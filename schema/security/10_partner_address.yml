@@ -1,0 +1,46 @@
+table: partner_address
+comment: Business partner addresses
+order: 29
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: address
+    type: VARCHAR(200)
+  - name: city
+    type: VARCHAR(80)
+    nullable: true
+  - name: country
+    type: CHAR(2)
+    nullable: true
+  - name: state
+    type: CHAR(2)
+    nullable: true
+  - name: zipcode
+    type: VARCHAR(10)
+    nullable: true
+  - name: phone
+    type: VARCHAR(20)
+    nullable: true
+  - name: latitude
+    type: NUMERIC(10,7)
+    nullable: true
+  - name: longitude
+    type: NUMERIC(10,7)
+    nullable: true
+primary_key: [partner_id, address]
+foreign_keys:
+  - name: partner_addresses
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_address_countries
+    columns: [country]
+    references:
+      table: country
+      columns: [id]
+  - name: partner_address_states
+    columns: [country, state]
+    references:
+      table: state
+      columns: [country_id, id]

@@ -1,0 +1,17 @@
+table: authorization_object_action
+comment: Actions available on each authorization object
+order: 13
+columns:
+  - name: authorization_object_id
+    type: VARCHAR(30)
+  - name: action
+    type: VARCHAR(30)
+  - name: caption
+    type: VARCHAR(80)
+primary_key: [authorization_object_id, action]
+foreign_keys:
+  - name: authorization_object_actions
+    columns: [authorization_object_id]
+    references:
+      table: authorization_object
+      columns: [id]

@@ -1,0 +1,17 @@
+table: county
+comment: County reference table
+order: 17
+columns:
+  - name: country_id
+    type: CHAR(2)
+  - name: state_id
+    type: CHAR(2)
+  - name: id
+    type: VARCHAR(100)
+primary_key: [country_id, state_id, id]
+foreign_keys:
+  - name: counties
+    columns: [country_id, state_id]
+    references:
+      table: state
+      columns: [country_id, id]

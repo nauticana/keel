@@ -1,0 +1,27 @@
+table: user_otp
+comment: One-time password codes for phone/email verification
+order: 34
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: code
+    type: VARCHAR(6)
+  - name: purpose
+    type: VARCHAR(20)
+  - name: expires_at
+    type: TIMESTAMP
+  - name: attempts
+    type: INTEGER
+    default: "0"
+primary_key: [id]
+sequence:
+  name: user_otp_seq
+  column: id
+foreign_keys:
+  - name: user_otps
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

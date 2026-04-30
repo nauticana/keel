@@ -1,0 +1,34 @@
+table: partner_plan_subscription
+comment: Active plan subscriptions per business partner
+order: 44
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: plan_id
+    type: VARCHAR(20)
+  - name: begda
+    type: TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: monthly_cost
+    type: NUMERIC(18,2)
+  - name: currency
+    type: CHAR(3)
+  - name: status
+    type: CHAR(1)
+  - name: auto_renew
+    type: BOOLEAN
+    default: "TRUE"
+primary_key: [partner_id, plan_id, begda]
+foreign_keys:
+  - name: partner_plan_subscriptions
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_subscriptions_plan
+    columns: [plan_id]
+    references:
+      table: subscription_plan
+      columns: [id]

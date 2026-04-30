@@ -1,0 +1,47 @@
+table: device_token
+comment: Mobile device push-notification tokens (FCM / APNs via FCM)
+order: 38
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: platform
+    type: CHAR(1)
+    comment: I=iOS, A=Android, W=Web
+  - name: token
+    type: TEXT
+  - name: app_version
+    type: VARCHAR(32)
+    nullable: true
+  - name: device_model
+    type: VARCHAR(64)
+    nullable: true
+  - name: is_active
+    type: BOOLEAN
+    default: TRUE
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: last_seen_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: device_token_seq
+  column: id
+indexes:
+  - name: device_token_user_token_uq
+    columns: [user_id, token]
+    unique: true
+  - name: idx_device_token_user_active
+    columns: [user_id, is_active]
+foreign_keys:
+  - name: device_token_users
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

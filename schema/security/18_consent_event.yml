@@ -1,0 +1,55 @@
+table: consent_event
+comment: Per-user consent decisions with full audit trail for PIPEDA/GDPR
+order: 37
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+    nullable: true
+  - name: email_hash
+    type: VARCHAR(64)
+    nullable: true
+  - name: consent_type
+    type: VARCHAR(30)
+  - name: consented
+    type: BOOLEAN
+  - name: policy_id
+    type: BIGINT
+  - name: event_ref
+    type: VARCHAR(64)
+    nullable: true
+  - name: region
+    type: VARCHAR(10)
+  - name: client_ip
+    type: VARCHAR(45)
+    nullable: true
+  - name: client_user_agent
+    type: VARCHAR(500)
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: consent_event_seq
+  column: id
+foreign_keys:
+  - name: consent_event_policies
+    columns: [policy_id]
+    references:
+      table: consent_policy
+      columns: [id]
+  - name: consent_event_users
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+checks:
+  - name: consent_event_identity
+    expression: user_id IS NOT NULL OR email_hash IS NOT NULL
+indexes:
+  - name: idx_consent_event_user
+    columns: [user_id, consent_type]
+  - name: idx_consent_event_email
+    columns: [email_hash, consent_type]

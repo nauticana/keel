@@ -1,0 +1,25 @@
+table: user_account_history
+comment: Login audit trail
+order: 25
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: action_time
+    type: TIMESTAMP
+  - name: action_type
+    type: CHAR(1)
+  - name: status
+    type: CHAR(1)
+  - name: object_name
+    type: VARCHAR(80)
+    nullable: true
+  - name: client_address
+    type: VARCHAR(15)
+    nullable: true
+primary_key: [user_id, action_time]
+foreign_keys:
+  - name: user_historic_actions
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

@@ -1,0 +1,9 @@
+table: country
+comment: Country reference table
+order: 15
+columns:
+  - name: id
+    type: CHAR(2)
+  - name: caption
+    type: VARCHAR(100)
+primary_key: [id]

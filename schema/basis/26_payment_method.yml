@@ -1,0 +1,33 @@
+table: payment_method
+comment: Stored payment methods per business partner (provider customer tokens)
+order: 48
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: provider
+    type: VARCHAR(30)
+  - name: provider_token
+    type: VARCHAR(255)
+  - name: method_type
+    type: VARCHAR(20)
+  - name: is_default
+    type: BOOLEAN
+    default: "FALSE"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: payment_method_seq
+  column: id
+foreign_keys:
+  - name: partner_payment_methods
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+indexes:
+  - name: idx_payment_method_default
+    columns: [partner_id, is_default]

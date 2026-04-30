@@ -1,0 +1,9 @@
+table: authorization_role
+comment: Authorization roles
+order: 20
+columns:
+  - name: id
+    type: VARCHAR(30)
+  - name: caption
+    type: VARCHAR(80)
+primary_key: [id]

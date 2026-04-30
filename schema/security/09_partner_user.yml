@@ -1,0 +1,29 @@
+table: partner_user
+comment: Associates users with business partners
+order: 28
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: begda
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+primary_key: [partner_id, user_id, begda]
+indexes:
+  - name: idx_partner_user_user
+    columns: [user_id]
+foreign_keys:
+  - name: partner_users
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: user_partners
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

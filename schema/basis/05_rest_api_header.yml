@@ -1,0 +1,15 @@
+table: rest_api_header
+comment: Metadata-driven REST API definitions
+order: 5
+columns:
+  - name: id
+    type: VARCHAR(80)
+  - name: version
+    type: VARCHAR(20)
+    default: "v1"
+  - name: master_table
+    type: VARCHAR(60)
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+primary_key: [id]

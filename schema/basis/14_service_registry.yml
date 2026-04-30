@@ -1,0 +1,19 @@
+table: service_registry
+comment: Background worker registration and heartbeat
+order: 14
+columns:
+  - name: service_name
+    type: VARCHAR(16)
+  - name: started_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: hostname
+    type: VARCHAR(64)
+  - name: pid
+    type: BIGINT
+  - name: status
+    type: CHAR(1)
+  - name: last_heartbeat
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [service_name, started_at]

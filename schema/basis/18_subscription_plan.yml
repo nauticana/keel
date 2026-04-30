@@ -1,0 +1,19 @@
+table: subscription_plan
+comment: Subscription plans with pricing
+order: 40
+columns:
+  - name: id
+    type: VARCHAR(20)
+  - name: caption
+    type: VARCHAR(80)
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+  - name: monthly_cost
+    type: NUMERIC(18,2)
+  - name: annual_cost
+    type: NUMERIC(18,2)
+  - name: currency
+    type: CHAR(3)
+    default: USD
+primary_key: [id]

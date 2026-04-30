@@ -1,0 +1,15 @@
+table: rest_report_header
+comment: Report definitions
+order: 7
+columns:
+  - name: id
+    type: VARCHAR(80)
+  - name: version
+    type: VARCHAR(20)
+    default: "v1"
+  - name: query_name
+    type: VARCHAR(60)
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+primary_key: [id]

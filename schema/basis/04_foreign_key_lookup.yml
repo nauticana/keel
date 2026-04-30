@@ -1,0 +1,11 @@
+table: foreign_key_lookup
+comment: Controls FK display behavior in the UI
+order: 4
+columns:
+  - name: constraint_name
+    type: VARCHAR(60)
+  - name: lookup_style
+    type: CHAR(1)
+  - name: display_column
+    type: VARCHAR(60)
+primary_key: [constraint_name]

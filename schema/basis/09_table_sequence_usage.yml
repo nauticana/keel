@@ -1,0 +1,11 @@
+table: table_sequence_usage
+comment: Maps tables to their PostgreSQL sequences
+order: 9
+columns:
+  - name: table_name
+    type: VARCHAR(32)
+  - name: column_name
+    type: VARCHAR(32)
+  - name: sequence_name
+    type: VARCHAR(32)
+primary_key: [table_name]

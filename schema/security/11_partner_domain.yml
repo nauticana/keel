@@ -1,0 +1,21 @@
+table: partner_domain
+comment: Partner website domains
+order: 30
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: domain_url
+    type: VARCHAR(255)
+  - name: is_primary
+    type: BOOLEAN
+    default: "FALSE"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, domain_url]
+foreign_keys:
+  - name: partner_domains
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

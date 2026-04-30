@@ -1,0 +1,17 @@
+table: user_social_provider
+comment: Social login provider links (Google, Apple)
+order: 35
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: provider
+    type: VARCHAR(20)
+  - name: provider_id
+    type: VARCHAR(255)
+primary_key: [user_id, provider]
+foreign_keys:
+  - name: user_social_providers
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

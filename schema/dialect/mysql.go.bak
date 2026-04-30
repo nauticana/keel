@@ -1,0 +1,195 @@
+package dialect
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/nauticana/basis/schema"
+)
+
+// MySQL implements the MySQL dialect.
+type MySQL struct{}
+
+func (d *MySQL) Name() string { return "mysql" }
+
+func (d *MySQL) mapType(yamlType string) string {
+	upper := strings.ToUpper(yamlType)
+	// Convert PostgreSQL types to MySQL equivalents
+	switch {
+	case upper == "BOOLEAN" || upper == "BOOL":
+		return "TINYINT(1)"
+	case upper == "BIGINT":
+		return "BIGINT"
+	case upper == "SMALLINT":
+		return "SMALLINT"
+	case upper == "INTEGER" || upper == "INT":
+		return "INT"
+	case upper == "TEXT":
+		return "TEXT"
+	case upper == "TIMESTAMP":
+		return "DATETIME"
+	case upper == "DATE":
+		return "DATE"
+	case upper == "TIME":
+		return "TIME"
+	case upper == "BYTEA":
+		return "BLOB"
+	case upper == "BIGSERIAL":
+		return "BIGINT AUTO_INCREMENT"
+	case strings.HasPrefix(upper, "CHAR("):
+		return yamlType
+	case strings.HasPrefix(upper, "VARCHAR("):
+		return yamlType
+	case strings.HasPrefix(upper, "NUMERIC("):
+		return strings.Replace(yamlType, "NUMERIC", "DECIMAL", 1)
+	case strings.HasPrefix(upper, "FLOAT"):
+		return "FLOAT"
+	case strings.HasPrefix(upper, "GEOGRAPHY"):
+		// MySQL uses GEOMETRY / POINT instead of PostGIS geography
+		if strings.Contains(upper, "POINT") {
+			return "POINT"
+		}
+		if strings.Contains(upper, "POLYGON") {
+			return "POLYGON"
+		}
+		return "GEOMETRY"
+	default:
+		return yamlType
+	}
+}
+
+func (d *MySQL) formatDefault(col *schema.Column) string {
+	if col.Default == "" {
+		return ""
+	}
+	val := col.Default
+	upper := strings.ToUpper(val)
+	switch upper {
+	case "TRUE":
+		return "1"
+	case "FALSE":
+		return "0"
+	case "NULL":
+		return "NULL"
+	case "CURRENT_TIMESTAMP":
+		return "CURRENT_TIMESTAMP"
+	case "CURRENT_DATE":
+		return "CURRENT_DATE"
+	}
+	if isNumeric(val) {
+		return val
+	}
+	return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+}
+
+func (d *MySQL) GenerateTable(table *schema.Table) string {
+	var sb strings.Builder
+
+	if table.Comment != "" {
+		sb.WriteString(fmt.Sprintf("-- %s\n", table.Comment))
+	}
+
+	// IF NOT EXISTS so re-runs don't fail (P1-48). MySQL warns
+	// rather than errors when the table already exists with this
+	// modifier, which matches the basis re-runnable contract.
+	sb.WriteString(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n", table.Name))
+
+	var lines []string
+	for _, col := range table.Columns {
+		mysqlType := d.mapType(col.Type)
+
+		nullable := "NOT NULL"
+		if col.Nullable {
+			nullable = ""
+		}
+
+		defVal := ""
+		if col.Default != "" {
+			defVal = "DEFAULT " + d.formatDefault(col)
+		}
+
+		namePart := fmt.Sprintf("    %-36s %-13s", col.Name, mysqlType)
+		var parts []string
+		parts = append(parts, namePart)
+		if nullable != "" {
+			parts = append(parts, nullable)
+		}
+		if defVal != "" {
+			parts = append(parts, defVal)
+		}
+		lines = append(lines, strings.Join(parts, " "))
+	}
+
+	// Primary key
+	lines = append(lines, fmt.Sprintf("    PRIMARY KEY (%s)",
+		strings.Join(table.PrimaryKey, ", ")))
+
+	// Foreign keys (MySQL — inline per CREATE TABLE statement
+	// because MySQL has no DO-block equivalent to the
+	// post-CREATE pattern used in the PgSQL emitter. Tables must
+	// therefore be declared in topological order; the schema's
+	// Order field provides that.)
+	for _, fk := range table.ForeignKeys {
+		fkLine := fmt.Sprintf("    CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s)",
+			fk.Name,
+			strings.Join(fk.Columns, ", "),
+			fk.References.Table,
+			strings.Join(fk.References.Columns, ", "))
+		if fk.OnDelete != "" {
+			fkLine += " ON DELETE " + strings.ToUpper(strings.TrimSpace(fk.OnDelete))
+		}
+		if fk.OnUpdate != "" {
+			fkLine += " ON UPDATE " + strings.ToUpper(strings.TrimSpace(fk.OnUpdate))
+		}
+		lines = append(lines, fkLine)
+	}
+
+	// Check constraints (MySQL 8.0+)
+	for _, chk := range table.Checks {
+		lines = append(lines, fmt.Sprintf("    CONSTRAINT %s CHECK (%s)", chk.Name, chk.Expression))
+	}
+
+	for i, line := range lines {
+		sb.WriteString(line)
+		if i < len(lines)-1 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n")
+
+	// Indexes
+	for _, idx := range table.Indexes {
+		if idx.Unique {
+			sb.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s(%s);\n",
+				idx.Name, table.Name, strings.Join(idx.Columns, ", ")))
+		} else if idx.Using != "" && strings.ToUpper(idx.Using) == "GIST" {
+			// MySQL uses SPATIAL index instead of GiST
+			sb.WriteString(fmt.Sprintf("CREATE SPATIAL INDEX %s ON %s(%s);\n",
+				idx.Name, table.Name, strings.Join(idx.Columns, ", ")))
+		} else {
+			sb.WriteString(fmt.Sprintf("CREATE INDEX %s ON %s(%s);\n",
+				idx.Name, table.Name, strings.Join(idx.Columns, ", ")))
+		}
+	}
+
+	return sb.String()
+}
+
+func (d *MySQL) GenerateSchema(s *schema.Schema) string {
+	var sb strings.Builder
+
+	sb.WriteString("-- ==========================================================================\n")
+	sb.WriteString("-- Generated by schemagen — do not edit manually\n")
+	sb.WriteString("-- ==========================================================================\n\n")
+
+	for i, table := range s.Tables {
+		sb.WriteString(d.GenerateTable(table))
+		if i < len(s.Tables)-1 {
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
+}

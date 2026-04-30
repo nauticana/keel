@@ -1,0 +1,27 @@
+table: application_menu_item
+comment: Menu items with REST API links
+order: 11
+columns:
+  - name: menu_id
+    type: VARCHAR(30)
+  - name: item_id
+    type: VARCHAR(30)
+  - name: caption
+    type: TEXT
+  - name: display_order
+    type: INTEGER
+  - name: rest_uri
+    type: VARCHAR(255)
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+  - name: filter_on_list
+    type: BOOLEAN
+    default: "FALSE"
+primary_key: [menu_id, item_id]
+foreign_keys:
+  - name: application_menu_items
+    columns: [menu_id]
+    references:
+      table: application_menu
+      columns: [id]

@@ -1,0 +1,17 @@
+table: state
+comment: State/province reference table
+order: 16
+columns:
+  - name: country_id
+    type: CHAR(2)
+  - name: id
+    type: CHAR(2)
+  - name: caption
+    type: VARCHAR(100)
+primary_key: [country_id, id]
+foreign_keys:
+  - name: states
+    columns: [country_id]
+    references:
+      table: country
+      columns: [id]

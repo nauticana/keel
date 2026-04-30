@@ -1,0 +1,30 @@
+table: authorization_role_permission
+comment: Role-based permission assignments
+order: 21
+columns:
+  - name: role_id
+    type: VARCHAR(30)
+  - name: authorization_object_id
+    type: VARCHAR(30)
+  - name: action
+    type: VARCHAR(30)
+  - name: low_limit
+    type: VARCHAR(80)
+  - name: high_limit
+    type: VARCHAR(80)
+    nullable: true
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+primary_key: [role_id, authorization_object_id, action, low_limit]
+foreign_keys:
+  - name: authorization_role_permissions
+    columns: [role_id]
+    references:
+      table: authorization_role
+      columns: [id]
+  - name: permitted_object_action
+    columns: [authorization_object_id, action]
+    references:
+      table: authorization_object_action
+      columns: [authorization_object_id, action]

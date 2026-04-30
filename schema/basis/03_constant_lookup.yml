@@ -1,0 +1,17 @@
+table: constant_lookup
+comment: Maps constant domains to table columns
+order: 3
+columns:
+  - name: constant_id
+    type: VARCHAR(60)
+  - name: table_name
+    type: VARCHAR(60)
+  - name: column_name
+    type: VARCHAR(60)
+primary_key: [constant_id, table_name, column_name]
+foreign_keys:
+  - name: constant_lookups
+    columns: [constant_id]
+    references:
+      table: constant_header
+      columns: [id]

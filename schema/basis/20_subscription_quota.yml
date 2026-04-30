@@ -1,0 +1,25 @@
+table: subscription_quota
+comment: Resource limits per subscription plan
+order: 42
+columns:
+  - name: plan_id
+    type: VARCHAR(20)
+  - name: resource_id
+    type: VARCHAR(20)
+  - name: max_value
+    type: BIGINT
+  - name: period_type
+    type: CHAR(1)
+    default: M
+primary_key: [plan_id, resource_id]
+foreign_keys:
+  - name: subscription_quotas
+    columns: [plan_id]
+    references:
+      table: subscription_plan
+      columns: [id]
+  - name: sub_resources_quotas
+    columns: [resource_id]
+    references:
+      table: subscription_resource
+      columns: [id]

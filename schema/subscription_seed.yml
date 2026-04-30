@@ -1,0 +1,130 @@
+comment: Subscription and quota seed data (constants, lookups, REST API configs, PARTNER_ADMIN permissions)
+order: 3
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [currency, "Currency"]
+      - [period_type, "Period Type"]
+      - [subscription_status, "Subscription Status"]
+
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [currency, USD, "United States Dollar"]
+      - [currency, GBP, "British Pound"]
+      - [currency, EUR, "Euro"]
+      - [currency, AUD, "Australian Dollar"]
+      - [currency, CAD, "Canadian Dollar"]
+      - [period_type, A, "ANNUALLY"]
+      - [period_type, Q, "QUARTERLY"]
+      - [period_type, M, "MONTHLY"]
+      - [period_type, W, "WEEKLY"]
+      - [period_type, D, "DAILY"]
+      - [period_type, H, "HOURLY"]
+      - [period_type, N, "MINUTE"]
+      - [period_type, S, "SECOND"]
+      - [period_type, L, "LIFETIME"]
+      - [subscription_status, A, "ACTIVE"]
+      - [subscription_status, C, "CANCELLED"]
+
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [currency, subscription_plan, currency]
+      - [currency, subscription_addon, currency]
+      - [currency, partner_plan_subscription, currency]
+      - [currency, partner_addon_subscription, currency]
+      - [period_type, subscription_quota, period_type]
+      - [subscription_status, partner_plan_subscription, status]
+      - [subscription_status, partner_addon_subscription, status]
+
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [subscription_quotas, S, "*"]
+      - [sub_resources_quotas, D, id]
+      - [partner_plan_subscriptions, S, "*"]
+      - [partner_addon_subscriptions, S, "*"]
+      - [partner_subscriptions_addon, D, caption]
+      - [partner_subscriptions_plan, D, caption]
+      - [partner_usage_ledger, S, "*"]
+
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [subscription_resource, subscription_resource]
+      - [subscription_plan, subscription_plan]
+      - [subscription_addon, subscription_addon]
+      - [user_registration, user_registration]
+
+  - table: rest_api_child
+    columns: [api_id, seq, parent_seq, constraint_name]
+    rows:
+      - [subscription_plan, 1, 0, subscription_quotas]
+
+  - table: application_menu
+    columns: [display_order, id, caption]
+    rows:
+      - [30, subscription, "Subscription"]
+
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [10, false, subscription, subscription_resources, subscription_resource, "Subscription Resources"]
+      - [20, false, subscription, subscription_plans, subscription_plan, "Subscription Plans"]
+      - [30, false, subscription, subscription_addons, subscription_addon, "Subscription Addons"]
+      - [40, true, subscription, user_registrations, user_registration, "User Registrations"]
+
+  # PARTNER_ADMIN permissions for shared keel tables
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      # Security tables
+      - [PARTNER_ADMIN, PAGE, ACCESS, user_account_policies]
+      - [PARTNER_ADMIN, TABLE, SELECT, user_account_policy]
+      - [PARTNER_ADMIN, TABLE, SELECT, user_account_history]
+      - [PARTNER_ADMIN, TABLE, SELECT, user_account]
+      - [PARTNER_ADMIN, TABLE, SELECT, user_permission]
+      - [PARTNER_ADMIN, TABLE, INSERT, user_permission]
+      - [PARTNER_ADMIN, TABLE, UPDATE, user_permission]
+      - [PARTNER_ADMIN, TABLE, DELETE, user_permission]
+      # Subscription pages
+      - [PARTNER_ADMIN, PAGE, ACCESS, subscription_plans]
+      - [PARTNER_ADMIN, PAGE, ACCESS, countries]
+      # Geo tables
+      - [PARTNER_ADMIN, TABLE, SELECT, country]
+      - [PARTNER_ADMIN, TABLE, SELECT, state]
+      - [PARTNER_ADMIN, TABLE, SELECT, county]
+      # API key
+      - [PARTNER_ADMIN, TABLE, SELECT, api_key]
+      # Business partner
+      - [PARTNER_ADMIN, TABLE, SELECT, business_partner]
+      - [PARTNER_ADMIN, TABLE, UPDATE, business_partner]
+      # Partner addon subscription
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_addon_subscription]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_addon_subscription]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_addon_subscription]
+      # Partner address
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_address]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_address]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_address]
+      - [PARTNER_ADMIN, TABLE, DELETE, partner_address]
+      # Partner domain
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_domain]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_domain]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_domain]
+      - [PARTNER_ADMIN, TABLE, DELETE, partner_domain]
+      # Partner plan subscription
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_plan_subscription]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_plan_subscription]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_plan_subscription]
+      # Partner user
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_user]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_user]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_user]
+      - [PARTNER_ADMIN, TABLE, DELETE, partner_user]
+      # Subscription read-only
+      - [PARTNER_ADMIN, TABLE, SELECT, subscription_plan]
+      - [PARTNER_ADMIN, TABLE, SELECT, subscription_quota]
+      - [PARTNER_ADMIN, TABLE, SELECT, usage_ledger]

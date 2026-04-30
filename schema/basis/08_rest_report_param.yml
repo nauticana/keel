@@ -1,0 +1,20 @@
+table: rest_report_param
+comment: Report parameter definitions
+order: 8
+columns:
+  - name: report_id
+    type: VARCHAR(80)
+  - name: seq
+    type: INTEGER
+  - name: param_name
+    type: VARCHAR(20)
+  - name: data_type
+    type: VARCHAR(20)
+    default: "string"
+primary_key: [report_id, seq]
+foreign_keys:
+  - name: rest_report_params
+    columns: [report_id]
+    references:
+      table: rest_report_header
+      columns: [id]

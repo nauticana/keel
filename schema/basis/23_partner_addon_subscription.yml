@@ -1,0 +1,37 @@
+table: partner_addon_subscription
+comment: Active add-on subscriptions per business partner
+order: 45
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: addon_id
+    type: VARCHAR(20)
+  - name: auto_increase
+    type: BOOLEAN
+    default: "FALSE"
+  - name: begda
+    type: TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: monthly_cost
+    type: NUMERIC(18,2)
+  - name: currency
+    type: CHAR(3)
+  - name: status
+    type: CHAR(1)
+  - name: auto_renew
+    type: BOOLEAN
+    default: "TRUE"
+primary_key: [partner_id, addon_id, begda]
+foreign_keys:
+  - name: partner_addon_subscriptions
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_subscriptions_addon
+    columns: [addon_id]
+    references:
+      table: subscription_addon
+      columns: [id]

@@ -1,0 +1,35 @@
+table: payment_webhook_log
+comment: Raw inbound payment provider webhooks — idempotency + audit
+order: 47
+columns:
+  - name: id
+    type: BIGINT
+  - name: provider
+    type: VARCHAR(30)
+  - name: event_id
+    type: VARCHAR(255)
+  - name: event_type
+    type: VARCHAR(100)
+  - name: processing_status
+    type: CHAR(1)
+    default: R
+  - name: error_message
+    type: TEXT
+    nullable: true
+  - name: raw_payload
+    type: TEXT
+    nullable: true
+  - name: received_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: processed_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: payment_webhook_log_seq
+  column: id
+indexes:
+  - name: payment_webhook_log_uq
+    columns: [provider, event_id]
+    unique: true

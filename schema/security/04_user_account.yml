@@ -1,0 +1,68 @@
+table: user_account
+comment: User accounts with authentication credentials
+order: 23
+columns:
+  - name: id
+    type: BIGINT
+  - name: first_name
+    type: VARCHAR(80)
+  - name: last_name
+    type: VARCHAR(80)
+  - name: user_name
+    type: VARCHAR(80)
+  - name: user_email
+    type: VARCHAR(255)
+    nullable: true
+  - name: phone
+    type: VARCHAR(20)
+    nullable: true
+  - name: locale
+    type: VARCHAR(10)
+    nullable: true
+  - name: status
+    type: CHAR(1)
+  - name: passtext
+    type: VARCHAR(128)
+    nullable: true
+  - name: passdate
+    type: TIMESTAMP
+    nullable: true
+  - name: login_attempts
+    type: SMALLINT
+    default: "0"
+  - name: last_login_attempt
+    type: TIMESTAMP
+    nullable: true
+  - name: lock_time
+    type: TIMESTAMP
+    nullable: true
+  - name: twofa_enabled
+    type: BOOLEAN
+    default: "FALSE"
+    nullable: true
+  - name: twofa_method
+    type: CHAR(1)
+    nullable: true
+  - name: twofa_secret
+    type: VARCHAR(128)
+    nullable: true
+  - name: twofa_backup_codes
+    type: TEXT
+    nullable: true
+  - name: twofa_enabled_at
+    type: TIMESTAMP
+    nullable: true
+  - name: deleted_at
+    type: TIMESTAMP
+    nullable: true
+  - name: single_device_session
+    type: BOOLEAN
+    default: FALSE
+primary_key: [id]
+indexes:
+  - name: user_account_email_uq
+    columns: [user_email]
+    unique: true
+  - name: user_account_phone_uq
+    columns: [phone]
+    unique: true

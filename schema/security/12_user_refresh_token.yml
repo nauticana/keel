@@ -1,0 +1,31 @@
+table: user_refresh_token
+comment: JWT refresh tokens
+order: 31
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: token_hash
+    type: VARCHAR(128)
+  - name: expires_at
+    type: TIMESTAMP
+  - name: revoked_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: user_refresh_token_seq
+  column: id
+foreign_keys:
+  - name: user_refresh_tokens
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: idx_refresh_token_hash
+    columns: [token_hash]

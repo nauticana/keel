@@ -1,0 +1,59 @@
+table: api_key
+comment: API keys for public API access with rotation support
+order: 33
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: key_name
+    type: VARCHAR(100)
+  - name: key_prefix
+    type: CHAR(8)
+  - name: key_hash
+    type: CHAR(64)
+  - name: scopes
+    type: VARCHAR(500)
+    default: "query"
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: last_used_at
+    type: TIMESTAMP
+    nullable: true
+  - name: user_id
+    type: BIGINT
+    nullable: true
+  - name: rotated_at
+    type: TIMESTAMP
+    nullable: true
+  - name: grace_expires_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: api_key_seq
+  column: id
+foreign_keys:
+  - name: api_key_partners
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: api_key_users
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: idx_api_key_hash
+    columns: [key_hash]
+    unique: true
+  - name: idx_api_key_partner
+    columns: [partner_id]

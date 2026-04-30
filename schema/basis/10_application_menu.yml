@@ -1,0 +1,14 @@
+table: application_menu
+comment: Navigation menu structure
+order: 10
+columns:
+  - name: id
+    type: VARCHAR(30)
+  - name: caption
+    type: VARCHAR(80)
+  - name: display_order
+    type: INTEGER
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+primary_key: [id]

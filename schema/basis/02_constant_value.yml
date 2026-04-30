@@ -1,0 +1,17 @@
+table: constant_value
+comment: Dropdown/enum values for each constant header
+order: 2
+columns:
+  - name: constant_id
+    type: VARCHAR(60)
+  - name: value
+    type: VARCHAR(80)
+  - name: caption
+    type: VARCHAR(80)
+primary_key: [constant_id, value]
+foreign_keys:
+  - name: constant_values
+    columns: [constant_id]
+    references:
+      table: constant_header
+      columns: [id]

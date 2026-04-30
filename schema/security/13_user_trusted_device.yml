@@ -1,0 +1,34 @@
+table: user_trusted_device
+comment: Trusted devices for 2FA bypass
+order: 32
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: device_fingerprint
+    type: VARCHAR(128)
+  - name: device_name
+    type: VARCHAR(200)
+    nullable: true
+  - name: trusted_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+  - name: last_seen_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: user_trusted_device_seq
+  column: id
+foreign_keys:
+  - name: user_trusted_devices
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: idx_trusted_device_user
+    columns: [user_id, device_fingerprint]

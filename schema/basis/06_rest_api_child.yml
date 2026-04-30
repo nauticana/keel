@@ -1,0 +1,28 @@
+table: rest_api_child
+comment: Child relations for REST APIs
+order: 6
+columns:
+  - name: api_id
+    type: VARCHAR(80)
+  - name: seq
+    type: INTEGER
+  - name: parent_seq
+    type: INTEGER
+    default: "0"
+  - name: constraint_name
+    type: VARCHAR(60)
+primary_key: [api_id, seq]
+foreign_keys:
+  - name: rest_api_children
+    columns: [api_id]
+    references:
+      table: rest_api_header
+      columns: [id]
+  - name: rest_api_lookups
+    columns: [constraint_name]
+    references:
+      table: foreign_key_lookup
+      columns: [constraint_name]
+indexes:
+  - name: idx_rest_api_child_fk
+    columns: [constraint_name]

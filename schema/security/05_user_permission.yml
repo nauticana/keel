@@ -1,0 +1,29 @@
+table: user_permission
+comment: User-to-role assignments
+order: 24
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: role_id
+    type: VARCHAR(30)
+  - name: begda
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+primary_key: [user_id, role_id, begda]
+foreign_keys:
+  - name: user_permissions
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: permitted_users
+    columns: [role_id]
+    references:
+      table: authorization_role
+      columns: [id]
+indexes:
+  - name: idx_user_permission_role
+    columns: [role_id]

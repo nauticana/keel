@@ -1,0 +1,34 @@
+table: consent_policy
+comment: Versioned privacy/terms/consent policy text registered for audit trail
+order: 36
+columns:
+  - name: id
+    type: BIGINT
+  - name: policy_type
+    type: VARCHAR(30)
+  - name: region
+    type: VARCHAR(10)
+    default: global
+  - name: version
+    type: VARCHAR(64)
+  - name: language
+    type: VARCHAR(8)
+    default: en
+  - name: content_url
+    type: VARCHAR(500)
+  - name: content_sha256
+    type: VARCHAR(64)
+  - name: effective_from
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: deprecated_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: consent_policy_seq
+  column: id
+indexes:
+  - name: consent_policy_uq
+    columns: [policy_type, region, version, language]
+    unique: true

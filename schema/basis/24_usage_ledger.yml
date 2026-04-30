@@ -1,0 +1,23 @@
+table: usage_ledger
+comment: Resource usage tracking for quota enforcement
+order: 46
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: usage_time
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: resource_name
+    type: VARCHAR(50)
+  - name: amount
+    type: BIGINT
+  - name: notes
+    type: VARCHAR(255)
+    nullable: true
+primary_key: [partner_id, usage_time]
+foreign_keys:
+  - name: partner_usage_ledger
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

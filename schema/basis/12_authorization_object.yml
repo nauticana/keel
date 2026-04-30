@@ -1,0 +1,9 @@
+table: authorization_object
+comment: RBAC authorization object definitions
+order: 12
+columns:
+  - name: id
+    type: VARCHAR(30)
+  - name: caption
+    type: VARCHAR(80)
+primary_key: [id]

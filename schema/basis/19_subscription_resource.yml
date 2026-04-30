@@ -1,0 +1,19 @@
+table: subscription_resource
+comment: Quota-tracked resources (domains, API calls, etc.)
+order: 41
+columns:
+  - name: id
+    type: VARCHAR(20)
+  - name: table_name
+    type: VARCHAR(32)
+    nullable: true
+  - name: status_column
+    type: VARCHAR(32)
+    nullable: true
+  - name: status_value
+    type: VARCHAR(80)
+    nullable: true
+  - name: date_column
+    type: VARCHAR(32)
+    nullable: true
+primary_key: [id]

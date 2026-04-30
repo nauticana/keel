@@ -1,0 +1,12 @@
+table: business_partner
+comment: "Multi-tenant business partner entity — shared core only (id + caption). Projects create separate tables for domain-specific extensions (e.g. partner_profile, partner_branding)."
+order: 27
+columns:
+  - name: id
+    type: BIGINT
+  - name: caption
+    type: VARCHAR(200)
+primary_key: [id]
+sequence:
+  name: business_partner_seq
+  column: id

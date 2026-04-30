@@ -1,0 +1,34 @@
+table: user_registration
+comment: Pending user registrations, password reset tokens, and 2FA login tokens
+order: 26
+columns:
+  - name: user_email
+    type: VARCHAR(255)
+  - name: confirmation
+    type: INTEGER
+  - name: payload
+    type: TEXT
+    nullable: true
+  - name: status
+    type: CHAR(1)
+    default: "P"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: confirmed_at
+    type: TIMESTAMP
+    nullable: true
+  # user_id binds a row to a specific user_account so 2FA login tokens
+  # cannot collide across users (8-digit space + many concurrent sessions
+  # would otherwise let one user's code accidentally validate another's).
+  # NULL for legacy email-confirmation / password-reset rows where the
+  # user_account may not exist yet.
+  - name: user_id
+    type: BIGINT
+    nullable: true
+  # attempts gates brute-force on 2FA login-token validation. The validate
+  # path increments on mismatch and refuses further checks at MaxAttempts.
+  - name: attempts
+    type: INTEGER
+    default: "0"
+primary_key: [user_email, confirmation]

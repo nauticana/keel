@@ -1,0 +1,10 @@
+table: user_account_policy
+comment: Configurable password and login policies
+order: 22
+columns:
+  - name: id
+    type: VARCHAR(30)
+  - name: policy_value
+    type: INTEGER
+    nullable: true
+primary_key: [id]

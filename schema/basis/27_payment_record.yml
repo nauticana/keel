@@ -1,0 +1,56 @@
+table: payment_record
+comment: Completed/failed/refunded payment transactions per partner
+order: 49
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: provider
+    type: VARCHAR(30)
+  - name: provider_payment_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: provider_event_type
+    type: VARCHAR(100)
+    nullable: true
+  - name: amount
+    type: NUMERIC(18,2)
+  - name: currency
+    type: CHAR(3)
+  - name: plan_id
+    type: VARCHAR(20)
+    nullable: true
+  - name: invoice_id
+    type: BIGINT
+    nullable: true
+  - name: payment_status
+    type: CHAR(1)
+  - name: paid_at
+    type: TIMESTAMP
+    nullable: true
+  - name: raw_payload
+    type: TEXT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: payment_record_seq
+  column: id
+foreign_keys:
+  - name: partner_payment_records
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: payment_record_plans
+    columns: [plan_id]
+    references:
+      table: subscription_plan
+      columns: [id]
+indexes:
+  - name: idx_payment_record_partner
+    columns: [partner_id, paid_at]

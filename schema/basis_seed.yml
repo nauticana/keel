@@ -1,0 +1,100 @@
+comment: Keel platform seed data
+order: 1
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [lookup_style, "Lookup Style"]
+
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [lookup_style, D, "Dropdown"]
+      - [lookup_style, S, "Search Screen"]
+
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [lookup_style, foreign_key_lookup, lookup_style]
+
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [application_menu_items, D, caption]
+      - [rest_api_children, S, "*"]
+      - [constant_lookups, D, caption]
+      - [constant_values, D, caption]
+      - [authorization_object_actions, S, "*"]
+      - [rest_report_params, S, "*"]
+      - [states, S, "*"]
+      - [counties, S, "*"]
+      - [partner_payment_methods, S, "*"]
+      - [partner_payment_records, S, "*"]
+      - [payment_record_plans, D, caption]
+
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [PAGE, "Frontend Page"]
+      - [TABLE, "Database Table"]
+      - [REPORT, "Analytic Report"]
+
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [PAGE, ACCESS, ACCESS]
+      - [TABLE, SELECT, SELECT]
+      - [TABLE, INSERT, INSERT]
+      - [TABLE, UPDATE, UPDATE]
+      - [TABLE, DELETE, DELETE]
+      - [REPORT, ACCESS, ACCESS]
+
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [foreign_key_lookup, foreign_key_lookup]
+      - [application_menu, application_menu]
+      - [constant_header, constant_header]
+      - [table_sequence_usage, table_sequence_usage]
+      - [service_registry, service_registry]
+      - [rest_api_header, rest_api_header]
+      - [rest_report_header, rest_report_header]
+      - [authorization_object, authorization_object]
+      - [country, country]
+      - [payment_webhook_log, payment_webhook_log]
+      - [payment_record, payment_record]
+      - [payment_method, payment_method]
+
+  - table: rest_api_child
+    columns: [api_id, seq, parent_seq, constraint_name]
+    rows:
+      - [application_menu, 1, 0, application_menu_items]
+      - [constant_header, 1, 0, constant_values]
+      - [constant_header, 2, 0, constant_lookups]
+      - [rest_api_header, 1, 0, rest_api_children]
+      - [rest_report_header, 1, 0, rest_report_params]
+      - [authorization_object, 1, 0, authorization_object_actions]
+      - [country, 1, 0, states]
+      - [country, 2, 1, counties]
+
+  - table: application_menu
+    columns: [display_order, id, caption]
+    rows:
+      - [10, setup, "Setup"]
+      - [40, payments, "Payments"]
+
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [10, false, setup, constant_headers, constant_header, "Constant Headers"]
+      - [20, false, setup, foreign_key_lookups, foreign_key_lookup, "Foreign Key Lookups"]
+      - [30, false, setup, table_sequence_usages, table_sequence_usage, "Table Sequence Usages"]
+      - [40, false, setup, application_menus, application_menu, "Application Menus"]
+      - [50, false, setup, rest_api_headers, rest_api_header, "Rest Api Headers"]
+      - [60, false, setup, rest_report_headers, rest_report_header, "Rest Report Headers"]
+      - [70, false, setup, authorization_objects, authorization_object, "Authorization Objects"]
+      - [80, false, setup, countries, country, "Countries"]
+      - [90, false, setup, service_registries, service_registry, "Service Registries"]
+      - [10, false, payments, payment_records, payment_record, "Payment Records"]
+      - [20, false, payments, payment_methods, payment_method, "Payment Methods"]
+      - [30, false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]
