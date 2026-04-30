@@ -31,6 +31,25 @@ type PaymentEvent struct {
 	PaidAt          time.Time
 	RawPayload      string            // original JSON, for audit / replay
 	Metadata        map[string]string // provider's metadata field, flattened to strings
+
+	// Mode is the checkout-session mode for events that carry one
+	// ("subscription" | "payment" | "setup"). Empty for events that
+	// don't (most subscription / invoice / charge events).
+	// Pre-extracted in v0.5.1 so domain handlers can branch on a typed
+	// field instead of re-parsing RawPayload (downstream feedback D).
+	Mode string
+
+	// SetupIntentID is the SetupIntent identifier when the event is
+	// either a setup-mode checkout.session.completed (the spawned
+	// SetupIntent's id) or any setup_intent.* event (the SetupIntent
+	// itself). Empty otherwise.
+	SetupIntentID string
+
+	// CustomerID is the Stripe Customer id (cus_xxx) on the data.object
+	// for events that carry one. Empty when the event has no customer
+	// attached (e.g. an unauthenticated checkout that didn't create a
+	// customer).
+	CustomerID string
 }
 
 // PaymentEventHandler is what each project implements. keel's

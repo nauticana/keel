@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payment"
 )
 
@@ -151,14 +153,31 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "checkout client not configured")
 		return
 	}
+	var session *model.UserSession
 	if !h.AllowGuestCheckout {
-		if _, ok := h.RequireUser(w, r); !ok {
+		var ok bool
+		session, ok = h.RequireSession(w, r)
+		if !ok {
 			return
 		}
 	}
 	var req CreateCheckoutRequest
 	if !h.ReadRequest(w, r, &req) {
 		return
+	}
+	// Auto-inject user_id into metadata for the JWT-gated path so
+	// the webhook can recover "which user paid" without each consumer
+	// round-tripping the id through Stripe metadata themselves
+	// (downstream feedback v0.5.1-A). Don't overwrite a caller-supplied
+	// value — admin / impersonation flows that explicitly set user_id
+	// to a different id continue to win.
+	if session != nil {
+		if req.Metadata == nil {
+			req.Metadata = map[string]string{}
+		}
+		if _, ok := req.Metadata["user_id"]; !ok {
+			req.Metadata["user_id"] = strconv.Itoa(session.Id)
+		}
 	}
 	mode := req.Mode
 	if mode == "" {

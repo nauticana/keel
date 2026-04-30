@@ -37,6 +37,48 @@ type WebhookProcessor struct {
 	Repo      WebhookRepository
 	Providers map[string]PaymentProvider
 	Journal   logger.ApplicationLogger // optional
+
+	// AllowedEventTypes, when non-nil, gates which (provider, event_type)
+	// pairs reach the domain handler. Events not in the set are logged
+	// with status='S' (skipped) and never dispatched. nil means "trust
+	// the dashboard" — every signed event reaches the handler, which
+	// is the v0.5.0 behavior.
+	//
+	// Wire via WithAllowedEventTypes("checkout.session.completed",
+	// "setup_intent.succeeded", ...) at startup so an operator who
+	// accidentally subscribes a noisy event in the Stripe dashboard
+	// (customer.created, customer.updated) doesn't push that event
+	// through the domain layer (downstream feedback v0.5.1-E).
+	AllowedEventTypes map[string]bool
+
+	// AfterHandler, when non-nil, is invoked after a successful
+	// OnPaymentEvent. Use it for cross-cutting follow-ups that aren't
+	// part of the canonical event mapping — typically an idempotent
+	// Stripe POST like POST /v1/payment_methods/{id}/attach to make a
+	// freshly-saved PaymentMethod the customer's default. A non-nil
+	// error from AfterHandler flips the log row to status='F' so the
+	// provider retries the whole pipeline; AfterHandler MUST therefore
+	// be idempotent (downstream feedback v0.5.1-F).
+	AfterHandler func(ctx context.Context, event *PaymentEvent) error
+}
+
+// WithAllowedEventTypes sets the per-event-type allowlist on the
+// processor and returns the receiver for fluent construction.
+//
+//	processor := payment.NewWebhookProcessor(repo, journal, stripeProvider).
+//	    WithAllowedEventTypes(
+//	        "checkout.session.completed",
+//	        "setup_intent.succeeded",
+//	        "invoice.paid",
+//	    )
+func (p *WebhookProcessor) WithAllowedEventTypes(types ...string) *WebhookProcessor {
+	if p.AllowedEventTypes == nil {
+		p.AllowedEventTypes = make(map[string]bool, len(types))
+	}
+	for _, t := range types {
+		p.AllowedEventTypes[t] = true
+	}
+	return p
 }
 
 // NewWebhookProcessor constructs a processor and registers the given
@@ -156,6 +198,15 @@ func (p *WebhookProcessor) Process(
 		return err
 	}
 
+	// (4.5) Per-event-type allowlist (v0.5.1-E). Skipping happens AFTER
+	// the log row is written so operators can see in payment_webhook_log
+	// which events were rejected at the gate vs which never arrived.
+	// nil map = allow everything (v0.5.0 behavior).
+	if p.AllowedEventTypes != nil && !p.AllowedEventTypes[eventType] {
+		_ = p.Repo.UpdateStatus(ctx, logID, StatusSkipped, "event type not in allowlist")
+		return nil
+	}
+
 	// (5) Parse + dispatch. Errors here flip the row to 'F' and bubble
 	// up so the provider can retry — but only the parse/handle step is
 	// retryable, never verify (a real attacker can't get past it) and
@@ -176,6 +227,18 @@ func (p *WebhookProcessor) Process(
 	if err := handler.OnPaymentEvent(ctx, event); err != nil {
 		_ = p.Repo.UpdateStatus(ctx, logID, StatusFailed, err.Error())
 		return fmt.Errorf("handle event: %w", err)
+	}
+
+	// (5.5) After-hook (v0.5.1-F). Cross-cutting follow-up — typically
+	// an idempotent Stripe POST that finalizes setup-mode flow. Failure
+	// flips the row to 'F' so the provider re-delivers; the hook MUST
+	// be idempotent because OnPaymentEvent already ran successfully and
+	// will run again on the retry.
+	if p.AfterHandler != nil {
+		if err := p.AfterHandler(ctx, event); err != nil {
+			_ = p.Repo.UpdateStatus(ctx, logID, StatusFailed, err.Error())
+			return fmt.Errorf("after-handler: %w", err)
+		}
 	}
 
 	_ = p.Repo.UpdateStatus(ctx, logID, StatusProcessed, "")

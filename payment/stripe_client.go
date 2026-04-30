@@ -112,8 +112,19 @@ func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req Ch
 	for k, v := range req.Metadata {
 		form.Set("metadata["+k+"]", v)
 	}
+	// Mirror metadata into setup_intent_data[metadata][...] when the
+	// session spawns a SetupIntent. Stripe does NOT propagate Session
+	// metadata to the SetupIntent it creates, so without this branch
+	// `setup_intent.succeeded` arrives with empty metadata and the
+	// consumer has to fall back to checkout.session.completed or do
+	// a follow-up Stripe API call to recover (e.g. user_id) (v0.5.1-B).
+	if req.Mode == "setup" {
+		for k, v := range req.Metadata {
+			form.Set("setup_intent_data[metadata]["+k+"]", v)
+		}
+	}
 
-	body, err := c.do(ctx, stripeCheckoutPath, form)
+	body, err := c.Post(ctx, stripeCheckoutPath, form)
 	if err != nil {
 		return "", err
 	}
@@ -139,7 +150,7 @@ func (c *StripeCheckoutClient) CreatePortalSession(ctx context.Context, customer
 	if returnURL != "" {
 		form.Set("return_url", returnURL)
 	}
-	body, err := c.do(ctx, stripeBillingPortalPath, form)
+	body, err := c.Post(ctx, stripeBillingPortalPath, form)
 	if err != nil {
 		return "", err
 	}
@@ -154,31 +165,74 @@ func (c *StripeCheckoutClient) CreatePortalSession(ctx context.Context, customer
 	return portalURL, nil
 }
 
-// do issues the form-encoded POST against Stripe with idempotency,
-// bounded retries, capped response, and 2xx-range success matching.
-// Stripe error bodies are NOT propagated to the caller verbatim — the
-// caller (and the HTTP handler above) only sees the status code, so
-// internal request ids / account hints in Stripe's error JSON never
-// leak. The full error text rides out via the wrapped error so the
-// service-layer journal can record it.
-func (c *StripeCheckoutClient) do(ctx context.Context, path string, form url.Values) ([]byte, error) {
-	secret, err := c.Secrets.GetSecret(ctx, c.secretName())
+// Post issues an idempotent form-encoded POST against the Stripe
+// REST API and returns the bounded-size response body on a 2xx.
+// Wrap this from a typed helper (CreateCheckoutSession,
+// CreatePortalSession) when adding new write operations; consumers
+// can also call it directly to invoke any /v1/* endpoint that the
+// typed helpers don't yet cover (e.g. POST /v1/payment_methods/{id}/attach
+// from a webhook after-hook).
+//
+// Path is the API path beginning with "/" (e.g. "/checkout/sessions").
+// The shared retry/idempotency/bound logic from the previous private
+// do() lives in c.request and is reused by Get.
+func (c *StripeCheckoutClient) Post(ctx context.Context, path string, form url.Values) ([]byte, error) {
+	encoded := form.Encode()
+	return c.request(ctx, http.MethodPost, path, strings.NewReader(encoded), encoded)
+}
+
+// Get issues an idempotent GET against the Stripe REST API and
+// returns the bounded-size response body on a 2xx. Use it from
+// downstream code that needs to read Stripe state synchronously
+// from a webhook handler — for example
+// `c.Get(ctx, "/setup_intents/seti_xxx", url.Values{"expand[]": {"payment_method"}})`
+// to recover the attached PaymentMethod after `setup_intent.succeeded`.
+//
+// The same secret-loading, 5xx-retry, and 1 MiB response cap as Post
+// apply. The Idempotency-Key header is intentionally NOT sent on GET
+// — Stripe rejects the header on read endpoints (v0.5.1-C).
+func (c *StripeCheckoutClient) Get(ctx context.Context, path string, params url.Values) ([]byte, error) {
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+	return c.request(ctx, http.MethodGet, path, nil, "")
+}
+
+// request is the shared HTTP layer: secret loading, retries on 5xx /
+// 429, exponential backoff, response-body cap, basic-auth, and the
+// 2xx success match. POSTs carry a fresh idempotency key reused
+// across retries so Stripe's own dedupe converges; GETs omit it.
+//
+// rebuild is the body string used to re-construct the request on
+// each retry attempt — passing it separately from the io.Reader
+// avoids depending on whether the underlying reader is rewindable.
+// For GETs (no body) it's the empty string.
+func (c *StripeCheckoutClient) request(ctx context.Context, method, path string, _ io.Reader, rebuild string) ([]byte, error) {
+	secretValue, err := c.Secrets.GetSecret(ctx, c.secretName())
 	if err != nil {
 		return nil, fmt.Errorf("stripe: get secret: %w", err)
 	}
-	idempotencyKey := newIdempotencyKey()
-	encoded := form.Encode()
+	idempotencyKey := ""
+	if method == http.MethodPost {
+		idempotencyKey = newIdempotencyKey()
+	}
 
 	var lastErr error
 	backoff := 200 * time.Millisecond
 	for attempt := 0; attempt <= stripeMaxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL()+path, strings.NewReader(encoded))
+		var bodyReader io.Reader
+		if rebuild != "" {
+			bodyReader = strings.NewReader(rebuild)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, bodyReader)
 		if err != nil {
 			return nil, fmt.Errorf("stripe: build request: %w", err)
 		}
-		req.SetBasicAuth(secret, "")
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Idempotency-Key", idempotencyKey)
+		req.SetBasicAuth(secretValue, "")
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Idempotency-Key", idempotencyKey)
+		}
 
 		resp, err := c.httpClient().Do(req)
 		if err != nil {

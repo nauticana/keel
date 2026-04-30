@@ -46,6 +46,25 @@ The remaining methods on `UserService` keep their signatures. A future major ver
 
 **Process-lifetime context.** `LocalUserService.Ctx` is still a process-lifetime context that becomes the parent of every DB query. Per-request cancellation does not propagate. The fix requires threading `ctx` through every method on the `UserService` port — a 30+-method breaking change deferred to the v1.0 split above. Under load, pgx's connection-pool reaper bounds the impact.
 
+## Migration Guide (v0.5.1 — additive, downstream feedback)
+
+Every change below is **additive** — existing v0.5.0 wiring keeps compiling. Migration steps are one-liners pointing at the consumer code that can now be deleted or simplified.
+
+| Item | Before (consumer code) | After (keel-shipped) | Migration step |
+|---|---|---|---|
+| **A. user_id metadata** | Every consumer manually injected `metadata["user_id"] = strconv.Itoa(session.Id)` before calling the checkout endpoint, OR did a Stripe API round-trip from the webhook to recover the id. | `AbstractPaymentHandler.CreateCheckout` auto-injects `user_id` into `req.Metadata` on the JWT-gated path (skipped when `AllowGuestCheckout=true`, never overwrites a caller-supplied value). | **Delete** the manual `metadata["user_id"] = ...` line in your client code. **Read** `event.Metadata["user_id"]` in `OnPaymentEvent` — it's there for free. |
+| **B. setup_intent_data metadata mirror** | Every consumer either listened on `checkout.session.completed` (which DOES carry session metadata) instead of `setup_intent.succeeded`, OR fired a follow-up `GET /v1/setup_intents/{id}` to recover metadata. | `StripeCheckoutClient.CreateCheckoutSession` mirrors `req.Metadata` into `setup_intent_data[metadata][...]` automatically when `Mode == "setup"`. Stripe propagates that to the spawned SetupIntent so `setup_intent.succeeded` arrives self-contained. | **Delete** the workaround. Subscribe to `setup_intent.succeeded` and read `event.Metadata` directly. |
+| **C. `StripeCheckoutClient.Get`** | Consumers built their own `req, _ := http.NewRequestWithContext(...)` + `req.SetBasicAuth(stripeKey, "")` against `https://api.stripe.com/v1/...`, re-implementing secret loading, timeout, and 5xx retry logic on every read. | New public method: `func (c *StripeCheckoutClient) Get(ctx context.Context, path string, params url.Values) ([]byte, error)`. Same secret + retry + 1 MiB cap as `Post`; omits the `Idempotency-Key` header which Stripe rejects on GETs. There is also a sibling `Post(ctx, path, form)` for write ops the typed helpers don't yet cover (e.g. `POST /v1/payment_methods/{id}/attach`). | **Replace** custom Stripe HTTP code with `client.Get(ctx, "/setup_intents/seti_xxx", url.Values{"expand[]": {"payment_method"}})`. |
+| **D. Typed setup-mode fields on `PaymentEvent`** | Consumers re-parsed `event.RawPayload` to pull `mode`, `setup_intent`, and `customer` out of `data.object`. | New fields: `Mode string`, `SetupIntentID string`, `CustomerID string`. `parser_stripe.go` populates them automatically — `SetupIntentID` from `data.object.setup_intent` for checkout events and from `data.object.id` for `setup_intent.*` events. | **Replace** `if json.Unmarshal(...).mode == "setup"` blocks with `if event.Mode == "setup"`. |
+| **E. Per-event-type allowlist** | Every event subscribed in the Stripe dashboard reached `OnPaymentEvent`; an accidentally-enabled `customer.created` got logged then ignored at the domain layer with no clear "you didn't ask for this" signal. | `WebhookProcessor.AllowedEventTypes map[string]bool` (nil = allow-all, preserving v0.5.0 behavior) plus a fluent setter `WithAllowedEventTypes(...string)`. Skipped events get logged with `payment_webhook_log.processing_status='S'` so operators can see the gate in action. | **Optional**. Add `processor.WithAllowedEventTypes("checkout.session.completed", "setup_intent.succeeded", "invoice.paid")` at startup to fail-closed on unrelated events. |
+| **F. `WebhookProcessor.AfterHandler`** | Consumers wired follow-up Stripe API calls (`POST /v1/payment_methods/{id}/attach` for default-payment-method routing) inside `OnPaymentEvent`, mixing the canonical event mapping with cross-cutting infrastructure work. | Optional `AfterHandler func(ctx, *PaymentEvent) error` field on `WebhookProcessor`. Runs after a successful `OnPaymentEvent`; an error flips the row to `'F'` so the provider re-delivers. **Hook MUST be idempotent** because `OnPaymentEvent` already ran. | **Optional**. Move the `attach` call out of `OnPaymentEvent` into `processor.AfterHandler`. |
+| **G. `secret.MustGet`** | Every consumer wrote `v, err := secrets.GetSecret(ctx, name); if err != nil { log.Fatalf(...) }` for boot-time-required keys (Stripe secret, JWT secret, DB password). | New free function: `func MustGet(ctx context.Context, p SecretProvider, name string) string`. Calls `log.Fatalf` on missing key. Mirrors the existing `handler.MustRequireTrustedProxyCIDR` precedent. | **Replace** the boilerplate with `stripeKey := secret.MustGet(ctx, secrets, "stripe_secret_key")`. **Never** call `MustGet` from a hot request path — Fatalf takes the process down. |
+
+### When to use each new feature
+- **Always-on automatically (no opt-in needed)**: A, B, D — `user_id` injection, `setup_intent_data` mirroring, and typed event fields all activate the moment you upgrade.
+- **Recommended opt-in**: E (event-type allowlist) — fails closed on dashboard misconfiguration; one line at startup.
+- **Use when applicable**: C, F, G — only if your consumer has the corresponding need (Stripe GETs, follow-up POSTs, fatal-on-missing secrets).
+
 ## Architecture
 
 ```mermaid
@@ -139,6 +158,13 @@ func main() {
     // 2. Secrets
     secrets, _ := secret.NewSecretProvider(ctx)
 
+    // 2a. Boot-time-fatal keys: use secret.MustGet (v0.5.1-G). Returns
+    //     the value or terminates the process via log.Fatalf when the
+    //     secret is missing. Use this only at boot for genuinely-required
+    //     keys (Stripe key, JWT secret, DB password). NEVER call MustGet
+    //     from a request path — Fatalf takes the whole process down.
+    jwtSecret := secret.MustGet(ctx, secrets, "jwt_secret")
+
     // 3. Bigint ID generator (fed into the repository for collision-free ids
     //    in federated deployments). See "Bigint ID Generation" below.
     gen, err := data.NewSnowflakeGenerator(int64(*common.NodeId), data.EpochMs2026)
@@ -148,6 +174,7 @@ func main() {
     db, _ := pgsql.NewPgSQLDatabase(ctx, secrets, gen)
 
     // 5. Wire your controller and run
+    _ = jwtSecret // pass to user.NewLocalUserService(...)
     // ...
 }
 ```
@@ -771,18 +798,47 @@ import (
     "github.com/nauticana/keel/payment"
 )
 
+stripeClient := payment.NewStripeCheckoutClient(secrets)
+
 repo := payment.NewSQLWebhookRepository(db)
 processor := payment.NewWebhookProcessor(
     repo,
     journal,
     payment.NewStripeProvider(secrets),
     payment.NewLemonSqueezyProvider(secrets),
-)
+).
+    // v0.5.1-E: fail-closed on dashboard misconfiguration. Events not
+    // listed here are logged with status='S' and never dispatched.
+    // Omit the call to allow every signed event through (v0.5.0 behavior).
+    WithAllowedEventTypes(
+        "checkout.session.completed",
+        "setup_intent.succeeded",
+        "invoice.paid",
+        "customer.subscription.deleted",
+    )
+
+// v0.5.1-F: optional follow-up hook for cross-cutting work that must
+// run AFTER OnPaymentEvent succeeded — e.g. attaching a freshly-saved
+// PaymentMethod to the customer for default-payment-method routing.
+// MUST be idempotent — Stripe re-delivers on a 5xx and OnPaymentEvent
+// will run again on the retry.
+processor.AfterHandler = func(ctx context.Context, e *payment.PaymentEvent) error {
+    if e.EventType != "setup_intent.succeeded" || e.SetupIntentID == "" {
+        return nil
+    }
+    // Read the SetupIntent to recover the PaymentMethod, then attach it.
+    body, err := stripeClient.Get(ctx, "/setup_intents/"+e.SetupIntentID, nil)
+    if err != nil { return err }
+    // ... extract pm_xxx from body, then:
+    _, err = stripeClient.Post(ctx, "/payment_methods/pm_xxx/attach",
+        url.Values{"customer": {e.CustomerID}})
+    return err
+}
 
 paymentHandler := &handler.AbstractPaymentHandler{
     Processor: processor,
     Handler:   &myDomainHandler{db: db},       // implements port.PaymentEventHandler
-    Checkout:  payment.NewStripeCheckoutClient(secrets),
+    Checkout:  stripeClient,
     Journal:   journal,
 }
 
@@ -795,19 +851,46 @@ srv.Handle(map[string]func(http.ResponseWriter, *http.Request){
 
 ### Project-Specific Handler
 
+`OnPaymentEvent` receives a typed `*PaymentEvent` with the setup-mode fields pre-extracted as of v0.5.1 — branch on `e.Mode == "setup"` instead of unmarshalling `e.RawPayload`. The JWT-gated checkout path also injects `user_id` into metadata automatically (v0.5.1-A), so consumers no longer round-trip the id through the client.
+
 ```go
-func (h *myDomainHandler) OnPaymentEvent(ctx context.Context, e *port.PaymentEvent) error {
+func (h *myDomainHandler) OnPaymentEvent(ctx context.Context, e *payment.PaymentEvent) error {
+    userID := e.Metadata["user_id"] // auto-injected by CreateCheckout for JWT-gated callers
     switch e.EventType {
     case "checkout.session.completed":
-        return h.activateSubscription(ctx, e.Metadata["partner_id"], e.Metadata["plan"], e.Amount)
+        if e.Mode == "setup" {
+            // PaymentMethod-capture flow; the SetupIntent fires its own event.
+            return nil
+        }
+        return h.activateSubscription(ctx, userID, e.Metadata["plan"], e.MinorUnits)
+    case "setup_intent.succeeded":
+        // e.SetupIntentID and e.CustomerID are pre-extracted (v0.5.1-D).
+        return h.recordPaymentMethod(ctx, userID, e.SetupIntentID, e.CustomerID)
     case "invoice.paid":
         return h.recordRenewal(ctx, e)
     case "customer.subscription.deleted":
-        return h.cancelSubscription(ctx, e.Metadata["partner_id"])
+        return h.cancelSubscription(ctx, userID)
     }
     return nil
 }
 ```
+
+### Outbound Stripe API calls — `StripeCheckoutClient.Get` / `Post` (v0.5.1-C)
+
+Webhook handlers and after-hooks often need to read or mutate Stripe resources synchronously (e.g. expand a SetupIntent to get the attached PaymentMethod, or attach a PaymentMethod to a Customer). Use the same `StripeCheckoutClient` you already constructed for `CreateCheckoutSession` — it carries the secret, retry budget, and 1 MiB response cap.
+
+```go
+// Read: GET /v1/setup_intents/{id}?expand[]=payment_method
+body, err := client.Get(ctx, "/setup_intents/"+id, url.Values{
+    "expand[]": {"payment_method"},
+})
+
+// Write: POST /v1/payment_methods/{id}/attach
+form := url.Values{"customer": {"cus_abc"}}
+body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
+```
+
+`Get` does NOT send the `Idempotency-Key` header (Stripe rejects it on read endpoints); `Post` does. Both apply the shared 5xx/429 retry with exponential backoff.
 
 ### Secrets
 

@@ -3,6 +3,7 @@ package payment
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -56,6 +57,30 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 	event.Currency = stripeCurrency(obj)
 	for k, v := range stripeMetadata(obj) {
 		event.Metadata[k] = v
+	}
+
+	// v0.5.1-D: pre-extract setup-mode-relevant typed fields so domain
+	// handlers can `if e.Mode == "setup"` instead of re-parsing the
+	// raw body. Stripe carries these on data.object for checkout +
+	// setup_intent events; absent on most charge / invoice events.
+	if s, ok := obj["mode"].(string); ok {
+		event.Mode = s
+	}
+	if s, ok := obj["customer"].(string); ok {
+		event.CustomerID = s
+	}
+	// SetupIntentID has two sources depending on event class:
+	//   - checkout.session.* events spawn a SetupIntent and reference it
+	//     via data.object.setup_intent (a string id).
+	//   - setup_intent.* events are the SetupIntent itself; data.object.id
+	//     is the SetupIntent's id.
+	if s, ok := obj["setup_intent"].(string); ok {
+		event.SetupIntentID = s
+	}
+	if event.SetupIntentID == "" && strings.HasPrefix(raw.Type, "setup_intent.") {
+		if s, ok := obj["id"].(string); ok {
+			event.SetupIntentID = s
+		}
 	}
 	return event, nil
 }

@@ -54,6 +54,80 @@ func TestStripeParser_InvoicePaid(t *testing.T) {
 	}
 }
 
+// v0.5.1-D: setup-mode checkout.session.completed pre-extracts Mode,
+// SetupIntentID, and CustomerID so domain handlers branch on typed
+// fields instead of re-parsing RawPayload.
+func TestStripeParser_SetupModeCheckoutFields(t *testing.T) {
+	body := []byte(`{
+		"id":"evt_3",
+		"type":"checkout.session.completed",
+		"created": 1700000000,
+		"data":{"object":{
+			"mode":"setup",
+			"setup_intent":"seti_xyz",
+			"customer":"cus_abc",
+			"metadata":{"user_id":"42"}
+		}}
+	}`)
+	e, err := NewStripeEventParser().Parse(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if e.Mode != "setup" {
+		t.Errorf("mode: %q", e.Mode)
+	}
+	if e.SetupIntentID != "seti_xyz" {
+		t.Errorf("setup_intent: %q", e.SetupIntentID)
+	}
+	if e.CustomerID != "cus_abc" {
+		t.Errorf("customer: %q", e.CustomerID)
+	}
+}
+
+// v0.5.1-D: setup_intent.* events report the SetupIntent's own id
+// since data.object IS the SetupIntent (not a Checkout Session that
+// references one).
+func TestStripeParser_SetupIntentSucceededFields(t *testing.T) {
+	body := []byte(`{
+		"id":"evt_4",
+		"type":"setup_intent.succeeded",
+		"data":{"object":{
+			"id":"seti_zzz",
+			"customer":"cus_abc",
+			"metadata":{"user_id":"42"}
+		}}
+	}`)
+	e, err := NewStripeEventParser().Parse(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if e.SetupIntentID != "seti_zzz" {
+		t.Errorf("setup_intent id: %q (expected seti_zzz)", e.SetupIntentID)
+	}
+	if e.CustomerID != "cus_abc" {
+		t.Errorf("customer: %q", e.CustomerID)
+	}
+	if e.Mode != "" {
+		t.Errorf("setup_intent events should leave Mode empty, got %q", e.Mode)
+	}
+}
+
+// v0.5.1-D: events that don't carry mode / setup_intent / customer
+// leave the new fields zero-valued.
+func TestStripeParser_NoSetupFields_LeavesEmpty(t *testing.T) {
+	body := []byte(`{
+		"id":"evt_5","type":"invoice.paid",
+		"data":{"object":{"amount_paid": 1000, "currency":"usd"}}
+	}`)
+	e, err := NewStripeEventParser().Parse(body)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if e.Mode != "" || e.SetupIntentID != "" || e.CustomerID != "" {
+		t.Errorf("expected setup fields empty for invoice.paid; got %+v", e)
+	}
+}
+
 func TestStripeParser_MalformedJSON(t *testing.T) {
 	_, err := NewStripeEventParser().Parse([]byte("not-json"))
 	if err == nil {

@@ -340,3 +340,105 @@ func TestProcess_ConcurrentDeliveriesChargeOnce(t *testing.T) {
 		t.Fatalf("expected exactly 1 processed row, got %d", processedCount)
 	}
 }
+
+// v0.5.1-E: AllowedEventTypes gates dispatch — events not in the set
+// are skipped (status=S) and never reach the handler.
+func TestProcess_AllowedEventTypes_Skips(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	handler := &recordingHandler{}
+	p := newProcessor(repo, prov).WithAllowedEventTypes("invoice.paid")
+
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(handler.events) != 0 {
+		t.Fatalf("expected handler skipped, got %d events", len(handler.events))
+	}
+	if got := repo.statusOf(1); got != StatusSkipped {
+		t.Fatalf("expected status=S (skipped), got %q", got)
+	}
+}
+
+// v0.5.1-E: nil AllowedEventTypes preserves v0.5.0 behavior — every
+// signed event reaches the handler.
+func TestProcess_NoAllowlist_AllowsAll(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	handler := &recordingHandler{}
+	p := newProcessor(repo, prov) // AllowedEventTypes nil
+
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(handler.events) != 1 {
+		t.Fatalf("expected handler called once, got %d", len(handler.events))
+	}
+}
+
+// v0.5.1-F: AfterHandler runs after a successful OnPaymentEvent and
+// can use typed PaymentEvent fields.
+func TestProcess_AfterHandler_Fires(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123", SetupIntentID: "seti_xyz"}}
+	handler := &recordingHandler{}
+	p := newProcessor(repo, prov)
+	var afterCalled atomic.Int32
+	var seenSetup string
+	p.AfterHandler = func(_ context.Context, e *PaymentEvent) error {
+		afterCalled.Add(1)
+		seenSetup = e.SetupIntentID
+		return nil
+	}
+
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if afterCalled.Load() != 1 {
+		t.Fatalf("expected after-handler called once, got %d", afterCalled.Load())
+	}
+	if seenSetup != "seti_xyz" {
+		t.Fatalf("after-handler got wrong event: setup=%q", seenSetup)
+	}
+	if got := repo.statusOf(1); got != StatusProcessed {
+		t.Fatalf("expected status=P after success, got %q", got)
+	}
+}
+
+// v0.5.1-F: AfterHandler error flips the row to F and bubbles up so
+// the provider re-delivers. The hook must therefore be idempotent.
+func TestProcess_AfterHandlerError_FailsRow(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	handler := &recordingHandler{}
+	p := newProcessor(repo, prov)
+	p.AfterHandler = func(_ context.Context, _ *PaymentEvent) error {
+		return errors.New("attach failed")
+	}
+
+	err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler)
+	if err == nil {
+		t.Fatal("expected after-handler error to bubble up")
+	}
+	if !contains(err.Error(), "after-handler") {
+		t.Fatalf("expected after-handler in error, got %v", err)
+	}
+	if got := repo.statusOf(1); got != StatusFailed {
+		t.Fatalf("expected status=F on after-handler error, got %q", got)
+	}
+}
+
+// contains avoids pulling in strings.Contains to a test that already
+// has a tight set of imports — keeps the diff minimal.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// silence the time/sync imports when only some subset of tests run.
+var _ = time.Second
+var _ = sync.Mutex{}

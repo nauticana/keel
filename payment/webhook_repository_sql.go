@@ -15,6 +15,7 @@ const (
 	StatusProcessed = "P" // handler returned nil
 	StatusFailed    = "F" // handler or verification returned an error
 	StatusDuplicate = "D" // idempotency: already seen
+	StatusSkipped   = "S" // event-type not in WebhookProcessor.AllowedEventTypes; never reached the handler
 )
 
 const (
