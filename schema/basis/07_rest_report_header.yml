@@ -9,6 +9,8 @@ columns:
     default: "v1"
   - name: query_name
     type: VARCHAR(60)
+  - name: description
+    type: TEXT
   - name: is_active
     type: BOOLEAN
     default: "TRUE"

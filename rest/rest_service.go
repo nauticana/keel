@@ -42,7 +42,7 @@ SELECT authorization_object_id, action, low_limit, high_limit
 	qConstantLookup:   "SELECT table_name, column_name, constant_id FROM constant_lookup",
 	qRestApiHeader:    "SELECT id, version, master_table FROM rest_api_header where is_active IS TRUE",
 	qRestApiChild:     "SELECT api_id, constraint_name FROM rest_api_child",
-	qRestReportHeader: "SELECT id, version, query_name FROM rest_report_header WHERE is_active IS TRUE",
+	qRestReportHeader: "SELECT id, version, query_name, description FROM rest_report_header WHERE is_active IS TRUE",
 	qRestReportParam:  "SELECT report_id, seq, param_name, data_type FROM rest_report_param ORDER BY report_id, seq",
 }
 
@@ -73,10 +73,15 @@ type ReportParam struct {
 }
 
 type RestReport struct {
-	Id        string
-	Version   string
-	QueryName string
-	Params    []*ReportParam
+	Id          string
+	Version     string
+	QueryName   string
+	// Long-form text rendered as the report's page header. The short
+	// nav-rail label comes from application_menu_item.caption — there's
+	// no need to duplicate it here. NOT NULL in the schema; every report
+	// must have a description.
+	Description string
+	Params      []*ReportParam
 }
 
 type RestService struct {
@@ -192,10 +197,11 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseReposi
 	}
 	for _, row := range res.Rows {
 		restReport := &RestReport{
-			Id:        common.AsString(row[0]),
-			Version:   common.AsString(row[1]),
-			QueryName: common.AsString(row[2]),
-			Params:    make([]*ReportParam, 0),
+			Id:          common.AsString(row[0]),
+			Version:     common.AsString(row[1]),
+			QueryName:   common.AsString(row[2]),
+			Description: common.AsString(row[3]),
+			Params:      make([]*ReportParam, 0),
 		}
 		s.RestReports[restReport.Id] = restReport
 	}

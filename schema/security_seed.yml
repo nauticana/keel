@@ -27,6 +27,7 @@ seeds:
       - [user_account_policy, user_account_policy]
       - [business_partner, business_partner]
       - [partner_domain, partner_domain]
+      - [partner_user, partner_user]
       - [partner_registration, business_partner]
       - [partner_quota_usage, business_partner]
       - [api_key, api_key]
@@ -58,9 +59,16 @@ seeds:
       - [10, false, security, authorization_roles, authorization_role, "Authorization Roles"]
       - [20, false, security, user_accounts, user_account, "User Accounts"]
       - [30, false, security, user_account_policies, user_account_policy, "Account Policies"]
-      - [40, false, security, business_partners, business_partner, "Business Partners"]
-      - [50, true, security, partner_domains, partner_domain, "Partner Domains"]
-      - [60, false, security, api_keys, api_key, "API Keys"]
+      # Partner-scoped team management. filter_on_list=true is a UI hint;
+      # the actual scoping is enforced server-side because partner_user
+      # has FK to business_partner and is therefore PartnerSpecific=true
+      # (data/abstract_repository.go) — list reads inject WHERE
+      # partner_id = sessionPartnerID automatically.
+      - [40, true,  security, partner_users, partner_user, "Partner Users"]
+      # business_partners, partner_domains, and api_keys live under "setup"
+      # in basis_seed.yml — they are partner identity / configuration, not
+      # security primitives. Only partner_user (the join row that grants
+      # a user access to a partner) stays here.
 
   - table: authorization_role
     columns: [id, caption]
@@ -88,9 +96,12 @@ seeds:
       - [APP_ADMIN, PAGE, ACCESS, application_menus]
       - [APP_ADMIN, PAGE, ACCESS, authorization_objects]
       - [APP_ADMIN, PAGE, ACCESS, authorization_roles]
+      - [APP_ADMIN, PAGE, ACCESS, business_partners]
       - [APP_ADMIN, PAGE, ACCESS, constant_headers]
       - [APP_ADMIN, PAGE, ACCESS, foreign_key_lookups]
+      - [APP_ADMIN, PAGE, ACCESS, partner_domains]
       - [APP_ADMIN, PAGE, ACCESS, partner_registrations]
+      - [APP_ADMIN, PAGE, ACCESS, partner_users]
       - [APP_ADMIN, PAGE, ACCESS, rest_api_headers]
       - [APP_ADMIN, PAGE, ACCESS, subscription_addons]
       - [APP_ADMIN, PAGE, ACCESS, subscription_plans]
@@ -174,6 +185,7 @@ seeds:
       - [SECURITY_ADMIN, PAGE, ACCESS, constant_headers]
       - [SECURITY_ADMIN, PAGE, ACCESS, foreign_key_lookups]
       - [SECURITY_ADMIN, PAGE, ACCESS, partner_registrations]
+      - [SECURITY_ADMIN, PAGE, ACCESS, partner_users]
       - [SECURITY_ADMIN, PAGE, ACCESS, rest_api_headers]
       - [SECURITY_ADMIN, PAGE, ACCESS, subscription_resources]
       - [SECURITY_ADMIN, PAGE, ACCESS, user_account_policies]
@@ -222,6 +234,7 @@ seeds:
       - [SECURITY_OPER, PAGE, ACCESS, authorization_objects]
       - [SECURITY_OPER, PAGE, ACCESS, authorization_roles]
       - [SECURITY_OPER, PAGE, ACCESS, partner_registrations]
+      - [SECURITY_OPER, PAGE, ACCESS, partner_users]
       - [SECURITY_OPER, PAGE, ACCESS, user_account_policies]
       - [SECURITY_OPER, PAGE, ACCESS, user_accounts]
       - [SECURITY_OPER, TABLE, SELECT, application_menu_item]
@@ -246,8 +259,10 @@ seeds:
       - [BUSINESS_ADMIN, PAGE, ACCESS, application_menus]
       - [BUSINESS_ADMIN, PAGE, ACCESS, authorization_objects]
       - [BUSINESS_ADMIN, PAGE, ACCESS, authorization_roles]
+      - [BUSINESS_ADMIN, PAGE, ACCESS, business_partners]
       - [BUSINESS_ADMIN, PAGE, ACCESS, constant_headers]
       - [BUSINESS_ADMIN, PAGE, ACCESS, foreign_key_lookups]
+      - [BUSINESS_ADMIN, PAGE, ACCESS, partner_domains]
       - [BUSINESS_ADMIN, PAGE, ACCESS, partner_quota_usages]
       - [BUSINESS_ADMIN, PAGE, ACCESS, partner_registrations]
       - [BUSINESS_ADMIN, PAGE, ACCESS, rest_api_headers]

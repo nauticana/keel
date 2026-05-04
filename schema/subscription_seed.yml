@@ -82,6 +82,7 @@ seeds:
     rows:
       # Security tables
       - [PARTNER_ADMIN, PAGE, ACCESS, user_account_policies]
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_users]
       - [PARTNER_ADMIN, TABLE, SELECT, user_account_policy]
       - [PARTNER_ADMIN, TABLE, SELECT, user_account_history]
       - [PARTNER_ADMIN, TABLE, SELECT, user_account]
@@ -89,6 +90,10 @@ seeds:
       - [PARTNER_ADMIN, TABLE, INSERT, user_permission]
       - [PARTNER_ADMIN, TABLE, UPDATE, user_permission]
       - [PARTNER_ADMIN, TABLE, DELETE, user_permission]
+      # Setup pages (partner identity + config moved here in v0.5.2)
+      - [PARTNER_ADMIN, PAGE, ACCESS, business_partners]
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_domains]
+      - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
       # Subscription pages
       - [PARTNER_ADMIN, PAGE, ACCESS, subscription_plans]
       - [PARTNER_ADMIN, PAGE, ACCESS, countries]
