@@ -185,7 +185,17 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 		if where == nil {
 			where = make(map[string]any)
 		}
-		where["partner_id"] = partnerID
+		// Only fall back to the session's partner when the caller did not
+		// scope the query themselves. RelationAPI.FetchChildren propagates
+		// the parent's primary key (which includes partner_id for child
+		// tables) into `where` before calling Get; overwriting it would
+		// silently coerce every child read back to the session's partner
+		// — making a SUPER user viewing partner B's details see partner
+		// A's rows instead. The top-level /list path doesn't set this
+		// key, so the session-scoped partition guard still applies there.
+		if _, set := where["partner_id"]; !set {
+			where["partner_id"] = partnerID
+		}
 	}
 	if len(where) == len(s.Table.Keys) && len(where) > 0 {
 		match := true
@@ -386,7 +396,13 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 		if where == nil {
 			where = make(map[string]any)
 		}
-		where["partner_id"] = partnerID
+		// See the matching note in Get above. Same overwrite-vs-fallback
+		// distinction: caller-supplied `partner_id` in `where` (e.g. from
+		// a child-relation cascade) must be preserved, not coerced to the
+		// session's partner.
+		if _, set := where["partner_id"]; !set {
+			where["partner_id"] = partnerID
+		}
 	}
 	if len(where) == 0 {
 		return fmt.Errorf("filter cannot be empty for delete operations")
