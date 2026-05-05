@@ -90,8 +90,6 @@ seeds:
       - [PARTNER_ADMIN, TABLE, INSERT, user_permission]
       - [PARTNER_ADMIN, TABLE, UPDATE, user_permission]
       - [PARTNER_ADMIN, TABLE, DELETE, user_permission]
-      # Setup pages (partner identity + config moved here in v0.5.2)
-      - [PARTNER_ADMIN, PAGE, ACCESS, business_partners]
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_domains]
       - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
       # Subscription pages
@@ -103,9 +101,6 @@ seeds:
       - [PARTNER_ADMIN, TABLE, SELECT, county]
       # API key
       - [PARTNER_ADMIN, TABLE, SELECT, api_key]
-      # Business partner
-      - [PARTNER_ADMIN, TABLE, SELECT, business_partner]
-      - [PARTNER_ADMIN, TABLE, UPDATE, business_partner]
       # Partner addon subscription
       - [PARTNER_ADMIN, TABLE, SELECT, partner_addon_subscription]
       - [PARTNER_ADMIN, TABLE, INSERT, partner_addon_subscription]
