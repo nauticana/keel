@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	qRegisterService = "register_service"
-	qUpdateHeartBeat = "update_heart_beat"
+	qRegisterService    = "register_service"
+	qUpdateHeartBeat    = "update_heart_beat"
+	qPruneStaleRegistry = "prune_stale_registry"
 )
 
 var ServiceQueries = map[string]string{
@@ -33,6 +34,17 @@ UPDATE service_registry
  WHERE service_name = ?
    AND hostname = ?
    AND started_at = (SELECT MAX(started_at) FROM service_registry WHERE service_name = ? AND hostname = ?)
+`,
+	// Drop registry rows for the same service whose last heartbeat is more
+	// than 5 minutes old. Heartbeats fire every 30 s, so anything that hasn't
+	// heartbeat'd in 5 minutes is a dead worker (crashed, OOM-killed, lost to
+	// a deploy restart). Without this prune, the table accumulates one row
+	// per worker startup forever, and §7 of the diagnosis report grows
+	// unbounded across deploys.
+	qPruneStaleRegistry: `
+DELETE FROM service_registry
+ WHERE service_name = ?
+   AND last_heartbeat < CURRENT_TIMESTAMP - INTERVAL '5 minutes'
 `,
 }
 
@@ -122,6 +134,12 @@ func (e *JobExecutor) registerService(ctx context.Context, qs data.QueryService,
 		hostname = "unknown"
 	}
 	pid := int64(os.Getpid())
+	// Prune stale rows for this service first — anything not heartbeat'd
+	// in the last 5 minutes is a dead worker. Failure here is non-fatal:
+	// log and continue; the worst outcome is registry table growth.
+	if _, pruneErr := qs.Query(ctx, qPruneStaleRegistry, serviceName); pruneErr != nil {
+		log.Printf("failed to prune stale service_registry for %s: %v", serviceName, pruneErr)
+	}
 	e.Journal.Info("registering service " + serviceName + " on " + hostname + " PID " + fmt.Sprint(pid))
 	_, err = qs.Query(ctx, qRegisterService, serviceName, hostname, pid)
 	if err != nil {
