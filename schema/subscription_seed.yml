@@ -94,7 +94,6 @@ seeds:
       - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
       # Subscription pages
       - [PARTNER_ADMIN, PAGE, ACCESS, subscription_plans]
-      - [PARTNER_ADMIN, PAGE, ACCESS, countries]
       # Geo tables
       - [PARTNER_ADMIN, TABLE, SELECT, country]
       - [PARTNER_ADMIN, TABLE, SELECT, state]
