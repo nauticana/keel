@@ -11,10 +11,22 @@ columns:
   - name: data_type
     type: VARCHAR(20)
     default: "string"
+  # Optional FK to constant_header. When set, the frontend renders this
+  # parameter as a dropdown populated from the matching constant_value
+  # rows (Pass/Fail/etc.) instead of a free-text input. NULL means no
+  # domain — render a plain input typed by data_type.
+  - name: constant_id
+    type: VARCHAR(60)
+    nullable: true
 primary_key: [report_id, seq]
 foreign_keys:
   - name: rest_report_params
     columns: [report_id]
     references:
       table: rest_report_header
+      columns: [id]
+  - name: rest_report_param_constants
+    columns: [constant_id]
+    references:
+      table: constant_header
       columns: [id]

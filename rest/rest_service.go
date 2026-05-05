@@ -43,7 +43,7 @@ SELECT authorization_object_id, action, low_limit, high_limit
 	qRestApiHeader:    "SELECT id, version, master_table FROM rest_api_header where is_active IS TRUE",
 	qRestApiChild:     "SELECT api_id, constraint_name FROM rest_api_child",
 	qRestReportHeader: "SELECT id, version, query_name, description FROM rest_report_header WHERE is_active IS TRUE",
-	qRestReportParam:  "SELECT report_id, seq, param_name, data_type FROM rest_report_param ORDER BY report_id, seq",
+	qRestReportParam:  "SELECT report_id, seq, param_name, data_type, constant_id FROM rest_report_param ORDER BY report_id, seq",
 }
 
 type Permission struct {
@@ -70,6 +70,11 @@ type ApplicationMenu struct {
 type ReportParam struct {
 	Name     string
 	DataType string
+	// ConstantID points to a constant_header.id when this parameter should
+	// render as a dropdown filled from the corresponding constant_value rows
+	// (e.g. status, priority). Empty string means no domain — the frontend
+	// shows a plain input typed by DataType.
+	ConstantID string
 }
 
 type RestReport struct {
@@ -215,8 +220,9 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseReposi
 			continue
 		}
 		restReport.Params = append(restReport.Params, &ReportParam{
-			Name:     common.AsString(row[2]),
-			DataType: common.AsString(row[3]),
+			Name:       common.AsString(row[2]),
+			DataType:   common.AsString(row[3]),
+			ConstantID: common.AsString(row[4]),
 		})
 	}
 
