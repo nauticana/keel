@@ -130,6 +130,13 @@ func (s *TableServicePgsql) Init() error {
 		if isId {
 			continue
 		}
+		// user_id is the immutable owner column on UserSpecific tables —
+		// excluded from the UPDATE SET so the auto-detected ownership
+		// can never be rewritten via CRUD. Update() depends on this
+		// exclusion: its column-iteration loop applies the same skip.
+		if s.Table.UserSpecific && col.ColumnName == "user_id" {
+			continue
+		}
 		updateSet = append(updateSet, fmt.Sprintf("%s = %s", quoteIdent(col.ColumnName), s.Placeholder(plcCnt)))
 		plcCnt++
 	}
@@ -190,8 +197,12 @@ func quoteSQLString(s string) string {
 }
 
 func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int, where map[string]any, orderby string) ([]any, error) {
-	if userID > 0 && !s.CheckPermission(ctx, userID, "SELECT") {
-		return nil, fmt.Errorf("permission denied: SELECT on table %s", s.Table.TableName)
+	allowed, ownScope := false, false
+	if userID > 0 {
+		allowed, ownScope = s.CheckPermission(ctx, userID, "SELECT")
+		if !allowed {
+			return nil, fmt.Errorf("permission denied: SELECT on table %s", s.Table.TableName)
+		}
 	}
 	var sqlText string
 	var vals []any
@@ -212,7 +223,11 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 			where["partner_id"] = partnerID
 		}
 	}
-	if s.Table.UserSpecific && userID > 0 {
+	// Apply user_id filter only when the caller's permission is broad
+	// (wildcard match). An explicit per-table grant — typical of admin
+	// roles like FINANCE_ADMIN — leaves ownScope=false and lets the
+	// admin read across all owners.
+	if s.Table.UserSpecific && userID > 0 && ownScope {
 		if where == nil {
 			where = make(map[string]any)
 		}
@@ -362,10 +377,20 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 // callers can distinguish "row inserted, no id" from "row inserted
 // with an int64 id".
 func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID int, item any) ([]int64, error) {
-	if !s.CheckPermission(ctx, userID, "INSERT") {
+	allowed, _ := s.CheckPermission(ctx, userID, "INSERT")
+	if !allowed {
 		return nil, fmt.Errorf("permission denied: INSERT on table %s", s.Table.TableName)
 	}
 	val := reflect.ValueOf(item)
+	// UserSpecific writes are STRICT: the user_id column is force-set
+	// to the authenticated caller regardless of the caller's scope (an
+	// admin's explicit grant doesn't bypass the owner-pin). Admins
+	// that need to seed rows on behalf of another user must use a
+	// custom service-layer handler that writes raw SQL — generic CRUD
+	// on UserSpecific tables is owner-locked to prevent spoofing.
+	// userID == 0 (system / backfill) keeps InsertSingle's
+	// `userID > 0` guard inactive so the caller-supplied value is
+	// used — that's the safety hatch for one-off migrations.
 	if val.Kind() != reflect.Slice {
 		id, err := s.InsertSingle(ctx, partnerID, userID, item)
 		if err != nil {
@@ -395,9 +420,16 @@ func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID 
 }
 
 func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) error {
-	if !s.CheckPermission(ctx, userID, "UPDATE") {
+	allowed, _ := s.CheckPermission(ctx, userID, "UPDATE")
+	if !allowed {
 		return fmt.Errorf("permission denied: UPDATE on table %s", s.Table.TableName)
 	}
+	// UserSpecific UPDATE is owner-locked regardless of CheckPermission
+	// scope: an admin's explicit grant cannot rewrite another user's
+	// row through generic CRUD. The trailing `AND user_id = $N` clause
+	// in sqlUpdateByIDForUser quietly produces ROW_COUNT=0 when the
+	// caller targets a row they don't own. Cross-user admin writes
+	// belong in custom service-layer handlers.
 	useUserGuard := s.Table.UserSpecific && userID > 0 && s.sqlUpdateByIDForUser != ""
 	vals := make([]any, 0, len(s.Table.Columns))
 	for _, col := range s.Table.Columns {
@@ -408,16 +440,16 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 				break
 			}
 		}
-		if !isId {
-			// Force the user_id field to the authenticated user — a
-			// caller cannot rewrite a row's owner via UPDATE on a
-			// UserSpecific table.
-			if useUserGuard && col.ColumnName == "user_id" {
-				vals = append(vals, userID)
-			} else {
-				vals = append(vals, s.ExtractValue(item, col))
-			}
+		if isId {
+			continue
 		}
+		// Init excluded user_id from sqlUpdateByID's SET when
+		// UserSpecific (the column is immutable). Skip it here too so
+		// the value list and the placeholder list stay in sync.
+		if s.Table.UserSpecific && col.ColumnName == "user_id" {
+			continue
+		}
+		vals = append(vals, s.ExtractValue(item, col))
 	}
 	for _, id := range s.Table.Keys {
 		tempCol := &model.TableColumn{
@@ -428,9 +460,6 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 	}
 	sqlText := s.sqlUpdateByID
 	if useUserGuard {
-		// Pick the template with the trailing `AND user_id = $N` and
-		// pass userID as the matching positional arg. ROW_COUNT will
-		// be 0 if the caller targets a row owned by someone else.
 		sqlText = s.sqlUpdateByIDForUser
 		vals = append(vals, userID)
 	}
@@ -439,7 +468,8 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 }
 
 func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {
-	if !s.CheckPermission(ctx, userID, "DELETE") {
+	allowed, _ := s.CheckPermission(ctx, userID, "DELETE")
+	if !allowed {
 		return fmt.Errorf("permission denied: DELETE on table %s", s.Table.TableName)
 	}
 	if s.Table.PartnerSpecific {
@@ -454,6 +484,9 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 			where["partner_id"] = partnerID
 		}
 	}
+	// UserSpecific DELETE is owner-locked regardless of scope: even an
+	// admin's explicit grant cannot remove another user's row via
+	// generic CRUD. Cross-user deletes belong in custom handlers.
 	if s.Table.UserSpecific && userID > 0 {
 		if where == nil {
 			where = make(map[string]any)

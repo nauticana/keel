@@ -65,6 +65,73 @@ Every change below is **additive** — existing v0.5.0 wiring keeps compiling. M
 - **Recommended opt-in**: E (event-type allowlist) — fails closed on dashboard misconfiguration; one line at startup.
 - **Use when applicable**: C, F, G — only if your consumer has the corresponding need (Stripe GETs, follow-up POSTs, fatal-on-missing secrets).
 
+## Migration Guide (v0.5.9 — UserSpecific row scoping)
+
+Tables that have a column literally named `user_id` whose FK references `user_account` are now auto-detected as **UserSpecific**, mirroring the existing `PartnerSpecific` mechanism. Generic CRUD on these tables is owner-locked: a row's owner cannot be spoofed at INSERT, mutated by UPDATE, or read/deleted by another user. Admin reads bypass the per-row filter; admin writes do not (they must use custom service-layer handlers — explicit role grants do **not** override owner-locking on writes).
+
+### What gets auto-detected
+
+A child table is marked UserSpecific if and only if **both** are true:
+1. The FK references the user-account table (default `user_account`; override via `AbstractRepository.UserTableName`).
+2. The FK column is literally named `user_id`.
+
+### Behavior matrix
+
+| Operation | Wildcard grant (`'*'`) | Explicit grant (`'<table>'`) |
+|---|---|---|
+| **Get** (read list / by id) | `WHERE user_id = caller` auto-injected | No filter — admin reads across all owners |
+| **Insert** | `user_id = caller` force-set in args (caller-supplied value ignored) | **Same — strict.** Custom handlers needed for cross-user inserts |
+| **Update** | `AND user_id = caller` appended to WHERE; `user_id` excluded from SET (immutable) | **Same — strict.** Cross-user updates need custom handlers |
+| **Delete** | `WHERE user_id = caller` auto-injected | **Same — strict.** Cross-user deletes need custom handlers |
+
+Reads honor scope so an admin with explicit grants can audit across all rows. Writes are owner-locked unconditionally because a misconfigured permission grant should never let one user mutate another's data through generic CRUD.
+
+### Breaking API change
+
+`port.TableService.CheckPermission` signature changed:
+
+```go
+// Before
+CheckPermission(ctx context.Context, userID int, task string) bool
+
+// After
+CheckPermission(ctx context.Context, userID int, task string) (allowed bool, ownScope bool)
+```
+
+`ownScope` is `true` when the caller's matching permission row used a wildcard / range pattern (broad reach), `false` when it used an exact table name (admin-style explicit grant). The data-layer `Get` uses `ownScope` to decide whether to inject the per-row filter; downstream consumers that have their own `TableService` implementation (rare) need to update their signature and decide what to return.
+
+### `model.TableDefinition` additions
+
+```go
+type TableDefinition struct {
+    PartnerSpecific  bool   // existing
+    UserSpecific     bool   // NEW — set automatically by LoadForeignKeys
+    // ...
+}
+```
+
+### `data.AbstractRepository` additions
+
+```go
+type AbstractRepository struct {
+    PartnerTableName string // existing — defaults to "business_partner"
+    UserTableName    string // NEW — defaults to "user_account"
+    // ...
+}
+```
+
+### Migration steps for downstream consumers
+
+1. **Schema audit.** Check every table that has a single conceptual owner. If the owner column isn't named `user_id`, rename it (and the FK constraint) so keel auto-detects it. Multi-actor tables stay as-is.
+2. **Custom handler review.** Any admin endpoint that currently relies on generic CRUD to mutate user-owned rows on behalf of another user (e.g. `FINANCE_ADMIN` updating `ride_payment.payment_status` to mark a refund) now no-ops silently — `ROW_COUNT=0`. Move those flows into custom service-layer handlers that filter by the target user explicitly.
+3. **Permission seeds.** Wildcard grants (`'TABLE','SELECT','*'`) work for mobile-app roles automatically; explicit per-table grants for admin roles work for reads but won't allow cross-user writes — adjust seed data accordingly.
+4. **Custom `TableService` implementations.** Update the `CheckPermission` signature and decide your `ownScope` rule (most implementations will mirror the keel default: `true` if matched via wildcard, `false` if matched by exact table name).
+
+### When to use UserSpecific vs custom handlers
+
+- **UserSpecific (auto-CRUD)**: row's owner is a single fixed `user_id`, the API surface is "the owner manages their own data" (favorites, payment methods, notification preferences, etc.).
+- **Custom handlers**: multi-actor rows (rides, chat messages), indirect ownership (`driver_payout.driver_id` → `driver_profile.user_id`), or admin endpoints that operate on other users' data.
+
 ## Architecture
 
 ```mermaid

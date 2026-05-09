@@ -14,5 +14,5 @@ type TableService interface {
 	Update(ctx context.Context, userID int, data any) error
 	Post(ctx context.Context, partnerID int64, userID int, data ...any) error
 	Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error
-	CheckPermission(ctx context.Context, userID int, task string) bool
+	CheckPermission(ctx context.Context, userID int, task string) (allowed bool, ownScope bool)
 }
