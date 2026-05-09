@@ -50,6 +50,16 @@ type AbstractRepository struct {
 	// "business_partner". Lifted out of a hardcode in v0.4.1 (P1-39)
 	// so projects with a different multi-tenant root can opt in.
 	PartnerTableName string
+
+	// UserTableName is the user-account table whose presence as a
+	// parent in a child's FK graph (on a column literally named
+	// `user_id`) marks the child as UserSpecific — auto-filtering
+	// CRUD by the authenticated user's id. Defaults to
+	// "user_account". Tables that own a different user FK column
+	// (rider_id, driver_id, payer_id, cancelled_by_user_id, ...)
+	// are intentionally NOT auto-scoped — those are multi-actor
+	// and need custom handlers.
+	UserTableName string
 }
 
 // partnerTable returns the configured tenant-root table name,
@@ -59,6 +69,15 @@ func (r *AbstractRepository) partnerTable() string {
 		return "business_partner"
 	}
 	return r.PartnerTableName
+}
+
+// userTable returns the configured user-account table name,
+// defaulting to "user_account" when unset.
+func (r *AbstractRepository) userTable() string {
+	if r.UserTableName == "" {
+		return "user_account"
+	}
+	return r.UserTableName
 }
 
 func (r *AbstractRepository) Init(ctx context.Context) error {
@@ -212,6 +231,15 @@ func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.Que
 			childTable.Parents = append(childTable.Parents, fk)
 			if parentName == r.partnerTable() {
 				childTable.PartnerSpecific = true
+			}
+			// UserSpecific opt-in: parent is the user-account table AND
+			// the FK column is literally named `user_id`. The column
+			// check stops multi-actor tables (ride.rider_id, ride.
+			// cancelled_by_user_id, ride_payment.payer_id, ...) from
+			// being auto-scoped — those need custom handlers because
+			// the "owner" depends on which actor is calling.
+			if parentName == r.userTable() && columnName == "user_id" {
+				childTable.UserSpecific = true
 			}
 		} else {
 			columns[constraintName] = append(columns[constraintName], columnName)

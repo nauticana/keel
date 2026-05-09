@@ -37,6 +37,13 @@ type TableServicePgsql struct {
 	sqlInsertItem string
 	sqlUpdateByID string
 	sqlDeleteByID string
+	// sqlUpdateByIDForUser is sqlUpdateByID with an extra
+	// `AND user_id = $N` clause appended. Built only when the table
+	// is UserSpecific. Update() picks this template when the caller
+	// is authenticated so a row's owner can't be silently changed by
+	// the row's own data, and a non-owner can't update the row even
+	// if they know its primary key.
+	sqlUpdateByIDForUser string
 }
 
 // WithTx returns a shallow copy of the receiver with Client replaced
@@ -135,6 +142,14 @@ func (s *TableServicePgsql) Init() error {
 			plcCnt++
 		}
 		s.sqlUpdateByID = "UPDATE " + s.quotedTable() + " SET " + strings.Join(updateSet, ", ") + " WHERE " + strings.Join(updateWherePlc, " AND ")
+		// UserSpecific tables get a second template that requires the
+		// row's user_id to also match the authenticated userID. The
+		// extra placeholder takes the next position after the existing
+		// id-key placeholders, so Update() must append userID as the
+		// last positional arg when it picks this template.
+		if s.Table.UserSpecific {
+			s.sqlUpdateByIDForUser = s.sqlUpdateByID + " AND " + quoteIdent("user_id") + " = " + s.Placeholder(plcCnt)
+		}
 	}
 	var insertCols []string
 	var insertPlchldr []string
@@ -195,6 +210,18 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 		// key, so the session-scoped partition guard still applies there.
 		if _, set := where["partner_id"]; !set {
 			where["partner_id"] = partnerID
+		}
+	}
+	if s.Table.UserSpecific && userID > 0 {
+		if where == nil {
+			where = make(map[string]any)
+		}
+		// Same overwrite-vs-fallback rule as PartnerSpecific. Don't clobber
+		// a caller-supplied user_id (cascade reads from a parent that already
+		// scoped by user_id); only apply the session's user as the partition
+		// guard for top-level /list reads.
+		if _, set := where["user_id"]; !set {
+			where["user_id"] = userID
 		}
 	}
 	if len(where) == len(s.Table.Keys) && len(where) > 0 {
@@ -293,7 +320,7 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 	return results, nil
 }
 
-func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, item any) (int64, error) {
+func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, userID int, item any) (int64, error) {
 	var args []any
 	hasSequence := false
 	for _, col := range s.Table.Columns {
@@ -304,10 +331,17 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, i
 			hasSequence = true
 			continue
 		}
-		if !s.Table.PartnerSpecific || col.ColumnName != "partner_id" {
-			args = append(args, s.ExtractValue(item, col))
-		} else {
+		switch {
+		case s.Table.PartnerSpecific && col.ColumnName == "partner_id":
 			args = append(args, partnerID)
+		case s.Table.UserSpecific && col.ColumnName == "user_id" && userID > 0:
+			// Force user_id = authenticated user. Ignore whatever the
+			// caller supplied so a row owner can never be spoofed at
+			// insert time. userID==0 (system / anonymous) keeps the
+			// caller-supplied value as a safety hatch for backfills.
+			args = append(args, userID)
+		default:
+			args = append(args, s.ExtractValue(item, col))
 		}
 	}
 	if hasSequence {
@@ -333,7 +367,7 @@ func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID 
 	}
 	val := reflect.ValueOf(item)
 	if val.Kind() != reflect.Slice {
-		id, err := s.InsertSingle(ctx, partnerID, item)
+		id, err := s.InsertSingle(ctx, partnerID, userID, item)
 		if err != nil {
 			return nil, err
 		}
@@ -349,7 +383,7 @@ func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID 
 	}
 	var results []int64
 	for i := 0; i < val.Len(); i++ {
-		id, err := s.InsertSingle(ctx, partnerID, val.Index(i).Interface())
+		id, err := s.InsertSingle(ctx, partnerID, userID, val.Index(i).Interface())
 		if err != nil {
 			return nil, err
 		}
@@ -364,6 +398,7 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 	if !s.CheckPermission(ctx, userID, "UPDATE") {
 		return fmt.Errorf("permission denied: UPDATE on table %s", s.Table.TableName)
 	}
+	useUserGuard := s.Table.UserSpecific && userID > 0 && s.sqlUpdateByIDForUser != ""
 	vals := make([]any, 0, len(s.Table.Columns))
 	for _, col := range s.Table.Columns {
 		isId := false
@@ -374,7 +409,14 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 			}
 		}
 		if !isId {
-			vals = append(vals, s.ExtractValue(item, col))
+			// Force the user_id field to the authenticated user — a
+			// caller cannot rewrite a row's owner via UPDATE on a
+			// UserSpecific table.
+			if useUserGuard && col.ColumnName == "user_id" {
+				vals = append(vals, userID)
+			} else {
+				vals = append(vals, s.ExtractValue(item, col))
+			}
 		}
 	}
 	for _, id := range s.Table.Keys {
@@ -384,7 +426,15 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 		}
 		vals = append(vals, s.ExtractValue(item, tempCol))
 	}
-	_, err := s.Client.Exec(ctx, s.sqlUpdateByID, vals...)
+	sqlText := s.sqlUpdateByID
+	if useUserGuard {
+		// Pick the template with the trailing `AND user_id = $N` and
+		// pass userID as the matching positional arg. ROW_COUNT will
+		// be 0 if the caller targets a row owned by someone else.
+		sqlText = s.sqlUpdateByIDForUser
+		vals = append(vals, userID)
+	}
+	_, err := s.Client.Exec(ctx, sqlText, vals...)
 	return err
 }
 
@@ -402,6 +452,16 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 		// session's partner.
 		if _, set := where["partner_id"]; !set {
 			where["partner_id"] = partnerID
+		}
+	}
+	if s.Table.UserSpecific && userID > 0 {
+		if where == nil {
+			where = make(map[string]any)
+		}
+		// Mirror of the Get rule for user_id — fall back to the session's
+		// user when the caller didn't scope by user_id themselves.
+		if _, set := where["user_id"]; !set {
+			where["user_id"] = userID
 		}
 	}
 	if len(where) == 0 {
