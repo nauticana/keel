@@ -24,15 +24,18 @@ type CacheServiceImpl struct {
 // and the secret provider. It chooses the implementation by inspecting the
 // flag values, in this precedence:
 //
-//  1. --valkey_url set    → Valkey path. Honors --valkey_cluster. Reads the
+//  1. --valkey_url set → Valkey path. Honors --valkey_cluster. Reads the
 //     `valkey_password` secret (empty if missing).
-//  2. --redis_url  set    → Redis single-node path. Reads the
+//  2. --redis_url  set → Redis single-node path. Reads the
 //     `redis_password` secret (empty if missing).
-//  3. neither set         → NoOp implementation. Lets dev / test boot without
-//     a cache and silences cache-dependent paths.
+//  3. neither set      → MemoryCacheService. Process-local map with TTLs
+//     and pub/sub fan-out within the same process. Multi-instance deploys
+//     should use Valkey/Redis instead — see MemoryCacheService docs for
+//     the OTP-token and pub/sub constraints.
 //
-// Setting both flags at once is a configuration error and returns nil + err
-// so callers fail fast at startup instead of silently picking one.
+// Setting both --valkey_url and --redis_url is a configuration error and
+// returns nil + err so callers fail fast at startup instead of silently
+// picking one.
 //
 // URL accepted forms:
 //   - host:port                       — plain
@@ -57,7 +60,7 @@ func NewCacheService(ctx context.Context, secrets secret.SecretProvider) (CacheS
 		password, _ := secrets.GetSecret(ctx, "redis_password")
 		return newValkeyClient(redisAddr, strings.TrimSpace(password), false), nil
 	}
-	return &NoOpCacheService{}, nil
+	return NewMemoryCacheService(), nil
 }
 
 // newValkeyClient builds a redis.UniversalClient from a parsed address +

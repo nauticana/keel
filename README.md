@@ -176,7 +176,7 @@ graph TD
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager + factory |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch + factory |
-| `cache` | Redis/Valkey cache service. Single port covers KV + list + pub/sub. Single-node and Redis-Cluster modes; no-op fallback when no cache is configured. Backend chosen by flag (`--redis_url` / `--valkey_url`); password sourced from secret (`redis_password` / `valkey_password`). |
+| `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `--redis_url` / `--valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
 | `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository |
@@ -1655,7 +1655,7 @@ Keel defines shared flag variables in `common/variables.go`. Your project can de
 
 ## Cache Service
 
-`cache` is the unified cache port — KV (`Get`/`Set`/`Delete`/`Increment`), list (`RPush`/`LPopAll`), and pub/sub (`Publish`/`Subscribe`) on a single `port.CacheService` interface. The implementation is backed by `redis.UniversalClient`, so the same struct handles both single-node and Redis-Cluster topologies; the wire protocol is identical between Redis and Valkey.
+`cache` is the unified cache port — KV (`Get`/`Set`/`Delete`/`Increment`), list (`RPush`/`LPopAll`), and pub/sub (`Publish`/`Subscribe`) on a single `port.CacheService` interface. Two concrete backends ship with keel: a Redis/Valkey adapter built on `redis.UniversalClient` that handles both single-node and Redis-Cluster topologies (the wire protocol is identical between Redis and Valkey), and an in-process `MemoryCacheService` that backs deployments without a separate cache server.
 
 ### Backend selection
 
@@ -1663,9 +1663,23 @@ Keel defines shared flag variables in `common/variables.go`. Your project can de
 
 1. `--valkey_url` set → Valkey path. Honors `--valkey_cluster`. Reads the `valkey_password` secret.
 2. `--redis_url` set → Redis single-node path. Reads the `redis_password` secret.
-3. neither set → `NoOpCacheService` (Get returns `redis.Nil`; mutations are silently dropped). Lets dev/test boot without a cache.
+3. neither set → `MemoryCacheService`. KV + Increment with lazy TTL expiration backed by a single mutex; pub/sub fans out to subscribers in the same process.
 
 Setting both `--redis_url` and `--valkey_url` is a configuration error and the constructor returns a non-nil error so the app fails fast at startup.
+
+### `MemoryCacheService` — when it's safe
+
+The memory backend is the default fallback because the alternative (NoOp) silently disables rate limits — `Increment` returns `0`, `count > 3` is never true, and an attacker can pump unlimited OTP SMS/email or 2FA-verify attempts. Memory at least bounds abuse to `cap × N processes`.
+
+It is correct for any deployment where:
+
+- There is exactly one backend process per region, **or**
+- The load balancer pins a client to one process for the OTP flow (Caddy `lb_policy ip_hash` or session cookie), **or**
+- The deployment doesn't use OTP / does not need cross-process pub/sub.
+
+It is **not** correct when multiple non-sticky processes serve `/public/otp/send` and `/public/otp/verify`: the verify can land on a process that never minted the token, producing a phantom miss. Multi-instance OTP deployments must provision Valkey or Redis. Pub/Sub is also single-process — `Publish` does not reach subscribers in other processes.
+
+Rate-limit caps multiply by process count. With the OTP send cap of `3/contact` and 4 instances, an attacker hitting all four can send `12/contact` per window. Still bounded; tune the per-handler cap if a tighter ceiling matters.
 
 ### Connection string forms
 

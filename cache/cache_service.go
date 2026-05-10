@@ -20,8 +20,8 @@ var ErrCacheMiss = errors.New("cache: miss")
 // half (RPush/LPopAll) backs lightweight queues — e.g. batched location
 // fan-in for tracker workers; the pub/sub half (Publish/Subscribe) backs
 // real-time broadcast — e.g. WebSocket fan-out. All methods are satisfied
-// by a Redis/Valkey backend; consumers that don't need streaming can wire
-// the NoOp implementation in tests.
+// by a Redis/Valkey backend or by the in-process MemoryCacheService
+// fallback; tests can use either or wire their own stub.
 type CacheService interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key string, value string, ttl time.Duration) error
@@ -33,9 +33,9 @@ type CacheService interface {
 	Publish(ctx context.Context, channel string, message string) error
 	Subscribe(ctx context.Context, channel string) (<-chan string, error)
 
-	// Close releases the connection pool. Idempotent and safe to call
-	// even when no backing connection was opened (NoOp adapter).
-	// Owners that want clean shutdown should call this after the HTTP
-	// server stops; processes that exit immediately can skip it.
+	// Close releases backend resources (connection pools, sweeper
+	// goroutines, subscriber channels). Idempotent. Owners that want
+	// clean shutdown should call this after the HTTP server stops;
+	// processes that exit immediately can skip it.
 	Close() error
 }

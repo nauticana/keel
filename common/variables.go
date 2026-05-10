@@ -49,6 +49,16 @@ var (
 	// deployment. Empty + secret_mode=aws is a configuration error.
 	AWSRegion = flag.String("aws_region", "", "AWS region for Secrets Manager / SNS / SQS / S3 / CloudWatch")
 	SessionTimeout   = flag.Int("session_timeout", 300, "Session timeout in seconds")
+	// OTPTTLSeconds caps how long an OTP code minted by GenerateOTP
+	// remains valid in the user_otp table. Default 300s (5 min) is the
+	// industry-standard sweet spot — long enough for SMS / email
+	// delivery latency + the user reading + typing, short enough that a
+	// stale leaked code is useless. Brute-force is gated by
+	// per-row attempt limits in user_service_local, not by the TTL.
+	// Token TTL (the opaque session id bound to the OTP) auto-tracks
+	// this value with a small buffer in OTPHandler — never set this
+	// higher than ~9 min without revisiting OTPHandler.OTPTokenTTL.
+	OTPTTLSeconds    = flag.Int("otp_ttl_seconds", 300, "OTP code time-to-live in seconds")
 	NodeId           = flag.Int("node_id", 0, "Node ID for bigint ID generator")
 	DBhost           = flag.String("db_host", "localhost", "Database hostname")
 	DBport           = flag.Int("db_port", 5432, "Database port number")
