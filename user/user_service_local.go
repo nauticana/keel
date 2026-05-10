@@ -181,18 +181,26 @@ SELECT id, user_name, first_name, last_name, user_email, status, passdate, passt
  WHERE id = ?
 `,
 
+	// LEFT JOIN partner_user: a user_account row may exist without a
+	// partner_user row (OTP/email signup flows don't auto-create a
+	// partner binding — that's wired separately, e.g. by an admin or
+	// a registration handler that knows which partner to attach).
+	// Switching from the comma-join (implicit INNER JOIN) means the
+	// second OTP /send for an existing-but-partnerless email no
+	// longer phantom-misses, falls through to create, and dies on
+	// the user_email UNIQUE constraint with a 500.
 	qPartnerUserByid: `
 SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.passtext, U.login_attempts, U.last_login_attempt, U.lock_time, p.partner_id
-  FROM user_account U, partner_user p
- WHERE p.user_id = U.id
-   AND U.id = ?
+  FROM user_account U
+  LEFT JOIN partner_user p ON p.user_id = U.id
+ WHERE U.id = ?
 `,
 
 	qPartnerUserByEmail: `
 SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.passtext, U.login_attempts, U.last_login_attempt, U.lock_time, p.partner_id
-  FROM user_account U, partner_user p
- WHERE p.user_id = U.id
-   AND U.user_email = ?
+  FROM user_account U
+  LEFT JOIN partner_user p ON p.user_id = U.id
+ WHERE U.user_email = ?
 `,
 
 	qSetPassword: `
