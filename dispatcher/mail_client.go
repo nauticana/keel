@@ -234,22 +234,25 @@ func (m *MailClient) sendHTMLViaSMTP(ctx context.Context, subject string, htmlBo
 // --- API mode ---
 
 func (m *MailClient) sendViaAPI(ctx context.Context, subject string, body string, recipients []string) error {
-	return m.postMailAPI(ctx, subject, body, recipients)
+	return m.postMailAPI(ctx, subject, body, recipients, false)
 }
 
 func (m *MailClient) sendHTMLViaAPI(ctx context.Context, subject string, htmlBody string, recipients []string) error {
-	return m.postMailAPI(ctx, subject, htmlBody, recipients)
+	return m.postMailAPI(ctx, subject, htmlBody, recipients, true)
 }
 
 // postMailAPI delivers a message to keel's REST API.
-//   - Validates that --smtp_host is a bare host (no scheme, no
-//     path), then constructs the URL via net/url so an operator
+//   - Validates that --smtp_host is a bare host[:port] (no scheme,
+//     no path), then constructs the URL via net/url so an operator
 //     copy-paste like `https://mail.example.com/api` doesn't
 //     produce `https://https://mail.example.com/api/api/send`.
+//     A port is allowed (e.g. `mail.example.com:9443`) for backends
+//     that don't run on :443 — e.g. when bdsmail shares a host with
+//     another service that owns :443.
 //   - Drains the response body on non-2xx so the connection is released to the keep-alive pool.
 //   - Routes through common.HTTPClient() — the process-wide client
 //     with a 30s timeout — instead of constructing a one-shot.
-func (m *MailClient) postMailAPI(ctx context.Context, subject string, body string, recipients []string) error {
+func (m *MailClient) postMailAPI(ctx context.Context, subject string, body string, recipients []string, htmlMode bool) error {
 	apiKey, err := m.Secrets.GetSecret(ctx, "smtp_pass")
 	if err != nil {
 		return fmt.Errorf("failed to get mail API key: %w", err)
@@ -258,8 +261,8 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 	if host == "" {
 		return fmt.Errorf("smtp_host not configured")
 	}
-	if strings.Contains(host, "/") || strings.Contains(host, ":") {
-		return fmt.Errorf("mail api: --smtp_host must be a bare host (no scheme or path), got %q", host)
+	if strings.Contains(host, "/") {
+		return fmt.Errorf("mail api: --smtp_host must be a bare host[:port] (no scheme or path), got %q", host)
 	}
 	endpoint := (&url.URL{Scheme: "https", Host: host, Path: "/api/send"}).String()
 
@@ -268,6 +271,7 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 		"to":      recipients,
 		"subject": subject,
 		"body":    body,
+		"html":    htmlMode,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to marshal email payload: %w", err)
