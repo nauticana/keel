@@ -1689,16 +1689,21 @@ func (s *LocalUserService) insertUserAccount(ctx context.Context, tx data.TxQuer
 	return int(id), nil
 }
 
-// createUserByPhone INSERTs a new user_account row with phone set and no
-// social-provider row. Username defaults to "phone-<e164>" so it's unique
-// and recognizable. Caller must pass an already-normalized (E.164) phone.
-func (s *LocalUserService) createUserByPhone(phone string) (*model.UserSession, error) {
+// createUserByPhone INSERTs a new user_account row with phone + optional
+// email set, no password, no social-provider row. The user_name column
+// is set to the E.164 phone itself — phones are unique so they work as
+// auto-handles, and using the phone avoids a synthetic "phone-<e164>"
+// string that's redundant with the phone column. Caller must pass an
+// already-normalized (E.164) phone; email is stored as-is (caller
+// normalizes if needed) — empty email is fine and means "user only
+// gave us phone".
+func (s *LocalUserService) createUserByPhone(phone, email string) (*model.UserSession, error) {
 	ctx := s.ctx()
 	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
 	if err != nil {
 		return nil, err
 	}
-	userId, err := s.insertUserAccount(ctx, tx, "", "", "", phone, "phone-"+phone)
+	userId, err := s.insertUserAccount(ctx, tx, "", "", email, phone, phone)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, err
@@ -1707,17 +1712,97 @@ func (s *LocalUserService) createUserByPhone(phone string) (*model.UserSession, 
 		return nil, err
 	}
 	s.AddUserHistory(userId, 0, "", UserActivityCreate, "A", "phone")
-	session := s.newSession(userId, "", "", "", UserStatusActive, "phone")
+	session := s.newSession(userId, "", "", email, UserStatusActive, "phone")
 	session.PhoneNumber = phone
 	return session, nil
 }
 
+// createUserByEmail INSERTs a new user_account row with email + optional
+// phone set, no password, no social-provider row. The user_name column
+// is set to the email itself (lowercased) — emails are unique so they
+// work as auto-handles, and using the email avoids a synthetic
+// "email-foo@bar.com" string that's redundant with the user_email
+// column. Caller must pass an already-normalized (lowercased, trimmed)
+// email; phone is stored as-is (caller normalizes if needed) — empty
+// phone is fine and means "user only gave us email".
+func (s *LocalUserService) createUserByEmail(email, phone string) (*model.UserSession, error) {
+	ctx := s.ctx()
+	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
+	if err != nil {
+		return nil, err
+	}
+	userId, err := s.insertUserAccount(ctx, tx, "", "", email, phone, email)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	s.AddUserHistory(userId, 0, "", UserActivityCreate, "A", "email")
+	session := s.newSession(userId, "", "", email, UserStatusActive, "email")
+	if phone != "" {
+		session.PhoneNumber = phone
+	}
+	return session, nil
+}
+
+// GetOrCreateUserByEmail is the first-class email-auth entry point —
+// the email twin of GetOrCreateUserByPhone. Caller passes the raw email
+// (lowercased + trimmed before lookup) plus an optional phone number
+// the user supplied alongside the email at signup time. The phone is
+// recorded as-is — it's the user's claim, not yet verified; phone
+// verification happens later (e.g. on first booking). Empty phone
+// means email-only signup.
+//
+// Returns (session, created, err). When ConsentService is registered
+// and signupConsent is non-nil with at least one consent, records
+// those events against the newly-created user.
+func (s *LocalUserService) GetOrCreateUserByEmail(email, phone string, signupConsent *SignupConsent) (*model.UserSession, bool, error) {
+	normalized := normalizeEmail(email)
+	if normalized == "" {
+		return nil, false, fmt.Errorf("email is required")
+	}
+	if existing, lookupErr := s.GetUserByEmail(normalized); lookupErr == nil {
+		s.AddUserHistory(existing.Id, 0, "", UserActivityLogin, "A", "email")
+		return existing, false, nil
+	}
+	// Drop the secondary phone if it's already claimed by another user —
+	// phone is UNIQUE in user_account, so a duplicate would fail the
+	// whole insert. Same rationale as the email-collision drop in
+	// GetOrCreateUserByPhone: the email is what's being verified here;
+	// a stale-or-claimed phone shouldn't deny signup.
+	secondaryPhone := strings.TrimSpace(phone)
+	if secondaryPhone != "" {
+		if existing, _ := s.GetUserByPhone(secondaryPhone); existing != nil {
+			secondaryPhone = ""
+		}
+	}
+	fresh, createErr := s.createUserByEmail(normalized, secondaryPhone)
+	if createErr != nil {
+		return nil, false, createErr
+	}
+	if s.ConsentService != nil && signupConsent != nil && len(signupConsent.Consents) > 0 {
+		if consentErr := s.recordSignupConsent(fresh.Id, normalized, signupConsent); consentErr != nil {
+			return fresh, true, fmt.Errorf("user created but consent recording failed: %w", consentErr)
+		}
+	}
+	return fresh, true, nil
+}
+
 // GetOrCreateUserByPhone is the first-class phone-auth entry point. Caller
 // passes the raw user input plus a default region (e.g. "CA"); the method
-// normalizes to E.164 before lookup or insert. Returns (session, created, err).
-// When ConsentService is registered and signupConsent is non-nil with at
-// least one consent, records those events against the newly-created user.
-func (s *LocalUserService) GetOrCreateUserByPhone(phone, defaultRegion string, signupConsent *SignupConsent) (*model.UserSession, bool, error) {
+// normalizes to E.164 before lookup or insert. The optional `email`
+// parameter records a user-supplied email alongside the phone at signup
+// — empty means phone-only signup. Email collisions silently drop the
+// secondary email (logged via journal): the phone is what's being
+// verified at this step, and a stale-or-already-claimed email
+// shouldn't fail the whole signup.
+//
+// Returns (session, created, err). When ConsentService is registered
+// and signupConsent is non-nil with at least one consent, records
+// those events against the newly-created user.
+func (s *LocalUserService) GetOrCreateUserByPhone(phone, defaultRegion, email string, signupConsent *SignupConsent) (*model.UserSession, bool, error) {
 	normalized, err := normalizePhone(phone, defaultRegion)
 	if err != nil {
 		return nil, false, fmt.Errorf("phone: %w", err)
@@ -1726,12 +1811,23 @@ func (s *LocalUserService) GetOrCreateUserByPhone(phone, defaultRegion string, s
 		s.AddUserHistory(existing.Id, 0, "", UserActivityLogin, "A", "phone")
 		return existing, false, nil
 	}
-	fresh, createErr := s.createUserByPhone(normalized)
+	// Normalize the secondary email and check for conflict before insert.
+	// user_email is UNIQUE; a duplicate would fail the whole transaction
+	// and so deny the user a phone-OTP signup just because someone else
+	// already claimed the email. We drop the email instead — the user
+	// can update it from settings later when they prove ownership.
+	secondaryEmail := normalizeEmail(email)
+	if secondaryEmail != "" {
+		if existing, _ := s.GetUserByEmail(secondaryEmail); existing != nil {
+			secondaryEmail = ""
+		}
+	}
+	fresh, createErr := s.createUserByPhone(normalized, secondaryEmail)
 	if createErr != nil {
 		return nil, false, createErr
 	}
 	if s.ConsentService != nil && signupConsent != nil && len(signupConsent.Consents) > 0 {
-		if consentErr := s.recordSignupConsent(fresh.Id, "", signupConsent); consentErr != nil {
+		if consentErr := s.recordSignupConsent(fresh.Id, secondaryEmail, signupConsent); consentErr != nil {
 			return fresh, true, fmt.Errorf("user created but consent recording failed: %w", consentErr)
 		}
 	}

@@ -97,11 +97,25 @@ type UserService interface {
 
 	// Phone as first-class. Raw phone is normalized to E.164 using
 	// defaultRegion (e.g. "CA", "US") as a hint for local-format input.
-	// Same consent semantics as GetOrCreateUserFromSocial.
-	GetOrCreateUserByPhone(phone, defaultRegion string, signupConsent *SignupConsent) (session *model.UserSession, created bool, err error)
+	// The optional `email` parameter records a user-supplied email
+	// alongside the phone — empty means phone-only signup; a collision
+	// on user_email silently drops the secondary email so the signup
+	// still goes through. Same consent semantics as the other
+	// GetOrCreate* methods.
+	GetOrCreateUserByPhone(phone, defaultRegion, email string, signupConsent *SignupConsent) (session *model.UserSession, created bool, err error)
 
 	// NormalizePhone converts a raw user-entered phone into E.164. Exposed
 	// on the port so handlers can normalize before lookup paths that don't
 	// create users (e.g. OTP send on "login" purpose).
 	NormalizePhone(input, defaultRegion string) (string, error)
+
+	// Email as first-class — twin of GetOrCreateUserByPhone for the
+	// email-OTP authentication flow. The email is lowercased + trimmed
+	// before lookup or insert. The optional `phone` parameter records
+	// a user-supplied phone alongside the email (unverified — phone
+	// verification belongs in a later flow); empty phone means email-
+	// only signup. Same consent semantics as the other GetOrCreate*
+	// methods. Returns (session, created, err) — created is true when
+	// a new user_account row was inserted.
+	GetOrCreateUserByEmail(email, phone string, signupConsent *SignupConsent) (session *model.UserSession, created bool, err error)
 }
