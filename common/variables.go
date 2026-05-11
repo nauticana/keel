@@ -93,6 +93,7 @@ var (
 	ProjectID        = flag.String("gcp_project_id", "", "Google Cloud project ID")
 	NatsURL          = flag.String("nats_url", "", "NATS server URL")
 	StorageMode      = flag.String("storage_mode", "", "Object storage: s3 or gcs")
+	StorageBucket    = flag.String("storage_bucket", "", "Default object-storage bucket. Apps that store PII should set this per deployment site so blobs stay in the customer's data-residency region.")
 	MessagingMode    = flag.String("messaging_mode", "", "Messaging: gcp or aws")
 	MaxRequestSize   = flag.Int64("max_request_size", 16777216, "Maximum request body size (16MB)")
 	HttpReadTimeout  = flag.Int("http_read_timeout", 15, "HTTP read timeout in seconds")
