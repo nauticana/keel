@@ -127,6 +127,11 @@ func (r *RepositoryPgsql) Connect(ctx context.Context) error {
 		// Provided through a per-call wrapper rather than baked into
 		// the SQL — see information_schema lookups above.
 	}
+	// Auth query reused by CheckActionPermission for custom-action
+	// middleware. Per-TableService AuthQuery wires its own copy too;
+	// keeping them separate is cheap and avoids cross-binding queries
+	// from different intent.
+	r.AuthQuery = r.GetQueryService(ctx, data.AuthorizationQueries)
 	return nil
 }
 

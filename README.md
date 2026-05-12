@@ -183,6 +183,7 @@ graph TD
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `RunDefault`, the one-call worker bootstrap |
+| Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
 ## Quick Start
 
@@ -1080,6 +1081,94 @@ Routes registered:
 - **Fee / minimum / cooldown** policy on `RequestInstantPayout`. Keel runs the transfer; the application gates whether it should.
 - **Payout ledger** — recording the returned `ProviderPayoutID` against the application's domain table.
 - **Idempotency cache** — Valkey dedupe keyed on `RawEventID` is recommended for high-volume webhooks.
+
+## Table Actions
+
+`table_action` is a basis table that surfaces custom buttons in sail's generic CRUD screens (table_list, table_detail, table_search) — collapsing the five-piece boilerplate every "Set Default" / "Enable" / "Calculate" / "Assign" button used to need (handler + route + Angular button + click handler + permission grant) down to **one seed row + one Go handler + one auth grant**.
+
+### Schema
+
+```sql
+CREATE TABLE table_action (
+    table_name      VARCHAR(80)  NOT NULL,
+    action_name     VARCHAR(30)  NOT NULL,
+    caption         VARCHAR(80)  NOT NULL,
+    icon            VARCHAR(40),
+    record_specific BOOLEAN      NOT NULL DEFAULT FALSE,
+    method_name     VARCHAR(80),
+    display_order   SMALLINT     NOT NULL DEFAULT 10,
+    confirm_message VARCHAR(200),
+    PRIMARY KEY (table_name, action_name)
+);
+```
+
+`record_specific=TRUE` renders the button next to each row's edit/delete icons. `record_specific=FALSE` renders it on the toolbar next to "New Record".
+
+`action_name` is lowercase; the framework uppercases it for authorization lookups. Names that collide with generic-CRUD subpaths (`list`, `get`, `post`, `delete`, `get-paginated`) are rejected at REST service boot — fail-fast safety net.
+
+### Authorization
+
+Each table that owns custom actions registers its **own** `authorization_object`. The action becomes an `authorization_object_action` row under it. This keeps per-table namespacing — `ASSIGN` on `PROJECT_WBS_ITEM` is a distinct grant from `ASSIGN` on `ORDER_LINE`.
+
+```yaml
+- table: authorization_object
+  rows:
+    - [USER_PAYMENT_METHOD, "User Payment Method Actions"]
+
+- table: authorization_object_action
+  rows:
+    - [USER_PAYMENT_METHOD, SET_DEFAULT, "Set Default"]
+
+- table: authorization_role_permission
+  rows:
+    - [APP_USER, USER_PAYMENT_METHOD, SET_DEFAULT, "user_payment_method"]
+```
+
+The `low_limit` column carries the table_name (lowercase) so wildcard / range matching works the same way as standard `TABLE` CRUD grants.
+
+### URL convention
+
+`POST /api/v1/{table_name}/{action_name}` — no `/action/` segment, version segment matches the table's `rest_api_header.version`. Request body carries the record's primary key columns (record-specific) or `{}` (table-level).
+
+Override via the `table_action.method_name` column when two tables need to route to one shared handler — keel uses `{method_name}` in place of `{table}/{action_name}` on the URL.
+
+### Backend wiring
+
+Downstream apps register the handler in their existing `Routes(prefix)` map, wrapped in `handler.WrapTableAction` for the auth gate:
+
+```go
+func (h *UserPaymentMethodHandler) Routes(prefix string) map[string]http.HandlerFunc {
+    return map[string]http.HandlerFunc{
+        handler.TableActionPath(prefix, "user_payment_method", "set_default"):
+            handler.WrapTableAction(h.DB, h.UserService,
+                "USER_PAYMENT_METHOD", "SET_DEFAULT", "user_payment_method",
+                h.SetDefault),
+    }
+}
+```
+
+`handler.TableActionPath(prefix, table, action)` returns the conventional URL. `handler.WrapTableAction` runs the auth check before delegating to the inner handler — denied callers get 403 (RFC 7807).
+
+### Frontend behaviour
+
+Sail's `BaseTable.getActions(recordSpecific)` returns the `TableAction[]` for the active table, sorted by `displayOrder`. The three CRUD components consume it:
+
+- `table_list` and `table_detail` render record-specific actions next to edit/delete and table-level actions next to "New Record".
+- `table_search` renders table-level actions only (no per-row context).
+
+Each render is gated by `BaseAuthService.canExecute(authorityObject, authorityCheck, tableName)`. Click fires `BackendService.executeAction(action.method, body)` — for record-specific actions the body is the row's primary key (lifted via `BaseTable.primaryKeyValues`); for table-level it's `{}`. The list re-fetches on success.
+
+### What the application owns
+
+- The Go method that runs when the button is clicked (writes to the DB, calls keel services, etc.).
+- The auth grant deciding which roles can fire the action.
+- Optional confirm-prompt text on the `table_action` row.
+- The icon name (any Material icon) per row.
+
+### What sail / keel own
+
+- Button rendering, ordering, permission gating, click → HTTP dispatch, primary-key extraction, list-refresh-on-success.
+- Reserved-subpath safety guard at boot.
 
 ## Multi-Cloud Support
 

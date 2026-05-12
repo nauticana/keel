@@ -372,6 +372,7 @@ seeds:
       - [PAYMENT_ADMIN, TABLE, UPDATE, user_bank_info]
       - [PAYMENT_ADMIN, TABLE, SELECT, user_payment_method]
       - [PAYMENT_ADMIN, TABLE, DELETE, user_payment_method]
+      - [PAYMENT_ADMIN, USER_PAYMENT_METHOD, SET_DEFAULT, user_payment_method]
 
   - table: user_account_policy
     columns: [id, policy_value]

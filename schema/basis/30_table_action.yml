@@ -1,0 +1,48 @@
+table: table_action
+comment: |
+  Per-table custom actions surfaced as buttons in CRUD UIs. Each row
+  registers ONE action; the downstream application must also (a) seed
+  the matching authorization_object + authorization_object_action rows
+  so roles can grant access, and (b) register an HTTP handler at the
+  conventional URL POST /<rest_prefix>/<table_name>/<action_name>.
+
+  authorization_object.id mirrors the uppercased table name and
+  authorization_object_action.action mirrors the uppercased action_name
+  — gives each table its own action namespace so the same action name
+  ('assign', 'enable', 'calculate') can mean different things on
+  different tables without a shared auth dimension.
+
+  record_specific=TRUE  → button renders next to per-row edit/delete.
+  record_specific=FALSE → button renders next to the "New Record"
+                          control at the table-level toolbar.
+
+  Reserved action_name values that collide with generic CRUD subpaths
+  (list / get / post / delete / get-paginated) are rejected at REST
+  service boot.
+order: 52
+columns:
+  - name: table_name
+    type: VARCHAR(80)
+  - name: action_name
+    type: VARCHAR(30)
+  - name: caption
+    type: VARCHAR(80)
+  - name: icon
+    type: VARCHAR(40)
+    nullable: true
+  - name: record_specific
+    type: BOOLEAN
+    default: "FALSE"
+  - name: method_name
+    type: VARCHAR(80)
+    nullable: true
+  - name: display_order
+    type: SMALLINT
+    default: "10"
+  - name: confirm_message
+    type: VARCHAR(200)
+    nullable: true
+primary_key: [table_name, action_name]
+indexes:
+  - name: idx_table_action_table
+    columns: [table_name]

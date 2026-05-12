@@ -25,6 +25,12 @@ type TableDefinition struct {
 	Columns            []*TableColumn
 	Children           []*ForeignKey
 	Parents            []*ForeignKey
+	// Actions are the custom buttons registered against this table via
+	// the basis table_action seed — populated by RestService.Init.
+	// Empty when no custom actions are registered. Sail consumes this
+	// over the wire (TableDefinition.Actions) to render extra buttons
+	// next to the built-in edit / delete / new-record controls.
+	Actions []*TableAction
 }
 
 func (t *TableDefinition) TypeScriptColumnsNouser(indent string) string {

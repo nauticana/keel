@@ -21,6 +21,15 @@ type DatabaseRepository interface {
 	TypeScriptTables(baseclass string, indent int) []*[]byte
 	BeginTx(ctx context.Context, queries map[string]string) (TxQueryService, error)
 
+	// CheckActionPermission returns (allowed, ownScope) for an
+	// arbitrary (authorization_object, action) pair scoped to the given
+	// scope string (typically a table_name or "*"). Generalises the
+	// table-bound TableService.CheckPermission helper so custom action
+	// middleware (TableAction buttons, report dispatchers, etc.) can
+	// gate any object/action — not just "TABLE"/CRUD. Returns false
+	// when userID < 0 or the auth query is unwired.
+	CheckActionPermission(ctx context.Context, userID int, authObject, action, scope string) (bool, bool)
+
 	// RunInTx executes fn inside a database transaction. fn receives a
 	// TxView that yields TableService instances bound to the in-flight
 	// tx — every call through that view ends up in the same DB

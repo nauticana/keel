@@ -85,6 +85,7 @@ seeds:
       - [payment_method, payment_method]
       - [user_bank_info, user_bank_info]
       - [user_payment_method, user_payment_method]
+      - [table_action, table_action]
 
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
@@ -105,6 +106,21 @@ seeds:
       - [40, payments, "Payments"]
       - [50, payouts, "Payouts"]
 
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [USER_PAYMENT_METHOD, "User Payment Method Actions"]
+
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [USER_PAYMENT_METHOD, SET_DEFAULT, "Set Default"]
+
+  - table: table_action
+    columns: [table_name, action_name, caption, icon, record_specific, display_order]
+    rows:
+      - [user_payment_method, set_default, "Set Default", star, true, 10]
+
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:
@@ -120,6 +136,7 @@ seeds:
       - [90,  false, setup, api_keys, api_key, "API Keys"]
       - [100, false, setup, countries, country, "Countries"]
       - [110, false, setup, service_registries, service_registry, "Service Registries"]
+      - [120, false, setup, table_actions, table_action, "Table Actions"]
       - [10,  false, payments, payment_records, payment_record, "Payment Records"]
       - [20,  false, payments, payment_methods, payment_method, "Payment Methods"]
       - [30,  false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]

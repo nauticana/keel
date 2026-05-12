@@ -22,6 +22,7 @@ const (
 	qRestApiChild      = "rest_api_child"
 	qRestReportHeader  = "rest_report_header"
 	qRestReportParam   = "rest_report_param"
+	qTableAction       = "table_action"
 )
 
 var restQueries = map[string]string{
@@ -44,6 +45,12 @@ SELECT authorization_object_id, action, low_limit, high_limit
 	qRestApiChild:     "SELECT api_id, constraint_name FROM rest_api_child",
 	qRestReportHeader: "SELECT id, version, query_name, description FROM rest_report_header WHERE is_active IS TRUE",
 	qRestReportParam:  "SELECT report_id, seq, param_name, data_type, constant_id FROM rest_report_param ORDER BY report_id, seq",
+	qTableAction: `
+SELECT table_name, action_name, caption, COALESCE(icon, ''),
+       record_specific, COALESCE(method_name, ''),
+       display_order, COALESCE(confirm_message, '')
+  FROM table_action
+ ORDER BY table_name, display_order, action_name`,
 }
 
 type Permission struct {
@@ -193,6 +200,16 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseReposi
 			ChildServices:  make(map[string]RelationAPI),
 			Database:       s.db,
 		}
+	}
+
+	// Table actions — populate TableDefinition.Actions from the basis
+	// table_action rows. Each row becomes one button surfaced in sail's
+	// CRUD UIs (next to per-row edit/delete or next to "New Record",
+	// depending on record_specific). Reserved action_name values that
+	// would collide with generic-CRUD subpaths are rejected up-front
+	// so a bad seed fails at boot instead of mis-routing requests.
+	if err := s.loadTableActions(ctx); err != nil {
+		return nil, nil, err
 	}
 
 	s.RestReports = make(map[string]*RestReport)
@@ -522,4 +539,81 @@ func (s *RestService) TypeScriptTables(ctx context.Context, baseclass string, in
 
 func (s *RestService) GetTableDefinitions() map[string]*model.TableDefinition {
 	return s.db.GetTableDefinitions()
+}
+
+// loadTableActions reads basis table_action rows and attaches them to
+// each matching TableDefinition.Actions slice. Rejects reserved
+// action_name values (list / get / post / delete / get-paginated) so a
+// bad seed fails at boot instead of mis-routing requests at runtime.
+//
+// Tables missing from TableDefinitions silently skip — useful when a
+// downstream app pre-seeds table_action rows for tables that haven't
+// loaded yet (deferred load order is supported).
+func (s *RestService) loadTableActions(ctx context.Context) error {
+	// The basis table is named `table_action`; the table_action row
+	// for the metadata table itself is intentionally absent (we never
+	// register custom buttons against the metadata).
+	if _, ok := s.db.GetTableDefinitions()["table_action"]; !ok {
+		return nil // table_action not loaded — skip silently
+	}
+	res, err := s.qs.Query(ctx, qTableAction)
+	if err != nil {
+		return fmt.Errorf("load table_action rows: %w", err)
+	}
+	for _, row := range res.Rows {
+		tableName := common.AsString(row[0])
+		actionName := common.AsString(row[1])
+		if model.IsReservedActionName(actionName) {
+			return fmt.Errorf("table_action.action_name %q collides with a generic-CRUD subpath (%s.%s)",
+				actionName, tableName, actionName)
+		}
+		table := s.db.GetTableDefinition(tableName)
+		if table == nil {
+			// Unknown target table — skip silently rather than fail boot;
+			// downstream apps may seed actions for tables loaded later
+			// or that exist only in a sibling schema.
+			continue
+		}
+		action := &model.TableAction{
+			TableName:       tableName,
+			ActionName:      actionName,
+			Caption:         common.AsString(row[2]),
+			Icon:            common.AsString(row[3]),
+			RecordSpecific:  common.AsBool(row[4]),
+			MethodName:      common.AsString(row[5]),
+			DisplayOrder:    int(common.AsInt64(row[6])),
+			ConfirmMessage:  common.AsString(row[7]),
+			AuthorityObject: upper(tableName),
+			AuthorityAction: upper(actionName),
+		}
+		// Method is the resolved URL POST target relative to
+		// RestURL.api_prefix on the sail side (which prepends /api/).
+		// Convention: /v1/{table}/{action_name}, mirroring the generic
+		// CRUD path /v1/{apiName}/list / /get / /post / /delete that
+		// the downstream's GetApiHandlers loop already mounts.
+		// method_name overrides the {table}/{action_name} segment when
+		// set — useful for routing two tables' actions to one shared
+		// handler at a custom URL.
+		if action.MethodName != "" {
+			action.Method = "/v1/" + action.MethodName
+		} else {
+			action.Method = "/v1/" + tableName + "/" + actionName
+		}
+		table.Actions = append(table.Actions, action)
+	}
+	return nil
+}
+
+// upper is a tiny helper for upper-casing identifiers — pulled out so
+// the call sites in loadTableActions stay terse.
+func upper(s string) string {
+	out := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 32
+		}
+		out[i] = c
+	}
+	return string(out)
 }

@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/nauticana/keel/common"
@@ -39,6 +40,14 @@ type AbstractRepository struct {
 	TableDefinitions map[string]*model.TableDefinition
 	ForeignKeys      map[string]*model.ForeignKey
 	QuerySvc         QueryService
+	// AuthQuery carries the QCheckAuthorization template. Populated by
+	// concrete repository Init (pgsql/repository.go) so CheckActionPermission
+	// can reuse it across calls. Equivalent to the AuthQuery each
+	// AbstractTableService is given; promoted to the repository layer
+	// so middleware that operates outside any specific TableService
+	// (custom action handlers, report dispatchers) can run the same
+	// permission check.
+	AuthQuery        QueryService
 	IdGenerator      port.BigintGenerator
 	ConnectFn        func(ctx context.Context) error
 	LoadColumnsFn    func(ctx context.Context) (map[string][]*model.TableColumn, error)
@@ -78,6 +87,47 @@ func (r *AbstractRepository) userTable() string {
 		return "user_account"
 	}
 	return r.UserTableName
+}
+
+// CheckActionPermission generalises the table-bound CheckPermission
+// helper on AbstractTableService: any (authObject, action) pair scoped
+// to the given `scope` string (typically a table_name or "*") is
+// checked via the same QCheckAuthorization query.
+//
+// Used by TableAction middleware to gate per-table custom actions —
+// see keel/handler/WrapTableAction. authObject + action are the
+// (uppercased) authorization_object + authorization_object_action
+// values registered by the downstream app.
+//
+// Wildcard / range semantics mirror AbstractTableService.CheckPermission:
+// an explicit `low_limit == scope` grant returns ownScope=false; a
+// pattern / range match returns ownScope=true.
+func (r *AbstractRepository) CheckActionPermission(ctx context.Context, userID int, authObject, action, scope string) (bool, bool) {
+	if userID < 0 || authObject == "" || action == "" || r.AuthQuery == nil {
+		return false, false
+	}
+	res, err := r.AuthQuery.Query(ctx, QCheckAuthorization, authObject, action, userID, scope)
+	if err != nil || len(res.Rows) == 0 {
+		return false, false
+	}
+	wildcardMatched := false
+	for _, rec := range res.Rows {
+		lowLimit := common.AsString(rec[0])
+		highLimit := common.AsString(rec[1])
+		if lowLimit == scope {
+			return true, false
+		}
+		if matched, _ := path.Match(lowLimit, scope); matched {
+			wildcardMatched = true
+		}
+		if highLimit != "" && scope >= lowLimit && scope <= highLimit {
+			wildcardMatched = true
+		}
+	}
+	if wildcardMatched {
+		return true, true
+	}
+	return false, false
 }
 
 func (r *AbstractRepository) Init(ctx context.Context) error {
