@@ -362,6 +362,7 @@ seeds:
       - [PAYMENT_ADMIN, PAGE, ACCESS, payment_records]
       - [PAYMENT_ADMIN, PAGE, ACCESS, payment_methods]
       - [PAYMENT_ADMIN, PAGE, ACCESS, user_bank_infos]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, user_payment_methods]
       - [PAYMENT_ADMIN, TABLE, SELECT, payment_record]
       - [PAYMENT_ADMIN, TABLE, SELECT, payment_method]
       - [PAYMENT_ADMIN, TABLE, INSERT, payment_method]
@@ -369,6 +370,8 @@ seeds:
       - [PAYMENT_ADMIN, TABLE, DELETE, payment_method]
       - [PAYMENT_ADMIN, TABLE, SELECT, user_bank_info]
       - [PAYMENT_ADMIN, TABLE, UPDATE, user_bank_info]
+      - [PAYMENT_ADMIN, TABLE, SELECT, user_payment_method]
+      - [PAYMENT_ADMIN, TABLE, DELETE, user_payment_method]
 
   - table: user_account_policy
     columns: [id, policy_value]

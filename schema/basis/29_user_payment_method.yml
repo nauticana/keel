@@ -1,0 +1,54 @@
+table: user_payment_method
+comment: |
+  Saved payment methods for end users (cards, wallets, bank accounts).
+  Distinct from `payment_method`, which is partner-scoped for SaaS
+  billing — this row is per (user_id), the consumer cards a user has
+  on file for in-bound payments. provider_token is the provider's
+  reusable handle (Stripe PaymentMethod id, SetupIntent id, etc.);
+  raw card numbers / IBANs / SWIFT never land here.
+order: 51
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: method_type
+    type: VARCHAR(20)
+  - name: provider
+    type: VARCHAR(30)
+  - name: provider_token
+    type: VARCHAR(255)
+  - name: last_four
+    type: VARCHAR(4)
+    nullable: true
+  - name: brand
+    type: VARCHAR(20)
+    nullable: true
+  - name: expiry_month
+    type: SMALLINT
+    nullable: true
+  - name: expiry_year
+    type: SMALLINT
+    nullable: true
+  - name: currency
+    type: CHAR(3)
+    default: "'USD'"
+  - name: is_default
+    type: BOOLEAN
+    default: "FALSE"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: user_payment_method_seq
+  column: id
+indexes:
+  - name: idx_user_payment_method_user
+    columns: [user_id, is_default]
+foreign_keys:
+  - name: user_payment_method_users
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

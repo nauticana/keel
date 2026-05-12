@@ -7,6 +7,7 @@ seeds:
       - [lookup_style, "Lookup Style"]
       - [payout_provider, "Payout Provider"]
       - [tax_id_type, "Tax ID Type"]
+      - [payment_method_type, "Payment Method Type"]
 
   - table: constant_value
     columns: [constant_id, value, caption]
@@ -21,6 +22,11 @@ seeds:
       - [tax_id_type, E, "EIN (USA business)"]
       - [tax_id_type, V, "VAT (EU)"]
       - [tax_id_type, O, "Other"]
+      - [payment_method_type, card,       "Card"]
+      - [payment_method_type, bank,       "Bank Account"]
+      - [payment_method_type, wallet,     "Wallet"]
+      - [payment_method_type, apple_pay,  "Apple Pay"]
+      - [payment_method_type, google_pay, "Google Pay"]
 
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
@@ -28,6 +34,7 @@ seeds:
       - [lookup_style, foreign_key_lookup, lookup_style]
       - [payout_provider, user_bank_info, provider]
       - [tax_id_type, user_bank_info, tax_id_type]
+      - [payment_method_type, user_payment_method, method_type]
 
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
@@ -77,6 +84,7 @@ seeds:
       - [payment_record, payment_record]
       - [payment_method, payment_method]
       - [user_bank_info, user_bank_info]
+      - [user_payment_method, user_payment_method]
 
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
@@ -115,4 +123,5 @@ seeds:
       - [10,  false, payments, payment_records, payment_record, "Payment Records"]
       - [20,  false, payments, payment_methods, payment_method, "Payment Methods"]
       - [30,  false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]
+      - [40,  true,  payments, user_payment_methods, user_payment_method, "User Payment Methods"]
       - [10,  true,  payouts,  user_bank_infos, user_bank_info, "Bank Accounts"]
