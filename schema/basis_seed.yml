@@ -5,17 +5,29 @@ seeds:
     columns: [id, caption]
     rows:
       - [lookup_style, "Lookup Style"]
+      - [payout_provider, "Payout Provider"]
+      - [tax_id_type, "Tax ID Type"]
 
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
       - [lookup_style, D, "Dropdown"]
       - [lookup_style, S, "Search Screen"]
+      - [payout_provider, AW, "Airwallex"]
+      - [payout_provider, SC, "Stripe Connect"]
+      - [payout_provider, WI, "Wise"]
+      - [tax_id_type, S, "SIN (Canada)"]
+      - [tax_id_type, N, "SSN or EIN (USA)"]
+      - [tax_id_type, E, "EIN (USA business)"]
+      - [tax_id_type, V, "VAT (EU)"]
+      - [tax_id_type, O, "Other"]
 
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
       - [lookup_style, foreign_key_lookup, lookup_style]
+      - [payout_provider, user_bank_info, provider]
+      - [tax_id_type, user_bank_info, tax_id_type]
 
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
@@ -64,6 +76,7 @@ seeds:
       - [payment_webhook_log, payment_webhook_log]
       - [payment_record, payment_record]
       - [payment_method, payment_method]
+      - [user_bank_info, user_bank_info]
 
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
@@ -82,6 +95,7 @@ seeds:
     rows:
       - [10, setup, "Setup"]
       - [40, payments, "Payments"]
+      - [50, payouts, "Payouts"]
 
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
@@ -101,3 +115,4 @@ seeds:
       - [10,  false, payments, payment_records, payment_record, "Payment Records"]
       - [20,  false, payments, payment_methods, payment_method, "Payment Methods"]
       - [30,  false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]
+      - [10,  true,  payouts,  user_bank_infos, user_bank_info, "Bank Accounts"]

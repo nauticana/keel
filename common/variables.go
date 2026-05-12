@@ -123,4 +123,24 @@ var (
 	// value disables SMS dispatch (NewTwilioSMSDispatcher returns an error
 	// so callers can skip registering the channel).
 	TwilioMessagingServiceSID = flag.String("twilio_messaging_service_sid", "", "Twilio Messaging Service SID (MGxxxxxxxx...). Empty disables SMS.")
+
+	// Payout provider selection. Picks the active payout.PayoutProvider
+	// implementation for out-bound payouts. One impl is active per
+	// deployment; per-partner override is a future refinement on
+	// business_partner_config.payout_provider. Codes follow the basis
+	// constant_header `payout_provider` (CHAR(2)):
+	//   AW = Airwallex (default), SC = Stripe Connect, WI = Wise
+	PayoutProvider = flag.String("payout_provider", "AW", "Payout provider code: AW (Airwallex), SC (Stripe Connect), WI (Wise)")
+
+	// PayoutReturnURL is the deep-link the provider redirects the user
+	// back to after their hosted-KYC flow completes (e.g.
+	// "myapp://onboarding/return" for a mobile app, or
+	// "https://app.example.com/onboarding/return" for a web build).
+	PayoutReturnURL = flag.String("payout_return_url", "", "Deep-link the payout provider redirects back to after hosted KYC")
+
+	// PayoutWebhookURL is the public URL the provider POSTs webhook
+	// events to. The path suffix /api/v1/webhook/payout/<code> is
+	// appended by the calling application's router; the value here is
+	// the public-host portion only, e.g. "https://api.example.com".
+	PayoutWebhookURL = flag.String("payout_webhook_url", "", "Public host the payout provider sends webhook events to")
 )

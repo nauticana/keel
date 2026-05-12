@@ -79,6 +79,7 @@ seeds:
       - [SECURITY_OPER, "Security Operator"]
       - [BUSINESS_ADMIN, "Business Administrator"]
       - [PARTNER_ADMIN, "Partner Administrator"]
+      - [PAYMENT_ADMIN, "Payment Administrator"]
 
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
@@ -320,14 +321,54 @@ seeds:
       - [BUSINESS_ADMIN, TABLE, DELETE, payment_method]
       - [BUSINESS_ADMIN, TABLE, SELECT, payment_webhook_log]
 
-      # PARTNER_ADMIN — read-only on their own payment history + methods
-      - [PARTNER_ADMIN, PAGE, ACCESS, payment_records]
-      - [PARTNER_ADMIN, PAGE, ACCESS, payment_methods]
-      - [PARTNER_ADMIN, TABLE, SELECT, payment_record]
-      - [PARTNER_ADMIN, TABLE, SELECT, payment_method]
-      - [PARTNER_ADMIN, TABLE, INSERT, payment_method]
-      - [PARTNER_ADMIN, TABLE, UPDATE, payment_method]
-      - [PARTNER_ADMIN, TABLE, DELETE, payment_method]
+      # PARTNER_ADMIN — manages own partner only (auto-scoped by session
+      # partner_id via PartnerSpecific in data/abstract_repository.go).
+      # No user_account INSERT: account creation goes through registration
+      # + OTP verification which downstream projects implement themselves;
+      # this role can only link an existing user via partner_user.
+      - [PARTNER_ADMIN, PAGE, ACCESS, business_partners]
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_users]
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_domains]
+      - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_quota_usages]
+      - [PARTNER_ADMIN, TABLE, SELECT, business_partner]
+      - [PARTNER_ADMIN, TABLE, UPDATE, business_partner]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_user]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_user]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_user]
+      - [PARTNER_ADMIN, TABLE, DELETE, partner_user]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_address]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_address]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_address]
+      - [PARTNER_ADMIN, TABLE, DELETE, partner_address]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_domain]
+      - [PARTNER_ADMIN, TABLE, INSERT, partner_domain]
+      - [PARTNER_ADMIN, TABLE, UPDATE, partner_domain]
+      - [PARTNER_ADMIN, TABLE, DELETE, partner_domain]
+      - [PARTNER_ADMIN, TABLE, SELECT, api_key]
+      - [PARTNER_ADMIN, TABLE, INSERT, api_key]
+      - [PARTNER_ADMIN, TABLE, UPDATE, api_key]
+      - [PARTNER_ADMIN, TABLE, DELETE, api_key]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_plan_subscription]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_addon_subscription]
+      - [PARTNER_ADMIN, TABLE, SELECT, usage_ledger]
+      - [PARTNER_ADMIN, TABLE, SELECT, subscription_plan]
+      - [PARTNER_ADMIN, TABLE, SELECT, subscription_addon]
+      - [PARTNER_ADMIN, TABLE, SELECT, subscription_resource]
+      - [PARTNER_ADMIN, TABLE, SELECT, subscription_quota]
+      - [PARTNER_ADMIN, TABLE, SELECT, user_account]
+
+      # PAYMENT_ADMIN — reusable role for staff that manages in/out-bound payments
+      - [PAYMENT_ADMIN, PAGE, ACCESS, payment_records]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, payment_methods]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, user_bank_infos]
+      - [PAYMENT_ADMIN, TABLE, SELECT, payment_record]
+      - [PAYMENT_ADMIN, TABLE, SELECT, payment_method]
+      - [PAYMENT_ADMIN, TABLE, INSERT, payment_method]
+      - [PAYMENT_ADMIN, TABLE, UPDATE, payment_method]
+      - [PAYMENT_ADMIN, TABLE, DELETE, payment_method]
+      - [PAYMENT_ADMIN, TABLE, SELECT, user_bank_info]
+      - [PAYMENT_ADMIN, TABLE, UPDATE, user_bank_info]
 
   - table: user_account_policy
     columns: [id, policy_value]

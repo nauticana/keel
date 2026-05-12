@@ -1,0 +1,56 @@
+table: user_bank_info
+comment: |
+  Per (user, partner) bank account details for out-bound payouts.
+  Owned by keel/payout. Raw routing details live with the provider
+  (Airwallex / Stripe Connect / Wise); this row carries only the
+  provider handle plus tax/correspondence metadata.
+order: 50
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: country_code
+    type: CHAR(2)
+  - name: currency
+    type: CHAR(3)
+  - name: account_holder_name
+    type: VARCHAR(200)
+  - name: billing_address
+    type: TEXT
+  - name: tax_id_type
+    type: CHAR(1)
+  - name: tax_id_encrypted
+    type: BYTEA
+  - name: provider
+    type: CHAR(2)
+  - name: provider_account_id
+    type: VARCHAR(100)
+    nullable: true
+  - name: provider_agreement
+    type: BOOLEAN
+    default: "FALSE"
+  - name: provider_onboarded_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [user_id, partner_id]
+indexes:
+  - name: idx_user_bank_info_partner
+    columns: [partner_id]
+foreign_keys:
+  - name: user_bank_info_users
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: user_bank_info_partners
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

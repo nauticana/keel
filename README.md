@@ -180,6 +180,7 @@ graph TD
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
 | `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository |
+| `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `RunDefault`, the one-call worker bootstrap |
 
@@ -996,6 +997,90 @@ Setup mode returns the same `{ "checkoutUrl": "..." }` shape; Stripe persists a 
 - **Accounting / journaling** — keel is provider-neutral; per-project until a pattern clearly repeats.
 - **Success / cancel URLs** — computed from each project's `ConfirmBaseURL`.
 
+## Payout (Airwallex / Stripe Connect / Wise)
+
+`keel/payout` is the out-bound counterpart to `keel/payment`. It abstracts the third-party providers that hold bank routing details and disburse payouts to partner users (marketplace sellers, contractors, creators, gig-economy workers — keel is domain-neutral). The application never sees raw IBAN / SWIFT / ABA / institution numbers; only the provider's account handle.
+
+### Provider feature matrix
+
+| Provider | Code | Onboarding | Webhook | Instant payout |
+|---|---|:--:|:--:|:--:|
+| Airwallex      | `AW` | ✅ | ✅ | ✅ |
+| Stripe Connect | `SC` | ⏳ stub | ✅ | ⏳ stub |
+| Wise           | `WI` | ⏳ stub | ✅ | ⏳ stub |
+
+Stubs return `payout.ErrNotImplemented`. Wire them when the respective contract is live.
+
+### `PayoutProvider` interface
+
+```go
+type PayoutProvider interface {
+    Code() string
+    StartOnboarding(ctx, StartOnboardingInput) (*PayoutOnboardingSession, error)
+    VerifyAndParseWebhook(headers, rawBody) (*PayoutWebhookEvent, error)
+    RequestInstantPayout(ctx, InstantPayoutInput) (*InstantPayoutResult, error)
+}
+```
+
+Events are normalized into a small taxonomy (`account.created` / `activated` / `updated` / `rejected`) — service layer never reads provider-native event names. Webhook signature verification is per-provider HMAC; failures surface as the typed error and the handler replies 401 to trigger provider retry with backoff.
+
+### `user_bank_info` table (basis)
+
+Ships with basis.sql. Keyed on `(user_id, partner_id)` — one bank account per (user, partner). Multi-partner users get one row per partner, with the option to **share one `provider_account_id` across rows** via `OnboardingService.LinkReusableAccount` (no provider call — the account already cleared KYC on the provider's side).
+
+Columns: `country_code`, `currency`, `account_holder_name`, `billing_address`, `tax_id_type`, `tax_id_encrypted`, `provider`, `provider_account_id`, `provider_agreement`, `provider_onboarded_at`. PartnerSpecific auto-filter applies via the `partner_id` FK.
+
+### Downstream wiring
+
+```go
+provider, err := payout.NewProvider(*kcommon.PayoutProvider, apiKey, webhookSecret, journal)
+svc := &payout.OnboardingService{
+    DB:                  db,
+    Provider:            provider,
+    OnboardingReturnURL: *kcommon.PayoutReturnURL,
+    WebhookCallbackURL:  *kcommon.PayoutWebhookURL,
+    Journal:             journal,
+}
+h := &handler.PayoutHandler{
+    AbstractHandler: handler.AbstractHandler{UserService: userSvc},
+    PayoutService:   svc,
+}
+mux.Handle(h.Routes(kcommon.RestPrefix + "/v1"))
+```
+
+Routes registered:
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/v1/payout/onboard/start` | session | Mint hosted-KYC link |
+| POST | `/api/v1/payout/reusable`      | session | List user's other-partner accounts |
+| POST | `/api/v1/payout/reusable/link` | session | Reuse an account on the current partner |
+| POST | `/api/v1/payout/status`        | session | "Onboarding complete?" boolean |
+| POST | `/api/v1/webhook/payout/{AW\|SC\|WI}` | signature | Provider webhook intake |
+
+### Flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--payout_provider` | `AW` | Active provider code |
+| `--payout_return_url` | (empty) | Deep-link the provider redirects to after hosted KYC |
+| `--payout_webhook_url` | (empty) | Public host the provider posts webhooks to |
+
+### Secrets
+
+| Secret | Required | Source |
+|---|---|---|
+| `payout_provider_key` | yes (when payouts enabled) | Provider dashboard — API key / bearer token |
+| `payout_webhook_secret` | yes (when payouts enabled) | Same dashboard — HMAC signing key |
+
+### What the application owns
+
+`OnboardingService` deliberately stops at the bank-info table. The calling application is responsible for:
+
+- **Fee / minimum / cooldown** policy on `RequestInstantPayout`. Keel runs the transfer; the application gates whether it should.
+- **Payout ledger** — recording the returned `ProviderPayoutID` against the application's domain table.
+- **Idempotency cache** — Valkey dedupe keyed on `RawEventID` is recommended for high-volume webhooks.
+
 ## Multi-Cloud Support
 
 Keel supports multiple cloud providers through its port/adapter pattern:
@@ -1126,19 +1211,24 @@ One node emits up to 4096 ids/ms (~4M/s). The 41-bit timestamp spans ~69 years.
 
 The host app creates **one** `*SnowflakeGenerator` at startup and injects it into `pgsql.NewPgSQLDatabase`. Keel threads it through:
 
-```
-*SnowflakeGenerator
-      │
-      ▼
-NewPgSQLDatabase(ctx, secrets, gen)
-      │  (stored on AbstractRepository.IdGenerator)
-      ▼
-  ┌─────────────────────────────┬──────────────────────────────┐
-  ▼                             ▼                              ▼
-QueryServicePgsql           TxQueryServicePgsql           AbstractTableService
-(GetQueryService)           (BeginTx)                     (CreateTableService)
-      │                            │                              │
-      └──── GenID() ───────────────┴──── GenID() ──────────────── NextID() (used by generic Insert path)
+```mermaid
+flowchart TD
+    SG["*SnowflakeGenerator"]
+    NPG["NewPgSQLDatabase(ctx, secrets, gen)<br/>(stored on AbstractRepository.IdGenerator)"]
+    QS["QueryServicePgsql<br/>(GetQueryService)"]
+    TQS["TxQueryServicePgsql<br/>(BeginTx)"]
+    ATS["AbstractTableService<br/>(CreateTableService)"]
+
+    SG --> NPG
+    NPG --> QS
+    NPG --> TQS
+    NPG --> ATS
+
+    QS -->|GenID| G1[" "]
+    TQS -->|GenID| G1
+    ATS -->|"NextID() (used by generic Insert path)"| G1
+
+    style G1 fill:none,stroke:none
 ```
 
 Services in `package service` (registration, user) mint ids through the transaction they already hold:
@@ -1351,6 +1441,17 @@ User accounts
 
 ```mermaid
 erDiagram
+    consent_policy ||--o{ consent_event : tracks
+    authorization_role ||--o{ user_permission : assigned
+    user_account_history }o--|| user_account : logs
+    user_permission }o--|| user_account : has
+    user_social_provider }o--|| user_account : has
+    user_account ||--o{ user_refresh_token : has
+    user_account ||--o{ user_otp : has
+    user_account ||--o{ user_trusted_device : has
+    user_account ||--o{ device_token : has
+    user_account ||--o{ consent_event : has
+
     user_account {
         BIGINT id PK
         VARCHAR first_name
@@ -1365,16 +1466,12 @@ erDiagram
         SMALLINT login_attempts
         BOOLEAN twofa_enabled
     }
-
     user_permission {
         BIGINT user_id PK,FK
         VARCHAR role_id PK,FK
         TIMESTAMP begda PK
         TIMESTAMP endda
     }
-    user_account ||--o{ user_permission : has
-    authorization_role ||--o{ user_permission : assigned
-
     user_account_history {
         BIGINT user_id PK,FK
         TIMESTAMP action_time PK
@@ -1383,8 +1480,6 @@ erDiagram
         VARCHAR object_name
         VARCHAR client_address
     }
-    user_account ||--o{ user_account_history : logs
-
     user_refresh_token {
         BIGINT id PK
         BIGINT user_id FK
@@ -1393,8 +1488,6 @@ erDiagram
         TIMESTAMP revoked_at
         TIMESTAMP created_at
     }
-    user_account ||--o{ user_refresh_token : has
-
     user_trusted_device {
         BIGINT id PK
         BIGINT user_id FK
@@ -1403,8 +1496,6 @@ erDiagram
         TIMESTAMP trusted_at
         TIMESTAMP expires_at
     }
-    user_account ||--o{ user_trusted_device : has
-
     user_otp {
         BIGINT id PK
         BIGINT user_id FK
@@ -1413,20 +1504,58 @@ erDiagram
         TIMESTAMP expires_at
         INTEGER attempts
     }
-    user_account ||--o{ user_otp : has
-
     user_social_provider {
         BIGINT user_id PK,FK
         VARCHAR provider PK
         VARCHAR provider_id
     }
-    user_account ||--o{ user_social_provider : has
+    device_token {
+        BIGINT id PK
+        BIGINT user_id FK
+        CHAR platform
+        TEXT token
+        VARCHAR app_version
+        VARCHAR device_model
+        BOOLEAN is_active
+        TIMESTAMP last_seen_at
+    }
+    consent_policy {
+        BIGINT id PK
+        VARCHAR policy_type
+        VARCHAR region
+        VARCHAR version
+        VARCHAR language
+        VARCHAR content_url
+        VARCHAR content_sha256
+        TIMESTAMP effective_from
+        TIMESTAMP deprecated_at
+    }
+    consent_event {
+        BIGINT id PK
+        BIGINT user_id FK
+        VARCHAR email_hash
+        VARCHAR consent_type
+        BOOLEAN consented
+        BIGINT policy_id FK
+        VARCHAR region
+        VARCHAR client_ip
+        VARCHAR client_user_agent
+        TIMESTAMP created_at
+    }
 ```
 
 ### ER Diagram — Subscription Tables
 
 ```mermaid
 erDiagram
+    subscription_resource ||--o{ subscription_quota : limits
+    subscription_plan ||--o{ subscription_quota : has
+    subscription_plan ||--o{ partner_plan_subscription : subscribed
+    business_partner ||--o{ partner_plan_subscription : has
+    business_partner ||--o{ usage_ledger : tracks
+    subscription_addon ||--o{ partner_addon_subscription : subscribed
+    business_partner ||--o{ partner_addon_subscription : has
+
     subscription_plan {
         VARCHAR id PK
         VARCHAR caption
@@ -1448,9 +1577,6 @@ erDiagram
         BIGINT max_value
         CHAR period_type
     }
-    subscription_plan ||--o{ subscription_quota : has
-    subscription_resource ||--o{ subscription_quota : limits
-
     subscription_addon {
         VARCHAR id PK
         VARCHAR caption
@@ -1460,7 +1586,6 @@ erDiagram
         CHAR currency
         CHAR period_type
     }
-
     partner_plan_subscription {
         BIGINT partner_id PK,FK
         VARCHAR plan_id PK,FK
@@ -1469,9 +1594,6 @@ erDiagram
         CHAR status
         BOOLEAN auto_renew
     }
-    subscription_plan ||--o{ partner_plan_subscription : subscribed
-    business_partner ||--o{ partner_plan_subscription : has
-
     partner_addon_subscription {
         BIGINT partner_id PK,FK
         VARCHAR addon_id PK,FK
@@ -1480,9 +1602,6 @@ erDiagram
         CHAR status
         BOOLEAN auto_renew
     }
-    subscription_addon ||--o{ partner_addon_subscription : subscribed
-    business_partner ||--o{ partner_addon_subscription : has
-
     usage_ledger {
         BIGINT partner_id FK
         TIMESTAMP usage_time
@@ -1490,10 +1609,9 @@ erDiagram
         BIGINT amount
         VARCHAR notes
     }
-    business_partner ||--o{ usage_ledger : tracks
 ```
 
-### ER Diagram — Payment Tables
+### ER Diagram — Payment + Payout Tables
 
 ```mermaid
 erDiagram
@@ -1509,6 +1627,12 @@ erDiagram
         TIMESTAMP processed_at
     }
 
+    subscription_plan ||--o{ payment_record : for
+    business_partner ||--o{ payment_record : pays
+    business_partner ||--o{ payment_method : stores
+    user_account ||--o{ user_bank_info : "owns (1 per partner)"
+    business_partner ||--o{ user_bank_info : "scopes payouts"
+
     payment_method {
         BIGINT id PK
         BIGINT partner_id PK,FK
@@ -1518,8 +1642,6 @@ erDiagram
         BOOLEAN is_default
         TIMESTAMP created_at
     }
-    business_partner ||--o{ payment_method : stores
-
     payment_record {
         BIGINT id PK
         BIGINT partner_id FK
@@ -1535,13 +1657,35 @@ erDiagram
         TEXT raw_payload
         TIMESTAMP created_at
     }
-    business_partner ||--o{ payment_record : pays
-    subscription_plan ||--o{ payment_record : for
+    user_bank_info {
+        BIGINT user_id PK,FK
+        BIGINT partner_id PK,FK
+        CHAR country_code
+        CHAR currency
+        VARCHAR account_holder_name
+        TEXT billing_address
+        CHAR tax_id_type
+        BYTEA tax_id_encrypted
+        CHAR provider
+        VARCHAR provider_account_id
+        BOOLEAN provider_agreement
+        TIMESTAMP provider_onboarded_at
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
 ```
 
 ## Business Partners
 ```mermaid
 erDiagram
+    business_partner ||--o{ partner_domain : has
+    business_partner ||--o{ partner_user : has
+    business_partner ||--o{ api_key : owns
+    business_partner ||--o{ partner_address : has
+    partner_user }o--|| user_account : belongs
+    api_key }o--|| user_account : creates
+
+
     business_partner {
         BIGINT id PK
         VARCHAR caption
@@ -1552,9 +1696,6 @@ erDiagram
         TIMESTAMP begda PK
         TIMESTAMP endda
     }
-    business_partner ||--o{ partner_user : has
-    user_account ||--o{ partner_user : belongs
-
     api_key {
         BIGINT id PK
         BIGINT partner_id FK
@@ -1565,9 +1706,6 @@ erDiagram
         BOOLEAN is_active
         BIGINT user_id FK
     }
-    business_partner ||--o{ api_key : owns
-    user_account ||--o{ api_key : creates
-
     partner_address {
         BIGINT partner_id PK,FK
         VARCHAR address PK
@@ -1579,15 +1717,12 @@ erDiagram
         NUMERIC latitude
         NUMERIC longitude
     }
-    business_partner ||--o{ partner_address : has
-
     partner_domain {
         BIGINT partner_id PK,FK
         VARCHAR domain_url PK
         BOOLEAN is_primary
         TIMESTAMP created_at
     }
-    business_partner ||--o{ partner_domain : has
 ```
 
 ### Table Summary
