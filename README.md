@@ -65,6 +65,41 @@ Every change below is **additive** — existing v0.5.0 wiring keeps compiling. M
 - **Recommended opt-in**: E (event-type allowlist) — fails closed on dashboard misconfiguration; one line at startup.
 - **Use when applicable**: C, F, G — only if your consumer has the corresponding need (Stripe GETs, follow-up POSTs, fatal-on-missing secrets).
 
+## Migration Guide — `EventParser.PeekEventMeta` interface addition
+
+The `payment.EventParser` interface gained one method:
+
+```go
+type EventParser interface {
+    Parse(body []byte) (*PaymentEvent, error)
+    PeekEventMeta(body []byte) (eventID, eventType string, err error) // NEW
+}
+```
+
+The webhook processor uses `PeekEventMeta` as a lightweight pre-pass to extract the event id + type without unmarshalling the full payload, so the idempotency dedupe runs before the full signature-verify + parse cycle. The knowledge that was previously inlined in the processor as a `switch provider.Name()` (with hand-rolled per-provider peek logic) now lives next to each parser — adding a fourth payment provider no longer touches the processor.
+
+### What this means for downstream consumers
+
+- **Using bundled providers only?** Nothing to do. `StripeEventParser` and `LemonSqueezyEventParser` ship with the method.
+- **Have a custom `EventParser` implementation?** Add `PeekEventMeta(body []byte) (string, string, error)` to your type. The body of the method just unmarshals the provider's event id and event-type fields — usually 5–10 lines mirroring whatever your `Parse` does at the top.
+
+The Stripe peeker is the reference:
+
+```go
+func (p *StripeEventParser) PeekEventMeta(body []byte) (string, string, error) {
+    var peek struct {
+        ID   string `json:"id"`
+        Type string `json:"type"`
+    }
+    if err := json.Unmarshal(body, &peek); err != nil {
+        return "", "", err
+    }
+    return peek.ID, peek.Type, nil
+}
+```
+
+Empty id return propagates as-is — the processor rejects empty ids upstream to prevent synthetic-id replay attacks; do not fabricate one.
+
 ## Migration Guide (v0.5.9 — UserSpecific row scoping)
 
 Tables that have a column literally named `user_id` whose FK references `user_account` are now auto-detected as **UserSpecific**, mirroring the existing `PartnerSpecific` mechanism. Generic CRUD on these tables is owner-locked: a row's owner cannot be spoofed at INSERT, mutated by UPDATE, or read/deleted by another user. Admin reads bypass the per-row filter; admin writes do not (they must use custom service-layer handlers — explicit role grants do **not** override owner-locking on writes).
@@ -836,15 +871,38 @@ record ride payment, extend license, etc.). See
 ### Webhook Lifecycle
 
 ```
-POST /public/webhook/stripe
+POST /public/webhook/{provider}
   1. Read body (MaxBytesReader, 256 KiB cap)
-  2. Log raw webhook → payment_webhook_log (status='R')
-  3. Idempotency check on (provider, event_id) — duplicates → 'D', skip
-  4. Verify signature — HMAC-SHA256 of "<ts>.<body>", 5-min replay window
-  5. Parse into canonical port.PaymentEvent (amount in major units, metadata flattened)
-  6. Call project's PaymentEventHandler.OnPaymentEvent(event)
-  7. Update log status → 'P' (processed) or 'F' (failed) with error_message
+  2. Peek event id + type via EventParser.PeekEventMeta — reject empty id
+  3. Verify signature BEFORE any DB write — bad signatures never touch storage
+  4. Idempotency check on (provider, event_id) — duplicates → return without dispatching
+  5. Insert log row (unique-index race guard catches concurrent retries)
+  6. Parse into canonical PaymentEvent (amount in major units, metadata flattened)
+  7. Call project's PaymentEventHandler.OnPaymentEvent(event)
+  8. AfterHandler hook (optional, idempotent) — e.g. attach SetupIntent's PaymentMethod
+  9. Update log status → 'P' (processed), 'F' (failed), 'S' (skipped), or 'D' (duplicate)
 ```
+
+The verify-before-log ordering is load-bearing: an attacker pumping invalid-signature requests never reaches the DB, so `payment_webhook_log` cannot be filled with unsigned junk. Step 4 is the cheap-path dedupe; step 5's unique index on `(provider, event_id)` is the authoritative race guard for the TOCTOU window between them.
+
+### Signature replay protection per provider
+
+| Provider | Signed payload | Replay window | What stops replay |
+|---|---|---|---|
+| **Stripe** | `<unix_ts>.<body>` (HMAC-SHA256) | ±5 min (`Stripe-Signature: t=...,v1=...`) | Bidirectional timestamp window in `StripeSignatureVerifier`. A captured signed pair becomes invalid 5 minutes after Stripe emitted it. |
+| **LemonSqueezy** | `<body>` (HMAC-SHA256, no timestamp) | none — see below | **The `(provider, event_id)` unique index on `payment_webhook_log` is the sole replay defence.** |
+
+**LemonSqueezy specifics — read carefully if you integrate a non-LemonSqueezy.com source against this verifier.** LemonSqueezy's webhook signature is HMAC-SHA256 over the raw body alone — no timestamp is in the signed payload, so the signature itself stays valid forever. The only thing preventing an attacker who captured a single legitimate webhook+signature pair from replaying it indefinitely is the idempotency layer:
+
+- [payment/parser_lemosqueezy.go](payment/parser_lemosqueezy.go) **rejects** payloads whose `data.id` is missing (no synthetic-id fallback).
+- [payment/webhook_processor.go](payment/webhook_processor.go) treats any prior `(provider, event_id)` row — even in status 'R' (in flight) — as a duplicate and never re-dispatches.
+- The unique index on `payment_webhook_log(provider, event_id)` is the authoritative race guard at the DB layer.
+
+Operational implications:
+
+1. If you point this verifier at a webhook source that emits non-unique or stable `data.id` values, idempotency collapses and the first signed event will be the only one ever processed. Verify your source emits a fresh id per event.
+2. If your `payment_webhook_log` schema lacks the UNIQUE constraint on `(provider, event_id)`, replay protection degrades to a non-atomic "exists check then insert" — a concurrent retry can sneak past. The v0.9 schema-invariant check (see `SQLWebhookRepository.VerifySchema`) asserts the constraint at boot; run it.
+3. LemonSqueezy webhooks are NOT safe to log to a non-deduplicating sink and replay later by hand — the deduplication is the security boundary.
 
 ### Core Interfaces
 
@@ -1004,13 +1062,11 @@ Setup mode returns the same `{ "checkoutUrl": "..." }` shape; Stripe persists a 
 
 ### Provider feature matrix
 
-| Provider | Code | Onboarding | Webhook | Instant payout |
-|---|---|:--:|:--:|:--:|
-| Airwallex      | `AW` | ✅ | ✅ | ✅ |
-| Stripe Connect | `SC` | ⏳ stub | ✅ | ⏳ stub |
-| Wise           | `WI` | ⏳ stub | ✅ | ⏳ stub |
-
-Stubs return `payout.ErrNotImplemented`. Wire them when the respective contract is live.
+| Provider | Code | Onboarding | Webhook | Instant payout | Notes |
+|---|---|:--:|:--:|:--:|---|
+| Airwallex      | `AW` | ✅ | ✅ | ✅ | Hosted KYC + connected-account model. Production-shaped. |
+| Stripe Connect | `SC` | ✅ | ✅ | ✅ | Express accounts via `/v1/account_links`. Requires email at onboarding. |
+| Wise           | `WI` | ✅ | ✅ | ⚠️ unfunded | Email-recipient model — no hosted KYC; **transfer is created but not funded** (see below). |
 
 ### `PayoutProvider` interface
 
@@ -1063,9 +1119,26 @@ Routes registered:
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--payout_provider` | `AW` | Active provider code |
+| `--payout_provider` | `AW` | Active provider code (`AW` / `SC` / `WI`) |
 | `--payout_return_url` | (empty) | Deep-link the provider redirects to after hosted KYC |
 | `--payout_webhook_url` | (empty) | Public host the provider posts webhooks to |
+| `--airwallex_api_base` | `https://api-demo.airwallex.com` | Airwallex REST API base — flip to `https://api.airwallex.com` for production |
+| `--wise_api_base` | `https://api.sandbox.transferwise.tech` | Wise Platform REST API base — flip to `https://api.wise.com` for production |
+| `--wise_profile_id` | (empty) | Wise platform profile id (numeric). **Required** when `--payout_provider=WI` |
+
+### Wise specifics — recipient model + funding gap
+
+Wise's Platform API does not have a hosted KYC flow for platform-paid recipients. Bank details flow through the platform's own UI, then the platform creates the recipient via API. To stay within `user_bank_info`'s schema (no IBAN/sort_code/BIC columns), the keel implementation uses **`type=email` recipients** — Wise sends the recipient an email claim link and they enter their own bank details on Wise's side. `StartOnboarding` returns an empty `URL` and a numeric recipient id in `ExternalAccountID`; sail's frontend should render "linked, awaiting recipient email confirmation" when `URL` is empty.
+
+**Funding is not wired.** `RequestInstantPayout` creates the Wise transfer via `POST /v3/profiles/{profile}/quotes` + `POST /v1/transfers`, but it does NOT call `POST /v3/profiles/{profile}/transfers/{id}/payments` to fund it. Wise's funding endpoint requires SCA challenge handling (browser-based 2FA / approval) that keel does not surface today. After `RequestInstantPayout` returns successfully, the transfer sits in `status="incoming_payment_waiting"` indefinitely until something funds it.
+
+Three options for downstream apps:
+
+1. **Manual funding from the Wise dashboard.** Cheapest path. An operator logs into Wise and clicks "Pay" on the transfer. Fine for low-volume / B2B use cases.
+2. **Bridge to a downstream funding worker.** The app polls or listens for Wise webhook `transfers#updated → status=incoming_payment_waiting`, then calls `/v3/profiles/.../payments` from a context that can handle SCA (typically a browser-bridge flow).
+3. **Skip Wise.** Stripe Connect's `transfers` API funds atomically; Airwallex's `payouts` API does the same. Wise is the odd one out — its split-quote-then-fund model is by design.
+
+If you intend to ship Wise-backed payouts to production, choice 2 is the realistic path. Track the Wise transfer state alongside your payout ledger and surface the unfunded state to operators / the recipient until the payment leg lands.
 
 ### Secrets
 

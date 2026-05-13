@@ -177,8 +177,7 @@ func (c *StripeCheckoutClient) CreatePortalSession(ctx context.Context, customer
 // The shared retry/idempotency/bound logic from the previous private
 // do() lives in c.request and is reused by Get.
 func (c *StripeCheckoutClient) Post(ctx context.Context, path string, form url.Values) ([]byte, error) {
-	encoded := form.Encode()
-	return c.request(ctx, http.MethodPost, path, strings.NewReader(encoded), encoded)
+	return c.request(ctx, http.MethodPost, path, form.Encode())
 }
 
 // Get issues an idempotent GET against the Stripe REST API and
@@ -195,7 +194,7 @@ func (c *StripeCheckoutClient) Get(ctx context.Context, path string, params url.
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}
-	return c.request(ctx, http.MethodGet, path, nil, "")
+	return c.request(ctx, http.MethodGet, path, "")
 }
 
 // request is the shared HTTP layer: secret loading, retries on 5xx /
@@ -203,11 +202,11 @@ func (c *StripeCheckoutClient) Get(ctx context.Context, path string, params url.
 // 2xx success match. POSTs carry a fresh idempotency key reused
 // across retries so Stripe's own dedupe converges; GETs omit it.
 //
-// rebuild is the body string used to re-construct the request on
-// each retry attempt — passing it separately from the io.Reader
-// avoids depending on whether the underlying reader is rewindable.
-// For GETs (no body) it's the empty string.
-func (c *StripeCheckoutClient) request(ctx context.Context, method, path string, _ io.Reader, rebuild string) ([]byte, error) {
+// body is the form-encoded request body — passed as a string (rather
+// than an io.Reader) so each retry attempt can wrap it in a fresh
+// strings.NewReader without depending on whether the underlying reader
+// is rewindable. Empty string for GETs (no body).
+func (c *StripeCheckoutClient) request(ctx context.Context, method, path, body string) ([]byte, error) {
 	secretValue, err := c.Secrets.GetSecret(ctx, c.secretName())
 	if err != nil {
 		return nil, fmt.Errorf("stripe: get secret: %w", err)
@@ -221,8 +220,8 @@ func (c *StripeCheckoutClient) request(ctx context.Context, method, path string,
 	backoff := 200 * time.Millisecond
 	for attempt := 0; attempt <= stripeMaxRetries; attempt++ {
 		var bodyReader io.Reader
-		if rebuild != "" {
-			bodyReader = strings.NewReader(rebuild)
+		if body != "" {
+			bodyReader = strings.NewReader(body)
 		}
 		req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, bodyReader)
 		if err != nil {

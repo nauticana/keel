@@ -207,6 +207,15 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 	var sqlText string
 	var vals []any
 
+	// PartnerUserScoped is the user_account-style flag: rows are global
+	// (no partner_id column) and access must be JOIN-filtered through
+	// partner_user. Compute the gate once here so both the by-key fast
+	// path and the generic WHERE-builder branch reuse the same answer.
+	// Bypass for global-trust roles (SUPER / BUSINESS_ADMIN / etc.) —
+	// IsGlobalRole fails closed, so a query failure during the role
+	// check applies the stricter scope rather than skipping it.
+	applyPartnerUserScope := s.Table.PartnerUserScoped && userID > 0 && !s.IsGlobalRole(ctx, userID)
+
 	if s.Table.PartnerSpecific {
 		if where == nil {
 			where = make(map[string]any)
@@ -253,22 +262,44 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 		if match {
 			sqlText = s.sqlSelectByID
 			vals = sortedVals
+			// By-key fast path on a PartnerUserScoped table still needs
+			// the partner_user gate — a PARTNER_ADMIN supplying a known
+			// user_id from another partner would otherwise round-trip the
+			// row. Append the subquery and the session's partner as the
+			// next positional placeholder. The primary key on
+			// user_account is single-column (`id`), so the join condition
+			// targets the first (and only) key.
+			if applyPartnerUserScope {
+				keyCol := s.Table.Keys[0].ColumnName
+				sqlText += fmt.Sprintf(" AND %s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
+					quoteIdent(keyCol), quoteIdent("partner_user"), s.Placeholder(len(vals)+1))
+				vals = append(vals, partnerID)
+			}
 		}
 	}
 	if sqlText == "" {
 		sqlText = s.sqlSelectAll
-		if len(where) > 0 {
-			var conditions []string
-			plcCnt := 1
-			for k, v := range where {
-				colName, ok := s.resolveColumnName(k)
-				if !ok {
-					return nil, fmt.Errorf("invalid filter column: %s", k)
-				}
-				conditions = append(conditions, fmt.Sprintf("%s = %s", quoteIdent(colName), s.Placeholder(plcCnt)))
-				vals = append(vals, v)
-				plcCnt++
+		var conditions []string
+		plcCnt := 1
+		for k, v := range where {
+			colName, ok := s.resolveColumnName(k)
+			if !ok {
+				return nil, fmt.Errorf("invalid filter column: %s", k)
 			}
+			conditions = append(conditions, fmt.Sprintf("%s = %s", quoteIdent(colName), s.Placeholder(plcCnt)))
+			vals = append(vals, v)
+			plcCnt++
+		}
+		// Generic-WHERE branch: same partner_user gate as the by-key
+		// fast path, expressed as an additional condition. Joins the
+		// subquery on the table's primary key (id).
+		if applyPartnerUserScope {
+			keyCol := s.Table.Keys[0].ColumnName
+			conditions = append(conditions, fmt.Sprintf("%s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
+				quoteIdent(keyCol), quoteIdent("partner_user"), s.Placeholder(plcCnt)))
+			vals = append(vals, partnerID)
+		}
+		if len(conditions) > 0 {
 			sqlText += " WHERE " + strings.Join(conditions, " AND ")
 		}
 	}
@@ -472,6 +503,10 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 	if !allowed {
 		return fmt.Errorf("permission denied: DELETE on table %s", s.Table.TableName)
 	}
+	// PartnerUserScoped DELETE defense-in-depth: bar a PARTNER_ADMIN
+	// from deleting a user_account belonging to another partner via a
+	// crafted id. Same gate as Get; bypass for global-trust roles.
+	applyPartnerUserScope := s.Table.PartnerUserScoped && userID > 0 && !s.IsGlobalRole(ctx, userID)
 	if s.Table.PartnerSpecific {
 		if where == nil {
 			where = make(map[string]any)
@@ -516,6 +551,12 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 		if match {
 			sqlText = s.sqlDeleteByID
 			vals = sortedVals
+			if applyPartnerUserScope {
+				keyCol := s.Table.Keys[0].ColumnName
+				sqlText += fmt.Sprintf(" AND %s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
+					quoteIdent(keyCol), quoteIdent("partner_user"), s.Placeholder(len(vals)+1))
+				vals = append(vals, partnerID)
+			}
 		}
 	}
 	if sqlText == "" {
@@ -529,6 +570,12 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 			conditions = append(conditions, fmt.Sprintf("%s = %s", quoteIdent(colName), s.Placeholder(plcCnt)))
 			vals = append(vals, v)
 			plcCnt++
+		}
+		if applyPartnerUserScope {
+			keyCol := s.Table.Keys[0].ColumnName
+			conditions = append(conditions, fmt.Sprintf("%s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
+				quoteIdent(keyCol), quoteIdent("partner_user"), s.Placeholder(plcCnt)))
+			vals = append(vals, partnerID)
 		}
 		sqlText = "DELETE FROM " + s.quotedTable() + " WHERE " + strings.Join(conditions, " AND ")
 	}

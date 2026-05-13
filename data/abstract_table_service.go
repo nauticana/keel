@@ -20,6 +20,26 @@ func (s *AbstractTableService) GetTable() *model.TableDefinition {
 	return s.Table
 }
 
+// IsGlobalRole reports whether userID holds any role in GlobalRoleIDs
+// (SUPER / BUSINESS_ADMIN / SECURITY_ADMIN / SECURITY_OPER / APP_ADMIN
+// by default). Used by partner-scoped CRUD paths (e.g. pgsql.Get on a
+// PartnerUserScoped table) to decide whether the caller can read across
+// partners.
+//
+// Fail-closed: returns false on any query error or missing AuthQuery so
+// a misconfigured deployment applies the stricter scope rather than
+// silently granting cross-partner read.
+func (s *AbstractTableService) IsGlobalRole(ctx context.Context, userID int) bool {
+	if s.AuthQuery == nil || userID <= 0 {
+		return false
+	}
+	res, err := s.AuthQuery.Query(ctx, QCheckGlobalRole, userID)
+	if err != nil {
+		return false
+	}
+	return len(res.Rows) > 0
+}
+
 // CheckPermission returns (allowed, ownScope). `allowed` is true when
 // the caller has any permission row matching the (table, action) pair.
 // `ownScope` is true when the match is via a wildcard / range pattern

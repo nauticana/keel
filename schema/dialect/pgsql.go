@@ -80,9 +80,12 @@ func isNumeric(s string) bool {
 func (d *PgSQL) GenerateTable(table *schema.Table) string {
 	var sb strings.Builder
 
-	// Comment header
+	// Comment header — every line of a multi-line YAML comment block
+	// must be prefixed with `-- ` so the generated SQL stays parseable.
+	// Without per-line prefixing the second line and beyond becomes
+	// unquoted text and Postgres rejects the file with a syntax error.
 	if table.Comment != "" {
-		sb.WriteString(fmt.Sprintf("-- %s\n", table.Comment))
+		sb.WriteString(commentBlock(table.Comment))
 	}
 
 	// Extensions

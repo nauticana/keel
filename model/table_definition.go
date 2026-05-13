@@ -15,7 +15,22 @@ type TableDefinition struct {
 	// LoadForeignKeys; tables that own a different user FK column
 	// (e.g. ride.rider_id, ride.cancelled_by_user_id) are NOT auto-
 	// scoped because they are multi-actor and need custom handlers.
-	UserSpecific       bool
+	UserSpecific bool
+	// PartnerUserScoped is set when the table is the user-account table
+	// itself. Rows of this table belong globally (no partner_id column);
+	// access by a partner-scoped role must be filtered through
+	// partner_user so a PARTNER_ADMIN sees only their partner's users.
+	//
+	// The CRUD path (Get / Delete) injects
+	//   id IN (SELECT user_id FROM partner_user WHERE partner_id = $sessionPartnerID)
+	// when the caller is NOT a global-trust role (see
+	// data.GlobalRoleIDs). SUPER / BUSINESS_ADMIN / SECURITY_ADMIN /
+	// SECURITY_OPER / APP_ADMIN bypass the filter to manage cross-
+	// partner data legitimately.
+	//
+	// Auto-set in AbstractRepository.Init on the table whose name matches
+	// AbstractRepository.UserTableName.
+	PartnerUserScoped bool
 	QuotaResource      string
 	QuotaPartnerColumn string
 	QuotaStringColumn  string

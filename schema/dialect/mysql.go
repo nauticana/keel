@@ -85,8 +85,10 @@ func (d *MySQL) formatDefault(col *schema.Column) string {
 func (d *MySQL) GenerateTable(table *schema.Table) string {
 	var sb strings.Builder
 
+	// Per-line `-- ` prefix so multi-line YAML comments stay parseable
+	// (same fix as the pgsql dialect).
 	if table.Comment != "" {
-		sb.WriteString(fmt.Sprintf("-- %s\n", table.Comment))
+		sb.WriteString(commentBlock(table.Comment))
 	}
 
 	// IF NOT EXISTS so re-runs don't fail (P1-48). MySQL warns

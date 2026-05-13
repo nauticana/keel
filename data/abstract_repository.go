@@ -18,8 +18,38 @@ const (
 	QGetFkLookupStyles  = "get_fk_lookup_styles"
 	QGetSequenceUsage   = "get_sequence_usage"
 	QCheckAuthorization = "check_permission"
+	// QCheckGlobalRole returns 1 row when the caller holds any role
+	// listed in the SQL's IN-clause — framework roles whose mandate is
+	// to manage cross-partner data. Drives the bypass on partner-scoped
+	// row filters (e.g. user_account: PartnerUserScoped). Membership is
+	// inlined as SQL literals because role ids are framework constants
+	// that never originate from user input, and the IN list must be
+	// portable across DB drivers (`?` placeholders can't expand to
+	// variable-length IN lists without per-driver shimming).
+	QCheckGlobalRole = "check_global_role"
 )
 
+// GlobalRoleIDs names the roles whose mandate is cross-partner data
+// management. Used by QCheckGlobalRole to gate partner-scoped row
+// filters: SUPER / BUSINESS_ADMIN / SECURITY_ADMIN / SECURITY_OPER /
+// APP_ADMIN bypass the partner_user JOIN scope on `user_account` etc.
+//
+// Downstream projects that add their own cross-partner role can append
+// to this slice at boot before AbstractRepository.Init runs and re-build
+// the QCheckGlobalRole SQL via buildGlobalRoleQuery. The default set
+// matches the framework roles seeded by schema/security_seed.yml.
+var GlobalRoleIDs = []string{
+	"SUPER",
+	"BUSINESS_ADMIN",
+	"SECURITY_ADMIN",
+	"SECURITY_OPER",
+	"APP_ADMIN",
+}
+
+// AuthorizationQueries are the SQL templates the data layer registers
+// with each connection's QueryService. QCheckGlobalRole is built once at
+// package init from GlobalRoleIDs so a downstream that overrides the
+// list before importing this package picks up the modified set.
 var AuthorizationQueries = map[string]string{
 	QCheckAuthorization: `
 SELECT a.low_limit, a.high_limit
@@ -33,6 +63,36 @@ SELECT a.low_limit, a.high_limit
    AND p.user_id = ?
    AND (a.low_limit = ? OR a.low_limit = '*')
 `,
+	QCheckGlobalRole: buildGlobalRoleQuery(GlobalRoleIDs),
+}
+
+// buildGlobalRoleQuery splices the role-id allowlist into a single
+// inlined IN-clause. Role ids are framework constants (never user
+// input), so embedding them as quoted literals is safe and produces a
+// portable SQL string that doesn't need driver-specific IN-expansion.
+func buildGlobalRoleQuery(roles []string) string {
+	if len(roles) == 0 {
+		// Empty role set → query that never matches. Keeps callers safe
+		// when a downstream blanks out GlobalRoleIDs (every user is then
+		// treated as partner-scoped).
+		return `SELECT 1 WHERE FALSE`
+	}
+	quoted := make([]string, len(roles))
+	for i, r := range roles {
+		// Single-quote literals; defend against an accidentally
+		// embedded `'` even though role ids are caller-controlled
+		// constants by convention.
+		quoted[i] = "'" + strings.ReplaceAll(r, "'", "''") + "'"
+	}
+	return `
+SELECT 1
+  FROM user_permission
+ WHERE user_id = ?
+   AND role_id IN (` + strings.Join(quoted, ",") + `)
+   AND begda <= CURRENT_TIMESTAMP
+   AND (endda IS NULL OR endda >= CURRENT_TIMESTAMP)
+ LIMIT 1
+`
 }
 
 type AbstractRepository struct {
@@ -87,6 +147,25 @@ func (r *AbstractRepository) userTable() string {
 		return "user_account"
 	}
 	return r.UserTableName
+}
+
+// IsGlobalRole reports whether userID holds any role listed in
+// GlobalRoleIDs — the set of framework roles whose mandate is
+// cross-partner data management. Drives the bypass on partner-scoped
+// row filters such as user_account's PartnerUserScoped flag.
+//
+// Returns false on any error (query failure, missing AuthQuery, invalid
+// userID) — fail-closed so a broken permission lookup applies the
+// stricter scope rather than silently granting cross-partner read.
+func (r *AbstractRepository) IsGlobalRole(ctx context.Context, userID int) bool {
+	if userID <= 0 || r.AuthQuery == nil {
+		return false
+	}
+	res, err := r.AuthQuery.Query(ctx, QCheckGlobalRole, userID)
+	if err != nil {
+		return false
+	}
+	return len(res.Rows) > 0
 }
 
 // CheckActionPermission generalises the table-bound CheckPermission
@@ -183,6 +262,16 @@ func (r *AbstractRepository) Init(ctx context.Context) error {
 		// to silently continue with a partial FK graph. Surface it
 		// so misconfigured schemas fail fast at boot.
 		return fmt.Errorf("load foreign keys: %w", err)
+	}
+
+	// Mark the user-account table for partner_user-mediated row scoping.
+	// pgsql.TableServicePgsql.Get / Delete consult this flag and inject
+	// `id IN (SELECT user_id FROM partner_user WHERE partner_id = $N)`
+	// when the caller is not a GlobalRoleIDs holder. Auto-detection here
+	// (rather than a schema YAML opt-in) means a single line covers
+	// every downstream that follows keel's user_account convention.
+	if userTable := r.TableDefinitions[r.userTable()]; userTable != nil {
+		userTable.PartnerUserScoped = true
 	}
 
 	for tableName, table := range r.TableDefinitions {

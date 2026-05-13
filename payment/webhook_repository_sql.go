@@ -22,6 +22,18 @@ const (
 	qLogWebhook          = "payment_log_webhook"
 	qCheckWebhookExists  = "payment_check_webhook_exists"
 	qUpdateWebhookStatus = "payment_update_webhook_status"
+	// qVerifyWebhookIndex asserts the UNIQUE index on
+	// payment_webhook_log(provider, event_id) exists. The index is the
+	// authoritative race guard for concurrent webhook retries — if a
+	// downstream applied the schema without it (partial migration,
+	// hand-written DDL), idempotency silently degrades to a
+	// log-and-retry-storm. Boot-time invariant check fails fast.
+	//
+	// Postgres-specific: queries pg_indexes for an index definition
+	// containing both column names and the UNIQUE keyword. Substring
+	// match is correct because indexdef holds the original CREATE
+	// statement verbatim.
+	qVerifyWebhookIndex = "payment_verify_webhook_index"
 )
 
 // webhookQueries are the SQL statements used by SQLWebhookRepository.
@@ -52,6 +64,16 @@ UPDATE payment_webhook_log
        error_message = ?,
        processed_at = CURRENT_TIMESTAMP
  WHERE id = ?
+`,
+	qVerifyWebhookIndex: `
+SELECT 1
+  FROM pg_indexes
+ WHERE schemaname = current_schema()
+   AND tablename = 'payment_webhook_log'
+   AND indexdef ILIKE '%UNIQUE%'
+   AND indexdef ILIKE '%provider%'
+   AND indexdef ILIKE '%event_id%'
+ LIMIT 1
 `,
 }
 
@@ -125,6 +147,26 @@ func (r *SQLWebhookRepository) UpdateStatus(ctx context.Context, logID int64, st
 	_, err := r.queryService(ctx).Query(ctx, qUpdateWebhookStatus, status, msg, logID)
 	if err != nil {
 		return fmt.Errorf("update webhook status: %w", err)
+	}
+	return nil
+}
+
+// VerifySchema asserts the schema invariants this repository relies on
+// — currently the UNIQUE index on (provider, event_id). Call once at
+// boot from main.go so a partially-migrated database (e.g. the YAML
+// shipped but the index DDL was applied by hand and dropped) fails the
+// app at startup with a clear error instead of silently losing
+// idempotency under load.
+//
+// Postgres-only: the query reads pg_indexes. MySQL / SQLite consumers
+// should provide their own driver-specific check or skip this call.
+func (r *SQLWebhookRepository) VerifySchema(ctx context.Context) error {
+	res, err := r.queryService(ctx).Query(ctx, qVerifyWebhookIndex)
+	if err != nil {
+		return fmt.Errorf("verify webhook log schema: %w", err)
+	}
+	if len(res.Rows) == 0 {
+		return fmt.Errorf("payment_webhook_log: missing UNIQUE index on (provider, event_id) — idempotency cannot be enforced without it; apply the index defined in schema/basis/25_payment_webhook_log.yml")
 	}
 	return nil
 }
