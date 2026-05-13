@@ -5,6 +5,28 @@ import (
 	"time"
 )
 
+// Provider name constants — the canonical lowercase identifiers used as
+// PaymentEvent.Provider, PaymentProvider.Name(), the payment_webhook_log.provider
+// column, and the routing key on WebhookProcessor.Providers. Downstream code
+// MUST use these constants rather than string literals so a future rename
+// only touches one place.
+const (
+	ProviderStripe       = "stripe"
+	ProviderLemonSqueezy = "lemonsqueezy"
+)
+
+// Checkout-mode constants — the three values CheckoutRequest.Mode accepts.
+// Each maps directly to Stripe's `mode` form parameter on
+// /v1/checkout/sessions:
+//   - ModeSubscription: recurring billing against a subscription Price.
+//   - ModePayment:      one-shot charge against a payment Price.
+//   - ModeSetup:        no charge — capture a SetupIntent for later reuse.
+const (
+	ModeSubscription = "subscription"
+	ModePayment      = "payment"
+	ModeSetup        = "setup"
+)
+
 // PaymentEvent is the canonical representation of a webhook event after
 // provider-specific parsing. Domain handlers receive this and decide what to
 // persist for their project.
@@ -79,8 +101,19 @@ type SignatureVerifier interface {
 
 // EventParser converts a raw provider webhook body into a canonical
 // PaymentEvent. Implementations own the provider's schema.
+//
+// PeekEventMeta is a lightweight pre-pass that extracts JUST the event id
+// and type without unmarshalling the full payload — used by
+// WebhookProcessor.Process for the idempotency check before the full
+// signature-verify + parse cycle runs. It MUST return the empty string for
+// eventID when the body has no provider-canonical id field (callers reject
+// empty ids upstream to prevent synthetic-id replay attacks). The
+// separate hop avoids forcing every provider into a polymorphic provider-
+// name switch inside the processor and keeps the schema knowledge
+// co-located with each parser impl.
 type EventParser interface {
 	Parse(body []byte) (*PaymentEvent, error)
+	PeekEventMeta(body []byte) (eventID, eventType string, err error)
 }
 
 // PaymentProvider bundles everything needed to process webhooks for a

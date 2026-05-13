@@ -2,7 +2,6 @@ package payment
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -154,9 +153,12 @@ func (p *WebhookProcessor) Process(
 		return permanentErr("unknown payment provider %q", providerName)
 	}
 
-	// (1) Pull event id + type out of the raw body. We don't trust the
-	// payload yet — but extractEventMeta only reads a couple of fields.
-	eventID, eventType, parseErr := extractEventMeta(provider.Name(), body)
+	// (1) Pull event id + type out of the raw body via the provider's
+	// own peek implementation. We don't trust the payload yet — but
+	// PeekEventMeta only reads a couple of fields. Provider-specific
+	// schema knowledge stays in the parser; the processor only sees
+	// the polymorphic interface.
+	eventID, eventType, parseErr := provider.PeekEventMeta(body)
 	if parseErr != nil {
 		// Surface the underlying JSON-decode error in the journal so
 		// operators don't have to debug "missing event id" messages
@@ -269,44 +271,4 @@ func (p *WebhookProcessor) logError(format string, args ...any) {
 	if p.Journal != nil {
 		p.Journal.Error(fmt.Sprintf(format, args...))
 	}
-}
-
-// extractEventMeta peeks at the raw body to get the provider event ID +
-// type. Needed before Parse() because the idempotency check fires
-// before the full canonical Parse runs. The peek decoder unmarshals
-// only 2-4 fields, so the marginal CPU cost vs the subsequent Parse()
-// (which decodes the full event) is dominated by the second pass —
-// not worth changing the EventParser interface to collapse for the
-// O(10) events/sec a typical webhook stream sustains.
-//
-// Returns a non-nil error when the body is not valid JSON so callers
-// can distinguish "malformed body" from "valid JSON without an id".
-// Operators previously had to guess at the root cause when both
-// branches reported "missing event id".
-func extractEventMeta(provider string, body []byte) (eventID, eventType string, err error) {
-	switch provider {
-	case "stripe":
-		var peek struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
-		}
-		if err = json.Unmarshal(body, &peek); err != nil {
-			return "", "", err
-		}
-		return peek.ID, peek.Type, nil
-	case "lemonsqueezy":
-		var peek struct {
-			Meta struct {
-				EventName string `json:"event_name"`
-			} `json:"meta"`
-			Data struct {
-				ID string `json:"id"`
-			} `json:"data"`
-		}
-		if err = json.Unmarshal(body, &peek); err != nil {
-			return "", "", err
-		}
-		return peek.Data.ID, peek.Meta.EventName, nil
-	}
-	return "", "", nil
 }

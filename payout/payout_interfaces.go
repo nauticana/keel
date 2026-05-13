@@ -11,21 +11,86 @@ package payout
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+
+	"github.com/nauticana/keel/logger"
 )
 
-// PayoutOnboardingSession is what a provider returns when the caller
-// asks to start the hosted KYC / bank-routing collection flow. URL is
-// opened in a webview / browser; the provider's own UI walks the user
-// through bank details, creates an external account, and then fires
-// the configured webhook back at the application.
+// Provider code constants — the 2-char identifiers persisted on
+// user_bank_info.provider and routed on by the webhook handler. Downstream
+// code MUST use these constants rather than literal "AW" / "SC" / "WI" so
+// a future rename touches one place. They also match what the
+// --payout_provider flag in common/variables.go accepts.
+const (
+	ProviderCodeAirwallex     = "AW"
+	ProviderCodeStripeConnect = "SC"
+	ProviderCodeWise          = "WI"
+)
+
+// AbstractProvider is the base implementation shared by every concrete
+// PayoutProvider impl. It holds the three fields every provider needs
+// (apiKey, webhookSecret, journal) plus a small HMAC-SHA256 helper used
+// during webhook signature verification.
 //
-// ExternalAccountID is the provider's placeholder handle returned at
-// session-start time. Some providers (Airwallex, Stripe Connect) create
-// the account synchronously and hand the ID back immediately; others
-// (Wise) defer creation until the user submits the form. Either way,
-// the application persists this value if non-empty so that the later
-// webhook can be matched even before activation.
+// Concrete providers embed AbstractProvider by value at the top of their
+// struct declaration so field promotion makes apiKey / webhookSecret /
+// journal accessible directly (p.apiKey, not p.AbstractProvider.apiKey).
+// The Code() method stays on each concrete because it's the one piece of
+// state the abstract layer cannot supply.
+type AbstractProvider struct {
+	apiKey        string
+	webhookSecret string
+	journal       logger.ApplicationLogger
+}
+
+// hmacSHA256Hex computes HMAC-SHA256(webhookSecret, parts...) and returns
+// it as lower-case hex — the wire format both Airwallex and Stripe Connect
+// expect on their signature headers. Returns the empty string when
+// webhookSecret is unset so callers can short-circuit with a clear "secret
+// not configured" error rather than producing a misleading signature
+// mismatch.
+//
+// The variadic parts argument lets each provider feed the components of
+// its signed payload in order. Airwallex and Stripe both sign
+// "<timestamp>.<body>"; Wise signs the body alone but uses plain SHA256
+// (not HMAC), so Wise does NOT use this helper.
+func (p *AbstractProvider) hmacSHA256Hex(parts ...[]byte) string {
+	if p.webhookSecret == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(p.webhookSecret))
+	for _, part := range parts {
+		mac.Write(part)
+	}
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// PayoutOnboardingSession is what a provider returns when the caller
+// asks to start the hosted KYC / bank-routing collection flow.
+//
+// URL is opened in a webview / browser; the provider's own UI walks the
+// user through bank details, creates an external account, and then fires
+// the configured webhook back at the application. URL is EMPTY for
+// providers whose model has no hosted flow (Wise's recipient model —
+// the calling app shows "linked" and the recipient confirms via email).
+//
+// ExternalAccountID is the provider's account handle. Airwallex and
+// Stripe Connect create the account synchronously and return the id at
+// session-start time; Wise returns the recipient id from its
+// recipient-create response. The application persists this value if
+// non-empty so the later webhook (or first transfer) can be matched even
+// before activation.
+//
+// ExpiresAt is the provider's RFC3339 timestamp for when the hosted URL
+// or recipient handle expires — kept as a string and passed through
+// unchanged. The wire shape (sail consumes `json:"expiresAt"` as a
+// string) is part of the public contract; do not promote this to
+// time.Time without coordinating with sail and downstream consumers.
+// Empty when the provider returns no expiry (Wise) or has no concept
+// of one.
 type PayoutOnboardingSession struct {
 	URL               string
 	ExternalAccountID string
@@ -57,9 +122,17 @@ type PayoutWebhookEvent struct {
 // create a new external account. Most providers want country + currency
 // for routing rules; some (Stripe Connect) also need a return URL to
 // redirect back to the calling application after the hosted form.
+//
+// Email is loaded by OnboardingService.loadBankInfo via a JOIN to
+// user_account. Stripe Connect requires it on the Express account at
+// creation time; Wise uses it as the recipient identifier when type=email.
+// Airwallex passes it through as metadata. Empty Email is a configuration
+// error for Stripe Connect and Wise (they reject the request);
+// Airwallex tolerates it.
 type StartOnboardingInput struct {
 	UserID         int64
 	PartnerID      int64
+	Email          string
 	CountryCode    string
 	Currency       string
 	AccountHolder  string

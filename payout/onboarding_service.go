@@ -3,11 +3,85 @@ package payout
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	kcommon "github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 )
+
+// Named keys for the SQL statements OnboardingService uses. Mirrors the
+// payment package's webhook_repository_sql shape — one map per package,
+// built once, served by a sync.Once-cached QueryService accessor so the
+// placeholder rewriter doesn't re-run per webhook event.
+const (
+	qPayoutReusableAccounts  = "payout_reusable_accounts"
+	qPayoutVerifyReusable    = "payout_verify_reusable"
+	qPayoutLinkExisting      = "payout_link_existing"
+	qPayoutIsOnboarded       = "payout_is_onboarded"
+	qPayoutBankInfo          = "payout_bank_info"
+	qPayoutWriteExternal     = "payout_write_external"
+	qPayoutBackFillExternal  = "payout_backfill_external"
+	qPayoutClearExternal     = "payout_clear_external"
+)
+
+var onboardingQueries = map[string]string{
+	qPayoutReusableAccounts: `
+SELECT ubi.partner_id, bp.caption, ubi.provider, ubi.provider_account_id,
+       ubi.country_code, ubi.currency, ubi.provider_onboarded_at
+  FROM user_bank_info ubi
+  JOIN business_partner bp ON bp.id = ubi.partner_id
+ WHERE ubi.user_id = ?
+   AND ubi.partner_id <> ?
+   AND ubi.provider_account_id IS NOT NULL
+   AND ubi.currency = (
+       SELECT currency FROM user_bank_info
+        WHERE user_id = ? AND partner_id = ?
+   )`,
+	qPayoutVerifyReusable: `
+SELECT 1 FROM user_bank_info
+ WHERE user_id = ? AND provider_account_id = ? AND partner_id <> ?
+ LIMIT 1`,
+	qPayoutLinkExisting: `
+UPDATE user_bank_info
+   SET provider_account_id = ?,
+       provider_onboarded_at = CURRENT_TIMESTAMP,
+       provider_agreement = TRUE,
+       updated_at = CURRENT_TIMESTAMP
+ WHERE user_id = ? AND partner_id = ?`,
+	qPayoutIsOnboarded: `
+SELECT 1 FROM user_bank_info
+ WHERE user_id = ? AND partner_id = ?
+   AND provider_account_id IS NOT NULL
+ LIMIT 1`,
+	qPayoutBankInfo: `
+SELECT ubi.country_code, ubi.currency, ubi.account_holder_name, ubi.billing_address,
+       ubi.provider, COALESCE(ubi.provider_account_id, ''),
+       COALESCE(ua.email, '')
+  FROM user_bank_info ubi
+  LEFT JOIN user_account ua ON ua.id = ubi.user_id
+ WHERE ubi.user_id = ? AND ubi.partner_id = ?`,
+	qPayoutWriteExternal: `
+UPDATE user_bank_info
+   SET provider_account_id = ?,
+       provider_onboarded_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE provider_onboarded_at END,
+       provider_agreement = CASE WHEN ? THEN TRUE ELSE provider_agreement END,
+       updated_at = CURRENT_TIMESTAMP
+ WHERE user_id = ? AND partner_id = ?`,
+	qPayoutBackFillExternal: `
+UPDATE user_bank_info
+   SET provider_onboarded_at = CASE WHEN ? AND provider_onboarded_at IS NULL THEN CURRENT_TIMESTAMP ELSE provider_onboarded_at END,
+       provider_agreement = CASE WHEN ? THEN TRUE ELSE provider_agreement END,
+       updated_at = CURRENT_TIMESTAMP
+ WHERE provider_account_id = ?`,
+	qPayoutClearExternal: `
+UPDATE user_bank_info
+   SET provider_account_id = NULL,
+       provider_onboarded_at = NULL,
+       provider_agreement = FALSE,
+       updated_at = CURRENT_TIMESTAMP
+ WHERE provider_account_id = ?`,
+}
 
 // OnboardingService orchestrates the user-side payout-provider
 // onboarding flow. It owns:
@@ -31,6 +105,23 @@ type OnboardingService struct {
 	OnboardingReturnURL string         // deep-link the provider redirects back to
 	WebhookCallbackURL  string         // public-facing URL the provider POSTs events to
 	Journal             logger.ApplicationLogger
+
+	// qsOnce / qs cache the package-level onboardingQueries map after the
+	// first call so the data layer's placeholder rewriter only runs once
+	// per process. Same shape as payment.SQLWebhookRepository — eliminates
+	// the per-call rebuild that previously happened in every method.
+	qsOnce sync.Once
+	qs     data.QueryService
+}
+
+// queryService returns the cached data.QueryService, lazily constructing it
+// on first call. Safe for concurrent callers — sync.Once guarantees a
+// single underlying GetQueryService invocation.
+func (s *OnboardingService) queryService(ctx context.Context) data.QueryService {
+	s.qsOnce.Do(func() {
+		s.qs = s.DB.GetQueryService(ctx, onboardingQueries)
+	})
+	return s.qs
 }
 
 // StartOnboardingResult is what the calling-application handler echoes
@@ -75,6 +166,7 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, userID int, par
 	sess, err := s.Provider.StartOnboarding(ctx, StartOnboardingInput{
 		UserID:         int64(userID),
 		PartnerID:      partnerID,
+		Email:          bank.Email,
 		CountryCode:    bank.CountryCode,
 		Currency:       bank.Currency,
 		AccountHolder:  bank.AccountHolderName,
@@ -127,24 +219,11 @@ func (s *OnboardingService) HandleWebhook(ctx context.Context, providerCode stri
 // partner asking for USD. Cross-currency reuse is provider-specific
 // and an opt-in upgrade; out of scope.
 func (s *OnboardingService) ListReusableAccounts(ctx context.Context, userID int, targetPartnerID int64) ([]ReusableAccount, error) {
-	qs := s.DB.GetQueryService(ctx, map[string]string{
-		"qReusableAccounts": `
-SELECT ubi.partner_id, bp.caption, ubi.provider, ubi.provider_account_id,
-       ubi.country_code, ubi.currency, ubi.provider_onboarded_at
-  FROM user_bank_info ubi
-  JOIN business_partner bp ON bp.id = ubi.partner_id
- WHERE ubi.user_id = ?
-   AND ubi.partner_id <> ?
-   AND ubi.provider_account_id IS NOT NULL
-   AND ubi.currency = (
-       SELECT currency FROM user_bank_info
-        WHERE user_id = ? AND partner_id = ?
-   )`,
-	})
+	qs := s.queryService(ctx)
 	if qs == nil {
 		return nil, fmt.Errorf("query service not available")
 	}
-	res, err := qs.Query(ctx, "qReusableAccounts", userID, targetPartnerID, userID, targetPartnerID)
+	res, err := qs.Query(ctx, qPayoutReusableAccounts, userID, targetPartnerID, userID, targetPartnerID)
 	if err != nil {
 		return nil, fmt.Errorf("list reusable accounts: %w", err)
 	}
@@ -169,27 +248,15 @@ SELECT ubi.partner_id, bp.caption, ubi.provider, ubi.provider_account_id,
 // reusing an account is application-side bookkeeping; the provider
 // already cleared this user's KYC under the shared account id.
 func (s *OnboardingService) LinkReusableAccount(ctx context.Context, userID int, targetPartnerID int64, providerAccountID string) error {
-	qs := s.DB.GetQueryService(ctx, map[string]string{
-		"qVerifyReusable": `
-SELECT 1 FROM user_bank_info
- WHERE user_id = ? AND provider_account_id = ? AND partner_id <> ?
- LIMIT 1`,
-		"qLinkExisting": `
-UPDATE user_bank_info
-   SET provider_account_id = ?,
-       provider_onboarded_at = CURRENT_TIMESTAMP,
-       provider_agreement = TRUE,
-       updated_at = CURRENT_TIMESTAMP
- WHERE user_id = ? AND partner_id = ?`,
-	})
+	qs := s.queryService(ctx)
 	if qs == nil {
 		return fmt.Errorf("query service not available")
 	}
-	res, err := qs.Query(ctx, "qVerifyReusable", userID, providerAccountID, targetPartnerID)
+	res, err := qs.Query(ctx, qPayoutVerifyReusable, userID, providerAccountID, targetPartnerID)
 	if err != nil || len(res.Rows) == 0 {
 		return fmt.Errorf("provider account not reusable for this user")
 	}
-	if _, err := qs.Query(ctx, "qLinkExisting", providerAccountID, userID, targetPartnerID); err != nil {
+	if _, err := qs.Query(ctx, qPayoutLinkExisting, providerAccountID, userID, targetPartnerID); err != nil {
 		return fmt.Errorf("link existing account: %w", err)
 	}
 	return nil
@@ -199,17 +266,11 @@ UPDATE user_bank_info
 // banner: true when the calling user has a populated
 // provider_account_id on the active partner row.
 func (s *OnboardingService) IsOnboardingComplete(ctx context.Context, userID int, partnerID int64) (bool, error) {
-	qs := s.DB.GetQueryService(ctx, map[string]string{
-		"qIsOnboarded": `
-SELECT 1 FROM user_bank_info
- WHERE user_id = ? AND partner_id = ?
-   AND provider_account_id IS NOT NULL
- LIMIT 1`,
-	})
+	qs := s.queryService(ctx)
 	if qs == nil {
 		return false, fmt.Errorf("query service not available")
 	}
-	res, err := qs.Query(ctx, "qIsOnboarded", userID, partnerID)
+	res, err := qs.Query(ctx, qPayoutIsOnboarded, userID, partnerID)
 	if err != nil {
 		return false, err
 	}
@@ -252,20 +313,15 @@ type bankInfoRow struct {
 	BillingAddress    string
 	Provider          string
 	ProviderAccountID string
+	Email             string
 }
 
 func (s *OnboardingService) loadBankInfo(ctx context.Context, userID int, partnerID int64) (*bankInfoRow, error) {
-	qs := s.DB.GetQueryService(ctx, map[string]string{
-		"qBankInfoForOnboarding": `
-SELECT country_code, currency, account_holder_name, billing_address,
-       provider, COALESCE(provider_account_id, '')
-  FROM user_bank_info
- WHERE user_id = ? AND partner_id = ?`,
-	})
+	qs := s.queryService(ctx)
 	if qs == nil {
 		return nil, fmt.Errorf("query service not available")
 	}
-	res, err := qs.Query(ctx, "qBankInfoForOnboarding", userID, partnerID)
+	res, err := qs.Query(ctx, qPayoutBankInfo, userID, partnerID)
 	if err != nil || len(res.Rows) == 0 {
 		return nil, fmt.Errorf("user_bank_info not found — complete the billing step first")
 	}
@@ -277,23 +333,16 @@ SELECT country_code, currency, account_holder_name, billing_address,
 		BillingAddress:    kcommon.AsString(row[3]),
 		Provider:          kcommon.AsString(row[4]),
 		ProviderAccountID: kcommon.AsString(row[5]),
+		Email:             kcommon.AsString(row[6]),
 	}, nil
 }
 
 func (s *OnboardingService) writeExternalAccountID(ctx context.Context, userID int64, partnerID int64, externalID string, activated bool) error {
-	qs := s.DB.GetQueryService(ctx, map[string]string{
-		"qWriteExternalAccount": `
-UPDATE user_bank_info
-   SET provider_account_id = ?,
-       provider_onboarded_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE provider_onboarded_at END,
-       provider_agreement = CASE WHEN ? THEN TRUE ELSE provider_agreement END,
-       updated_at = CURRENT_TIMESTAMP
- WHERE user_id = ? AND partner_id = ?`,
-	})
+	qs := s.queryService(ctx)
 	if qs == nil {
 		return fmt.Errorf("query service not available")
 	}
-	_, err := qs.Query(ctx, "qWriteExternalAccount", externalID, activated, activated, userID, partnerID)
+	_, err := qs.Query(ctx, qPayoutWriteExternal, externalID, activated, activated, userID, partnerID)
 	return err
 }
 
@@ -316,36 +365,21 @@ func (s *OnboardingService) applyEvent(ctx context.Context, ev *PayoutWebhookEve
 }
 
 func (s *OnboardingService) backFillByExternalID(ctx context.Context, externalID string, activated bool) error {
-	qs := s.DB.GetQueryService(ctx, map[string]string{
-		"qBackFillByExternal": `
-UPDATE user_bank_info
-   SET provider_onboarded_at = CASE WHEN ? AND provider_onboarded_at IS NULL THEN CURRENT_TIMESTAMP ELSE provider_onboarded_at END,
-       provider_agreement = CASE WHEN ? THEN TRUE ELSE provider_agreement END,
-       updated_at = CURRENT_TIMESTAMP
- WHERE provider_account_id = ?`,
-	})
+	qs := s.queryService(ctx)
 	if qs == nil {
 		return fmt.Errorf("query service not available")
 	}
-	if _, err := qs.Query(ctx, "qBackFillByExternal", activated, activated, externalID); err != nil {
+	if _, err := qs.Query(ctx, qPayoutBackFillExternal, activated, activated, externalID); err != nil {
 		return fmt.Errorf("back-fill by external_id: %w", err)
 	}
 	return nil
 }
 
 func (s *OnboardingService) clearByExternalID(ctx context.Context, externalID string) error {
-	qs := s.DB.GetQueryService(ctx, map[string]string{
-		"qClearByExternal": `
-UPDATE user_bank_info
-   SET provider_account_id = NULL,
-       provider_onboarded_at = NULL,
-       provider_agreement = FALSE,
-       updated_at = CURRENT_TIMESTAMP
- WHERE provider_account_id = ?`,
-	})
+	qs := s.queryService(ctx)
 	if qs == nil {
 		return fmt.Errorf("query service not available")
 	}
-	_, err := qs.Query(ctx, "qClearByExternal", externalID)
+	_, err := qs.Query(ctx, qPayoutClearExternal, externalID)
 	return err
 }

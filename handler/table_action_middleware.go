@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/nauticana/keel/data"
-	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/user"
 )
 
@@ -54,12 +53,4 @@ func WrapTableAction(db data.DatabaseRepository, userSvc user.UserService, authO
 		}
 		inner(w, r)
 	}
-}
-
-// IsReservedActionName re-exports model.IsReservedActionName so
-// handler-side validation reads naturally without importing model
-// directly. Kept here as a thin alias; see model.ReservedActionNames
-// for the actual set.
-func IsReservedActionName(actionName string) bool {
-	return model.IsReservedActionName(actionName)
 }

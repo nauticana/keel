@@ -5,9 +5,15 @@ import "flag"
 type ContextKey string
 
 const (
-	RestPrefix              = "/api"
-	PubapiPrefix            = "/pubapi"
-	PublicPrefix            = "/public"
+	RestPrefix   = "/api"
+	PubapiPrefix = "/pubapi"
+	PublicPrefix = "/public"
+	// APIVersion is the major version segment appended to the REST
+	// prefix on the wire (e.g. `/api/v1/...`). The keel HTTP routers
+	// emit `RestPrefix + APIVersion + "/" + <resource>` so a single
+	// bump touches every mounted route, including the table-action
+	// handlers built by rest.RestService.loadTableActions.
+	APIVersion              = "/v1"
 	PartnerID    ContextKey = "partnerID"
 	ApiKeyID     ContextKey = "apiKeyID"
 	Scopes       ContextKey = "scopes"
@@ -143,4 +149,24 @@ var (
 	// appended by the calling application's router; the value here is
 	// the public-host portion only, e.g. "https://api.example.com".
 	PayoutWebhookURL = flag.String("payout_webhook_url", "", "Public host the payout provider sends webhook events to")
+
+	// AirwallexAPIBase is the Airwallex REST API root. Defaults to the
+	// demo host so a fresh install can't accidentally hit production.
+	// Set to "https://api.airwallex.com" once the integration is
+	// contract-live. The previous behaviour was a hardcoded constant
+	// inside payout/airwallex.go — replaced with this flag so production
+	// deployments can flip the value without a recompile.
+	AirwallexAPIBase = flag.String("airwallex_api_base", "https://api-demo.airwallex.com", "Airwallex REST API base URL")
+
+	// WiseAPIBase is the Wise Platform REST API root. Defaults to the
+	// sandbox. Production set this to "https://api.wise.com".
+	WiseAPIBase = flag.String("wise_api_base", "https://api.sandbox.transferwise.tech", "Wise Platform REST API base URL")
+
+	// WiseProfileID is the Wise platform profile id (numeric) the
+	// transfers + recipient creates are scoped to. Required when
+	// --payout_provider=WI; the Wise API rejects /v1/accounts and
+	// /v1/transfers requests with no profile id. Empty value is a
+	// configuration error — the Wise provider's StartOnboarding /
+	// RequestInstantPayout will reject calls at runtime.
+	WiseProfileID = flag.String("wise_profile_id", "", "Wise platform profile id (numeric)")
 )

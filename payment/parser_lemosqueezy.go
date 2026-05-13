@@ -3,6 +3,7 @@ package payment
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,24 @@ import (
 type LemonSqueezyEventParser struct{}
 
 func NewLemonSqueezyEventParser() *LemonSqueezyEventParser { return &LemonSqueezyEventParser{} }
+
+// PeekEventMeta satisfies EventParser — pulls just the event id and
+// event_name out of the raw body for the idempotency pre-pass. Empty id
+// returns are propagated; the processor rejects them.
+func (p *LemonSqueezyEventParser) PeekEventMeta(body []byte) (string, string, error) {
+	var peek struct {
+		Meta struct {
+			EventName string `json:"event_name"`
+		} `json:"meta"`
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &peek); err != nil {
+		return "", "", err
+	}
+	return peek.Data.ID, peek.Meta.EventName, nil
+}
 
 // Parse satisfies port.EventParser.
 func (p *LemonSqueezyEventParser) Parse(body []byte) (*PaymentEvent, error) {
@@ -39,7 +58,7 @@ func (p *LemonSqueezyEventParser) Parse(body []byte) (*PaymentEvent, error) {
 		return nil, fmt.Errorf("lemonsqueezy event missing data.id")
 	}
 	event := &PaymentEvent{
-		Provider:        "lemonsqueezy",
+		Provider:        ProviderLemonSqueezy,
 		ProviderEventID: raw.Data.ID,
 		EventType:       raw.Meta.EventName,
 		RawPayload:      string(body),
@@ -67,7 +86,7 @@ func (p *LemonSqueezyEventParser) Parse(body []byte) (*PaymentEvent, error) {
 		}
 	}
 	if c, ok := attr["currency"].(string); ok {
-		event.Currency = toUpperASCII(c)
+		event.Currency = strings.ToUpper(c)
 	}
 	if ts, ok := attr["created_at"].(string); ok {
 		if t, err := time.Parse(time.RFC3339, ts); err == nil {

@@ -99,14 +99,14 @@ func (h *AbstractPaymentHandler) HandleWebhook(providerName string, w http.Respo
 	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// HandleStripeWebhook is a convenience wrapper pinned to the "stripe" provider.
+// HandleStripeWebhook is a convenience wrapper pinned to the Stripe provider.
 func (h *AbstractPaymentHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Request) {
-	h.HandleWebhook("stripe", w, r)
+	h.HandleWebhook(payment.ProviderStripe, w, r)
 }
 
-// HandleLemonSqueezyWebhook is a convenience wrapper pinned to the "lemonsqueezy" provider.
+// HandleLemonSqueezyWebhook is a convenience wrapper pinned to the LemonSqueezy provider.
 func (h *AbstractPaymentHandler) HandleLemonSqueezyWebhook(w http.ResponseWriter, r *http.Request) {
-	h.HandleWebhook("lemonsqueezy", w, r)
+	h.HandleWebhook(payment.ProviderLemonSqueezy, w, r)
 }
 
 // CreateCheckoutRequest is the JSON body accepted by CreateCheckout.
@@ -181,15 +181,15 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 	}
 	mode := req.Mode
 	if mode == "" {
-		mode = "subscription"
+		mode = payment.ModeSubscription
 	}
 	switch mode {
-	case "subscription", "payment":
+	case payment.ModeSubscription, payment.ModePayment:
 		if !h.priceAllowed(req.PriceID) {
 			h.WriteError(w, http.StatusBadRequest, "Bad Request", "priceId is not allowed")
 			return
 		}
-	case "setup":
+	case payment.ModeSetup:
 		// Stripe ignores line_items in setup mode, so any non-empty
 		// priceId here is a caller mistake. Reject up front so the
 		// error is crisp instead of a 502 from a downstream Stripe

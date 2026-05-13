@@ -3,6 +3,7 @@ package rest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"golang.org/x/sync/singleflight"
@@ -583,37 +584,23 @@ func (s *RestService) loadTableActions(ctx context.Context) error {
 			MethodName:      common.AsString(row[5]),
 			DisplayOrder:    int(common.AsInt64(row[6])),
 			ConfirmMessage:  common.AsString(row[7]),
-			AuthorityObject: upper(tableName),
-			AuthorityAction: upper(actionName),
+			AuthorityObject: strings.ToUpper(tableName),
+			AuthorityAction: strings.ToUpper(actionName),
 		}
 		// Method is the resolved URL POST target relative to
 		// RestURL.api_prefix on the sail side (which prepends /api/).
-		// Convention: /v1/{table}/{action_name}, mirroring the generic
-		// CRUD path /v1/{apiName}/list / /get / /post / /delete that
-		// the downstream's GetApiHandlers loop already mounts.
-		// method_name overrides the {table}/{action_name} segment when
-		// set — useful for routing two tables' actions to one shared
-		// handler at a custom URL.
+		// Convention: <APIVersion>/{table}/{action_name}, mirroring the
+		// generic CRUD path <APIVersion>/{apiName}/list / /get / /post /
+		// /delete that the downstream's GetApiHandlers loop already
+		// mounts. method_name overrides the {table}/{action_name}
+		// segment when set — useful for routing two tables' actions to
+		// one shared handler at a custom URL.
 		if action.MethodName != "" {
-			action.Method = "/v1/" + action.MethodName
+			action.Method = common.APIVersion + "/" + action.MethodName
 		} else {
-			action.Method = "/v1/" + tableName + "/" + actionName
+			action.Method = common.APIVersion + "/" + tableName + "/" + actionName
 		}
 		table.Actions = append(table.Actions, action)
 	}
 	return nil
-}
-
-// upper is a tiny helper for upper-casing identifiers — pulled out so
-// the call sites in loadTableActions stay terse.
-func upper(s string) string {
-	out := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'a' && c <= 'z' {
-			c -= 32
-		}
-		out[i] = c
-	}
-	return string(out)
 }

@@ -27,13 +27,17 @@ func (a *AbstractProvider) Parse(body []byte) (*PaymentEvent, error) {
 	return a.Parser.Parse(body)
 }
 
+func (a *AbstractProvider) PeekEventMeta(body []byte) (string, string, error) {
+	return a.Parser.PeekEventMeta(body)
+}
+
 // StripeProvider bundles verifier + parser for Stripe.
 type StripeProvider struct{ AbstractProvider }
 
 func NewStripeProvider(secrets secret.SecretProvider) *StripeProvider {
 	return &StripeProvider{
 		AbstractProvider: AbstractProvider{
-			ProviderName: "stripe",
+			ProviderName: ProviderStripe,
 			SigHeader:    "Stripe-Signature",
 			Verifier:     NewStripeSignatureVerifier(secrets),
 			Parser:       NewStripeEventParser(),
@@ -47,7 +51,7 @@ type LemonSqueezyProvider struct{ AbstractProvider }
 func NewLemonSqueezyProvider(secrets secret.SecretProvider) *LemonSqueezyProvider {
 	return &LemonSqueezyProvider{
 		AbstractProvider: AbstractProvider{
-			ProviderName: "lemonsqueezy",
+			ProviderName: ProviderLemonSqueezy,
 			SigHeader:    "X-Signature",
 			Verifier:     NewLemonSqueezySignatureVerifier(secrets),
 			Parser:       NewLemonSqueezyEventParser(),

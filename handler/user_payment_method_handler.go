@@ -6,7 +6,6 @@ import (
 	kcommon "github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/payment"
-	"github.com/nauticana/keel/user"
 )
 
 // UserPaymentMethodHandler exposes the one custom endpoint for the
@@ -33,20 +32,12 @@ func (h *UserPaymentMethodHandler) Routes(prefix string) map[string]func(w http.
 	if h.Service == nil {
 		return map[string]func(w http.ResponseWriter, r *http.Request){}
 	}
-	userSvc := userServiceFromAbstract(&h.AbstractHandler)
 	return map[string]func(w http.ResponseWriter, r *http.Request){
 		TableActionPath(prefix, "user_payment_method", "set_default"):
-			WrapTableAction(h.DB, userSvc,
+			WrapTableAction(h.DB, h.UserService,
 				"USER_PAYMENT_METHOD", "SET_DEFAULT", "user_payment_method",
 				h.setDefault),
 	}
-}
-
-// userServiceFromAbstract is a tiny shim so callers don't need to
-// reach into AbstractHandler to pull the UserService for
-// WrapTableAction.
-func userServiceFromAbstract(a *AbstractHandler) user.UserService {
-	return a.UserService
 }
 
 type paymentMethodIDRequest struct {

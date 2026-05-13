@@ -13,6 +13,20 @@ type StripeEventParser struct{}
 
 func NewStripeEventParser() *StripeEventParser { return &StripeEventParser{} }
 
+// PeekEventMeta satisfies EventParser — pulls just the id and type out of
+// the raw body so the webhook processor can dedupe before the full parse.
+// Empty id returns are propagated as-is; the processor rejects them.
+func (p *StripeEventParser) PeekEventMeta(body []byte) (string, string, error) {
+	var peek struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(body, &peek); err != nil {
+		return "", "", err
+	}
+	return peek.ID, peek.Type, nil
+}
+
 // Parse satisfies port.EventParser.
 func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 	var raw struct {
@@ -36,7 +50,7 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 		return nil, fmt.Errorf("stripe event missing id")
 	}
 	event := &PaymentEvent{
-		Provider:        "stripe",
+		Provider:        ProviderStripe,
 		ProviderEventID: raw.ID,
 		EventType:       raw.Type,
 		RawPayload:      string(body),
@@ -145,7 +159,7 @@ func stripeAmountCents(eventType string, obj map[string]any) int64 {
 
 func stripeCurrency(obj map[string]any) string {
 	if c, ok := obj["currency"].(string); ok {
-		return toUpperASCII(c)
+		return strings.ToUpper(c)
 	}
 	return ""
 }
@@ -213,16 +227,4 @@ func asFloat(v any) (float64, bool) {
 		return f, err == nil
 	}
 	return 0, false
-}
-
-func toUpperASCII(s string) string {
-	b := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'a' && c <= 'z' {
-			c -= 32
-		}
-		b[i] = c
-	}
-	return string(b)
 }

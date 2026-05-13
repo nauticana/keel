@@ -3,7 +3,7 @@ package handler
 import (
 	"io"
 	"net/http"
-	"strings"
+	"path"
 
 	kcommon "github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/payout"
@@ -126,8 +126,12 @@ func (h *PayoutHandler) Status(w http.ResponseWriter, r *http.Request) {
 // the provider retries with exponential backoff (matches every major
 // provider's convention).
 func (h *PayoutHandler) Webhook(w http.ResponseWriter, r *http.Request) {
-	providerCode := extractProviderCode(r.URL.Path)
-	if providerCode == "" {
+	// path.Base returns "." for empty input and the trailing segment
+	// for everything else; "/" inputs return "/". Both sentinels are
+	// rejected as missing-code so a misconfigured mount doesn't reach
+	// the provider lookup with a junk code.
+	providerCode := path.Base(r.URL.Path)
+	if providerCode == "" || providerCode == "." || providerCode == "/" {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "missing provider code in path")
 		return
 	}
@@ -141,14 +145,4 @@ func (h *PayoutHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// extractProviderCode pulls the last path segment off the webhook URL.
-// e.g. "/api/v1/webhook/payout/AW" → "AW".
-func extractProviderCode(path string) string {
-	idx := strings.LastIndex(path, "/")
-	if idx < 0 || idx == len(path)-1 {
-		return ""
-	}
-	return path[idx+1:]
 }

@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -111,6 +112,24 @@ func (s *stubProvider) Parse(_ []byte) (*PaymentEvent, error) {
 		return nil, s.parseErr
 	}
 	return s.event, nil
+}
+
+// PeekEventMeta mirrors the Stripe-style peek used by every test fixture
+// in this file — id + type from the top level of the JSON body. Returns
+// empty strings (and no error) for a non-JSON body so the legacy
+// "(no-id payload)" test cases keep their original error path.
+func (s *stubProvider) PeekEventMeta(body []byte) (string, string, error) {
+	var peek struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if len(body) == 0 || body[0] != '{' {
+		return "", "", nil
+	}
+	if err := json.Unmarshal(body, &peek); err != nil {
+		return "", "", err
+	}
+	return peek.ID, peek.Type, nil
 }
 
 type recordingHandler struct {

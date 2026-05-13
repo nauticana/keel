@@ -1853,6 +1853,16 @@ erDiagram
 
 Keel defines shared flag variables in `common/variables.go`. Your project can define additional flags alongside these.
 
+> **Rule: flags, never environment variables.** Every deployable knob in
+> keel — hosts, ports, credential locations, URLs, feature toggles,
+> provider selectors — is declared as a `flag.String` / `flag.Int` /
+> `flag.Bool` in [common/variables.go](common/variables.go). `os.Getenv`
+> is NEVER used for configuration. Operators get a single uniform
+> override surface (`--flag=value`), the README's Flag Variables table
+> is the single source of truth, and there's exactly one place to grep
+> when a knob's value needs to change. If you see `os.Getenv` in a keel
+> file, that's a bug to fix, not a pattern to copy.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--log_type` | `local` | Logger: local, gcp, aws |
@@ -1876,6 +1886,12 @@ Keel defines shared flag variables in `common/variables.go`. Your project can de
 | `--valkey_url` | (empty) | Valkey connection (`host:port` or `redis[s]://host:port/db`). Mutually exclusive with `--redis_url`. Password lives in the `valkey_password` secret. |
 | `--valkey_cluster` | `false` | Use Redis-Cluster protocol (required for Memorystore for Valkey cluster-mode-only and ElastiCache for Valkey clusters). Applies only when `--valkey_url` is set. |
 | `--twilio_messaging_service_sid` | (empty) | Twilio Messaging Service SID (`MGxxxxxxxx...`) used by `TwilioSMSDispatcher`. Empty disables SMS dispatch. Account SID + auth token live in the `twilio_account_sid` / `twilio_auth_token` secrets. |
+| `--payout_provider` | `AW` | Payout provider code: `AW` (Airwallex), `SC` (Stripe Connect), `WI` (Wise). |
+| `--payout_return_url` | (empty) | Deep-link the payout provider redirects back to after hosted KYC. |
+| `--payout_webhook_url` | (empty) | Public host the payout provider sends webhook events to. Path suffix `/api/v1/webhook/payout/<code>` is appended by the calling app's router. |
+| `--airwallex_api_base` | `https://api-demo.airwallex.com` | Airwallex REST API base URL. Set to `https://api.airwallex.com` for production. |
+| `--wise_api_base` | `https://api.sandbox.transferwise.tech` | Wise Platform REST API base URL. Set to `https://api.wise.com` for production. |
+| `--wise_profile_id` | (empty) | Wise platform profile id (numeric). Required when `--payout_provider=WI`. |
 
 ## Cache Service
 
@@ -2195,6 +2211,297 @@ Contributions are welcome via GitHub pull requests. A few ground rules:
   least one no-op or in-memory test.
 - **Doc-comment every exported symbol.** This repo is the public surface for
   several downstream projects; opaque exports cost everyone time.
+- **Follow the Development Standards below.** Every contribution — internal
+  or external — is expected to honour the patterns the rest of the codebase
+  has converged on. Reviewers will reject PRs that bypass them without a
+  written rationale.
+
+## Development Standards
+
+Keel is Apache-2.0 licensed and consumed by multiple downstream projects plus the [sail](https://github.com/nauticana/sail)
+Angular frontend. The following standards exist so contributions stay
+predictable across all of those consumers and so the codebase grows without
+turning into a yard sale of one-off patterns.
+
+These are NOT suggestions. A PR that violates them needs to either fix the
+violation or include a `Why:` paragraph in the description explaining the
+constraint that justified the deviation.
+
+### 1. Object-orientation via composition
+
+Go has no classical inheritance, so "OOP" in keel means **struct embedding +
+narrow interfaces**, applied in this fixed order:
+
+1. **Abstraction** — every cross-cutting concern (HTTP handler base, webhook
+   provider, payout provider, table service) has an `Abstract<Name>` struct
+   that holds the shared state and methods.
+   - `handler.AbstractHandler` — session parsing, RFC 7807 envelopes,
+     request reading.
+   - `handler.AbstractPaymentHandler` — webhook lifecycle + checkout
+     redirect-host / price allowlist enforcement.
+   - `payment.AbstractProvider` — provider Name / SignatureHeader / Verify
+     / Parse plumbing shared by Stripe + LemonSqueezy.
+2. **Inheritance** — concrete types embed the abstract by value (not by
+   pointer) at the top of the struct declaration. Method promotion gives
+   the "extends" feel without runtime cost.
+
+   ```go
+   type StripeProvider struct{ AbstractProvider }
+   type UserPaymentMethodHandler struct{ AbstractHandler; … }
+   ```
+
+   Never re-implement a method the embedded abstract already provides —
+   override it only when the concrete genuinely differs (e.g. Stripe's
+   `setup_intent` mode in [payment/stripe_client.go](payment/stripe_client.go)).
+3. **Polymorphism** — consumers depend on **interfaces**, never on the
+   concrete struct. Interfaces live next to the abstraction
+   (`payment.PaymentProvider`, `payout.PayoutProvider`,
+   `payment.SignatureVerifier`, `payment.EventParser`,
+   `payment.CheckoutClient`, `payment.WebhookRepository`,
+   `port.UserService`, etc.). New providers add a file, implement the
+   interface, register themselves in the factory — nothing else
+   changes. The 2026-Q2 payout migration added Airwallex / Stripe
+   Connect / Wise with three files and one switch arm in
+   [payout/factory.go](payout/factory.go) precisely because the
+   interface was already in place.
+
+Every concrete type that implements an interface MUST include a
+compile-time assertion at the bottom of the file:
+
+```go
+var _ payout.PayoutProvider = (*AirwallexProvider)(nil)
+```
+
+This catches drift the moment the interface evolves — the build fails
+where the contract breaks, not at runtime in a downstream project.
+
+### 2. Don't reinvent the standard library
+
+Reaching for a homegrown utility when `strings`, `strconv`, `path`, `net/url`,
+or `net/http` already covers the case is a regression. Some patterns we keep
+catching in review:
+
+| Don't write                | Use instead                              |
+|----------------------------|------------------------------------------|
+| local `upper(s string)` / `toUpperASCII` | `strings.ToUpper(s)`              |
+| local `equalFold`          | `strings.EqualFold(a, b)`               |
+| manual last-segment split  | `path.Base(urlPath)`                    |
+| string-concat URL building | `url.URL{}` / `url.Values.Encode()`     |
+| `time.Now().Sub(t).Abs()` reimplemented | `time.Since(t)` / `Sub` then abs |
+
+Exception: helpers that genuinely don't have a stdlib equivalent (e.g.
+`common.AsInt64`, `common.PascalCase`) belong in
+[common/functions.go](common/functions.go) and are reused everywhere.
+
+### 3. No magic strings — constants and `constant_header`
+
+Two distinct tools, two distinct purposes. Get them right.
+
+**Code-level constants** for any literal that's referenced from more than
+one place or carries semantic meaning (provider names, status codes, event
+types, URL prefixes, header names). They live in the package they describe:
+
+```go
+// payment/webhook_repository_sql.go
+const (
+    StatusReceived  = "R"
+    StatusProcessed = "P"
+    StatusFailed    = "F"
+    StatusDuplicate = "D"
+    StatusSkipped   = "S"
+)
+
+// payout/airwallex.go
+const airwallexCode = "AW"
+```
+
+If a literal appears in more than one file in a package, hoist it to a
+package-level `const` block. If it appears in more than one package, it
+belongs in [common/variables.go](common/variables.go) (configuration) or
+the relevant `port/` interface file (protocol-level constant).
+
+**`constant_header` / `constant_value` tables** are the runtime equivalent
+for domain enumerations that the **UI** has to render — order status,
+payout provider code, payment method type, country code. Sail reads these
+through `GetClientCache` and auto-renders dropdowns; the Go side reads them
+through `RestService.GetConstantCache`. Always add a `constant_header` row
++ `constant_value` rows + a `constant_lookup` row pointing the column at
+the header — never hardcode the dropdown options in TypeScript.
+
+The two complement each other: the `const` block in Go enforces type-safety
+at compile time; the `constant_header` row makes the same value editable
+through the admin UI without a redeploy. New domain enums add both.
+
+### 4. Flag variables for every deployable knob
+
+Anything an operator might want to change between environments — host,
+port, credential location, feature toggle, provider selector, return URL —
+goes through `flag` in [common/variables.go](common/variables.go).
+
+Rules:
+
+- One flag per knob. Don't overload a single flag with multiple meanings
+  (the v0.4.1 `--keystore` / `--aws_region` split is the cautionary tale).
+- Documented default that's safe for local dev. `--cors_origin` defaults
+  to empty (deny all); `--secret_mode` to `local`; `--push_mode` to `noop`.
+  Deny-by-default beats permissive defaults that bite you on a fresh
+  install.
+- Doc-comment **at the variable declaration** explaining what it does,
+  what the valid range is, what depends on it, and what the consequence of
+  the empty/zero value is. The flag's `Description` argument is short
+  user-facing help; the Go doc-comment is the engineering reference.
+- Add a corresponding row to the **Flag Variables** table in this README
+  so downstream consumers can `Cmd-F` for it.
+- Validate combinations at startup, not at first-use. `handler.MustRequireTrustedProxyCIDR`
+  is the pattern: fail fast in `main`, not on the first signed-in user.
+
+**Flags, never environment variables.** keel does NOT read `os.Getenv` for
+configuration anywhere. Every deployable knob is a `flag.*` declaration in
+[common/variables.go](common/variables.go), period. The reason is uniformity:
+one override surface (`--flag=value`), one place to grep, one table in this
+README that documents the whole set. If you find yourself reaching for
+`os.Getenv`, stop and declare a flag instead. A PR that adds an env-var
+read will be rejected.
+
+### 5. SQL: parameterised, cached, schema-aware
+
+- **No string-built SQL.** Every query goes through
+  `data.QueryService.Query(ctx, queryName, args...)` with a query map
+  registered once per package (see
+  [payment/webhook_repository_sql.go](payment/webhook_repository_sql.go) for
+  the canonical shape). The placeholder rewriter handles `?` → `$N` per
+  driver.
+- **Cache the QueryService** with `sync.Once` at the struct level
+  (see `SQLWebhookRepository`). Re-rewriting the same query map per call
+  burns CPU on the hot webhook path.
+- **Idempotency via unique indexes**, not application-side checks.
+  Concurrent retries from a payment provider WILL race the cheap-path
+  existence check; the unique-index insert is the authoritative gate
+  (SQLSTATE 23505 → treat as duplicate, see
+  [payment/webhook_processor.go](payment/webhook_processor.go)).
+- **`UserSpecific` / `PartnerSpecific` row scoping** is automatic via the
+  table flag — don't re-implement scoping in raw SQL unless the operation
+  legitimately crosses actors (e.g. `OnboardingService.ListReusableAccounts`
+  spans partners by design).
+
+### 6. HTTP handlers: thin, RFC-compliant, deny-by-default
+
+- Embed `AbstractHandler`. Use `RequireSession`, `RequireMethod`,
+  `ReadAuthRequest`, `WriteError`, `WriteJSON` — not their hand-rolled
+  equivalents. If you find yourself reading `Authorization` directly,
+  stop and use `ParseSession`.
+- 4xx responses pass the caller's `detail` through (validation messages
+  are intentionally user-facing); 5xx responses replace `detail` with a
+  generic message and surface a `request_id` so the user-visible error
+  correlates to the application log.
+- **Allowlists default to empty = deny.** `AllowedPriceIDs`,
+  `AllowedRedirectHosts`, `AllowedEventTypes`, `TrustedProxyCIDR` — every
+  one of these is permissive ONLY when the operator explicitly populates
+  it. A zero-value struct should never be exploitable.
+- Mount custom table-row actions through `WrapTableAction` (see
+  [handler/table_action_middleware.go](handler/table_action_middleware.go))
+  so the authorization gate is consistent with the generic-CRUD path.
+  Don't reimplement `CheckActionPermission` per handler.
+
+### 7. The sail (Angular frontend) contract
+
+Sail consumes keel JSON shapes directly. Breaking the wire contract breaks
+sail with no compile-time signal, so the following are HARD constraints:
+
+- **PascalCase JSON keys** for every table row and `model/` struct that
+  rides the wire (`Id`, `PartnerId`, `Caption`). The data layer's
+  `PascalCase()` does the column → field translation; new JSON-tagged
+  fields on hand-written types must match.
+- **`TableAction.Method`** is the absolute URL path sail POSTs against
+  (`/v1/{table}/{action}` or `/v1/{method_name}`). Don't change the path
+  scheme without coordinating with sail's table-action dispatcher.
+- **`canExecute()` on the sail side** matches `authorityObject` /
+  `authorityCheck` from the `TableAction` JSON against the user's
+  permission set. Authorisation seeds MUST include the
+  `authorization_object` + `authorization_object_action` row for every
+  custom action, or sail will show the button greyed out.
+- **`ProblemDetail`** (RFC 7807) is the error envelope sail expects.
+  Don't return bare strings or custom shapes.
+- **`MainMenu` / `Permissions` / `TableDefinitions`** in
+  `RestService.GetClientCache` are sail's bootstrap payload. Adding a new
+  metadata table for sail to consume = add a slot to `GetClientCache` and
+  invalidate the cache (`RestService.InvalidateCache`) after admin tooling
+  edits the source table.
+
+### 8. Security defaults are non-negotiable
+
+- **Verify signatures BEFORE writing to the DB.** Don't log unsigned
+  webhook bodies — an unauthenticated attacker would otherwise fill the
+  log table with garbage.
+- **Bound every external input.** `MaxBytesReader` for HTTP bodies
+  (`*common.MaxRequestSize` global cap; `MaxWebhookBodyBytes` tighter cap
+  for webhooks); `MaxSigHeaderBytes` for signature headers;
+  `stripeMaxResponseBytes` for upstream responses. A missing bound is a
+  DoS vector.
+- **Use `crypto/rand`** for any token that an attacker shouldn't be
+  able to predict. `math/rand` is never appropriate for security
+  contexts.
+- **`hmac.Equal` and `subtle.ConstantTimeCompare`** for signature
+  comparisons — `bytes.Equal` leaks timing.
+- **No PII in error responses.** "user not found" is more dangerous
+  than it looks: it confirms whether an email is registered. Prefer
+  generic "credentials rejected" / "request rejected".
+
+### 9. Testing
+
+- Every adapter / provider gets at least a no-op or in-memory test that
+  exercises the public surface — `payment/webhook_test.go`,
+  `payment/signature_test.go`, `payment/parser_test.go` are the canonical
+  shapes.
+- Signature verifiers MUST have a known-good vector test and at least one
+  tamper-detection test (flipped byte → reject).
+- Webhook processors MUST have an idempotency test (same event id twice →
+  one handler invocation).
+- Tests live next to the code (`*_test.go` in the same package). No
+  separate `tests/` tree.
+
+### 10. Doc comments are the public surface
+
+Every exported symbol (`Capitalised`) carries a doc comment that explains:
+
+- What it does (one line, complete sentence).
+- What the non-obvious constraints are — preconditions, idempotency
+  guarantees, security implications, why this exists rather than the
+  obvious-looking alternative.
+- For deprecated APIs, what replaces them and the cutover date.
+
+The doc comments on `payment.WebhookProcessor.Process` and
+`handler.AbstractPaymentHandler.CreateCheckout` are good references —
+they describe WHY the order of operations matters and what attack each
+step defends against, not just WHAT the function does.
+
+### 11. Versioning and breaking changes
+
+- Public APIs in `port/`, `model/`, `handler/`, `data/`, `worker/`,
+  `service/`, `payment/`, `payout/` are **stable across minor releases**.
+  Renames, parameter reordering, and return-shape changes go in a major
+  bump (v1.0 → v2.0).
+- Additive changes (new method on a struct, new optional struct field,
+  new constant, new interface impl) are minor-version-safe.
+- New SQL columns are added NULL-able with a default so old schemas
+  continue to read; column removals wait one major release.
+- `TODO.md` tracks deferred work with `why deferred / acceptance / effort`
+  so cross-version follow-up isn't lost.
+
+### 12. Commit & PR hygiene
+
+- One logical change per PR. A "v0.X.Y: add foo" commit is fine; a "v0.X.Y:
+  add foo, fix bar, refactor baz" commit is not.
+- Commit messages cite the release tag (`v0.7.0`, `v0.8.0`) when the PR
+  ships a tagged release.
+- README + role matrix + flag table + schema changelog update in the
+  SAME commit as the code change. A schema row without a README row is a
+  bug.
+
+---
+
+These standards apply equally to the keel maintainers and to external
+contributors — same review bar, same rationale.
 
 ## License
 

@@ -85,9 +85,9 @@ func (c *StripeCheckoutClient) secretName() string {
 // hosted checkout URL.
 func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req CheckoutRequest) (string, error) {
 	if req.Mode == "" {
-		req.Mode = "subscription"
+		req.Mode = ModeSubscription
 	}
-	if req.Mode != "setup" && req.PriceID == "" {
+	if req.Mode != ModeSetup && req.PriceID == "" {
 		return "", fmt.Errorf("checkout: price_id is required for mode %q", req.Mode)
 	}
 	if req.Quantity <= 0 {
@@ -99,7 +99,7 @@ func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req Ch
 	if req.Email != "" {
 		form.Set("customer_email", req.Email)
 	}
-	if req.Mode != "setup" {
+	if req.Mode != ModeSetup {
 		form.Set("line_items[0][price]", req.PriceID)
 		form.Set("line_items[0][quantity]", strconv.FormatInt(req.Quantity, 10))
 	}
@@ -118,7 +118,7 @@ func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req Ch
 	// `setup_intent.succeeded` arrives with empty metadata and the
 	// consumer has to fall back to checkout.session.completed or do
 	// a follow-up Stripe API call to recover (e.g. user_id) (v0.5.1-B).
-	if req.Mode == "setup" {
+	if req.Mode == ModeSetup {
 		for k, v := range req.Metadata {
 			form.Set("setup_intent_data[metadata]["+k+"]", v)
 		}

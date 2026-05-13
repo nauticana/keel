@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
 )
 
@@ -27,37 +27,42 @@ import (
 //   - POST /api/v1/payouts                       → instant payout
 //   - Webhook POST {NotifyURL} with x-signature  → account.* events
 //
-// apiBase defaults to Airwallex's demo host for safety; flip to prod
-// via AIRWALLEX_API_BASE env when the integration is contract-live.
+// apiBase comes from --airwallex_api_base. Default is the demo host so
+// a fresh install can't accidentally hit production; flip to
+// "https://api.airwallex.com" once the integration is contract-live.
+//
+// AbstractProvider is embedded by value so apiKey / webhookSecret /
+// journal are field-promoted; the hmacSHA256Hex helper is accessible as
+// p.hmacSHA256Hex(...).
 type AirwallexProvider struct {
-	apiKey        string
-	webhookSecret string
-	apiBase       string
-	httpClient    *http.Client
-	journal       logger.ApplicationLogger
+	AbstractProvider
+	apiBase    string
+	httpClient *http.Client
 }
-
-const airwallexCode = "AW"
-const airwallexDemoBase = "https://api-demo.airwallex.com"
 
 // NewAirwallexProvider wires the provider. apiKey is the bearer token
 // (or a JWT minted via the auth endpoint — production rotates these
 // every 30min); webhookSecret is the HMAC-SHA256 shared secret
 // configured on the Airwallex dashboard for the webhook endpoint.
+//
+// apiBase is read from --airwallex_api_base; tests can override the
+// field directly on the returned struct after construction.
 func NewAirwallexProvider(apiKey, webhookSecret string, journal logger.ApplicationLogger) (*AirwallexProvider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("airwallex: API key is required")
 	}
 	return &AirwallexProvider{
-		apiKey:        apiKey,
-		webhookSecret: webhookSecret,
-		apiBase:       airwallexDemoBase,
-		httpClient:    &http.Client{Timeout: 15 * time.Second},
-		journal:       journal,
+		AbstractProvider: AbstractProvider{
+			apiKey:        apiKey,
+			webhookSecret: webhookSecret,
+			journal:       journal,
+		},
+		apiBase:    *common.AirwallexAPIBase,
+		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}, nil
 }
 
-func (p *AirwallexProvider) Code() string { return airwallexCode }
+func (p *AirwallexProvider) Code() string { return ProviderCodeAirwallex }
 
 type airwallexCreateAccountReq struct {
 	AccountCurrency string         `json:"account_currency"`
@@ -138,14 +143,10 @@ func (p *AirwallexProvider) VerifyAndParseWebhook(headers map[string][]string, r
 	if sig == "" || ts == "" {
 		return nil, fmt.Errorf("airwallex webhook: missing signature headers")
 	}
-	if p.webhookSecret == "" {
+	expected := p.hmacSHA256Hex([]byte(ts), []byte("."), rawBody)
+	if expected == "" {
 		return nil, fmt.Errorf("airwallex webhook: secret not configured")
 	}
-	mac := hmac.New(sha256.New, []byte(p.webhookSecret))
-	mac.Write([]byte(ts))
-	mac.Write([]byte("."))
-	mac.Write(rawBody)
-	expected := hex.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(expected), []byte(sig)) {
 		return nil, fmt.Errorf("airwallex webhook: invalid signature")
 	}
@@ -249,13 +250,46 @@ func mapAirwallexPayoutStatus(s string) string {
 	}
 }
 
-// isInsufficientBalance pattern-matches Airwallex's documented
-// balance-related error text. Airwallex returns 400 with
-// {"code":"insufficient_balance"} in the body — postJSON folds that
-// into the wrapped error string, so a substring check is sufficient.
+// airwallexAPIError is the typed error returned by postJSON whenever
+// Airwallex responds with a non-2xx status. Code carries Airwallex's
+// canonical error code (e.g. "insufficient_balance"), Message carries
+// the human-readable message. RawBody is preserved for diagnostics when
+// the envelope didn't parse — every Airwallex error response is JSON,
+// but a misbehaving proxy or non-JSON 5xx could land here.
+//
+// Callers identify specific error classes via errors.As:
+//
+//	var apiErr *airwallexAPIError
+//	if errors.As(err, &apiErr) && apiErr.Code == "insufficient_balance" { ... }
+type airwallexAPIError struct {
+	Path       string
+	StatusCode int
+	Code       string
+	Message    string
+	RawBody    string
+}
+
+func (e *airwallexAPIError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("airwallex %s status=%d code=%s message=%s",
+			e.Path, e.StatusCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("airwallex %s status=%d body=%s",
+		e.Path, e.StatusCode, e.RawBody)
+}
+
+// isInsufficientBalance checks for Airwallex's documented
+// insufficient-balance error class. Prefers the typed
+// airwallexAPIError.Code path (set when the envelope parsed); falls
+// back to a substring check when the envelope didn't parse so we
+// still detect the class on a non-JSON 4xx body.
 func isInsufficientBalance(err error) bool {
 	if err == nil {
 		return false
+	}
+	var apiErr *airwallexAPIError
+	if errors.As(err, &apiErr) && apiErr.Code != "" {
+		return strings.EqualFold(apiErr.Code, "insufficient_balance")
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "insufficient_balance") ||
@@ -280,7 +314,23 @@ func (p *AirwallexProvider) postJSON(ctx context.Context, path string, in any, o
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("airwallex %s status=%d body=%s", path, resp.StatusCode, string(raw))
+		apiErr := &airwallexAPIError{
+			Path:       path,
+			StatusCode: resp.StatusCode,
+			RawBody:    string(raw),
+		}
+		// Airwallex's documented error envelope: {"code":"...","message":"..."}.
+		// Parse best-effort; missing fields leave the typed Code/Message
+		// empty and callers fall through to the substring path.
+		var envelope struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if jerr := json.Unmarshal(raw, &envelope); jerr == nil {
+			apiErr.Code = envelope.Code
+			apiErr.Message = envelope.Message
+		}
+		return apiErr
 	}
 	if out == nil {
 		return nil
@@ -290,30 +340,11 @@ func (p *AirwallexProvider) postJSON(ctx context.Context, path string, in any, o
 
 func firstHeader(headers map[string][]string, key string) string {
 	for k, v := range headers {
-		if len(v) > 0 && equalFold(k, key) {
+		if len(v) > 0 && strings.EqualFold(k, key) {
 			return v[0]
 		}
 	}
 	return ""
-}
-
-func equalFold(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if ca >= 'A' && ca <= 'Z' {
-			ca += 32
-		}
-		if cb >= 'A' && cb <= 'Z' {
-			cb += 32
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
 }
 
 // Compile-time assertion that AirwallexProvider satisfies PayoutProvider.
