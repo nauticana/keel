@@ -4,6 +4,7 @@ import (
 	crand "crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/dispatcher"
+	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
@@ -37,6 +39,11 @@ type OTPHandler struct {
 	// async-Pub/Sub round-trip adds avoidable latency to a security
 	// flow the user is actively waiting on.
 	Mail *dispatcher.MailClient
+	// Journal receives dispatch-side errors (mail/SMS send failures)
+	// that the handler intentionally doesn't surface to the client. nil
+	// is fine — failures fall through to log.Println so they always
+	// reach stdout/journald.
+	Journal logger.ApplicationLogger
 }
 
 // otpChannelPhone / otpChannelEmail are the two contactType values the
@@ -52,6 +59,19 @@ const (
 // expiry so a legitimate user typing slowly can still use the token to
 // resend without re-entering their phone.
 const OTPTokenTTL = 5 * time.Minute
+
+// otpSendResponse mirrors what clients deserialize. resendCountdownSec
+// echoes the server's --otp_ttl_seconds so the OTP-input keypad's
+// resend timer can match the code's actual lifetime instead of using
+// a client-side fallback.
+type otpSendResponse struct {
+	OtpToken            string `json:"otpToken"`
+	ResendCountdownSec  int    `json:"resendCountdownSec"`
+}
+
+func makeOtpSendResponse(token string) otpSendResponse {
+	return otpSendResponse{OtpToken: token, ResendCountdownSec: *common.OTPTTLSeconds}
+}
 
 // otpTokenPrefix is the cache-key namespace for SendOTP-issued tokens.
 const otpTokenPrefix = "otp_token:"
@@ -272,7 +292,7 @@ func (h *OTPHandler) sendOTPPhone(w http.ResponseWriter, r *http.Request, req *o
 		session, _ = h.UserService.GetUserByPhone(normalized)
 		if session == nil {
 			fakeToken, _ := h.mintFakeOTPToken(r, otpChannelPhone)
-			common.WriteJSON(w, http.StatusOK, map[string]any{"otpToken": fakeToken})
+			common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(fakeToken))
 			return
 		}
 	}
@@ -289,7 +309,7 @@ func (h *OTPHandler) sendOTPPhone(w http.ResponseWriter, r *http.Request, req *o
 	}
 	h.dispatchOTPSMS(r, session.Id, otp)
 
-	common.WriteJSON(w, http.StatusOK, map[string]any{"otpToken": token})
+	common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(token))
 }
 
 // sendOTPEmail is the email-channel twin of sendOTPPhone. Mirrors the
@@ -338,7 +358,7 @@ func (h *OTPHandler) sendOTPEmail(w http.ResponseWriter, r *http.Request, req *o
 		if session == nil {
 			// Same anti-enumeration shape as the phone fall-through.
 			fakeToken, _ := h.mintFakeOTPToken(r, otpChannelEmail)
-			common.WriteJSON(w, http.StatusOK, map[string]any{"otpToken": fakeToken})
+			common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(fakeToken))
 			return
 		}
 	}
@@ -355,43 +375,69 @@ func (h *OTPHandler) sendOTPEmail(w http.ResponseWriter, r *http.Request, req *o
 	}
 	h.dispatchOTPEmail(r, session.Id, email, otp)
 
-	common.WriteJSON(w, http.StatusOK, map[string]any{"otpToken": token})
+	common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(token))
 }
 
 // dispatchOTPSMS pushes the SMS code through the consumer's notification
-// service. Failures are intentionally swallowed — the OTP row already
-// exists in user_otp, so the user can resend or wait out the rate-limit.
+// service. The error doesn't propagate to the client — the OTP row
+// already exists in user_otp so the user can resend — but it IS logged
+// so a silently-failing Twilio config surfaces in the journal.
 func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, otp string) {
 	if h.NotificationSvc == nil {
 		return
 	}
-	_ = h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
+	if err := h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
 		UserID:  userID,
 		Type:    "S",
 		Channel: "S", // SMS
 		Title:   "Verification Code",
 		Body:    "Your verification code is: " + otp,
-	})
+	}); err != nil {
+		h.logDispatchFailure("otp-sms", userID, err)
+	}
 }
 
 // dispatchOTPEmail prefers the synchronous MailClient path because OTP
 // timing matters and the user is actively waiting. Falls back to the
 // async NotificationSvc with Channel="E" when MailClient isn't wired.
+//
+// Errors are NOT propagated to the caller — the OTP row already exists
+// in user_otp so the user can resend, and a 5xx here would leak
+// dispatch-internal failure modes. But we DO log them via the
+// AbstractHandler.Journal (when wired by the consumer) so a "200 OK
+// but nothing arrived" mystery surfaces in the logs instead of silence.
 func (h *OTPHandler) dispatchOTPEmail(r *http.Request, userID int, email, otp string) {
 	body := "Your Trvoo verification code is: " + otp + "\n\nThe code expires in a few minutes. If you didn't request it, you can ignore this message."
 	if h.Mail != nil {
-		_ = h.Mail.SendEmail(r.Context(), "Verification Code", body, []string{email})
+		if err := h.Mail.SendEmail(r.Context(), "Verification Code", body, []string{email}); err != nil {
+			h.logDispatchFailure("otp-email", userID, err)
+		}
 		return
 	}
 	if h.NotificationSvc != nil {
-		_ = h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
+		if err := h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
 			UserID:  userID,
 			Type:    "S",
 			Channel: "E", // Email
 			Title:   "Verification Code",
 			Body:    body,
-		})
+		}); err != nil {
+			h.logDispatchFailure("otp-email-async", userID, err)
+		}
 	}
+}
+
+// logDispatchFailure routes a dispatch error to the consumer-provided
+// Journal so silent mail/SMS failures don't disappear. AbstractHandler.
+// Journal is optional; nil journals fall back to log.Printf so the
+// message is at least in stdout/journald.
+func (h *OTPHandler) logDispatchFailure(channel string, userID int, err error) {
+	msg := fmt.Sprintf("otp dispatch failed (channel=%s userID=%d): %v", channel, userID, err)
+	if h.Journal != nil {
+		h.Journal.Error(msg)
+		return
+	}
+	log.Println(msg)
 }
 
 // mintFakeOTPToken returns a server-issued token that resolves to

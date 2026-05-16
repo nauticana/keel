@@ -167,6 +167,26 @@ type AbstractRepository struct {
 - **UserSpecific (auto-CRUD)**: row's owner is a single fixed `user_id`, the API surface is "the owner manages their own data" (favorites, payment methods, notification preferences, etc.).
 - **Custom handlers**: multi-actor rows (rides, chat messages), indirect ownership (`driver_payout.driver_id` → `driver_profile.user_id`), or admin endpoints that operate on other users' data.
 
+## Migration Guide (v0.8.4 — additive, dispatch error visibility)
+
+All changes are **additive** — existing v0.8.3 consumers keep compiling.
+
+| Item | Before | After | Migration step |
+|---|---|---|---|
+| **`POST /public/otp/send` response shape** | `{"otpToken": "…"}` | `{"otpToken": "…", "resendCountdownSec": 300}`. `resendCountdownSec` mirrors `--otp_ttl_seconds` so the client's resend timer can match the code's actual server-side lifetime instead of guessing a default. | **Optional**. Older clients that ignore unknown JSON fields keep working. Clients that want server-driven cooldown read `resendCountdownSec` (added to sail's `OtpResponse` type as `resendCountdownSec?: number`). |
+| **`OTPHandler.Journal`** | Did not exist. SMS/email dispatch errors were silently swallowed with `_ = h.NotificationSvc.Send(...)` / `_ = h.Mail.SendEmail(...)`. | Optional `Journal logger.ApplicationLogger` field. `dispatchOTPEmail` / `dispatchOTPSMS` now route failed sends to `Journal.Error(...)` when set; `log.Println` fallback when nil. Errors are still **not propagated to the client** (OTP row exists; user can resend) — the change is observability, not behavior. | **Optional**. Set `Journal: yourLogger` on the OTPHandler struct literal. Skipping leaves you at v0.8.3 behavior plus a `log.Println` fallback. |
+| **`dispatcher.MailClient.postMailAPI`** | Treated any 2xx as success. RFC 7807 backends like bdsmail return `HTTP 200 OK` with `Content-Type: application/problem+json` for auth/sender errors (`{"Code":401,"Detail":"Invalid API key"}`) — these silently looked like successes. | Now inspects `Content-Type` and parses `{Code, Title, Detail}` from `application/problem+json` bodies. Returns `fmt.Errorf("mail API rejected request: %d %s", ...)` so the error reaches `OTPHandler.dispatchOTPEmail` and surfaces through `Journal`. | **None** — internal behavior change. SMTP-mode mail backends are unaffected (different code path). API-mode consumers that previously saw silent failures will now see real errors in their logs. |
+
+### Recommended adoption order
+
+1. **Bump to v0.8.4** — `postMailAPI` correctness lands automatically; no other code changes required.
+2. **Wire `OTPHandler.Journal`** in your consumer's controller so silent mail/SMS failures stop disappearing. One-line struct field; nil-safe before and after.
+3. **Surface `resendCountdownSec`** in your frontend's OTP-input timer. Optional but eliminates the disconnect between server-side OTP TTL (`--otp_ttl_seconds`) and client-side resend cooldown.
+
+### Breaking-change risk
+
+None identified. The response-shape change adds a field; the handler change adds a field; the dispatcher fix tightens error detection without changing success behavior.
+
 ## Architecture
 
 ```mermaid
@@ -753,7 +773,11 @@ pushHandler := &handler.PushHandler{
 srv.Handle(pushHandler.GetAuthRoutes())
 ```
 
-FCM mode requires `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service-account key, or running inside GCP with an attached identity.
+FCM mode resolves credentials via Google's Application Default Credentials. Three working setups, listed best-first:
+
+1. **Workload Identity on GCP** — running on GCE / GKE / Cloud Run with an attached service account that holds `roles/firebasecloudmessaging.admin` (or a custom role with `cloudmessaging.messages.create`). The Firebase SDK pulls a short-lived token from the metadata server; nothing to mount, nothing to rotate. **Recommended.**
+2. **Workload Identity Federation on AWS/other** — set `GOOGLE_APPLICATION_CREDENTIALS` to a credential-config JSON that exchanges the local-cloud OIDC token for a GCP access token. No static key on disk.
+3. **Static service-account key (legacy)** — set `GOOGLE_APPLICATION_CREDENTIALS` to a downloaded Firebase Admin SDK private-key JSON. Works everywhere but you own the rotation; GCP org policies increasingly force short key lifetimes (~14 days) making this unsustainable. Prefer (1) or (2).
 
 ### Device-token endpoints
 

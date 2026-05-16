@@ -11,10 +11,11 @@ import (
 )
 
 // NewPushProvider returns the push provider selected by --push_mode.
-// "fcm" wires the Firebase Cloud Messaging backend (requires
-// GOOGLE_APPLICATION_CREDENTIALS or GCP runtime). "noop" returns a
-// provider that silently discards dispatches — the default for
-// non-mobile consumers.
+// "fcm" wires the Firebase Cloud Messaging backend (credentials via
+// Application Default Credentials — Workload Identity on GCP,
+// GOOGLE_APPLICATION_CREDENTIALS elsewhere; see FCMPushProvider doc).
+// "noop" returns a provider that silently discards dispatches — the
+// default for non-mobile consumers.
 func NewPushProvider(ctx context.Context, users user.UserService, journal logger.ApplicationLogger) (dispatcher.MessageDispatcher, error) {
 	switch *common.PushMode {
 	case "fcm":

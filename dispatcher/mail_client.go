@@ -293,6 +293,34 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 		_ = resp.Body.Close()
 	}()
 
+	// bdsmail (and any RFC 7807 backend) returns errors as 200 OK +
+	// `application/problem+json` body — checking only StatusCode would
+	// let "Invalid API key" and "Token not authorized to send from X"
+	// pass as success. Inspect the content-type before declaring victory.
+	ct := resp.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "application/problem+json") {
+		var pj struct {
+			Code   int    `json:"Code"`
+			Title  string `json:"Title"`
+			Detail string `json:"Detail"`
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if jerr := json.Unmarshal(body, &pj); jerr == nil && (pj.Code >= 400 || pj.Title != "") {
+			detail := pj.Detail
+			if detail == "" {
+				detail = pj.Title
+			}
+			return fmt.Errorf("mail API rejected request: %d %s", pj.Code, detail)
+		}
+		// Couldn't decode the problem document — surface raw status +
+		// a snippet so the log isn't empty.
+		snippet := string(body)
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return fmt.Errorf("mail API returned problem+json (status %d): %s", resp.StatusCode, snippet)
+	}
+
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("mail API returned status %d", resp.StatusCode)
 	}

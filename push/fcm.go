@@ -19,7 +19,12 @@ import (
 // the injected UserService so the next Dispatch call skips them.
 //
 // Construct via New or via the factory (selected by --push_mode=fcm).
-// Requires GOOGLE_APPLICATION_CREDENTIALS or running inside GCP.
+// Authenticates via Application Default Credentials — preferred path is
+// Workload Identity (GCE/GKE/Cloud Run SA with
+// roles/firebasecloudmessaging.admin); falls back to
+// GOOGLE_APPLICATION_CREDENTIALS pointing at a downloaded key JSON or a
+// Workload Identity Federation credential-config (AWS/other clouds).
+// See README "Push Notifications (FCM)" for the full matrix.
 type FCMPushProvider struct {
 	client  *messaging.Client
 	users   user.UserService
