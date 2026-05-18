@@ -44,7 +44,12 @@ func (s *QueryServicePgsql) Query(ctx context.Context, queryName string, args ..
 		}
 		row := make([]any, len(cols))
 		for i := range cols {
-			row[i] = *columnPointers[i].(*any)
+			// normalizeValue strips pgx wrapper types (pgtype.Numeric,
+			// pgtype.Date, pgtype.Timestamp[tz]) so callers consuming
+			// the row via common.As* helpers get native Go primitives
+			// (float64 / time.Time) instead of the -1 sentinel from
+			// the unknown-type branch. See scan_normalize.go.
+			row[i] = normalizeValue(*columnPointers[i].(*any))
 		}
 		results = append(results, row)
 	}

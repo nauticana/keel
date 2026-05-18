@@ -187,6 +187,59 @@ All changes are **additive** — existing v0.8.3 consumers keep compiling.
 
 None identified. The response-shape change adds a field; the handler change adds a field; the dispatcher fix tightens error detection without changing success behavior.
 
+## Migration Guide (v0.8.5 — NUMERIC / DATE / TIMESTAMP rows decoded to native Go types)
+
+Fix-only release. No new API, no removed API. The pgx default codec
+decodes `NUMERIC` to `pgtype.Numeric` (a struct wrapping `*big.Int`)
+and `DATE` / `TIMESTAMP` / `TIMESTAMPTZ` to `pgtype.Date` /
+`pgtype.Timestamp` / `pgtype.Timestamptz`. `common.AsFloat64` and
+`common.AsTime` only know primitive Go types — every NUMERIC value
+read via `QueryService.Query` previously fell through to the `-1`
+sentinel; date/timestamp values fell to the zero `time.Time`. Money
+columns, coordinates, rates, fiscal-period dates — all silently
+corrupted for downstream consumers.
+
+`QueryServicePgsql.Query` and `TxQueryServicePgsql.Query` now apply
+`normalizeValue` to every scanned cell before handing the row back:
+
+| Wire type | Becomes | NULL becomes |
+|---|---|---|
+| `pgtype.Numeric` | `float64` | `nil` |
+| `pgtype.Date` | `time.Time` | `nil` |
+| `pgtype.Timestamp` | `time.Time` | `nil` |
+| `pgtype.Timestamptz` | `time.Time` | `nil` |
+| Everything else | unchanged | unchanged |
+
+`common.AsFloat64` / `common.AsTime` keep their existing type
+switches — they now reliably see the primitive types they were
+written for.
+
+### Migration steps for downstream consumers
+
+1. **Bump to `github.com/nauticana/keel v0.8.5`** in your `go.mod`,
+   `go mod tidy`, rebuild. No source changes.
+2. If your service has callers checking `AsFloat64(...) == -1` as a
+   "NULL or missing" sentinel **on a NUMERIC column**, switch to
+   `AsFloat64OK` — NULL now returns `0, ok=false` cleanly. Grep:
+   `grep -rn 'AsFloat64' yourrepo/`; the few legitimate "is the
+   value -1?" callers in quota / unlimited-sentinel tables stored
+   in `BIGINT` are unaffected because BIGINT was already a native
+   `int64`.
+3. Redeploy.
+
+### Breaking-change risk
+
+- **Negligible behavioural change.** Money/coordinate/rate reads that
+  previously evaluated to `-1` (and produced wrong-but-non-zero
+  downstream values) now evaluate to the real value or `0` for NULL.
+  Downstream math that compensated for the bug (none observed in
+  trvoo / daxoom / bdsrest) would need to drop that compensation.
+- **Precision.** NUMERIC values >15 significant digits round on
+  float64 conversion. Standard money widths (NUMERIC(18,2)) and
+  coordinate widths (NUMERIC(10,7)) are well within float64 range.
+  Callers persisting arbitrary-precision NUMERIC must use the typed
+  `TableService.Get` path or read the column as `string`.
+
 ## Architecture
 
 ```mermaid

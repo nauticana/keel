@@ -44,7 +44,10 @@ func (s *TxQueryServicePgsql) Query(ctx context.Context, queryName string, args 
 		}
 		row := make([]any, len(cols))
 		for i := range cols {
-			row[i] = *columnPointers[i].(*any)
+			// See QueryServicePgsql.Query for the rationale —
+			// scan_normalize.go strips pgtype wrappers at the
+			// row boundary so common.As* helpers see primitives.
+			row[i] = normalizeValue(*columnPointers[i].(*any))
 		}
 		results = append(results, row)
 	}
