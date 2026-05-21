@@ -28,8 +28,19 @@ const (
 )
 
 var (
-	LogType     = flag.String("log_type", "local", "Log type: local, gcp, or aws")
+	LogType     = flag.String("log_type", "local", "Log type: local, gcp, aws, or azure")
 	LogRoot     = flag.String("log_root", "/opt/app/log", "Log folder")
+	// Azure Monitor Logs Ingestion settings, used when --log_type=azure.
+	// Logs are POSTed to a Data Collection Endpoint (DCE) which routes
+	// them through a Data Collection Rule (DCR) into a custom Log
+	// Analytics table. Authentication uses azidentity.DefaultAzureCredential
+	// (the same chain as storage/azure.go and the azure secret provider),
+	// so a managed identity with the "Monitoring Metrics Publisher" role on
+	// the DCR needs no secret material in the environment. All three are
+	// required when --log_type=azure.
+	AzureLogsEndpoint = flag.String("azure_logs_endpoint", "", "Azure Monitor Data Collection Endpoint URL (e.g. https://my-dce-xxxx.region.ingest.monitor.azure.com)")
+	AzureLogsRuleID   = flag.String("azure_logs_dcr", "", "Azure Monitor Data Collection Rule immutable ID (e.g. dcr-xxxxxxxx)")
+	AzureLogsStream   = flag.String("azure_logs_stream", "", "Azure Monitor DCR stream name (e.g. Custom-AppLogs_CL)")
 	HttpApiPort = flag.Int("http_api_port", 8080, "HTTP server port")
 	HTTPSPort   = flag.Int("https_port", 443, "HTTPS server port")
 	TLSCert     = flag.String("tls_cert", "", "TLS certificate file path")

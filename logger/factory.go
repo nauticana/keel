@@ -15,6 +15,8 @@ func NewApplicationLogger(caption string) (ApplicationLogger, error) {
 		l = &LoggerGcp{}
 	case "aws":
 		l = &LoggerAWS{}
+	case "azure":
+		l = &LoggerAzure{}
 	default:
 		return nil, fmt.Errorf("unknown log_type: %s", *common.LogType)
 	}

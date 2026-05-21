@@ -283,7 +283,7 @@ graph TD
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults) |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault + factory |
-| `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch + factory |
+| `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `--redis_url` / `--valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
@@ -1343,6 +1343,7 @@ graph LR
         LF[File]
         LG[GCP Cloud Logging]
         LA[AWS CloudWatch]
+        LAZ[Azure Monitor Logs]
     end
 
     subgraph Storage
@@ -1358,6 +1359,7 @@ graph LR
     LOG --- LF
     LOG --- LG
     LOG --- LA
+    LOG --- LAZ
     STORE --- S3
     STORE --- GCS
     STORE --- Azure
@@ -1366,7 +1368,8 @@ graph LR
 Selection is driven by flag variables:
 - `--secret_mode=local|gsm|aws|azure`
   - `azure` reads from Azure Key Vault; set `--azure_keyvault_url=https://<vault>.vault.azure.net/`. Auth uses `azidentity.DefaultAzureCredential` (managed identity on Azure VM/AKS, or the `AZURE_*` env fallback), so no secret material passes through the process config.
-- `--log_type=local|gcp|aws`
+- `--log_type=local|gcp|aws|azure`
+  - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
 - `--storage_mode=s3|gcs`
 - `--messaging_mode=gcp|aws|nats`
 
@@ -2018,7 +2021,10 @@ Keel defines shared flag variables in `common/variables.go`. Your project can de
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--log_type` | `local` | Logger: local, gcp, aws |
+| `--log_type` | `local` | Logger: local, gcp, aws, azure |
+| `--azure_logs_endpoint` | `` | Azure Monitor DCE URL (required when `--log_type=azure`) |
+| `--azure_logs_dcr` | `` | Azure Monitor DCR immutable id (required when `--log_type=azure`) |
+| `--azure_logs_stream` | `` | Azure Monitor DCR stream name (required when `--log_type=azure`) |
 | `--log_root` | `/opt/app/log` | Log directory |
 | `--http_api_port` | `8080` | HTTP server port |
 | `--https_port` | `443` | HTTPS server port |
@@ -2248,7 +2254,7 @@ keel/
 ├── dispatcher/                # MailClient + LocalNotificationService + Email & Twilio dispatchers
 ├── worker/                    # JobExecutor + RunDefault one-call bootstrap
 ├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault + factory
-├── logger/                    # File / GCP Cloud Logging / AWS CloudWatch + factory
+├── logger/                    # File / GCP Cloud Logging / AWS CloudWatch / Azure Monitor Logs + factory
 ├── cache/                     # Redis / Valkey single-node + cluster + NoOp fallback
 ├── storage/                   # S3 (AWS + Cloudflare R2) / GCS / Azure Blob
 ├── messaging/                 # GCP Pub/Sub + AWS SNS+SQS + NATS JetStream + factory
