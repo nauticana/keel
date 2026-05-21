@@ -282,7 +282,7 @@ graph TD
 | `handler` | `AbstractHandler` (JWT session parsing + helpers), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation) |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults) |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
-| `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager + factory |
+| `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault + factory |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `--redis_url` / `--valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob |
@@ -1336,6 +1336,7 @@ graph LR
         SL[Local JSON]
         SG[Google Secret Manager]
         SA[AWS Secrets Manager]
+        SAZ[Azure Key Vault]
     end
 
     subgraph Loggers
@@ -1353,6 +1354,7 @@ graph LR
     SP --- SL
     SP --- SG
     SP --- SA
+    SP --- SAZ
     LOG --- LF
     LOG --- LG
     LOG --- LA
@@ -1362,7 +1364,8 @@ graph LR
 ```
 
 Selection is driven by flag variables:
-- `--secret_mode=local|gsm|aws`
+- `--secret_mode=local|gsm|aws|azure`
+  - `azure` reads from Azure Key Vault; set `--azure_keyvault_url=https://<vault>.vault.azure.net/`. Auth uses `azidentity.DefaultAzureCredential` (managed identity on Azure VM/AKS, or the `AZURE_*` env fallback), so no secret material passes through the process config.
 - `--log_type=local|gcp|aws`
 - `--storage_mode=s3|gcs`
 - `--messaging_mode=gcp|aws|nats`
@@ -2027,7 +2030,8 @@ Keel defines shared flag variables in `common/variables.go`. Your project can de
 | `--db_name` | `app` | Database name |
 | `--db_user` | `app` | Database user |
 | `--db_sslmode` | `disable` | SSL mode |
-| `--secret_mode` | `local` | Secret provider: local, gsm, aws |
+| `--secret_mode` | `local` | Secret provider: local, gsm, aws, azure |
+| `--azure_keyvault_url` | `` | Azure Key Vault URL (required when `--secret_mode=azure`) |
 | `--cors_origin` | (empty) | CORS allowed origins. Comma-separated allowlist (e.g. `https://app.example.com,https://admin.example.com`) or `"*"` for any origin (incompatible with `HttpBackend.AllowCredentials=true`). The middleware echoes the inbound `Origin` header back ONLY when it matches an entry in the allowlist; mismatched origins receive no CORS headers. `Vary: Origin` is always set so caches/CDNs key responses correctly per origin. |
 | `--nats_url` | (empty) | NATS server URL |
 | `--push_mode` | `noop` | Push provider: `fcm` or `noop` |
@@ -2243,7 +2247,7 @@ keel/
 ├── service/                   # APIKeyService + JWT/API-key middleware + HttpBackend
 ├── dispatcher/                # MailClient + LocalNotificationService + Email & Twilio dispatchers
 ├── worker/                    # JobExecutor + RunDefault one-call bootstrap
-├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager + factory
+├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault + factory
 ├── logger/                    # File / GCP Cloud Logging / AWS CloudWatch + factory
 ├── cache/                     # Redis / Valkey single-node + cluster + NoOp fallback
 ├── storage/                   # S3 (AWS + Cloudflare R2) / GCS / Azure Blob

@@ -95,8 +95,16 @@ var (
 	// network range so client IPs surfaced to rate-limit and consent
 	// audit are authentic.
 	TrustedProxyCIDR = flag.String("trusted_proxy_cidr", "", "REQUIRED for production deployments behind a load balancer. CSV of CIDRs whose X-Forwarded-For / X-Real-IP headers are honored — typically your LB / reverse-proxy network range. Empty = trust nothing (peer RemoteAddr only); audit attribution and rate-limit keys then point at the LB. Production binaries should call handler.MustRequireTrustedProxyCIDR() after flag.Parse().")
-	SecretMode       = flag.String("secret_mode", "local", "Secret provider: local, gsm, or aws")
+	SecretMode       = flag.String("secret_mode", "local", "Secret provider: local, gsm, aws, or azure")
 	ProjectID        = flag.String("gcp_project_id", "", "Google Cloud project ID")
+	// AzureKeyVaultURL is the vault endpoint consulted when
+	// --secret_mode=azure, e.g. "https://my-vault.vault.azure.net/".
+	// Authentication uses azidentity.DefaultAzureCredential (the same
+	// chain as storage/azure.go), so on Azure VMs/AKS a system- or
+	// user-assigned managed identity needs the "Key Vault Secrets User"
+	// role and no secret material lands in the environment. Empty +
+	// secret_mode=azure is a configuration error.
+	AzureKeyVaultURL = flag.String("azure_keyvault_url", "", "Azure Key Vault URL for Secrets (e.g. https://my-vault.vault.azure.net/)")
 	NatsURL          = flag.String("nats_url", "", "NATS server URL")
 	StorageMode      = flag.String("storage_mode", "", "Object storage: s3 or gcs")
 	StorageBucket    = flag.String("storage_bucket", "", "Default object-storage bucket. Apps that store PII should set this per deployment site so blobs stay in the customer's data-residency region.")

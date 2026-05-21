@@ -16,6 +16,8 @@ func NewSecretProvider(ctx context.Context) (SecretProvider, error) {
 		return NewSecretProviderGSM(ctx)
 	case "aws":
 		return NewSecretProviderAWS(ctx)
+	case "azure":
+		return NewSecretProviderAzure(ctx)
 	default:
 		return nil, fmt.Errorf("unknown secret_mode: %s", *common.SecretMode)
 	}
