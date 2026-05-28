@@ -58,6 +58,15 @@ func (s *StorageAzure) Delete(ctx context.Context, bucket, key string) error {
 	return nil
 }
 
+// PublicURL returns <account-url>/<container>/<blob> with each path
+// component escaped (Azure blob names may contain "+", "?", " ", Unicode).
+// Reachable only if the container is set to public ("blob"/"container")
+// access; this is pure string construction and makes no API call.
+func (s *StorageAzure) PublicURL(bucket, key string) string {
+	base := strings.TrimRight(s.url, "/")
+	return fmt.Sprintf("%s/%s/%s", base, url.PathEscape(bucket), url.PathEscape(key))
+}
+
 func (s *StorageAzure) GetSignedURL(ctx context.Context, bucket, key string, expirySeconds int) (string, error) {
 	now := time.Now().UTC()
 	expiry := now.Add(time.Duration(expirySeconds) * time.Second)

@@ -1373,7 +1373,11 @@ Selection is driven by flag variables:
   - `infisical` reads from [Infisical](https://infisical.com) — the production-grade option for deployments **not** on AWS/GCP/Azure (so they need not fall back to the local `secrets.json` file). Set `--infisical_project_id`, `--infisical_environment` (default `prod`), and `--infisical_host` (default `https://app.infisical.com`; override for a self-hosted instance). Auth uses an Infisical **machine identity** via Universal Auth: the SDK reads `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` / `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` from the environment, so — like the gsm/aws/azure backends — the credential is owned by the vendor SDK's chain and never passes through a keel flag. Universal Auth is chosen because it is platform-agnostic; the native AWS/Azure/GCP/Kubernetes machine-identity methods only apply when running on that platform.
 - `--log_type=local|gcp|aws|azure`
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
-- `--storage_mode=s3|gcs`
+- `--storage_mode=s3|gcs|azure`
+  - Build a backend with `storage.New(ctx, *common.StorageMode)`; it is also wired onto `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.RunDefault` when `--storage_mode` is set), so app code calls `svc.Storage.Upload(...)` and `svc.Storage.PublicURL(...)`. Empty `--storage_mode` disables storage (the field stays `nil`).
+  - **Cloudflare R2 / S3-compatible**: use `s3` plus `--s3_endpoint=https://<account>.r2.cloudflarestorage.com` (this switches the client to path-style addressing). `--s3_endpoint` replaces the former `S3_ENDPOINT` env var. AWS/R2 credentials still resolve through the AWS SDK's own chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `AWS_REGION=auto` for R2) — that is the SDK's concern, not a keel knob.
+  - **Public URLs**: `ObjectStorage.PublicURL(bucket, key)` returns a stable, non-expiring served URL (no signing, no API call) for publicly-readable buckets. GCS → `https://storage.googleapis.com/<bucket>/<key>`; S3/R2 → `<--storage_public_base_url>/<key>` (set `--storage_public_base_url` to an R2 custom domain or `*.r2.dev` host — the bucket is not in the path because the domain already maps to it; empty returns `""`); Azure → `<account-url>/<container>/<key>`. Use `GetSignedURL` instead when the bucket is private.
+  - **Azure**: requires `--storage_account_url=https://<account>.blob.core.windows.net/`; auth via `azidentity.DefaultAzureCredential`.
 - `--messaging_mode=gcp|aws|nats`
 
 ## Messaging (publisher / subscriber)
@@ -2044,6 +2048,11 @@ Keel defines shared flag variables in `common/variables.go`. Your project can de
 | `--infisical_project_id` | `` | Infisical project (workspace) ID (required when `--secret_mode=infisical`) |
 | `--infisical_environment` | `prod` | Infisical environment slug: dev, staging, prod (used when `--secret_mode=infisical`) |
 | `--infisical_host` | `https://app.infisical.com` | Infisical API host; override for a self-hosted instance |
+| `--storage_mode` | (empty) | Object storage: `s3`, `gcs`, or `azure` (R2 = `s3` + `--s3_endpoint`). Empty disables storage. |
+| `--storage_bucket` | (empty) | Default object-storage bucket. Set per deployment site for data residency. |
+| `--s3_endpoint` | (empty) | S3-compatible endpoint override (e.g. `https://<account>.r2.cloudflarestorage.com` for Cloudflare R2). Empty = AWS default. Replaces the former `S3_ENDPOINT` env var. |
+| `--storage_public_base_url` | (empty) | Public base URL for `ObjectStorage.PublicURL` on s3/R2 (R2 custom domain or `*.r2.dev` host). Empty disables public URLs. Unused by gcs. |
+| `--storage_account_url` | (empty) | Azure Blob service endpoint (e.g. `https://<account>.blob.core.windows.net/`). Required when `--storage_mode=azure`. |
 | `--cors_origin` | (empty) | CORS allowed origins. Comma-separated allowlist (e.g. `https://app.example.com,https://admin.example.com`) or `"*"` for any origin (incompatible with `HttpBackend.AllowCredentials=true`). The middleware echoes the inbound `Origin` header back ONLY when it matches an entry in the allowlist; mismatched origins receive no CORS headers. `Vary: Origin` is always set so caches/CDNs key responses correctly per origin. |
 | `--nats_url` | (empty) | NATS server URL |
 | `--push_mode` | `noop` | Push provider: `fcm` or `noop` |

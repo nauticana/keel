@@ -18,6 +18,7 @@ import (
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
+	"github.com/nauticana/keel/storage"
 	"github.com/nauticana/keel/user"
 )
 
@@ -45,6 +46,13 @@ type HttpBackend struct {
 	Journal logger.ApplicationLogger
 	DB      data.DatabaseRepository
 	Secrets secret.SecretProvider
+
+	// Storage is the optional object-storage backend (s3/R2, gcs, azure)
+	// selected by --storage_mode. nil when storage is not configured;
+	// handlers that serve uploads should nil-check before use. Build it
+	// with storage.New(ctx, *common.StorageMode). Call svc.Storage.Upload
+	// to store a blob and svc.Storage.PublicURL to get its served URL.
+	Storage storage.ObjectStorage
 
 	// Origin is a comma-separated allowlist of permitted CORS origins.
 	// "*" allows any origin (NOT compatible with credentialed requests).

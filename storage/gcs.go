@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -31,6 +32,16 @@ func NewStorageGCS(ctx context.Context) (*StorageGCS, error) {
 		return nil, fmt.Errorf("failed to create GCS client: %w", err)
 	}
 	return &StorageGCS{client: client}, nil
+}
+
+// PublicURL returns the canonical public-read URL for an object,
+// https://storage.googleapis.com/<bucket>/<key>. Reachable only if the
+// object/bucket is configured for public read; this is pure string
+// construction and makes no API call. Keys are emitted as-is (GCS object
+// names may legitimately contain "/"); the leading "/" is trimmed so the
+// result is never double-slashed.
+func (s *StorageGCS) PublicURL(bucket, key string) string {
+	return "https://storage.googleapis.com/" + bucket + "/" + strings.TrimLeft(key, "/")
 }
 
 // Close releases the GCS client. Idempotent.

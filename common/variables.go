@@ -13,10 +13,10 @@ const (
 	// emit `RestPrefix + APIVersion + "/" + <resource>` so a single
 	// bump touches every mounted route, including the table-action
 	// handlers built by rest.RestService.loadTableActions.
-	APIVersion              = "/v1"
-	PartnerID    ContextKey = "partnerID"
-	ApiKeyID     ContextKey = "apiKeyID"
-	Scopes       ContextKey = "scopes"
+	APIVersion            = "/v1"
+	PartnerID  ContextKey = "partnerID"
+	ApiKeyID   ContextKey = "apiKeyID"
+	Scopes     ContextKey = "scopes"
 	// RequestID is the context-key under which request-id middleware
 	// stores the per-request opaque token. handler.WriteError reads
 	// from this when emitting 5xx envelopes so the user-visible
@@ -28,8 +28,8 @@ const (
 )
 
 var (
-	LogType     = flag.String("log_type", "local", "Log type: local, gcp, aws, or azure")
-	LogRoot     = flag.String("log_root", "/opt/app/log", "Log folder")
+	LogType = flag.String("log_type", "local", "Log type: local, gcp, aws, or azure")
+	LogRoot = flag.String("log_root", "/opt/app/log", "Log folder")
 	// Azure Monitor Logs Ingestion settings, used when --log_type=azure.
 	// Logs are POSTed to a Data Collection Endpoint (DCE) which routes
 	// them through a Data Collection Rule (DCR) into a custom Log
@@ -41,10 +41,10 @@ var (
 	AzureLogsEndpoint = flag.String("azure_logs_endpoint", "", "Azure Monitor Data Collection Endpoint URL (e.g. https://my-dce-xxxx.region.ingest.monitor.azure.com)")
 	AzureLogsRuleID   = flag.String("azure_logs_dcr", "", "Azure Monitor Data Collection Rule immutable ID (e.g. dcr-xxxxxxxx)")
 	AzureLogsStream   = flag.String("azure_logs_stream", "", "Azure Monitor DCR stream name (e.g. Custom-AppLogs_CL)")
-	HttpApiPort = flag.Int("http_api_port", 8080, "HTTP server port")
-	HTTPSPort   = flag.Int("https_port", 443, "HTTPS server port")
-	TLSCert     = flag.String("tls_cert", "", "TLS certificate file path")
-	TLSKey      = flag.String("tls_key", "", "TLS private key file path")
+	HttpApiPort       = flag.Int("http_api_port", 8080, "HTTP server port")
+	HTTPSPort         = flag.Int("https_port", 443, "HTTPS server port")
+	TLSCert           = flag.String("tls_cert", "", "TLS certificate file path")
+	TLSKey            = flag.String("tls_key", "", "TLS private key file path")
 	// MaxTLSVersion controls the TLS policy applied by the HTTP backend.
 	//   "none"  — no TLS enforcement; plain HTTP is accepted on all paths
 	//             (dev / test / demo deployments).
@@ -53,7 +53,7 @@ var (
 	//             value, and the plain-HTTP listener only accepts /health
 	//             and /ready requests (for in-VPC health checkers).
 	// When not "none", --tls_cert and --tls_key must be set.
-	MaxTLSVersion    = flag.String("max_tls_version", "none", "TLS policy: none | tls10 | tls11 | tls12 | tls13")
+	MaxTLSVersion = flag.String("max_tls_version", "none", "TLS policy: none | tls10 | tls11 | tls12 | tls13")
 	// Keystore is the JSON file path consulted by the local secret
 	// provider. AWS-Secrets-Manager / GSM consumers ignore this flag.
 	// Previously this same flag was overloaded as the AWS region for
@@ -64,8 +64,8 @@ var (
 	// would silently pick "us-east-1" or whatever AWS_REGION sits in
 	// the environment, which is the wrong behavior for a multi-region
 	// deployment. Empty + secret_mode=aws is a configuration error.
-	AWSRegion = flag.String("aws_region", "", "AWS region for Secrets Manager / SNS / SQS / S3 / CloudWatch")
-	SessionTimeout   = flag.Int("session_timeout", 300, "Session timeout in seconds")
+	AWSRegion      = flag.String("aws_region", "", "AWS region for Secrets Manager / SNS / SQS / S3 / CloudWatch")
+	SessionTimeout = flag.Int("session_timeout", 300, "Session timeout in seconds")
 	// OTPTTLSeconds caps how long an OTP code minted by GenerateOTP
 	// remains valid in the user_otp table. Default 300s (5 min) is the
 	// industry-standard sweet spot — long enough for SMS / email
@@ -75,22 +75,22 @@ var (
 	// Token TTL (the opaque session id bound to the OTP) auto-tracks
 	// this value with a small buffer in OTPHandler — never set this
 	// higher than ~9 min without revisiting OTPHandler.OTPTokenTTL.
-	OTPTTLSeconds    = flag.Int("otp_ttl_seconds", 300, "OTP code time-to-live in seconds")
-	NodeId           = flag.Int("node_id", 0, "Node ID for bigint ID generator")
-	DBhost           = flag.String("db_host", "localhost", "Database hostname")
-	DBport           = flag.Int("db_port", 5432, "Database port number")
-	DBname           = flag.String("db_name", "app", "Database name")
-	DBuser           = flag.String("db_user", "app", "Database user")
-	DBschema         = flag.String("db_schema", "public", "Database schema name")
-	DBsslmode        = flag.String("db_sslmode", "disable", "Database SSL mode (disable, require, verify-ca, verify-full)")
-	DBPoolMax        = flag.Int("db_pool_max", 4, "Maximum database pool connections")
-	MailMode         = flag.String("mail_mode", "smtp", "Mail delivery mode: smtp or api")
-	SmtpHost         = flag.String("smtp_host", "smtp.gmail.com", "SMTP server host")
-	SmtpPort         = flag.Int("smtp_port", 587, "SMTP server port")
-	SmtpUser         = flag.String("smtp_user", "", "SMTP username")
-	SmtpFrom         = flag.String("smtp_from", "", "SMTP sender email address")
-	CORSOrigin       = flag.String("cors_origin", "", "Allowed CORS origin")
-	GoogleClientID   = flag.String("google_client_id", "", "Google OAuth client ID (shared by login and any Google API integration). Required to verify ID tokens against Google's JWKs.")
+	OTPTTLSeconds  = flag.Int("otp_ttl_seconds", 300, "OTP code time-to-live in seconds")
+	NodeId         = flag.Int("node_id", 0, "Node ID for bigint ID generator")
+	DBhost         = flag.String("db_host", "localhost", "Database hostname")
+	DBport         = flag.Int("db_port", 5432, "Database port number")
+	DBname         = flag.String("db_name", "app", "Database name")
+	DBuser         = flag.String("db_user", "app", "Database user")
+	DBschema       = flag.String("db_schema", "public", "Database schema name")
+	DBsslmode      = flag.String("db_sslmode", "disable", "Database SSL mode (disable, require, verify-ca, verify-full)")
+	DBPoolMax      = flag.Int("db_pool_max", 4, "Maximum database pool connections")
+	MailMode       = flag.String("mail_mode", "smtp", "Mail delivery mode: smtp or api")
+	SmtpHost       = flag.String("smtp_host", "smtp.gmail.com", "SMTP server host")
+	SmtpPort       = flag.Int("smtp_port", 587, "SMTP server port")
+	SmtpUser       = flag.String("smtp_user", "", "SMTP username")
+	SmtpFrom       = flag.String("smtp_from", "", "SMTP sender email address")
+	CORSOrigin     = flag.String("cors_origin", "", "Allowed CORS origin")
+	GoogleClientID = flag.String("google_client_id", "", "Google OAuth client ID (shared by login and any Google API integration). Required to verify ID tokens against Google's JWKs.")
 	// Apple Sign-In identifier — the `aud` claim that Apple-issued ID
 	// tokens MUST carry. For native iOS / iPadOS / macOS clients this is
 	// the app's bundle id (`com.example.app`); for web clients (Sign in
@@ -128,16 +128,35 @@ var (
 	InfisicalProjectID   = flag.String("infisical_project_id", "", "Infisical project (workspace) ID. Required when --secret_mode=infisical.")
 	InfisicalEnvironment = flag.String("infisical_environment", "prod", "Infisical environment slug (dev, staging, prod). Used when --secret_mode=infisical.")
 	InfisicalHost        = flag.String("infisical_host", "https://app.infisical.com", "Infisical API host. Override for self-hosted instances.")
-	NatsURL          = flag.String("nats_url", "", "NATS server URL")
-	StorageMode      = flag.String("storage_mode", "", "Object storage: s3 or gcs")
-	StorageBucket    = flag.String("storage_bucket", "", "Default object-storage bucket. Apps that store PII should set this per deployment site so blobs stay in the customer's data-residency region.")
-	MessagingMode    = flag.String("messaging_mode", "", "Messaging: gcp or aws")
-	MaxRequestSize   = flag.Int64("max_request_size", 16777216, "Maximum request body size (16MB)")
-	HttpReadTimeout  = flag.Int("http_read_timeout", 15, "HTTP read timeout in seconds")
-	HttpWriteTimeout = flag.Int("http_write_timeout", 30, "HTTP write timeout in seconds")
-	HttpIdleTimeout  = flag.Int("http_idle_timeout", 120, "HTTP idle timeout in seconds")
-	HCPort           = flag.Int("hc_port", 0, "Health check port override for workers")
-	PushMode         = flag.String("push_mode", "noop", "Push provider: fcm or noop")
+	NatsURL              = flag.String("nats_url", "", "NATS server URL")
+	StorageMode          = flag.String("storage_mode", "", "Object storage: s3, gcs, or azure (R2 = s3 + --s3_endpoint). Empty disables storage.")
+	StorageBucket        = flag.String("storage_bucket", "", "Default object-storage bucket. Apps that store PII should set this per deployment site so blobs stay in the customer's data-residency region.")
+	// S3Endpoint overrides the S3 endpoint for non-AWS S3-compatible
+	// providers (Cloudflare R2, MinIO, Wasabi, Backblaze B2), e.g.
+	// https://<account>.r2.cloudflarestorage.com. When set, the client
+	// switches to path-style addressing. Empty uses AWS default endpoint
+	// resolution. Replaces the former S3_ENDPOINT env var so the endpoint
+	// is a flag knob like every other deployable switch; the AWS
+	// credentials themselves still resolve via the SDK's own chain.
+	S3Endpoint = flag.String("s3_endpoint", "", "S3-compatible endpoint override (e.g. https://<account>.r2.cloudflarestorage.com for Cloudflare R2). Empty = AWS default.")
+	// StoragePublicBaseURL is the public-read base for ObjectStorage.PublicURL
+	// on the s3/R2 backend — an R2 custom domain or *.r2.dev host, e.g.
+	// https://media.example.com. PublicURL returns <base>/<key>; the bucket
+	// is not in the path because the domain already maps to the bucket.
+	// Empty makes PublicURL return "" (no public URL configured). Unused by
+	// the gcs backend, which serves from storage.googleapis.com/<bucket>/<key>.
+	StoragePublicBaseURL = flag.String("storage_public_base_url", "", "Public base URL for ObjectStorage.PublicURL on s3/R2 (R2 custom domain or *.r2.dev host). Empty disables public URLs.")
+	// StorageAccountURL is the Azure Blob service endpoint, e.g.
+	// https://<account>.blob.core.windows.net/. Required when
+	// --storage_mode=azure. Auth uses azidentity.DefaultAzureCredential.
+	StorageAccountURL = flag.String("storage_account_url", "", "Azure Blob service endpoint (e.g. https://<account>.blob.core.windows.net/). Required when --storage_mode=azure.")
+	MessagingMode     = flag.String("messaging_mode", "", "Messaging: gcp or aws")
+	MaxRequestSize    = flag.Int64("max_request_size", 16777216, "Maximum request body size (16MB)")
+	HttpReadTimeout   = flag.Int("http_read_timeout", 15, "HTTP read timeout in seconds")
+	HttpWriteTimeout  = flag.Int("http_write_timeout", 30, "HTTP write timeout in seconds")
+	HttpIdleTimeout   = flag.Int("http_idle_timeout", 120, "HTTP idle timeout in seconds")
+	HCPort            = flag.Int("hc_port", 0, "Health check port override for workers")
+	PushMode          = flag.String("push_mode", "noop", "Push provider: fcm or noop")
 
 	// Cache backend selection. Set exactly one of --redis_url / --valkey_url.
 	// Both forms accept either `host:port` or `redis[s]://host:port/db` —

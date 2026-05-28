@@ -10,6 +10,7 @@ import (
 	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
+	"github.com/nauticana/keel/storage"
 )
 
 // RunDefault is the standard worker entry point for binaries that don't
@@ -50,11 +51,23 @@ func RunDefault(ctx context.Context, caption string, intervalSec int, w JobWorke
 		return fmt.Errorf("RunDefault: snowflake: %w", err)
 	}
 
+	// Object storage is optional: only build it when --storage_mode is set.
+	// A misconfigured backend (e.g. azure without --storage_account_url) is
+	// a hard startup error, consistent with the secret provider.
+	var objStore storage.ObjectStorage
+	if mode := *common.StorageMode; mode != "" {
+		objStore, err = storage.New(ctx, mode)
+		if err != nil {
+			return fmt.Errorf("RunDefault: storage: %w", err)
+		}
+	}
+
 	executor := &JobExecutor{
 		Caption:  caption,
 		Interval: intervalSec,
 		Journal:  journal,
 		Worker:   w,
+		Storage:  objStore,
 		NewDatabase: func(ctx context.Context, sp secret.SecretProvider) (data.DatabaseRepository, error) {
 			return pgsql.NewPgSQLDatabase(ctx, sp, gen)
 		},

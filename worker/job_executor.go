@@ -13,6 +13,7 @@ import (
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
+	"github.com/nauticana/keel/storage"
 )
 
 const (
@@ -55,6 +56,14 @@ type JobExecutor struct {
 	Worker      JobWorker
 	NewDatabase func(ctx context.Context, sp secret.SecretProvider) (data.DatabaseRepository, error)
 	NewQuota    func(db data.DatabaseRepository) port.QuotaService
+
+	// Storage is the optional object-storage backend selected by
+	// --storage_mode, populated by RunDefault when the flag is set (nil
+	// otherwise). ProcessQueue does not receive it as a parameter to keep
+	// the JobWorker interface stable; workers that need storage should hold
+	// a reference to their JobExecutor, or build their own via
+	// storage.New(ctx, *common.StorageMode).
+	Storage storage.ObjectStorage
 }
 
 func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvider) error {

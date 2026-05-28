@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
+	"strings"
 	"time"
+
+	"github.com/nauticana/keel/common"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -13,16 +15,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// S3-compatible endpoint overrides. Set S3_ENDPOINT to point the client at a
+// S3-compatible endpoint overrides. Set --s3_endpoint to point the client at a
 // non-AWS provider (Cloudflare R2, MinIO, Wasabi, Backblaze B2):
 //
-//	S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com   # Cloudflare R2
-//	AWS_REGION=auto                                          # R2 doesn't use regions
-//	AWS_ACCESS_KEY_ID=<r2 access key>
+//	--s3_endpoint=https://<account>.r2.cloudflarestorage.com   # Cloudflare R2
+//	AWS_REGION=auto                                            # R2 doesn't use regions
+//	AWS_ACCESS_KEY_ID=<r2 access key>                          # via SDK credential chain
 //	AWS_SECRET_ACCESS_KEY=<r2 secret>
 //
-// Leave S3_ENDPOINT unset to use the AWS S3 default endpoint resolution.
-const envS3Endpoint = "S3_ENDPOINT"
+// Leave --s3_endpoint empty to use the AWS S3 default endpoint resolution.
+// (Credentials still resolve via the AWS SDK's own chain — that is the SDK's
+// concern, not a keel knob; only keel's own switches go through flags.)
 
 // s3MultipartThreshold is the body size at which Upload switches from
 // a single PutObject to the SDK's multipart Uploader. A single
@@ -35,6 +38,11 @@ type StorageS3 struct {
 	client        *s3.Client
 	presignClient *s3.PresignClient
 	uploader      *manager.Uploader
+
+	// publicBaseURL is the public-read base for PublicURL, from
+	// --storage_public_base_url (an R2 custom domain or *.r2.dev host).
+	// Empty disables PublicURL (returns ""). Trailing slash trimmed.
+	publicBaseURL string
 }
 
 func NewStorageS3() (*StorageS3, error) {
@@ -43,7 +51,7 @@ func NewStorageS3() (*StorageS3, error) {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	opts := []func(*s3.Options){}
-	if endpoint := os.Getenv(envS3Endpoint); endpoint != "" {
+	if endpoint := strings.TrimSpace(*common.S3Endpoint); endpoint != "" {
 		opts = append(opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 			// R2 and most non-AWS providers require path-style addressing
@@ -56,7 +64,20 @@ func NewStorageS3() (*StorageS3, error) {
 		client:        client,
 		presignClient: s3.NewPresignClient(client),
 		uploader:      manager.NewUploader(client),
+		publicBaseURL: strings.TrimRight(strings.TrimSpace(*common.StoragePublicBaseURL), "/"),
 	}, nil
+}
+
+// PublicURL returns <--storage_public_base_url>/<key>. The bucket arg is
+// ignored: the public base domain (R2 custom domain or *.r2.dev) already
+// maps to a single bucket, matching how downstream projects serve media.
+// Returns "" when --storage_public_base_url is unset, so callers can treat
+// an empty result as "no public URL configured".
+func (s *StorageS3) PublicURL(bucket, key string) string {
+	if s.publicBaseURL == "" {
+		return ""
+	}
+	return s.publicBaseURL + "/" + strings.TrimLeft(key, "/")
 }
 
 // Upload writes reader to the named (bucket, key). Always routes via
