@@ -18,6 +18,8 @@ func NewSecretProvider(ctx context.Context) (SecretProvider, error) {
 		return NewSecretProviderAWS(ctx)
 	case "azure":
 		return NewSecretProviderAzure(ctx)
+	case "infisical":
+		return NewSecretProviderInfisical(ctx)
 	default:
 		return nil, fmt.Errorf("unknown secret_mode: %s", *common.SecretMode)
 	}

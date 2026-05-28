@@ -38,3 +38,6 @@ go.work.sum
 
 # Build artifacts produced by Makefile
 bin/
+
+# macOS Finder metadata
+.DS_Store

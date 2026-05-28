@@ -19,6 +19,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sns v1.39.17
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.27
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/infisical/go-sdk v0.7.2
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/nats-io/nats.go v1.51.0
 	github.com/nyaruka/phonenumbers v1.7.2
@@ -27,6 +28,16 @@ require (
 	golang.org/x/crypto v0.49.0
 	golang.org/x/sync v0.20.0
 	gopkg.in/yaml.v3 v3.0.1
+)
+
+require (
+	github.com/go-resty/resty/v2 v2.13.1 // indirect
+	github.com/gofrs/flock v0.8.1 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
+	github.com/oracle/oci-go-sdk/v65 v65.95.2 // indirect
+	github.com/rs/zerolog v1.26.1 // indirect
+	github.com/sony/gobreaker v0.5.0 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 )
 
 require (

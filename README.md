@@ -282,7 +282,7 @@ graph TD
 | `handler` | `AbstractHandler` (JWT session parsing + helpers), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation) |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults) |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
-| `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault + factory |
+| `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `--redis_url` / `--valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob |
@@ -1337,6 +1337,7 @@ graph LR
         SG[Google Secret Manager]
         SA[AWS Secrets Manager]
         SAZ[Azure Key Vault]
+        SI[Infisical]
     end
 
     subgraph Loggers
@@ -1356,6 +1357,7 @@ graph LR
     SP --- SG
     SP --- SA
     SP --- SAZ
+    SP --- SI
     LOG --- LF
     LOG --- LG
     LOG --- LA
@@ -1366,8 +1368,9 @@ graph LR
 ```
 
 Selection is driven by flag variables:
-- `--secret_mode=local|gsm|aws|azure`
+- `--secret_mode=local|gsm|aws|azure|infisical`
   - `azure` reads from Azure Key Vault; set `--azure_keyvault_url=https://<vault>.vault.azure.net/`. Auth uses `azidentity.DefaultAzureCredential` (managed identity on Azure VM/AKS, or the `AZURE_*` env fallback), so no secret material passes through the process config.
+  - `infisical` reads from [Infisical](https://infisical.com) — the production-grade option for deployments **not** on AWS/GCP/Azure (so they need not fall back to the local `secrets.json` file). Set `--infisical_project_id`, `--infisical_environment` (default `prod`), and `--infisical_host` (default `https://app.infisical.com`; override for a self-hosted instance). Auth uses an Infisical **machine identity** via Universal Auth: the SDK reads `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` / `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` from the environment, so — like the gsm/aws/azure backends — the credential is owned by the vendor SDK's chain and never passes through a keel flag. Universal Auth is chosen because it is platform-agnostic; the native AWS/Azure/GCP/Kubernetes machine-identity methods only apply when running on that platform.
 - `--log_type=local|gcp|aws|azure`
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
 - `--storage_mode=s3|gcs`
@@ -2036,8 +2039,11 @@ Keel defines shared flag variables in `common/variables.go`. Your project can de
 | `--db_name` | `app` | Database name |
 | `--db_user` | `app` | Database user |
 | `--db_sslmode` | `disable` | SSL mode |
-| `--secret_mode` | `local` | Secret provider: local, gsm, aws, azure |
+| `--secret_mode` | `local` | Secret provider: local, gsm, aws, azure, infisical |
 | `--azure_keyvault_url` | `` | Azure Key Vault URL (required when `--secret_mode=azure`) |
+| `--infisical_project_id` | `` | Infisical project (workspace) ID (required when `--secret_mode=infisical`) |
+| `--infisical_environment` | `prod` | Infisical environment slug: dev, staging, prod (used when `--secret_mode=infisical`) |
+| `--infisical_host` | `https://app.infisical.com` | Infisical API host; override for a self-hosted instance |
 | `--cors_origin` | (empty) | CORS allowed origins. Comma-separated allowlist (e.g. `https://app.example.com,https://admin.example.com`) or `"*"` for any origin (incompatible with `HttpBackend.AllowCredentials=true`). The middleware echoes the inbound `Origin` header back ONLY when it matches an entry in the allowlist; mismatched origins receive no CORS headers. `Vary: Origin` is always set so caches/CDNs key responses correctly per origin. |
 | `--nats_url` | (empty) | NATS server URL |
 | `--push_mode` | `noop` | Push provider: `fcm` or `noop` |
@@ -2253,7 +2259,7 @@ keel/
 ├── service/                   # APIKeyService + JWT/API-key middleware + HttpBackend
 ├── dispatcher/                # MailClient + LocalNotificationService + Email & Twilio dispatchers
 ├── worker/                    # JobExecutor + RunDefault one-call bootstrap
-├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault + factory
+├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault / Infisical + factory
 ├── logger/                    # File / GCP Cloud Logging / AWS CloudWatch / Azure Monitor Logs + factory
 ├── cache/                     # Redis / Valkey single-node + cluster + NoOp fallback
 ├── storage/                   # S3 (AWS + Cloudflare R2) / GCS / Azure Blob

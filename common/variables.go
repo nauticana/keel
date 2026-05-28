@@ -106,7 +106,7 @@ var (
 	// network range so client IPs surfaced to rate-limit and consent
 	// audit are authentic.
 	TrustedProxyCIDR = flag.String("trusted_proxy_cidr", "", "REQUIRED for production deployments behind a load balancer. CSV of CIDRs whose X-Forwarded-For / X-Real-IP headers are honored — typically your LB / reverse-proxy network range. Empty = trust nothing (peer RemoteAddr only); audit attribution and rate-limit keys then point at the LB. Production binaries should call handler.MustRequireTrustedProxyCIDR() after flag.Parse().")
-	SecretMode       = flag.String("secret_mode", "local", "Secret provider: local, gsm, aws, or azure")
+	SecretMode       = flag.String("secret_mode", "local", "Secret provider: local, gsm, aws, azure, or infisical")
 	ProjectID        = flag.String("gcp_project_id", "", "Google Cloud project ID")
 	// AzureKeyVaultURL is the vault endpoint consulted when
 	// --secret_mode=azure, e.g. "https://my-vault.vault.azure.net/".
@@ -116,6 +116,18 @@ var (
 	// role and no secret material lands in the environment. Empty +
 	// secret_mode=azure is a configuration error.
 	AzureKeyVaultURL = flag.String("azure_keyvault_url", "", "Azure Key Vault URL for Secrets (e.g. https://my-vault.vault.azure.net/)")
+	// Infisical backend (--secret_mode=infisical), the production-grade
+	// managed-secrets option for deployments not on AWS/GCP/Azure. These
+	// three are non-secret location knobs only. The machine-identity
+	// credential is read by the Infisical SDK from
+	// INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _CLIENT_SECRET — keel never
+	// carries it in a flag, mirroring the ambient-credential pattern of the
+	// GSM/AWS/Azure backends (Google ADC, AWS default chain,
+	// azidentity.DefaultAzureCredential). Empty project id or environment +
+	// secret_mode=infisical is a configuration error.
+	InfisicalProjectID   = flag.String("infisical_project_id", "", "Infisical project (workspace) ID. Required when --secret_mode=infisical.")
+	InfisicalEnvironment = flag.String("infisical_environment", "prod", "Infisical environment slug (dev, staging, prod). Used when --secret_mode=infisical.")
+	InfisicalHost        = flag.String("infisical_host", "https://app.infisical.com", "Infisical API host. Override for self-hosted instances.")
 	NatsURL          = flag.String("nats_url", "", "NATS server URL")
 	StorageMode      = flag.String("storage_mode", "", "Object storage: s3 or gcs")
 	StorageBucket    = flag.String("storage_bucket", "", "Default object-storage bucket. Apps that store PII should set this per deployment site so blobs stay in the customer's data-residency region.")
