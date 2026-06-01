@@ -4,12 +4,15 @@ import (
 	"github.com/nauticana/keel/model"
 )
 
+// TrustedDevice is a row in user_trusted_device exposed via the security
+// API. The raw device secret is never returned — the DB stores only its
+// SHA256, and the secret leaves the server exactly once (set as an
+// HttpOnly cookie immediately after RegisterTrustedDevice).
 type TrustedDevice struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Fingerprint string `json:"fingerprint"`
-	LastUsedAt  string `json:"last_used_at"`
-	CreatedAt   string `json:"created_at"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	LastUsedAt string `json:"last_used_at"`
+	CreatedAt  string `json:"created_at"`
 }
 
 type UserService interface {
@@ -75,8 +78,14 @@ type UserService interface {
 	ValidateLoginToken(token string) (int, error)
 
 	// Trusted devices
-	RegisterTrustedDevice(userID int, fingerprint string, name string) error
-	IsTrustedDevice(userID int, fingerprint string) (bool, error)
+	// RegisterTrustedDevice mints a random 32-byte secret, stores its hex
+	// SHA256 against userID, and returns the raw secret for the caller to
+	// place in an HttpOnly cookie. Callers MUST treat the returned string
+	// as sensitive — it is the bearer credential for 2FA bypass.
+	RegisterTrustedDevice(userID int, name string) (secret string, err error)
+	// IsTrustedDevice hashes secret and looks for a matching active row.
+	// secret is the raw cookie value; empty secret always returns false.
+	IsTrustedDevice(userID int, secret string) (bool, error)
 	GetTrustedDevices(userID int) ([]TrustedDevice, error)
 	RevokeTrustedDevice(userID int, deviceID int64) error
 

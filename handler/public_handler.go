@@ -35,9 +35,8 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Username          string `json:"username"`
-		Password          string `json:"password"`
-		DeviceFingerprint string `json:"deviceFingerprint"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -63,8 +62,8 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 
 	if session.TwoFactorEnabled {
 		trusted := false
-		if req.DeviceFingerprint != "" {
-			trusted, _ = h.UserService.IsTrustedDevice(session.Id, req.DeviceFingerprint)
+		if secret := DefaultTrustedDeviceCookie.Get(r); secret != "" {
+			trusted, _ = h.UserService.IsTrustedDevice(session.Id, secret)
 		}
 		if !trusted {
 			loginToken, err := h.UserService.CreateLoginToken(session.Id)
@@ -106,9 +105,8 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Code              string `json:"code"`
-		RedirectURI       string `json:"redirectUri"`
-		DeviceFingerprint string `json:"deviceFingerprint"`
+		Code        string `json:"code"`
+		RedirectURI string `json:"redirectUri"`
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -219,8 +217,8 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 
 	if session.TwoFactorEnabled {
 		trusted := false
-		if req.DeviceFingerprint != "" {
-			trusted, _ = h.UserService.IsTrustedDevice(session.Id, req.DeviceFingerprint)
+		if secret := DefaultTrustedDeviceCookie.Get(r); secret != "" {
+			trusted, _ = h.UserService.IsTrustedDevice(session.Id, secret)
 		}
 		if !trusted {
 			loginToken, err := h.UserService.CreateLoginToken(session.Id)

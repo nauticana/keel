@@ -15,8 +15,8 @@ import (
 // through fresh login tokens (each new token resets the per-token
 // counter) cannot keep guessing 2FA codes from the same IP unboundedly.
 const (
-	MaxVerify2FAPerIP   = 20
-	MaxVerify2FAWindow  = 10 * time.Minute
+	MaxVerify2FAPerIP  = 20
+	MaxVerify2FAWindow = 10 * time.Minute
 )
 
 // requireRecentAuth confirms the JWT-bearing caller can still produce a
@@ -108,7 +108,8 @@ func (h *SecurityHandler) GetAuthRoutes() map[string]func(w http.ResponseWriter,
 // authenticator's seed.
 //
 // POST /api/user/2fa/setup  { "password": "<current password>" }
-//   or { "twoFactorCode": "<current TOTP, when re-rotating>" }
+//
+//	or { "twoFactorCode": "<current TOTP, when re-rotating>" }
 func (h *SecurityHandler) Setup2FA(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -148,11 +149,10 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Code              string `json:"code"`
-		LoginToken        string `json:"loginToken"`
-		TrustDevice       bool   `json:"trustDevice"`
-		DeviceFingerprint string `json:"deviceFingerprint"`
-		DeviceName        string `json:"deviceName"`
+		Code        string `json:"code"`
+		LoginToken  string `json:"loginToken"`
+		TrustDevice bool   `json:"trustDevice"`
+		DeviceName  string `json:"deviceName"`
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -187,8 +187,10 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if req.TrustDevice && req.DeviceFingerprint != "" {
-			_ = h.UserService.RegisterTrustedDevice(userID, req.DeviceFingerprint, req.DeviceName)
+		if req.TrustDevice {
+			if secret, err := h.UserService.RegisterTrustedDevice(userID, req.DeviceName); err == nil {
+				DefaultTrustedDeviceCookie.Set(w, secret)
+			}
 		}
 
 		session, err := h.UserService.GetUserById(userID)

@@ -273,13 +273,14 @@ graph TD
 | `model` | Domain-agnostic models: `TableDefinition`, `TableColumn`, `ForeignKey`, `UserSession`, `PasswordPolicy`, `QueryResult`, `AppError`, `UserMenu`, `DeviceToken`, `TableChangeLog` |
 | `port` | Interface definitions for all pluggable components (auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger) |
 | `data` | `AbstractRepository`, `AbstractTableService`, `DatabaseRepository` / `TxView` / `QueryService` interfaces, file-based `TableLogger`, `QuotaServiceDb`, Snowflake bigint id generator |
-| `pgsql` | PostgreSQL implementation using `pgx/v5` — repository, table service, query service, tx-bound query service, tx view |
+| `pgsql` | PostgreSQL implementation using `pgx/v5` — repository, table service, query service, tx-bound query service, tx view. For typed reads against a fixed schema, use [`pgx.CollectRows[T]`](https://pkg.go.dev/github.com/jackc/pgx/v5#CollectRows) directly (already in scope; no keel wrapper needed); reserve `QueryService.Query` for metadata-driven dynamic-schema reads where the `[][]any` shape is intentional. |
 | `schema` | YAML-based schema definition + seed loader, plus the `schemagen` model used by `cmd/schemagen` to emit DDL/DML for any supported dialect |
 | `schema/dialect` | DDL dialects (PostgreSQL, MySQL) consumed by `schemagen` |
 | `cmd/schemagen` | CLI tool that converts `schema/*.yml` files into DDL + seed SQL |
 | `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
-| `handler` | `AbstractHandler` (JWT session parsing + helpers), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation) |
+| `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
+| `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults) |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory |
@@ -508,24 +509,132 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 |---|---|
 | `api_key` | Issued keys: `id`, `partner_id`, `key_name`, `key_prefix` (visible), `key_hash` (SHA-256), `scopes` (CSV), `is_active`, `expires_at`, `last_used_at`. |
 
+## Reusable Primitives (upstreamed from downstream services)
+
+Small, generic building blocks that downstream apps were each reinventing — now part of keel. Adopt them by importing the package; no wiring change needed beyond the example below.
+
+### `crypto` — AES-256-GCM seal/open
+
+At-rest encryption for sensitive fields (TOTP seeds, refresh tokens, secret-manager values). Sealed output is tagged `enc:v1:` + base64(nonce‖ciphertext), so callers can dual-read during migration — `IsSealed` distinguishes new vs legacy values, `Open` returns `(nil, false)` on any failure so the caller falls back to plaintext.
+
+```go
+import "github.com/nauticana/keel/crypto"
+
+kek, _ := crypto.DecodeKEK(secrets.MustGet(ctx, "field_kek")) // 32-byte AES-256 key, hex-encoded
+sealed, _ := crypto.Seal(kek, []byte(totpSeed))               // store in DB
+if plain, ok := crypto.Open(kek, row); ok { use(plain) } else { use([]byte(row)) /* legacy */ }
+```
+
+### `handler.JSON` / `handler.JSONPublic` — typed JSON endpoint adapter
+
+Eliminates the method-check / auth / decode / dispatch / error-map / write prologue every JSON handler otherwise repeats. Available as methods on `AbstractHandler`, so any handler that embeds it gets them for free. Return `*handler.APIError` to set a specific status; any other error → 500.
+
+```go
+type MyHandler struct{ handler.AbstractHandler; svc *MyService }
+
+mux.Handle("/api/v1/widget", h.JSON("POST", func(ctx context.Context, s *model.UserSession, body json.RawMessage) (any, error) {
+    var req CreateWidget
+    if err := json.Unmarshal(body, &req); err != nil {
+        return nil, handler.NewAPIError(http.StatusBadRequest, "bad request: "+err.Error())
+    }
+    w, err := h.svc.Create(ctx, s.UserID, req)
+    if errors.Is(err, ErrConflict) { return nil, handler.NewAPIError(http.StatusConflict, "exists") }
+    return w, err
+}))
+
+mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, _ json.RawMessage) (any, error) { ... }))
+```
+
+### `handler.CSRF` — double-submit-cookie helper
+
+For server-rendered admin pages in downstream services (keel's own JWT API doesn't need this). `Issue` mints a token and sets it in an HttpOnly/Secure/Strict cookie; `Validate` constant-time compares it against the form field. Cookie name / path / TTL are struct fields.
+
+```go
+csrf := &handler.CSRF{CookieName: "myapp_csrf", Path: "/", TTL: 2 * time.Hour}
+// GET render: tok, _ := csrf.Issue(w); render with hidden <input name="csrf_token" value="{{tok}}">
+// POST handler: if !csrf.Validate(r, "csrf_token") { http.Error(w, "forbidden", 403); return }
+```
+
+### `handler.AdminSessionStore` — opaque-token in-memory session
+
+Replaces the "cookie value == static admin secret" anti-pattern with a revocable, expiring, server-minted token. Cookies are the caller's concern — the store is just the token→expiry map, so it composes with any handler stack. In-memory: tokens are lost on restart, which is usually the right behavior for an admin/console area.
+
+```go
+store := handler.NewAdminSessionStore(2*time.Hour, 10_000)
+// login: tok, _ := store.Create(); http.SetCookie(w, ...{Value: tok})
+// guard: c, _ := r.Cookie(...); if !store.Valid(c.Value) { http.Error(w, "forbidden", 403); return }
+// logout: store.Delete(tok)
+```
+
+### `data.ScanRows[T]` — generic `*sql.Rows` scanner
+
+Collapses the `rows.Next` / `rows.Scan` / `rows.Err` boilerplate that recurs once per typed query. Pair it with a single-row scan closure.
+
+```go
+type Widget struct{ ID int64; Name string }
+
+rows, err := db.QueryContext(ctx, `SELECT id, name FROM widget WHERE owner = $1`, ownerID)
+if err != nil { return nil, err }
+widgets, err := data.ScanRows(rows, func(r *sql.Rows) (Widget, error) {
+    var w Widget
+    return w, r.Scan(&w.ID, &w.Name)
+})
+```
+
+**For pgx consumers (anything wired through keel/pgsql), use [`pgx.CollectRows[T]`](https://pkg.go.dev/github.com/jackc/pgx/v5#CollectRows) directly** — pgx ships an equivalent helper with the same shape, plus `CollectOneRow`, `AppendRows`, and `ForEachRow` siblings. `data.ScanRows` exists for `database/sql` callers (downstream services with non-pgx stores) where no built-in helper is available.
+
+```go
+// pgx-native equivalent — no keel helper needed:
+rows, err := pool.Query(ctx, `SELECT id, name FROM widget WHERE owner = $1`, ownerID)
+if err != nil { return nil, err }
+widgets, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Widget, error) {
+    var w Widget
+    return w, r.Scan(&w.ID, &w.Name)
+})
+```
+
+For metadata-driven dynamic-schema reads, keep using `QueryService.Query` — the `[][]any` shape is intentional for the REST engine and table-action handlers; replacing it with typed scans would defeat the purpose.
+
 ## Two-Factor Authentication (2FA) & Trusted Devices
 
 Keel includes built-in TOTP-based 2FA with trusted device management. The login endpoints (`LoginLocal`, `LoginGmail`) automatically check `TwoFactorEnabled` on the user session and return a conditional response.
+
+### Trusted-device model (v0.9 — server-minted secret, SHA256-at-rest)
+
+The "trusted device" credential is a **server-minted 32-byte secret** kept in an HttpOnly + Secure + SameSite=Strict cookie (default name `keel_td`). The DB stores only the secret's hex SHA256 — never the raw value — and `IsTrustedDevice` constant-time compares against the active rows for the user. This replaces the earlier "client-supplied fingerprint string" pattern, which had two weaknesses: the client picked the value (so a malicious client could re-use a known fingerprint across users), and the value was stored plaintext (so a DB leak handed an attacker direct bypass material).
+
+Lifecycle:
+1. `POST /public/2fa/verify` with `trustDevice:true` → server calls `UserService.RegisterTrustedDevice(userID, deviceName)`, which mints a fresh secret, stores its SHA256, and **returns the raw secret** to the handler. The handler immediately sets the `keel_td` cookie via `handler.DefaultTrustedDeviceCookie.Set(w, secret)`. The secret never appears in the JSON response body.
+2. On the next `POST /public/login/local` (or `/public/login/gmail`), the handler reads the cookie via `handler.DefaultTrustedDeviceCookie.Get(r)` and passes the value to `IsTrustedDevice`, which hashes it and looks for a matching row. Match → skip 2FA.
+3. `POST /api/user/trusted-device/revoke` removes the row; the next request from that device has no usable cookie.
 
 ### Login Flow with 2FA
 
 ```
 POST /public/login/local   (or /public/login/gmail)
-  Request:  { "username": "...", "password": "...", "deviceFingerprint": "optional" }
+  Cookie:  keel_td=<secret> (sent by browser when set during a previous 2FA verify)
+  Request: { "username": "...", "password": "..." }
 
-  // If 2FA NOT enabled (or device is trusted):
+  // If 2FA NOT enabled (or keel_td cookie maps to a trusted row):
   Response: { "token": "jwt...", "userId": 1, "partnerId": 1, "menu": [...], "twoFactorRequired": false }
 
   // If 2FA enabled AND device NOT trusted:
   Response: { "twoFactorRequired": true, "loginToken": "12345678" }
 ```
 
-When `twoFactorRequired` is `true`, the frontend redirects to a 2FA verification page and submits the code via the public verify endpoint.
+When `twoFactorRequired` is `true`, the frontend redirects to a 2FA verification page and submits the code via the public verify endpoint. The verify request opts into device trust with `trustDevice:true` + an optional human-readable `deviceName`; on success the server sets the `keel_td` cookie.
+
+### Migration from v0.8 trusted-device API (breaking)
+
+Three changes to the public surface:
+
+- **JSON `deviceFingerprint` field removed** from `LoginLocal`, `LoginGmail`, and `Verify2FA` request bodies. The value moves into the `keel_td` cookie, set automatically by the server. Frontends that previously sent the field can drop it — extra fields are ignored.
+- **`UserService.RegisterTrustedDevice` signature changed**: `(userID, fingerprint, name) error` → `(userID, name) (secret string, err error)`. Downstream callers that wrap this API must update; the raw `secret` is the value to feed into a cookie (use `handler.DefaultTrustedDeviceCookie.Set` for the default attributes).
+- **`TrustedDevice.Fingerprint` field removed** from the `[]TrustedDevice` returned by `GetTrustedDevices` (was leaking the bypass credential to the API). `ID`, `Name`, `LastUsedAt`, `CreatedAt` remain.
+
+**Existing data**: rows written under the old plaintext-fingerprint scheme are orphaned — they will never match a hashed lookup, and expire naturally via their 30-day `expires_at`. No data migration script needed; affected users will be prompted for 2FA on their next login and can opt into "trust this device" again. Downstream apps that need to clean up early can `DELETE FROM user_trusted_device WHERE LENGTH(device_fingerprint) <> 64` (new hashes are exactly 64 hex chars).
+
+**Custom cookie attributes**: instantiate a `handler.TrustedDeviceCookie{Name: ..., Path: ..., TTL: ...}` in your `SecurityHandler`/`PublicHandler` wiring instead of relying on `DefaultTrustedDeviceCookie`.
 
 ### Security Endpoints
 

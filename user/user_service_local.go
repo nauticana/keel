@@ -118,7 +118,6 @@ const (
 
 	// Trusted device queries
 	qInsertTrustedDevice  = "insert_trusted_device"
-	qCheckTrustedDevice   = "check_trusted_device"
 	qGetTrustedDevices    = "get_trusted_devices"
 	qRevokeTrustedDevice  = "revoke_trusted_device"
 	qUpdateDeviceLastSeen = "update_device_last_seen"
@@ -381,14 +380,6 @@ UPDATE user_refresh_token SET revoked_at = CURRENT_TIMESTAMP
 	qInsertTrustedDevice: `
 INSERT INTO user_trusted_device (id, user_id, device_fingerprint, device_name, trusted_at, expires_at)
 VALUES (nextval('user_trusted_device_seq'), ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '30 days')
-`,
-
-	qCheckTrustedDevice: `
-SELECT id FROM user_trusted_device
- WHERE user_id = ?
-   AND device_fingerprint = ?
-   AND expires_at > CURRENT_TIMESTAMP
- LIMIT 1
 `,
 
 	qGetTrustedDevices: `
@@ -1482,19 +1473,39 @@ func parseLoginToken(token string) (userID, confirmation int, err error) {
 
 // --- Trusted Devices ---
 
-func (s *LocalUserService) RegisterTrustedDevice(userID int, fingerprint string, name string) error {
-	_, err := s.queryService.Query(s.ctx(), qInsertTrustedDevice, userID, fingerprint, name)
-	return err
+// RegisterTrustedDevice mints a 32-byte random secret, stores its hex
+// SHA256, and returns the raw secret for the caller to set as an
+// HttpOnly cookie. The DB never sees the plaintext.
+func (s *LocalUserService) RegisterTrustedDevice(userID int, name string) (string, error) {
+	raw := make([]byte, 32)
+	if _, err := crand.Read(raw); err != nil {
+		return "", fmt.Errorf("register trusted device: %w", err)
+	}
+	secret := hex.EncodeToString(raw)
+	_, err := s.queryService.Query(s.ctx(), qInsertTrustedDevice, userID, hashDeviceSecret(secret), name)
+	if err != nil {
+		return "", err
+	}
+	return secret, nil
 }
 
-func (s *LocalUserService) IsTrustedDevice(userID int, fingerprint string) (bool, error) {
-	res, err := s.queryService.Query(s.ctx(), qCheckTrustedDevice, userID, fingerprint)
+// IsTrustedDevice hashes secret and constant-time-compares against each
+// active row for userID. Empty secret short-circuits to false.
+func (s *LocalUserService) IsTrustedDevice(userID int, secret string) (bool, error) {
+	if secret == "" {
+		return false, nil
+	}
+	candidate := hashDeviceSecret(secret)
+	res, err := s.queryService.Query(s.ctx(), qGetTrustedDevices, userID)
 	if err != nil {
 		return false, err
 	}
-	if len(res.Rows) > 0 {
-		_, _ = s.queryService.Query(s.ctx(), qUpdateDeviceLastSeen, userID, fingerprint)
-		return true, nil
+	for _, row := range res.Rows {
+		stored := common.AsString(row[2])
+		if subtle.ConstantTimeCompare([]byte(stored), []byte(candidate)) == 1 {
+			_, _ = s.queryService.Query(s.ctx(), qUpdateDeviceLastSeen, userID, stored)
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -1507,14 +1518,18 @@ func (s *LocalUserService) GetTrustedDevices(userID int) ([]TrustedDevice, error
 	devices := make([]TrustedDevice, len(res.Rows))
 	for i, row := range res.Rows {
 		devices[i] = TrustedDevice{
-			ID:          common.AsInt64(row[0]),
-			Name:        common.AsString(row[1]),
-			Fingerprint: common.AsString(row[2]),
-			LastUsedAt:  common.AsString(row[3]),
-			CreatedAt:   common.AsString(row[4]),
+			ID:         common.AsInt64(row[0]),
+			Name:       common.AsString(row[1]),
+			LastUsedAt: common.AsString(row[3]),
+			CreatedAt:  common.AsString(row[4]),
 		}
 	}
 	return devices, nil
+}
+
+func hashDeviceSecret(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *LocalUserService) RevokeTrustedDevice(userID int, deviceID int64) error {

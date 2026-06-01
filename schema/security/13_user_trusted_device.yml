@@ -1,5 +1,5 @@
 table: user_trusted_device
-comment: Trusted devices for 2FA bypass
+comment: Trusted devices for 2FA bypass; device_fingerprint holds hex SHA256 of a server-minted secret kept in an HttpOnly cookie (never the raw secret).
 order: 32
 columns:
   - name: id
@@ -8,6 +8,7 @@ columns:
     type: BIGINT
   - name: device_fingerprint
     type: VARCHAR(128)
+    comment: Hex SHA256 of server-minted device secret (64 chars; column left at 128 to absorb legacy plaintext rows during the orphan-and-expire migration window).
   - name: device_name
     type: VARCHAR(200)
     nullable: true
