@@ -52,7 +52,7 @@ var GlobalRoleIDs = []string{
 // list before importing this package picks up the modified set.
 var AuthorizationQueries = map[string]string{
 	QCheckAuthorization: `
-SELECT a.low_limit, a.high_limit
+SELECT a.low_limit, a.high_limit, a.bypass_scope
   FROM user_permission p, authorization_role_permission a
  WHERE p.role_id = a.role_id
    AND p.begda <= CURRENT_TIMESTAMP

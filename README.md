@@ -119,7 +119,27 @@ A child table is marked UserSpecific if and only if **both** are true:
 | **Update** | `AND user_id = caller` appended to WHERE; `user_id` excluded from SET (immutable) | **Same — strict.** Cross-user updates need custom handlers |
 | **Delete** | `WHERE user_id = caller` auto-injected | **Same — strict.** Cross-user deletes need custom handlers |
 
-Reads honor scope so an admin with explicit grants can audit across all rows. Writes are owner-locked unconditionally because a misconfigured permission grant should never let one user mutate another's data through generic CRUD.
+Reads honor scope so the caller sees only their own rows. Admin/audit roles that legitimately need cross-user reads on a UserSpecific table opt in per-grant via `bypass_scope=TRUE` — see [Admin opt-in for cross-user reads](#admin-opt-in-for-cross-user-reads-v093). Writes are owner-locked unconditionally because a misconfigured permission grant should never let one user mutate another's data through generic CRUD.
+
+### Admin opt-in for cross-user reads (v0.9.3)
+
+`authorization_role_permission` gains a `bypass_scope BOOLEAN DEFAULT FALSE` column. When TRUE, `CheckPermission` returns `ownScope=false` for that grant so the UserSpecific / PartnerSpecific `WHERE user_id = session.UserID` filter is NOT auto-injected. Default FALSE keeps every other grant safely owner-scoped — including explicit per-table grants, which previously bypassed the filter just by naming the table.
+
+```sql
+-- End-user reads their own rows (default — bypass_scope omitted = FALSE):
+INSERT INTO authorization_role_permission (role_id, authorization_object_id, action, low_limit) VALUES
+    ('RIDER', 'TABLE', 'SELECT', 'user_payment_method');
+
+-- Finance admin audits across all riders:
+INSERT INTO authorization_role_permission (role_id, authorization_object_id, action, low_limit, bypass_scope) VALUES
+    ('FINANCE_ADMIN', 'TABLE', 'SELECT', 'user_payment_method', TRUE);
+```
+
+Migration when upgrading from ≤ v0.9.2:
+
+1. Audit per-table SELECT grants on UserSpecific tables held by admin/audit roles (FINANCE_ADMIN, PARTNER_REVIEWER, SUPPORT_AGENT, etc.).
+2. Set `bypass_scope=TRUE` on the grants that need cross-user access (or `UPDATE … SET bypass_scope = TRUE WHERE …` for existing rows).
+3. End-user role grants (RIDER, DRIVER, …) need no migration — `bypass_scope` defaults to FALSE, which is now the safe owner-scoped behavior.
 
 ### Breaking API change
 
@@ -133,7 +153,7 @@ CheckPermission(ctx context.Context, userID int, task string) bool
 CheckPermission(ctx context.Context, userID int, task string) (allowed bool, ownScope bool)
 ```
 
-`ownScope` is `true` when the caller's matching permission row used a wildcard / range pattern (broad reach), `false` when it used an exact table name (admin-style explicit grant). The data-layer `Get` uses `ownScope` to decide whether to inject the per-row filter; downstream consumers that have their own `TableService` implementation (rare) need to update their signature and decide what to return.
+`ownScope` is `true` when the data-layer should auto-inject the UserSpecific / PartnerSpecific row filter. As of v0.9.3 it returns `true` for every grant by default; admin opt-out uses `bypass_scope=TRUE` on the specific grant row (see [Admin opt-in for cross-user reads](#admin-opt-in-for-cross-user-reads-v093)). Downstream consumers with their own `TableService` implementation need to update the signature and mirror this rule.
 
 ### `model.TableDefinition` additions
 
@@ -159,7 +179,7 @@ type AbstractRepository struct {
 
 1. **Schema audit.** Check every table that has a single conceptual owner. If the owner column isn't named `user_id`, rename it (and the FK constraint) so keel auto-detects it. Multi-actor tables stay as-is.
 2. **Custom handler review.** Any admin endpoint that currently relies on generic CRUD to mutate user-owned rows on behalf of another user (e.g. `FINANCE_ADMIN` updating `ride_payment.payment_status` to mark a refund) now no-ops silently — `ROW_COUNT=0`. Move those flows into custom service-layer handlers that filter by the target user explicitly.
-3. **Permission seeds.** Wildcard grants (`'TABLE','SELECT','*'`) work for mobile-app roles automatically; explicit per-table grants for admin roles work for reads but won't allow cross-user writes — adjust seed data accordingly.
+3. **Permission seeds.** Wildcard grants (`'TABLE','SELECT','*'`) and explicit per-table grants both auto-scope UserSpecific tables (v0.9.3). Admin/audit roles that need cross-user reads opt in per-grant with `bypass_scope=TRUE` — see [Admin opt-in for cross-user reads](#admin-opt-in-for-cross-user-reads-v093). Cross-user writes still require custom handlers regardless.
 4. **Custom `TableService` implementations.** Update the `CheckPermission` signature and decide your `ownScope` rule (most implementations will mirror the keel default: `true` if matched via wildcard, `false` if matched by exact table name).
 
 ### When to use UserSpecific vs custom handlers

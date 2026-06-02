@@ -13,6 +13,10 @@ columns:
   - name: high_limit
     type: VARCHAR(80)
     nullable: true
+  - name: bypass_scope
+    type: BOOLEAN
+    default: "FALSE"
+    comment: TRUE = admin opt-in to cross-user reads on UserSpecific tables.
   - name: is_active
     type: BOOLEAN
     default: "TRUE"
