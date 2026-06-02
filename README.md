@@ -121,6 +121,10 @@ A child table is marked UserSpecific if and only if **both** are true:
 
 Reads honor scope so the caller sees only their own rows. Admin/audit roles that legitimately need cross-user reads on a UserSpecific table opt in per-grant via `bypass_scope=TRUE` — see [Admin opt-in for cross-user reads](#admin-opt-in-for-cross-user-reads-v093). Writes are owner-locked unconditionally because a misconfigured permission grant should never let one user mutate another's data through generic CRUD.
 
+### The session must carry its scope (`PartnerId`)
+
+Auto-scoping injects `WHERE partner_id = session.PartnerId` (PartnerSpecific) and `WHERE user_id = session.UserID` (UserSpecific) into every generic-CRUD read. Every session-issuing path on `LocalUserService` stamps the binding from `partner_user` before the JWT is signed: `GetUserById`, `GetUserByEmail`, and the social/OTP token paths, and — as of v0.9.2 — `GetUserByLogin`. Custom `UserService` implementations must likewise populate `session.PartnerId` before calling `CreateJWT`.
+
 ### Admin opt-in for cross-user reads (v0.9.3)
 
 `authorization_role_permission` gains a `bypass_scope BOOLEAN DEFAULT FALSE` column. When TRUE, `CheckPermission` returns `ownScope=false` for that grant so the UserSpecific / PartnerSpecific `WHERE user_id = session.UserID` filter is NOT auto-injected. Default FALSE keeps every other grant safely owner-scoped — including explicit per-table grants, which previously bypassed the filter just by naming the table.

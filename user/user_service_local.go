@@ -900,6 +900,16 @@ func (s *LocalUserService) GetUserByLogin(username string, password string) (*mo
 	}
 	s.AddUserHistory(userAccountId, 0, "", UserActivityLogin, "A", "")
 	s.queryService.Query(ctx, qSetLastLogin, time.Now(), userAccountId)
+
+	// Stamp the partner binding into the session so PartnerSpecific row
+	// scoping works on password logins — same lookup GetUserById /
+	// GetUserByEmail already do. Without it PartnerId stays 0 and every
+	// partner-scoped read returns nothing.
+	partnerRes, err := s.queryService.Query(ctx, qPartnerUserByid, userAccountId)
+	if err == nil && len(partnerRes.Rows) > 0 {
+		session.PartnerId = common.AsInt64(partnerRes.Rows[0][10])
+	}
+
 	return session, nil
 }
 
