@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS authorization_role_permission (
     action                               VARCHAR(30)   NOT NULL,
     low_limit                            VARCHAR(80)   NOT NULL,
     high_limit                           VARCHAR(80)  ,
+    bypass_scope                         TINYINT(1)    NOT NULL DEFAULT 0,
     is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
     PRIMARY KEY (role_id, authorization_object_id, action, low_limit),
     CONSTRAINT authorization_role_permissions FOREIGN KEY (role_id) REFERENCES authorization_role(id),
@@ -297,6 +298,16 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     CONSTRAINT partner_domains FOREIGN KEY (partner_id) REFERENCES business_partner(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Per-column UI display overrides (read-only, field width, textarea rows)
+CREATE TABLE IF NOT EXISTS column_display_attribute (
+    table_name                           VARCHAR(63)   NOT NULL,
+    column_name                          VARCHAR(63)   NOT NULL,
+    read_only                            TINYINT(1)    NOT NULL DEFAULT 0,
+    display_width                        INT          ,
+    display_rows                         INT          ,
+    PRIMARY KEY (table_name, column_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- JWT refresh tokens
 CREATE TABLE IF NOT EXISTS user_refresh_token (
     id                                   BIGINT        NOT NULL,
@@ -310,7 +321,7 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_refresh_token_hash ON user_refresh_token(token_hash);
 
--- Trusted devices for 2FA bypass
+-- Trusted devices for 2FA bypass; device_fingerprint holds hex SHA256 of a server-minted secret kept in an HttpOnly cookie (never the raw secret).
 CREATE TABLE IF NOT EXISTS user_trusted_device (
     id                                   BIGINT        NOT NULL,
     user_id                              BIGINT        NOT NULL,

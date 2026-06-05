@@ -264,6 +264,47 @@ written for.
   Callers persisting arbitrary-precision NUMERIC must use the typed
   `TableService.Get` path or read the column as `string`.
 
+## Migration Guide (column_display_attribute — additive, per-column UI overrides)
+
+Lets a project tune how the generic edit form renders each column —
+without changing column types — via a new basis table. Fully additive
+and **downstream-safe**: if the table doesn't exist, the loader skips it
+and behaviour is unchanged.
+
+### What's new
+
+- New basis table `column_display_attribute (table_name, column_name,
+  read_only BOOLEAN, display_width INTEGER NULL, display_rows INTEGER NULL)`,
+  PK `(table_name, column_name)`. Generated from
+  `schema/basis/31_column_display_attribute.yml`.
+- `model.TableColumn` gains three optional fields: `Readonly bool`,
+  `DisplayWidth int`, `DisplayRows int`. Zero values mean "no override".
+- `AbstractRepository.Init` calls `applyColumnDisplay`, which overlays any
+  rows from the table onto the loaded column definitions. It reads via the
+  new `QGetColumnDisplay` named query and is **non-fatal if the table is
+  absent** (same pattern as `loadFkLookupStyles`).
+
+### What it controls (consumed by sail ≥ the matching release)
+
+- `read_only=TRUE` → the field renders display-only in the edit form.
+  Use for audit timestamps (`*_at`) and system-managed status fields.
+- `display_rows` → overrides textarea height; `1` forces a single-line
+  input even for a `TEXT` column (keep `TEXT` to avoid VARCHAR overflow on
+  bulk-loaded data, but still render single-line).
+- `display_width` → overrides the field's max width in px.
+
+### Migration steps for downstream consumers
+
+1. Bump keel; regenerate your `basis.sql` (`make gen-schema` here, or your
+   schemagen step) so the new table is created.
+2. Optionally seed `column_display_attribute` rows for tables you want to
+   tune. No rows = identical behaviour to before.
+
+### Breaking-change risk
+
+- **None.** New table, new optional struct fields, guarded loader. Existing
+  schemas with no `column_display_attribute` rows are unaffected.
+
 ## Architecture
 
 ```mermaid

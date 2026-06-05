@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS authorization_role_permission (
     action                               VARCHAR(30)   NOT NULL,
     low_limit                            VARCHAR(80)   NOT NULL,
     high_limit                           VARCHAR(80)  ,
+    bypass_scope                         BOOLEAN       NOT NULL DEFAULT FALSE,
     is_active                            BOOLEAN       NOT NULL DEFAULT TRUE,
     CONSTRAINT authorization_role_permission_pk PRIMARY KEY (role_id, authorization_object_id, action, low_limit)
 );
@@ -279,6 +280,16 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     CONSTRAINT partner_domain_pk PRIMARY KEY (partner_id, domain_url)
 );
 
+-- Per-column UI display overrides (read-only, field width, textarea rows)
+CREATE TABLE IF NOT EXISTS column_display_attribute (
+    table_name                           VARCHAR(63)   NOT NULL,
+    column_name                          VARCHAR(63)   NOT NULL,
+    read_only                            BOOLEAN       NOT NULL DEFAULT FALSE,
+    display_width                        INTEGER      ,
+    display_rows                         INTEGER      ,
+    CONSTRAINT column_display_attribute_pk PRIMARY KEY (table_name, column_name)
+);
+
 -- JWT refresh tokens
 CREATE TABLE IF NOT EXISTS user_refresh_token (
     id                                   BIGINT        NOT NULL,
@@ -294,7 +305,7 @@ CREATE INDEX IF NOT EXISTS idx_refresh_token_hash ON user_refresh_token(token_ha
 CREATE SEQUENCE IF NOT EXISTS user_refresh_token_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_refresh_token', 'id', 'user_refresh_token_seq') ON CONFLICT DO NOTHING;
 
--- Trusted devices for 2FA bypass
+-- Trusted devices for 2FA bypass; device_fingerprint holds hex SHA256 of a server-minted secret kept in an HttpOnly cookie (never the raw secret).
 CREATE TABLE IF NOT EXISTS user_trusted_device (
     id                                   BIGINT        NOT NULL,
     user_id                              BIGINT        NOT NULL,

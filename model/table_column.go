@@ -38,6 +38,11 @@ type TableColumn struct {
 	LookupStyle  string
 	HasDefault   bool
 	DefaultValue string
+	// UI display overrides from the column_display_attribute table (optional).
+	// Zero values mean "no override" — the UI falls back to its heuristics.
+	Readonly     bool
+	DisplayWidth int
+	DisplayRows  int
 }
 
 func (f *TableColumn) GetTypeScriptDecorator() string {

@@ -16,6 +16,7 @@ const (
 	QGetPrimaryKeys     = "get_primary_keys"
 	QGetForeignKeys     = "get_foreign_keys"
 	QGetFkLookupStyles  = "get_fk_lookup_styles"
+	QGetColumnDisplay   = "get_column_display"
 	QGetSequenceUsage   = "get_sequence_usage"
 	QCheckAuthorization = "check_permission"
 	// QCheckGlobalRole returns 1 row when the caller holds any role
@@ -231,6 +232,8 @@ func (r *AbstractRepository) Init(ctx context.Context) error {
 		r.TableDefinitions[tableName] = table
 	}
 
+	r.applyColumnDisplay(ctx)
+
 	primaryKeys, err := r.LoadPrimaryKeys(ctx)
 	if err != nil {
 		return err
@@ -334,6 +337,34 @@ func (r *AbstractRepository) loadFkLookupStyles(ctx context.Context) (map[string
 		styles[common.AsString(rec[0])] = common.AsString(rec[1])
 	}
 	return styles, nil
+}
+
+// applyColumnDisplay overlays per-column UI overrides (read_only, display_width,
+// display_rows) from the column_display_attribute table onto the loaded column
+// definitions. Non-fatal if the table is absent — downstream schemas that
+// predate it simply get no overrides.
+func (r *AbstractRepository) applyColumnDisplay(ctx context.Context) {
+	res, err := r.QuerySvc.Query(ctx, QGetColumnDisplay)
+	if err != nil {
+		return // table missing or unreadable: no overrides
+	}
+	for _, rec := range res.Rows {
+		table := strings.ToLower(common.AsString(rec[0]))
+		column := strings.ToLower(common.AsString(rec[1]))
+		def := r.TableDefinitions[table]
+		if def == nil {
+			continue
+		}
+		for _, col := range def.Columns {
+			if col.ColumnName != column {
+				continue
+			}
+			col.Readonly = common.AsBool(rec[2])
+			col.DisplayWidth = int(common.AsInt32(rec[3]))
+			col.DisplayRows = int(common.AsInt32(rec[4]))
+			break
+		}
+	}
 }
 
 func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.QueryResult, lookupStyles map[string]string) error {
