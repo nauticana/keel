@@ -280,11 +280,11 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     CONSTRAINT partner_domain_pk PRIMARY KEY (partner_id, domain_url)
 );
 
--- Per-column UI display overrides (read-only, field width, textarea rows)
+-- Per-column UI/CRUD display overrides (mode, field width, textarea rows)
 CREATE TABLE IF NOT EXISTS column_display_attribute (
     table_name                           VARCHAR(63)   NOT NULL,
     column_name                          VARCHAR(63)   NOT NULL,
-    read_only                            BOOLEAN       NOT NULL DEFAULT FALSE,
+    display_mode                         CHAR(1)      ,
     display_width                        INTEGER      ,
     display_rows                         INTEGER      ,
     CONSTRAINT column_display_attribute_pk PRIMARY KEY (table_name, column_name)

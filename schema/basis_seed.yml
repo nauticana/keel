@@ -142,3 +142,24 @@ seeds:
       - [30,  false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]
       - [40,  true,  payments, user_payment_methods, user_payment_method, "User Payment Methods"]
       - [10,  true,  payouts,  user_bank_infos, user_bank_info, "Bank Accounts"]
+
+  # Audit-column display modes for keel's own framework tables. R = display-only
+  # (system-set, excluded from writes); U = keel stamps now() on UPDATE. All
+  # listed columns are NOT NULL DEFAULT CURRENT_TIMESTAMP, so excluding them from
+  # INSERT is safe — the DB default fills them.
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [user_registration,   created_at, R]
+      - [partner_user,        begda,      R]
+      - [partner_domain,      created_at, R]
+      - [user_refresh_token,  created_at, R]
+      - [api_key,             created_at, R]
+      - [consent_event,       created_at, R]
+      - [device_token,        created_at, R]
+      - [device_token,        updated_at, U]
+      - [payment_method,      created_at, R]
+      - [payment_record,      created_at, R]
+      - [user_bank_info,      created_at, R]
+      - [user_bank_info,      updated_at, U]
+      - [user_payment_method, created_at, R]

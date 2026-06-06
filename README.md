@@ -264,34 +264,96 @@ written for.
   Callers persisting arbitrary-precision NUMERIC must use the typed
   `TableService.Get` path or read the column as `string`.
 
-## Migration Guide (column_display_attribute — additive, per-column UI overrides)
+## Migration Guide (column_display_attribute — additive, per-column display modes)
 
-Lets a project tune how the generic edit form renders each column —
-without changing column types — via a new basis table. Fully additive
-and **downstream-safe**: if the table doesn't exist, the loader skips it
-and behaviour is unchanged.
+Lets a project tune how the generic edit form renders each column **and**
+whether the CRUD engine writes it — without changing column types — via a
+new basis table. Fully additive and **downstream-safe**: if the table
+doesn't exist, the loader skips it and behaviour is unchanged.
 
 ### What's new
 
 - New basis table `column_display_attribute (table_name, column_name,
-  read_only BOOLEAN, display_width INTEGER NULL, display_rows INTEGER NULL)`,
-  PK `(table_name, column_name)`. Generated from
+  display_mode CHAR(1) NULL, display_width INTEGER NULL, display_rows
+  INTEGER NULL)`, PK `(table_name, column_name)`. Generated from
   `schema/basis/31_column_display_attribute.yml`.
-- `model.TableColumn` gains three optional fields: `Readonly bool`,
-  `DisplayWidth int`, `DisplayRows int`. Zero values mean "no override".
+- `model.TableColumn` gains three optional fields: `DisplayMode string`,
+  `DisplayWidth int`, `DisplayRows int`. Zero/empty = no override.
 - `AbstractRepository.Init` calls `applyColumnDisplay`, which overlays any
-  rows from the table onto the loaded column definitions. It reads via the
-  new `QGetColumnDisplay` named query and is **non-fatal if the table is
-  absent** (same pattern as `loadFkLookupStyles`).
+  rows onto the loaded column definitions via the new `QGetColumnDisplay`
+  named query — **non-fatal if the table is absent** (same pattern as
+  `loadFkLookupStyles`).
 
-### What it controls (consumed by sail ≥ the matching release)
+### display_mode values (see `model.Display*`)
 
-- `read_only=TRUE` → the field renders display-only in the edit form.
-  Use for audit timestamps (`*_at`) and system-managed status fields.
-- `display_rows` → overrides textarea height; `1` forces a single-line
-  input even for a `TEXT` column (keep `TEXT` to avoid VARCHAR overflow on
-  bulk-loaded data, but still render single-line).
-- `display_width` → overrides the field's max width in px.
+| Mode | Edit form | INSERT | UPDATE |
+|------|-----------|--------|--------|
+| `R` (read-only) | display-only; hidden when empty | skipped | skipped |
+| `H` (hidden) | never shown | skipped (DB default/seq/trigger fills) | skipped |
+| `D` (default-seeded) | editable, prefilled with the column default | written | written |
+| `I` (insert-only) | editable on create, locked on edit | written | skipped |
+| `U` (update stamp) | display-only like `R` | skipped | **keel-set**: `timestamp`→`now()`, `integer`→`user_id` |
+| `` / NULL | editable (normal) | written | written |
+
+The write rules are enforced in the SQL builders (`skipInsertCol` /
+`skipUpdateCol` / `updateStampKind` in `pgsql/table_service.go`), so
+`R`/`H`/`I`/`U` can't be set by a crafted API payload — not just hidden in
+the UI. `U` replaces the need for an `updated_at`/`updated_by` DB trigger:
+keel stamps `now()` (timestamp columns) or the authenticated user_id
+(integer columns) on every UPDATE. Explicit modes win over the legacy
+"HasDefault timestamp" INSERT heuristic, which remains the default for
+unmoded audit columns.
+
+`display_width` / `display_rows` are orthogonal sizing hints consumed by the
+UI (`display_rows=1` forces a single-line input even for a `TEXT` column).
+
+### Framework defaults keel ships (basis_seed.yml)
+
+keel seeds modes for its own framework audit columns (all
+`NOT NULL DEFAULT CURRENT_TIMESTAMP`, so excluding them from INSERT is safe —
+the DB default fills them). Rows use `ON CONFLICT DO NOTHING`, so a downstream
+project's own seed always wins.
+
+| Table | Column | Mode |
+|-------|--------|------|
+| `user_registration` | `created_at` | `R` |
+| `partner_user` | `begda` | `R` |
+| `partner_domain` | `created_at` | `R` |
+| `user_refresh_token` | `created_at` | `R` |
+| `api_key` | `created_at` | `R` |
+| `consent_event` | `created_at` | `R` |
+| `device_token` | `created_at` | `R` |
+| `device_token` | `updated_at` | `U` |
+| `payment_method` | `created_at` | `R` |
+| `payment_record` | `created_at` | `R` |
+| `user_bank_info` | `created_at` | `R` |
+| `user_bank_info` | `updated_at` | `U` |
+| `user_payment_method` | `created_at` | `R` |
+
+Not seeded (deliberately): `partner_plan_subscription.begda` /
+`partner_addon_subscription.begda` are admin-entered business dates with **no**
+DB default — `R` would NULL-violate on INSERT. `*.endda` columns are
+open-ended validity end-dates, left editable. `user_permission.begda` is the
+same auto-`now()` pattern as `partner_user.begda` and is a reasonable
+candidate if you expose that table via generic CRUD.
+
+**Interaction with keel's manual DML.** `display_mode` governs **only** the
+generic CRUD engine (`TableService`) — the admin grid driven by
+`rest_api_header`. keel's own service-layer SQL (registration, api-key
+issuance, device-token upsert, payout onboarding, …) writes these columns in
+its hand-written `INSERT`/`UPDATE` statements regardless, and is unaffected.
+The two paths don't conflict:
+
+- `created_at R` only stops the *grid* from editing a column the real
+  lifecycle INSERT already fills (via explicit `CURRENT_TIMESTAMP` or the DB
+  default). The manual create path is untouched.
+- `updated_at U` makes the *generic* UPDATE stamp `now()` — the **same** thing
+  the manual update paths already do (e.g. device-token reactivate, payout
+  writes `SET updated_at = CURRENT_TIMESTAMP`). So `U` keeps the grid
+  consistent with the service layer, it doesn't override it.
+
+Tables written *only* via manual DML and not exposed through a generic CRUD
+grid simply ignore these rows (harmless, future-proof if later exposed).
 
 ### Migration steps for downstream consumers
 
@@ -302,8 +364,10 @@ and behaviour is unchanged.
 
 ### Breaking-change risk
 
-- **None.** New table, new optional struct fields, guarded loader. Existing
-  schemas with no `column_display_attribute` rows are unaffected.
+- **None for unmoded schemas.** New table, new optional struct fields,
+  guarded loader. Note `R`/`H`/`I` columns are now excluded from generic
+  INSERT/UPDATE — intended, but if you previously relied on the generic CRUD
+  to write a column you now mark `R`/`H`, set it via a custom handler.
 
 ## Architecture
 

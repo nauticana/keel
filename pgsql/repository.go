@@ -56,7 +56,7 @@ SELECT distinct f.constraint_name, f.table_name, k.ordinal_position, k.column_na
 
 		data.QGetFkLookupStyles: `SELECT constraint_name, lookup_style FROM foreign_key_lookup`,
 
-		data.QGetColumnDisplay: `SELECT table_name, column_name, read_only, display_width, display_rows FROM column_display_attribute`,
+		data.QGetColumnDisplay: `SELECT table_name, column_name, display_mode, display_width, display_rows FROM column_display_attribute`,
 
 		data.QGetPrimaryKeys: `
 SELECT p.table_name, k.ordinal_position, k.column_name

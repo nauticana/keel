@@ -11,6 +11,17 @@ const (
 	DT_TIME   = "timestamp"
 )
 
+// DisplayMode codes (column_display_attribute.display_mode) control how the
+// generic edit form renders a column and whether the CRUD engine writes it.
+// Empty string = the implicit default: editable, shown, written normally.
+const (
+	DisplayReadonly    = "R" // shown display-only; never written (INSERT/UPDATE skip it)
+	DisplayHidden      = "H" // never shown; never written — DB default/sequence/trigger fills it
+	DisplayDefault     = "D" // editable, prefilled with the column default on new records
+	DisplayInsertOnly  = "I" // editable on create, read-only on edit; UPDATE skips it
+	DisplayUpdateStamp = "U" // read-only audit stamp keel sets on UPDATE: timestamp→now(), integer→user_id
+)
+
 var TypescriptNames = map[string]string{
 	DT_BOOL:   "boolean",
 	DT_INT:    "number",
@@ -38,9 +49,9 @@ type TableColumn struct {
 	LookupStyle  string
 	HasDefault   bool
 	DefaultValue string
-	// UI display overrides from the column_display_attribute table (optional).
-	// Zero values mean "no override" — the UI falls back to its heuristics.
-	Readonly     bool
+	// UI/CRUD display overrides from the column_display_attribute table (optional).
+	// Zero values mean "no override" — editable, shown, written normally.
+	DisplayMode  string // one of Display* ("" = editable default)
 	DisplayWidth int
 	DisplayRows  int
 }

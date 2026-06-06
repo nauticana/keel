@@ -100,6 +100,55 @@ func (s *TableServicePgsql) resolveColumnName(key string) (string, bool) {
 	return "", false
 }
 
+// skipInsertCol reports whether a column is omitted from generated INSERTs.
+// Explicit display modes win over the legacy timestamp-default heuristic, so a
+// D/I column with a defaulted timestamp is still written. Sequence handling is
+// separate (the caller checks SequenceName after this).
+func skipInsertCol(col *model.TableColumn) bool {
+	switch col.DisplayMode {
+	case model.DisplayHidden, model.DisplayReadonly, model.DisplayUpdateStamp:
+		return true // system-managed: DB default / trigger fills it (U stamps on UPDATE only)
+	case "":
+		return col.HasDefault && col.DataType == model.DT_TIME // unmoded audit timestamps
+	}
+	return false
+}
+
+// skipUpdateCol reports whether a column is omitted from generated UPDATE SETs
+// (beyond keys and the UserSpecific user_id pin, handled separately).
+// updateStampKind classifies a 'U' audit-stamp column by its target value on
+// UPDATE: stampNow → set now() inline (timestamp), stampUser → bind the
+// updater's user_id (integer). stampNone = not a usable stamp (non-U, or an
+// unsupported type) and is treated as not-updatable, like 'R'.
+const (
+	stampNone = iota
+	stampNow
+	stampUser
+)
+
+func updateStampKind(col *model.TableColumn) int {
+	if col.DisplayMode != model.DisplayUpdateStamp {
+		return stampNone
+	}
+	switch col.DataType {
+	case model.DT_TIME:
+		return stampNow
+	case model.DT_INT:
+		return stampUser
+	}
+	return stampNone
+}
+
+func skipUpdateCol(col *model.TableColumn) bool {
+	switch col.DisplayMode {
+	case model.DisplayHidden, model.DisplayReadonly, model.DisplayInsertOnly:
+		return true
+	case model.DisplayUpdateStamp:
+		return updateStampKind(col) == stampNone // unsupported type → not updatable
+	}
+	return false
+}
+
 func (s *TableServicePgsql) Init() error {
 	if len(s.Table.Keys) < 1 || len(s.Table.Columns) < 1 {
 		return fmt.Errorf("columns or ID fields not defined for table %s.%s", s.Schema, s.Table.TableName)
@@ -137,6 +186,22 @@ func (s *TableServicePgsql) Init() error {
 		if s.Table.UserSpecific && col.ColumnName == "user_id" {
 			continue
 		}
+		// R/H/I columns are not user-updatable (must stay in sync with the
+		// Update() value-binding loop below).
+		if skipUpdateCol(col) {
+			continue
+		}
+		// 'U' audit stamp: keel sets the value, not the caller — now() inline
+		// for timestamps, a bound user_id placeholder for integers.
+		switch updateStampKind(col) {
+		case stampNow:
+			updateSet = append(updateSet, fmt.Sprintf("%s = now()", quoteIdent(col.ColumnName)))
+			continue
+		case stampUser:
+			updateSet = append(updateSet, fmt.Sprintf("%s = %s", quoteIdent(col.ColumnName), s.Placeholder(plcCnt)))
+			plcCnt++
+			continue
+		}
 		updateSet = append(updateSet, fmt.Sprintf("%s = %s", quoteIdent(col.ColumnName), s.Placeholder(plcCnt)))
 		plcCnt++
 	}
@@ -164,7 +229,9 @@ func (s *TableServicePgsql) Init() error {
 	hasSequence := false
 	seqColumn := ""
 	for _, col := range s.Table.Columns {
-		if col.HasDefault && col.DataType == model.DT_TIME {
+		// R/H (and unmoded audit timestamps) are server-managed (must stay in
+		// sync with the InsertSingle() value-binding loop below).
+		if skipInsertCol(col) {
 			continue
 		}
 		if col.SequenceName != "" {
@@ -370,7 +437,7 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 	var args []any
 	hasSequence := false
 	for _, col := range s.Table.Columns {
-		if col.HasDefault && col.DataType == model.DT_TIME {
+		if skipInsertCol(col) {
 			continue
 		}
 		if col.SequenceName != "" {
@@ -478,6 +545,18 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 		// UserSpecific (the column is immutable). Skip it here too so
 		// the value list and the placeholder list stay in sync.
 		if s.Table.UserSpecific && col.ColumnName == "user_id" {
+			continue
+		}
+		if skipUpdateCol(col) {
+			continue
+		}
+		// Mirror the SET-clause stamp handling: now() consumes no arg, a
+		// user_id stamp binds the authenticated updater.
+		switch updateStampKind(col) {
+		case stampNow:
+			continue
+		case stampUser:
+			vals = append(vals, userID)
 			continue
 		}
 		vals = append(vals, s.ExtractValue(item, col))

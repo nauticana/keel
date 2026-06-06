@@ -1,14 +1,16 @@
 table: column_display_attribute
-comment: Per-column UI display overrides (read-only, field width, textarea rows)
+comment: Per-column UI/CRUD display overrides (mode, field width, textarea rows)
 order: 31
 columns:
   - name: table_name
     type: VARCHAR(63)
   - name: column_name
     type: VARCHAR(63)
-  - name: read_only
-    type: BOOLEAN
-    default: "false"
+  # display_mode: R=read-only, H=hidden, D=default-seeded editable, I=insert-only.
+  # NULL/empty = editable default. See model.Display* and README.
+  - name: display_mode
+    type: CHAR(1)
+    nullable: true
   - name: display_width
     type: INTEGER
     nullable: true

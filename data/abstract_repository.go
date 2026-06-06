@@ -359,7 +359,7 @@ func (r *AbstractRepository) applyColumnDisplay(ctx context.Context) {
 			if col.ColumnName != column {
 				continue
 			}
-			col.Readonly = common.AsBool(rec[2])
+			col.DisplayMode = strings.ToUpper(strings.TrimSpace(common.AsString(rec[2])))
 			col.DisplayWidth = int(common.AsInt32(rec[3]))
 			col.DisplayRows = int(common.AsInt32(rec[4]))
 			break

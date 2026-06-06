@@ -298,11 +298,11 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     CONSTRAINT partner_domains FOREIGN KEY (partner_id) REFERENCES business_partner(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Per-column UI display overrides (read-only, field width, textarea rows)
+-- Per-column UI/CRUD display overrides (mode, field width, textarea rows)
 CREATE TABLE IF NOT EXISTS column_display_attribute (
     table_name                           VARCHAR(63)   NOT NULL,
     column_name                          VARCHAR(63)   NOT NULL,
-    read_only                            TINYINT(1)    NOT NULL DEFAULT 0,
+    display_mode                         CHAR(1)      ,
     display_width                        INT          ,
     display_rows                         INT          ,
     PRIMARY KEY (table_name, column_name)
