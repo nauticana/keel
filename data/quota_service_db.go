@@ -14,7 +14,6 @@ import (
 
 const (
 	qGetPartnerSubscription = "get_partner_subscription"
-	qGetDomainCount         = "get_domain_count"
 	qGetResourceUsage       = "get_resource_usage"
 	qGetPartnerAddon        = "get_partner_addon"
 	qAddUsage               = "add_usage"
@@ -33,8 +32,6 @@ SELECT a.resource_id, max(a.max_value) AS limit_value, a.period_type
  ORDER BY a.resource_id
 `,
 
-	qGetDomainCount: "SELECT COUNT(*) AS domains FROM partner_domain WHERE partner_id = ?",
-
 	qGetResourceUsage: "SELECT COALESCE(SUM(amount), 0) FROM usage_ledger WHERE partner_id = ? AND resource_name = ? AND usage_time >= ?",
 
 	// Active addons for a partner. GROUP BY addon_id is essential —
@@ -51,6 +48,16 @@ SELECT addon_id, COUNT(*) AS active_count
 `,
 
 	qAddUsage: "INSERT INTO usage_ledger (partner_id, resource_name, amount, notes) VALUES (?, ?, ?, ?)",
+}
+
+// defaultResourceCountQueries holds keel's built-in per-resource live-count SQL,
+// keyed by RESOURCE ID (not an internal query name like the entries above). Each
+// query is bound with a single partnerID param and must return one row / one
+// column = the partner's current usage. Consumers extend or override these via
+// QuotaServiceDb.Queries. Shipping MAX_DOMAINS here — rather than a hardcoded
+// branch in CheckQuota — keeps every resource (keel's own included) on one path.
+var defaultResourceCountQueries = map[string]string{
+	"MAX_DOMAINS": "SELECT COUNT(*) FROM partner_domain WHERE partner_id = ?",
 }
 
 // cacheTTL is the per-partner soft expiry on cached quota / addon rows.
@@ -77,6 +84,14 @@ type AddonMap = map[string]bool
 type QuotaServiceDb struct {
 	Repo DatabaseRepository
 
+	// Queries injects per-resource live-count SQL keyed by RESOURCE ID (e.g.
+	// "MEDIA"). Each query is bound with a single partnerID param and must
+	// return one row / one column = current usage. Merged over
+	// defaultResourceCountQueries (consumer entries win). A resource without a
+	// count query falls back to the usage_ledger sum, windowed by period_type.
+	// Set at construction; read once at init().
+	Queries map[string]string
+
 	// initOnce guards the lazy field initialization (maps, query service)
 	// from a startup-time race where two callers each see nil and both
 	// initialize. Replaces the broken double-checked-locking pattern.
@@ -86,6 +101,10 @@ type QuotaServiceDb struct {
 	quotaCache map[int64]QuotaMap
 	addonCache map[int64]AddonMap
 	qs         QueryService
+	// resourceQueries is the merged default+injected resource→count-SQL map.
+	// Its keys are the routing table CheckQuota uses to choose live-count vs
+	// usage_ledger for a given resource.
+	resourceQueries map[string]string
 
 	// quotaSF / addonSF collapse concurrent fresh-load fan-out: when N
 	// callers hit a cold partner cache for the same partner_id at once,
@@ -103,7 +122,28 @@ func (s *QuotaServiceDb) init(ctx context.Context) {
 	s.initOnce.Do(func() {
 		s.quotaCache = make(map[int64]QuotaMap)
 		s.addonCache = make(map[int64]AddonMap)
-		s.qs = s.Repo.GetQueryService(ctx, quotaQueries)
+
+		// Merge keel's default resource-count queries with any injected by the
+		// consumer (injected entries win).
+		s.resourceQueries = make(map[string]string, len(defaultResourceCountQueries)+len(s.Queries))
+		for k, v := range defaultResourceCountQueries {
+			s.resourceQueries[k] = v
+		}
+		for k, v := range s.Queries {
+			s.resourceQueries[k] = v
+		}
+
+		// The query service spans the infra queries (quotaQueries) plus every
+		// resource-count query, keyed by resource id — these never collide with
+		// the infra query names.
+		all := make(map[string]string, len(quotaQueries)+len(s.resourceQueries))
+		for k, v := range quotaQueries {
+			all[k] = v
+		}
+		for k, v := range s.resourceQueries {
+			all[k] = v
+		}
+		s.qs = s.Repo.GetQueryService(ctx, all)
 	})
 }
 
@@ -169,10 +209,12 @@ func (s *QuotaServiceDb) CheckQuota(ctx context.Context, partnerID int64, quotaN
 	}
 
 	var usage int64
-	if quotaName == "MAX_DOMAINS" {
-		res, err := s.qs.Query(ctx, qGetDomainCount, partnerID)
+	if _, hasCount := s.resourceQueries[quotaName]; hasCount {
+		// Live-count resource: run its count query (registered under the
+		// resource id), bound with a single partnerID param.
+		res, err := s.qs.Query(ctx, quotaName, partnerID)
 		if err != nil {
-			return false, fmt.Errorf("failed to get domain counts for partner: %d", partnerID)
+			return false, fmt.Errorf("failed to count usage for resource %s, partner: %d", quotaName, partnerID)
 		}
 		if len(res.Rows) > 0 {
 			usage = common.AsInt64(res.Rows[0][0])
