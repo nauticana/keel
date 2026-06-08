@@ -601,28 +601,33 @@ Your entries are **merged over** keel's defaults (yours win on a key clash), and
 
 A `COUNT(*)` query yields concurrent "N at a time" limits; a `SUM(usage_ledger)` query yields lifetime/consumption — the query you write decides the semantics. Caps, caching, period windowing, and fail-closed behavior are unchanged regardless.
 
-## Billing (v1.0.0)
+## Billing (v1.0.1)
 
-keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook pipeline (`payment.WebhookProcessor`), the checkout client (`payment.StripeCheckoutClient`), the quota engine (`data.QuotaServiceDb`), and the canonical `subscription_*` / `partner_plan_subscription` / `usage_ledger` / `payment_method` tables. v0.10.0 adds the repetitive **SaaS billing glue** every downstream project used to re-implement, so a new project gets billing from config + a thin wiring layer. **All additive** — existing consumers compile unchanged; adopt piece by piece.
+keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook pipeline (`payment.WebhookProcessor`), the checkout client (`payment.StripeCheckoutClient`), the quota engine (`data.QuotaServiceDb`), and the canonical `subscription_*` / `partner_plan_subscription` / `usage_ledger` / `payment_method` tables. v1.0.1 adds the repetitive **SaaS billing glue** every downstream project used to re-implement, so a new project gets billing from config + a thin wiring layer. **All additive** — existing consumers compile unchanged; adopt piece by piece.
 
 | New | What it does | Project supplies |
 |---|---|---|
-| `service.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables | `Queries` overrides, `PriceResolver`, `ResourceNames` |
+| `service.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables; returns the `ErrNoSubscription`/`ErrPlanNotFound` sentinels so a handler can `errors.Is` → 404/400 | `Queries` overrides, `PriceResolver`, `ResourceNames` |
+| `service.AbstractBillingService` provider-driven write helpers (exposed via the `ProviderBillingStore` interface): `RecordProviderInvoice` (writes the `invoice` row on a provider `invoice.paid` so `GetInvoices` isn't empty — keel otherwise writes invoices only in the SelfScheduledEngine; idempotent on `invoice_number`), `LinkCustomer`/`CustomerToken`/`PartnerByCustomer` (partner ↔ provider-customer mapping in the dedicated `partner_billing_customer` table, for the portal + recurring-invoice attribution), `ListPaymentMethods` (the partner's saved methods for sail's `listPaymentMethods()`) | — (call from your `AbstractWebhookEventHandler` hooks / billing bridges) |
 | `payment.PaymentEvent.EventKind` + `SubscriptionID`/`InvoiceID` | provider-agnostic normalized event kind (set by every parser) + the ids, so handlers stop digging raw JSON | — |
 | `payment.AbstractWebhookEventHandler` | dispatches `EventKind` → nil-safe hooks (`OnCheckoutCompleted/OnInvoicePaid/OnInvoicePaymentFailed/OnSubscriptionUpdated/…`) | the per-kind closures (your domain SQL) |
 | `handler.QuotaEnforcer` | HTTP middleware: count new resources in a POST body → `CheckQuota` → **402** + optional post-write `After` hook. `CountOpCodeRows` builds your extractors | `Extractors []ResourceExtractor` |
 | `handler.FeatureGate` | entitlement via the `cap<0` flag convention: `FeatureAllowed`, `ListFeatures`, `FilterResponseField` (strip a premium child from a GET) | `Features`, `StripFeature`/`StripRecordKey` |
 | `payment.AddonReconciler` + `StripeAddonReconciler` | sync a metered add-on quantity as a subscription item (INERT when `PriceID==""`) | `PriceID`, `DesiredQty`, `SubIDFor` closures |
-| `payment.ChargeClient` + `StripeChargeClient` | off-session charge of a vaulted method (handles SCA-required & declines); `StripeCheckoutClient.PostRaw` exposes the 4xx body | `ChargeRequest` per call |
+| `payment.ChargeClient` + `StripeChargeClient` | off-session charge of a vaulted method (handles SCA-required & declines); `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)` exposes the 4xx body and threads a caller idempotency key | `ChargeRequest` per call (`AmountMinor`, `IdempotencyKey`) |
 | `worker.AbstractBillingReconciler` | daily backstop pass over active partners (run from a systemd timer, never a CI cron) | `Partners`, `Reconcile` closures |
 | `service.BillingEngine` (+ `ProviderSubscriptionEngine`, `SelfScheduledEngine`) | the recurring-engine strategy: provider runs the cycle **or** we self-schedule (own billing-run → off-session charge → invoice → dunning) | engine choice + the self-scheduled closures |
-| basis: `invoice`/`invoice_line`, `subscription_plan.provider_price_id`, `partner_plan_subscription.{provider_subscription_id,billing_cycle,renewal_date,cancelled_at,effective_cancel_date}` | the missing billing tables/columns | per-env seed of `provider_price_id` |
+| basis: `invoice`/`invoice_line`/`partner_billing_customer`, `subscription_plan.provider_price_id`, `partner_plan_subscription.{provider_subscription_id,billing_cycle,renewal_date,cancelled_at,effective_cancel_date}` | the missing billing tables/columns | per-env seed of `provider_price_id` |
 
 ### Provider-driven vs self-scheduled
 
 `ProviderSubscriptionEngine` lets Stripe Billing / LemonSqueezy run the recurring cycle (you only react to webhooks via `AbstractWebhookEventHandler`); it carries the provider's recurring fee but is the least code and handles SCA/dunning/retries for you. `SelfScheduledEngine` runs the cycle itself (a systemd-timer billing-run that charges off-session via `ChargeClient`, writes its own `invoice`, and owns dunning + SCA) — it avoids the recurring fee and is maximally provider-agnostic, but you own the money-critical SCA/dunning/proration logic. **Test self-scheduled exhaustively in provider test mode before enabling**, and keep it behind a per-plan flag (it is inert until its closures are wired).
 
-### v0.9.x → v1.0.0 adoption checklist
+**Money is integer minor units.** Amounts on the charge path are `int64` minor units, never floats: `InvoiceDraft` lines and the authoritative `invoice.total_minor` column carry the exact value, while `invoice.subtotal`/`total` are a display-only major-unit projection. Conversions go through `payment.CurrencyExponent` / `payment.MinorToMajor`, which derive the decimal places from the ISO‑4217 currency — so JPY (0 minor digits) and BHD (3) are correct, not a hardcoded ×100. Stripe's `amount` is already minor units, so `ChargeRequest.AmountMinor` passes straight through.
+
+**Off-session charge idempotency & atomicity.** `SelfScheduledEngine` charges with the invoice id as Stripe's `Idempotency-Key` (threaded via `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)`), so a charge retried after an ambiguous transport failure resolves to the original PaymentIntent instead of double-charging. Stripe remembers a key for 24h; a dunning retry past that window is treated as new, so the engine still stops once the invoice flips to paid. The `invoice` header + its lines are written in one `TxQueryService` transaction, so a half-written invoice is never charged.
+
+### v0.9.x → v1.0.1 adoption checklist
 
 1. Bump the dependency; run your DB re-init (the new basis tables/columns are additive — regenerate + reinit).
 2. Replace your hand-rolled `OnPaymentEvent` switch with an `AbstractWebhookEventHandler`; delete any raw-JSON `subscription`/`invoice` id digging (use `e.SubscriptionID`/`e.InvoiceID`).
@@ -1836,10 +1841,39 @@ Cities are not normalized in keel. Consumer address tables carry city as a free-
 
 ### ER Diagram — Framework Tables
 
+Dictionary add-ons
+```mermaid
+erDiagram
+    table_action {
+        VARCHAR table_name PK
+        VARCHAR action_name PK
+        VARCHAR caption
+        VARCHAR icon
+        BOOLEAN record_specific
+        VARCHAR method_name
+        SMALLINT display_order
+        VARCHAR confirm_message
+    }
+    table_sequence_usage {
+        VARCHAR table_name PK
+        VARCHAR column_name
+        VARCHAR sequence_name
+    }
+    column_display_attribute {
+        VARCHAR table_name PK
+        VARCHAR column_name PK
+        CHAR display_mode
+        INTEGER display_width
+        INTEGER display_rows
+    }
+```
+
 Lookup constants
 
 ```mermaid
 erDiagram
+    constant_header ||--o{ constant_value : has
+    constant_header ||--o{ constant_lookup : has
     constant_header {
         VARCHAR id PK
         VARCHAR caption
@@ -1854,20 +1888,21 @@ erDiagram
         VARCHAR table_name PK
         VARCHAR column_name PK
     }
-    constant_header ||--o{ constant_value : has
-    constant_header ||--o{ constant_lookup : has
 ```
 
 REST API for CRUD and Reporting
 
 ```mermaid
 erDiagram
+    rest_api_header ||--o{ rest_api_child : has
+    foreign_key_lookup ||--o{ rest_api_child : references
+    rest_report_header ||--o{ rest_report_param : has
+
     foreign_key_lookup {
         VARCHAR constraint_name PK
         CHAR lookup_style
         VARCHAR display_column
     }
-
     rest_api_header {
         VARCHAR id PK
         VARCHAR version
@@ -1880,9 +1915,6 @@ erDiagram
         INTEGER parent_seq
         VARCHAR constraint_name FK
     }
-    rest_api_header ||--o{ rest_api_child : has
-    foreign_key_lookup ||--o{ rest_api_child : references
-
     rest_report_header {
         VARCHAR id PK
         VARCHAR version
@@ -1895,13 +1927,16 @@ erDiagram
         VARCHAR param_name
         VARCHAR data_type
     }
-    rest_report_header ||--o{ rest_report_param : has
 ```
 
 Application Menu, GEO locations
 
 ```mermaid
 erDiagram
+    application_menu ||--o{ application_menu_item : has
+    country ||--o{ state : has
+    state ||--o{ county : has
+
     application_menu {
         VARCHAR id PK
         VARCHAR caption
@@ -1916,8 +1951,6 @@ erDiagram
         VARCHAR rest_uri
         BOOLEAN is_active
     }
-    application_menu ||--o{ application_menu_item : has
-
     country {
         CHAR id PK
         VARCHAR caption
@@ -1932,15 +1965,6 @@ erDiagram
         CHAR state_id PK,FK
         VARCHAR id PK
     }
-    country ||--o{ state : has
-    state ||--o{ county : has
-
-    table_sequence_usage {
-        VARCHAR table_name PK
-        VARCHAR column_name
-        VARCHAR sequence_name
-    }
-
     service_registry {
         VARCHAR service_name PK
         TIMESTAMP started_at PK
@@ -1949,7 +1973,6 @@ erDiagram
         CHAR status
         TIMESTAMP last_heartbeat
     }
-
 ```
 
 ### ER Diagram — Security Tables
@@ -1977,6 +2000,10 @@ Roles and permitted actions
 
 ```mermaid
 erDiagram
+    authorization_object ||--o{ authorization_object_action : has
+    authorization_role ||--o{ authorization_role_permission : has
+    authorization_object_action ||--o{ authorization_role_permission : grants
+
     authorization_object {
         VARCHAR id PK
         VARCHAR caption
@@ -1986,13 +2013,10 @@ erDiagram
         VARCHAR action PK
         VARCHAR caption
     }
-    authorization_object ||--o{ authorization_object_action : has
-
     authorization_role {
         VARCHAR id PK
         VARCHAR caption
     }
-
     authorization_role_permission {
         VARCHAR role_id PK,FK
         VARCHAR authorization_object_id PK,FK
@@ -2001,8 +2025,6 @@ erDiagram
         VARCHAR high_limit
         BOOLEAN is_active
     }
-    authorization_role ||--o{ authorization_role_permission : has
-    authorization_object_action ||--o{ authorization_role_permission : grants
 ```
 
 User accounts
@@ -2181,6 +2203,8 @@ erDiagram
 
 ### ER Diagram — Payment + Payout Tables
 
+Provider log
+
 ```mermaid
 erDiagram
     payment_webhook_log {
@@ -2194,12 +2218,21 @@ erDiagram
         TIMESTAMP received_at
         TIMESTAMP processed_at
     }
+```
 
-    subscription_plan ||--o{ payment_record : for
+Psyment, billing and invoice
+
+```mermaid
+erDiagram
+    payment_record }o--|| subscription_plan : for
     business_partner ||--o{ payment_record : pays
-    business_partner ||--o{ payment_method : stores
-    user_account ||--o{ user_bank_info : "owns (1 per partner)"
+    payment_method }o--|| business_partner : stores
+    partner_billing_customer }o--|| business_partner : "billing customer"
+    business_partner ||--o{ invoice : billed
+    invoice ||--o{ invoice_line : contains
     business_partner ||--o{ user_bank_info : "scopes payouts"
+    user_bank_info }o--|| user_account : "owns (1 per partner)"
+    user_account ||--o{ user_payment_method : saves
 
     payment_method {
         BIGINT id PK
@@ -2240,6 +2273,54 @@ erDiagram
         TIMESTAMP provider_onboarded_at
         TIMESTAMP created_at
         TIMESTAMP updated_at
+    }
+    partner_billing_customer {
+        BIGINT partner_id PK,FK
+        VARCHAR provider PK
+        VARCHAR customer_token UK
+        TIMESTAMP created_at
+    }
+    invoice {
+        BIGINT id PK
+        BIGINT partner_id FK
+        VARCHAR invoice_number UK
+        CHAR status
+        NUMERIC subtotal
+        NUMERIC tax
+        NUMERIC total
+        BIGINT total_minor
+        CHAR currency
+        TIMESTAMP issued_at
+        TIMESTAMP due_at
+        TIMESTAMP paid_at
+        VARCHAR pdf_storage_path
+        VARCHAR provider_invoice_id
+        VARCHAR provider_charge_id
+        INTEGER attempt_count
+        TIMESTAMP next_attempt_at
+        TEXT last_error
+    }
+    invoice_line {
+        BIGINT invoice_id PK,FK
+        INTEGER seq PK
+        VARCHAR description
+        INTEGER quantity
+        NUMERIC unit_price
+        NUMERIC amount
+    }
+    user_payment_method {
+        BIGINT id PK
+        BIGINT user_id FK
+        VARCHAR method_type
+        VARCHAR provider
+        VARCHAR provider_token
+        VARCHAR last_four
+        VARCHAR brand
+        SMALLINT expiry_month
+        SMALLINT expiry_year
+        CHAR currency
+        BOOLEAN is_default
+        TIMESTAMP created_at
     }
 ```
 

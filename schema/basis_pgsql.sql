@@ -689,6 +689,16 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     CONSTRAINT invoice_line_pk PRIMARY KEY (invoice_id, seq)
 );
 
+-- Partner ↔ provider-customer token (one per partner+provider)
+CREATE TABLE IF NOT EXISTS partner_billing_customer (
+    partner_id                           BIGINT        NOT NULL,
+    provider                             VARCHAR(30)   NOT NULL,
+    customer_token                       VARCHAR(255)  NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT partner_billing_customer_pk PRIMARY KEY (partner_id, provider)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_partner_billing_customer_token ON partner_billing_customer(provider, customer_token);
+
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
 BEGIN
@@ -1093,5 +1103,14 @@ BEGIN
      WHERE constraint_name = 'invoice_lines' AND table_name = 'invoice_line'
   ) THEN
     ALTER TABLE invoice_line ADD CONSTRAINT invoice_lines FOREIGN KEY (invoice_id) REFERENCES invoice(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_billing_customers' AND table_name = 'partner_billing_customer'
+  ) THEN
+    ALTER TABLE partner_billing_customer ADD CONSTRAINT partner_billing_customers FOREIGN KEY (partner_id) REFERENCES business_partner(id);
   END IF;
 END $$;

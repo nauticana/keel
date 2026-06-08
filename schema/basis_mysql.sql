@@ -694,3 +694,14 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     PRIMARY KEY (invoice_id, seq),
     CONSTRAINT invoice_lines FOREIGN KEY (invoice_id) REFERENCES invoice(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Partner ↔ provider-customer token (one per partner+provider)
+CREATE TABLE IF NOT EXISTS partner_billing_customer (
+    partner_id                           BIGINT        NOT NULL,
+    provider                             VARCHAR(30)   NOT NULL,
+    customer_token                       VARCHAR(255)  NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (partner_id, provider),
+    CONSTRAINT partner_billing_customers FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_partner_billing_customer_token ON partner_billing_customer(provider, customer_token);

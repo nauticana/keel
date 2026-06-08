@@ -1,0 +1,28 @@
+table: partner_billing_customer
+comment: |
+  Partner ↔ provider-customer token, one row per (partner, provider). Its own
+  table (not a method_type='customer' row in payment_method) so payment_method
+  holds only real chargeable methods. Used for billing-portal sessions and
+  recurring-invoice attribution (the reverse token→partner lookup).
+order: 55
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: provider
+    type: VARCHAR(30)
+  - name: customer_token
+    type: VARCHAR(255)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, provider]
+foreign_keys:
+  - name: partner_billing_customers
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+indexes:
+  - name: idx_partner_billing_customer_token
+    columns: [provider, customer_token]
+    unique: true

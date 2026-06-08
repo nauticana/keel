@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/payment"
 )
 
 // Billing read/write layer over keel's canonical basis tables
@@ -80,6 +82,21 @@ type BillingService interface {
 	GetPlans(ctx context.Context) ([]Plan, error)
 }
 
+// ProviderBillingStore is the provider-integration surface beyond the core
+// subscription CRUD: it records provider-issued invoices, maps a partner to its
+// provider-customer token, and lists saved methods. Webhook hooks and billing
+// bridges depend on THIS interface (not the concrete *AbstractBillingService),
+// so any keel consumer can substitute its own implementation. Kept separate
+// from BillingService so a project needing only the read/write CRUD surface
+// isn't forced to implement the webhook-write methods (interface segregation).
+type ProviderBillingStore interface {
+	RecordProviderInvoice(ctx context.Context, partnerID int64, e *payment.PaymentEvent) error
+	LinkCustomer(ctx context.Context, partnerID int64, provider, customerToken string) error
+	CustomerToken(ctx context.Context, partnerID int64, provider string) (string, error)
+	PartnerByCustomer(ctx context.Context, provider, customerToken string) (int64, error)
+	ListPaymentMethods(ctx context.Context, partnerID int64) ([]PaymentMethodInfo, error)
+}
+
 // Sentinel errors so an HTTP handler can map a billing failure to a status via
 // errors.Is — e.g. ErrNoSubscription → 404, ErrPlanNotFound → 400/404.
 var (
@@ -96,6 +113,11 @@ const (
 	qBillGetUsage        = "bill_get_usage"
 	qBillGetQuotaLimit   = "bill_get_quota_limit"
 	qBillGetAllPlans     = "bill_get_all_plans"
+	qBillRecordInvoice   = "bill_record_invoice"
+	qBillLinkCustomer    = "bill_link_customer"
+	qBillCustomerToken   = "bill_customer_token"
+	qBillPartnerByCust   = "bill_partner_by_customer"
+	qBillListMethods     = "bill_list_payment_methods"
 )
 
 // defaultBillingQueries is pgsql-flavored (the primary dialect for keel
@@ -145,6 +167,35 @@ SELECT COALESCE(MAX(sq.max_value), 0)
 	qBillGetAllPlans: `
 SELECT id, caption, monthly_cost, annual_cost, currency, provider_price_id
   FROM subscription_plan WHERE is_active = TRUE ORDER BY monthly_cost`,
+
+	// Provider-driven invoice: written on a provider invoice.paid event so
+	// GetInvoices returns data (the SelfScheduledEngine writes its own; the
+	// provider path had no writer). Idempotent on the UNIQUE invoice_number so
+	// a redelivered webhook no-ops.
+	qBillRecordInvoice: `
+INSERT INTO invoice (id, partner_id, invoice_number, status, subtotal, tax, total, total_minor, currency, issued_at, paid_at, provider_invoice_id)
+VALUES (?, ?, ?, 'P', ?, 0, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+ON CONFLICT (invoice_number) DO NOTHING`,
+
+	// Partner ↔ provider-customer token in its own table (one row per
+	// partner+provider) — keeps payment_method holding only real chargeable
+	// methods. Idempotent via the composite PK, so a redelivered webhook no-ops.
+	qBillLinkCustomer: `
+INSERT INTO partner_billing_customer (partner_id, provider, customer_token)
+VALUES (?, ?, ?)
+ON CONFLICT (partner_id, provider) DO NOTHING`,
+
+	qBillCustomerToken: `
+SELECT customer_token FROM partner_billing_customer
+ WHERE partner_id = ? AND provider = ?`,
+
+	qBillPartnerByCust: `
+SELECT partner_id FROM partner_billing_customer
+ WHERE provider = ? AND customer_token = ?`,
+
+	qBillListMethods: `
+SELECT id, provider, method_type, is_default FROM payment_method
+ WHERE partner_id = ? ORDER BY is_default DESC, id`,
 }
 
 // AbstractBillingService is the default BillingService over the basis tables.
@@ -295,4 +346,88 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 	return plans, nil
 }
 
+// PaymentMethodInfo is one saved provider customer/method for a partner, in
+// sail's PaymentMethod wire shape. ID is a string because payment_method.id is
+// a bigint that overflows JS number precision.
+type PaymentMethodInfo struct {
+	ID         string `json:"id"`
+	Provider   string `json:"provider"`
+	MethodType string `json:"methodType"`
+	IsDefault  bool   `json:"isDefault"`
+}
+
+// RecordProviderInvoice persists the invoice row for a provider-driven
+// invoice.paid event so GetInvoices has data to return (keel writes invoices
+// only in the SelfScheduledEngine otherwise). No-op when the event carries no
+// provider invoice id; idempotent on the UNIQUE invoice_number, so redelivered
+// webhooks don't duplicate. total_minor is authoritative; total is the
+// currency-aware major projection.
+func (s *AbstractBillingService) RecordProviderInvoice(ctx context.Context, partnerID int64, e *payment.PaymentEvent) error {
+	if e == nil || e.InvoiceID == "" {
+		return nil
+	}
+	s.init(ctx)
+	major := payment.MinorToMajor(e.MinorUnits, e.Currency)
+	_, err := s.qs.Query(ctx, qBillRecordInvoice,
+		s.qs.GenID(), partnerID, e.InvoiceID, major, major, e.MinorUnits, e.Currency, e.PaidAt, e.InvoiceID)
+	return err
+}
+
+// LinkCustomer idempotently stores the partner ↔ provider-customer mapping (the
+// cus_… token) needed for billing-portal sessions and recurring-invoice
+// attribution. No-op on an empty token; keeps at most one customer row per
+// (partner, provider).
+func (s *AbstractBillingService) LinkCustomer(ctx context.Context, partnerID int64, provider, customerToken string) error {
+	if customerToken == "" {
+		return nil
+	}
+	s.init(ctx)
+	_, err := s.qs.Query(ctx, qBillLinkCustomer, partnerID, provider, customerToken)
+	return err
+}
+
+// CustomerToken returns the partner's provider-customer token, or "" when none
+// is stored (e.g. the partner hasn't completed a checkout yet).
+func (s *AbstractBillingService) CustomerToken(ctx context.Context, partnerID int64, provider string) (string, error) {
+	s.init(ctx)
+	res, err := s.qs.Query(ctx, qBillCustomerToken, partnerID, provider)
+	if err != nil || len(res.Rows) == 0 {
+		return "", err
+	}
+	return common.AsString(res.Rows[0][0]), nil
+}
+
+// PartnerByCustomer resolves the partner that owns a provider-customer token —
+// the reverse lookup recurring-invoice webhooks need (they carry no metadata).
+// Returns 0 when unknown.
+func (s *AbstractBillingService) PartnerByCustomer(ctx context.Context, provider, customerToken string) (int64, error) {
+	s.init(ctx)
+	res, err := s.qs.Query(ctx, qBillPartnerByCust, provider, customerToken)
+	if err != nil || len(res.Rows) == 0 {
+		return 0, err
+	}
+	return common.AsInt64(res.Rows[0][0]), nil
+}
+
+// ListPaymentMethods returns the partner's saved provider methods for the
+// GET /api/billing/payment-methods bridge sail's listPaymentMethods() calls.
+func (s *AbstractBillingService) ListPaymentMethods(ctx context.Context, partnerID int64) ([]PaymentMethodInfo, error) {
+	s.init(ctx)
+	res, err := s.qs.Query(ctx, qBillListMethods, partnerID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PaymentMethodInfo, len(res.Rows))
+	for i, row := range res.Rows {
+		out[i] = PaymentMethodInfo{
+			ID:         strconv.FormatInt(common.AsInt64(row[0]), 10),
+			Provider:   common.AsString(row[1]),
+			MethodType: common.AsString(row[2]),
+			IsDefault:  common.AsBool(row[3]),
+		}
+	}
+	return out, nil
+}
+
 var _ BillingService = (*AbstractBillingService)(nil)
+var _ ProviderBillingStore = (*AbstractBillingService)(nil)
