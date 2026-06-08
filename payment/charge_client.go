@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -20,12 +21,52 @@ const (
 
 // ChargeRequest is one off-session charge against a stored credential.
 type ChargeRequest struct {
-	CustomerToken      string // provider customer id (Stripe cus_xxx)
-	PaymentMethodToken string // provider payment-method id (Stripe pm_xxx) — off-session charges need a specific stored method
-	AmountMinor        int64  // minor currency units (e.g. cents)
-	Currency           string // ISO 4217 (any case)
-	IdempotencyKey     string // de-dupe key — use the invoice id
-	Description        string
+	CustomerToken      string            // provider customer id (Stripe cus_xxx)
+	PaymentMethodToken string            // provider payment-method id (Stripe pm_xxx) — off-session charges need a specific stored method
+	AmountMinor        int64             // minor currency units (e.g. cents)
+	Currency           string            // ISO 4217 (any case)
+	IdempotencyKey     string            // de-dupe key — use the invoice id
+	Description        string            // free-text shown on the provider charge
+	Metadata           map[string]string // arbitrary key/value pairs forwarded onto the provider charge (Stripe PaymentIntent metadata); surfaced back on the settled charge's PaymentEvent.Metadata so a webhook can correlate it to the originating record
+}
+
+// Stripe metadata limits (https://stripe.com/docs/api/metadata): at most 50
+// keys, key names up to 40 chars, values up to 500 chars. The charge client
+// reserves one key (idempotency_key) for reconciliation, so callers get 49.
+const (
+	maxMetadataPairs    = 49
+	maxMetadataKeyLen   = 40
+	maxMetadataValLen   = 500
+	reservedMetadataKey = "idempotency_key"
+)
+
+// ErrInvalidMetadata is returned by ChargeClient.Charge before any network call
+// when ChargeRequest.Metadata violates the provider's metadata constraints.
+// It is a caller (programming) error, so the charge is rejected loudly rather
+// than silently truncated. Map it to a 4xx at the handler boundary.
+var ErrInvalidMetadata = errors.New("payment: invalid charge metadata")
+
+// validateMetadata enforces the provider's metadata limits and protects the
+// reserved reconciliation key. It does not mutate the request.
+func validateMetadata(md map[string]string) error {
+	if len(md) > maxMetadataPairs {
+		return fmt.Errorf("%w: %d pairs exceeds limit of %d", ErrInvalidMetadata, len(md), maxMetadataPairs)
+	}
+	for k, v := range md {
+		if k == "" {
+			return fmt.Errorf("%w: empty key", ErrInvalidMetadata)
+		}
+		if k == reservedMetadataKey {
+			return fmt.Errorf("%w: key %q is reserved", ErrInvalidMetadata, reservedMetadataKey)
+		}
+		if len(k) > maxMetadataKeyLen {
+			return fmt.Errorf("%w: key %q exceeds %d chars", ErrInvalidMetadata, k, maxMetadataKeyLen)
+		}
+		if len(v) > maxMetadataValLen {
+			return fmt.Errorf("%w: value for key %q exceeds %d chars", ErrInvalidMetadata, k, maxMetadataValLen)
+		}
+	}
+	return nil
 }
 
 // ChargeResult is the normalized outcome of ChargeClient.Charge.
@@ -88,6 +129,9 @@ func actionURL(na *stripeNextAction) string {
 }
 
 func (c *StripeChargeClient) Charge(ctx context.Context, req ChargeRequest) (ChargeResult, error) {
+	if err := validateMetadata(req.Metadata); err != nil {
+		return ChargeResult{}, err
+	}
 	form := url.Values{
 		"amount":      {strconv.FormatInt(req.AmountMinor, 10)},
 		"currency":    {strings.ToLower(req.Currency)},
@@ -101,10 +145,15 @@ func (c *StripeChargeClient) Charge(ctx context.Context, req ChargeRequest) (Cha
 	if req.Description != "" {
 		form.Set("description", req.Description)
 	}
+	for k, v := range req.Metadata {
+		form.Set("metadata["+k+"]", v)
+	}
 	if req.IdempotencyKey != "" {
 		// Also carry the key in metadata for human reconciliation in the Stripe
 		// dashboard; the real dedupe is the Idempotency-Key header set below.
-		form.Set("metadata[idempotency_key]", req.IdempotencyKey)
+		// Set last so the reserved key always wins (validateMetadata also
+		// rejects callers trying to supply it themselves).
+		form.Set("metadata["+reservedMetadataKey+"]", req.IdempotencyKey)
 	}
 
 	// Pass the caller's operation-scoped key (the invoice id) as Stripe's
