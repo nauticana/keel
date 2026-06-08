@@ -434,6 +434,7 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     monthly_cost                         NUMERIC(18,2) NOT NULL,
     annual_cost                          NUMERIC(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    provider_price_id                    VARCHAR(64)  ,
     CONSTRAINT subscription_plan_pk PRIMARY KEY (id)
 );
 
@@ -479,8 +480,14 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           BOOLEAN       NOT NULL DEFAULT TRUE,
+    provider_subscription_id             VARCHAR(64)  ,
+    billing_cycle                        CHAR(1)      ,
+    renewal_date                         TIMESTAMP    ,
+    cancelled_at                         TIMESTAMP    ,
+    effective_cancel_date                TIMESTAMP    ,
     CONSTRAINT partner_plan_subscription_pk PRIMARY KEY (partner_id, plan_id, begda)
 );
+CREATE INDEX IF NOT EXISTS idx_partner_plan_subscription_provider_sub ON partner_plan_subscription(provider_subscription_id);
 
 -- Active add-on subscriptions per business partner
 CREATE TABLE IF NOT EXISTS partner_addon_subscription (
@@ -642,6 +649,45 @@ CREATE TABLE IF NOT EXISTS table_action (
     CONSTRAINT table_action_pk PRIMARY KEY (table_name, action_name)
 );
 CREATE INDEX IF NOT EXISTS idx_table_action_table ON table_action(table_name);
+
+-- Billing invoices per partner (provider-issued or self-scheduled)
+CREATE TABLE IF NOT EXISTS invoice (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    invoice_number                       VARCHAR(30)   NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'D',
+    subtotal                             NUMERIC(18,2) NOT NULL,
+    tax                                  NUMERIC(18,2) NOT NULL DEFAULT 0.00,
+    total                                NUMERIC(18,2) NOT NULL,
+    total_minor                          BIGINT        NOT NULL DEFAULT 0,
+    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    issued_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    due_at                               TIMESTAMP    ,
+    paid_at                              TIMESTAMP    ,
+    pdf_storage_path                     VARCHAR(500) ,
+    provider_invoice_id                  VARCHAR(255) ,
+    provider_charge_id                   VARCHAR(255) ,
+    attempt_count                        INTEGER       NOT NULL DEFAULT 0,
+    next_attempt_at                      TIMESTAMP    ,
+    last_error                           TEXT         ,
+    CONSTRAINT invoice_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_number ON invoice(invoice_number);
+CREATE INDEX IF NOT EXISTS idx_invoice_partner ON invoice(partner_id);
+
+CREATE SEQUENCE IF NOT EXISTS invoice_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('invoice', 'id', 'invoice_seq') ON CONFLICT DO NOTHING;
+
+-- Line items for an invoice
+CREATE TABLE IF NOT EXISTS invoice_line (
+    invoice_id                           BIGINT        NOT NULL,
+    seq                                  INTEGER       NOT NULL,
+    description                          VARCHAR(200)  NOT NULL,
+    quantity                             INTEGER       NOT NULL DEFAULT 1,
+    unit_price                           NUMERIC(18,2) NOT NULL,
+    amount                               NUMERIC(18,2) NOT NULL,
+    CONSTRAINT invoice_line_pk PRIMARY KEY (invoice_id, seq)
+);
 
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
@@ -1029,5 +1075,23 @@ BEGIN
      WHERE constraint_name = 'user_payment_method_users' AND table_name = 'user_payment_method'
   ) THEN
     ALTER TABLE user_payment_method ADD CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_invoices' AND table_name = 'invoice'
+  ) THEN
+    ALTER TABLE invoice ADD CONSTRAINT partner_invoices FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'invoice_lines' AND table_name = 'invoice_line'
+  ) THEN
+    ALTER TABLE invoice_line ADD CONSTRAINT invoice_lines FOREIGN KEY (invoice_id) REFERENCES invoice(id);
   END IF;
 END $$;

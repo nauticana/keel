@@ -440,6 +440,7 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     monthly_cost                         DECIMAL(18,2) NOT NULL,
     annual_cost                          DECIMAL(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    provider_price_id                    VARCHAR(64)  ,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -487,10 +488,16 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           TINYINT(1)    NOT NULL DEFAULT 1,
+    provider_subscription_id             VARCHAR(64)  ,
+    billing_cycle                        CHAR(1)      ,
+    renewal_date                         DATETIME     ,
+    cancelled_at                         DATETIME     ,
+    effective_cancel_date                DATETIME     ,
     PRIMARY KEY (partner_id, plan_id, begda),
     CONSTRAINT partner_plan_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT partner_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES subscription_plan(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_partner_plan_subscription_provider_sub ON partner_plan_subscription(provider_subscription_id);
 
 -- Active add-on subscriptions per business partner
 CREATE TABLE IF NOT EXISTS partner_addon_subscription (
@@ -649,3 +656,41 @@ CREATE TABLE IF NOT EXISTS table_action (
     PRIMARY KEY (table_name, action_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_table_action_table ON table_action(table_name);
+
+-- Billing invoices per partner (provider-issued or self-scheduled)
+CREATE TABLE IF NOT EXISTS invoice (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    invoice_number                       VARCHAR(30)   NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'D',
+    subtotal                             DECIMAL(18,2) NOT NULL,
+    tax                                  DECIMAL(18,2) NOT NULL DEFAULT 0.00,
+    total                                DECIMAL(18,2) NOT NULL,
+    total_minor                          BIGINT        NOT NULL DEFAULT 0,
+    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    issued_at                            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    due_at                               DATETIME     ,
+    paid_at                              DATETIME     ,
+    pdf_storage_path                     VARCHAR(500) ,
+    provider_invoice_id                  VARCHAR(255) ,
+    provider_charge_id                   VARCHAR(255) ,
+    attempt_count                        INT           NOT NULL DEFAULT 0,
+    next_attempt_at                      DATETIME     ,
+    last_error                           TEXT         ,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_invoices FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_invoice_number ON invoice(invoice_number);
+CREATE INDEX idx_invoice_partner ON invoice(partner_id);
+
+-- Line items for an invoice
+CREATE TABLE IF NOT EXISTS invoice_line (
+    invoice_id                           BIGINT        NOT NULL,
+    seq                                  INT           NOT NULL,
+    description                          VARCHAR(200)  NOT NULL,
+    quantity                             INT           NOT NULL DEFAULT 1,
+    unit_price                           DECIMAL(18,2) NOT NULL,
+    amount                               DECIMAL(18,2) NOT NULL,
+    PRIMARY KEY (invoice_id, seq),
+    CONSTRAINT invoice_lines FOREIGN KEY (invoice_id) REFERENCES invoice(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

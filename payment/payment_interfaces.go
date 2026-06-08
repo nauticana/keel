@@ -27,6 +27,21 @@ const (
 	ModeSetup        = "setup"
 )
 
+// EventKind values normalize PaymentEvent.EventType across providers so
+// domain handlers (and AbstractWebhookEventHandler) switch on a stable
+// kind instead of provider-specific strings. Each EventParser maps its
+// raw event names onto these; KindOther covers anything unmapped.
+const (
+	KindCheckoutCompleted    = "checkout_completed"
+	KindInvoiceFinalized     = "invoice_finalized"
+	KindInvoicePaid          = "invoice_paid"
+	KindInvoicePaymentFailed = "invoice_payment_failed"
+	KindSubscriptionUpdated  = "subscription_updated"
+	KindSubscriptionCanceled = "subscription_canceled"
+	KindSetupCompleted       = "setup_completed"
+	KindOther                = "other"
+)
+
 // PaymentEvent is the canonical representation of a webhook event after
 // provider-specific parsing. Domain handlers receive this and decide what to
 // persist for their project.
@@ -72,6 +87,21 @@ type PaymentEvent struct {
 	// attached (e.g. an unauthenticated checkout that didn't create a
 	// customer).
 	CustomerID string
+
+	// EventKind is the provider-agnostic normalization of EventType
+	// (one of the Kind* constants), set by each parser so handlers switch
+	// on a stable kind rather than a provider-specific string. KindOther
+	// when the event maps to nothing a handler typically cares about.
+	EventKind string
+
+	// SubscriptionID is the provider subscription id this event concerns
+	// (Stripe sub_xxx) — on checkout / invoice / subscription events.
+	// Empty otherwise.
+	SubscriptionID string
+
+	// InvoiceID is the provider invoice id (Stripe in_xxx) on invoice.*
+	// events, or the invoice referenced by another event. Empty otherwise.
+	InvoiceID string
 }
 
 // PaymentEventHandler is what each project implements. keel's

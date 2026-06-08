@@ -207,13 +207,44 @@ func (c *StripeCheckoutClient) Get(ctx context.Context, path string, params url.
 // strings.NewReader without depending on whether the underlying reader
 // is rewindable. Empty string for GETs (no body).
 func (c *StripeCheckoutClient) request(ctx context.Context, method, path, body string) ([]byte, error) {
+	status, respBody, err := c.requestRaw(ctx, method, path, body, "")
+	if err != nil {
+		return nil, err
+	}
+	if status >= 200 && status < 300 {
+		return respBody, nil
+	}
+	return nil, fmt.Errorf("stripe: status %d: %s", status, string(respBody))
+}
+
+// requestRaw is the shared HTTP layer (secret loading, 5xx/429 retry with
+// backoff, response-body cap, basic-auth, POST idempotency key) that returns
+// the FINAL HTTP status + body for any non-retryable response — 2xx OR 4xx —
+// without treating non-2xx as a hard error. err is non-nil only for
+// build/transport failures or exhausted retries. The typed helpers go through
+// request (which applies the 2xx gate on top); callers that must inspect a 4xx
+// body (e.g. an off-session authentication_required charge whose PaymentIntent
+// rides in error.payment_intent) use PostRaw.
+//
+// body is the form-encoded request body — passed as a string so each retry
+// can wrap it in a fresh reader. Empty for GETs.
+//
+// idemKey sets the POST Idempotency-Key header verbatim; pass "" for a fresh
+// random key (the default for one-shot writes). A caller that may re-issue the
+// SAME logical write later — e.g. an off-session invoice charge retried across
+// dunning passes — MUST pass a stable, operation-scoped key so Stripe collapses
+// the retry onto the original charge instead of creating a second one.
+func (c *StripeCheckoutClient) requestRaw(ctx context.Context, method, path, body, idemKey string) (int, []byte, error) {
 	secretValue, err := c.Secrets.GetSecret(ctx, c.secretName())
 	if err != nil {
-		return nil, fmt.Errorf("stripe: get secret: %w", err)
+		return 0, nil, fmt.Errorf("stripe: get secret: %w", err)
 	}
 	idempotencyKey := ""
 	if method == http.MethodPost {
-		idempotencyKey = newIdempotencyKey()
+		idempotencyKey = idemKey
+		if idempotencyKey == "" {
+			idempotencyKey = newIdempotencyKey()
+		}
 	}
 
 	var lastErr error
@@ -225,7 +256,7 @@ func (c *StripeCheckoutClient) request(ctx context.Context, method, path, body s
 		}
 		req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, bodyReader)
 		if err != nil {
-			return nil, fmt.Errorf("stripe: build request: %w", err)
+			return 0, nil, fmt.Errorf("stripe: build request: %w", err)
 		}
 		req.SetBasicAuth(secretValue, "")
 		if method == http.MethodPost {
@@ -237,34 +268,42 @@ func (c *StripeCheckoutClient) request(ctx context.Context, method, path, body s
 		if err != nil {
 			lastErr = fmt.Errorf("stripe: request failed: %w", err)
 			if !sleepOrCancel(ctx, backoff) {
-				return nil, lastErr
+				return 0, nil, lastErr
 			}
 			backoff *= 2
 			continue
 		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, stripeMaxResponseBytes))
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, stripeMaxResponseBytes))
 		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = fmt.Errorf("stripe: read response: %w", readErr)
 			if !sleepOrCancel(ctx, backoff) {
-				return nil, lastErr
+				return 0, nil, lastErr
 			}
 			backoff *= 2
 			continue
 		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return body, nil
-		}
-		lastErr = fmt.Errorf("stripe: status %d: %s", resp.StatusCode, string(body))
 		if !shouldRetryStripe(resp.StatusCode) {
-			return nil, lastErr
+			// Final, non-retryable response (2xx or 4xx): hand it back as-is.
+			return resp.StatusCode, respBody, nil
 		}
+		lastErr = fmt.Errorf("stripe: status %d: %s", resp.StatusCode, string(respBody))
 		if !sleepOrCancel(ctx, backoff) {
-			return nil, lastErr
+			return resp.StatusCode, respBody, nil
 		}
 		backoff *= 2
 	}
-	return nil, lastErr
+	return 0, nil, lastErr
+}
+
+// PostRaw is like Post but returns the HTTP status + body for ANY final
+// response (not just 2xx), so callers can inspect a 4xx body. idemKey sets the
+// Stripe Idempotency-Key header verbatim — pass a stable, operation-scoped key
+// (e.g. the invoice id) so a retried charge dedupes at Stripe rather than
+// charging twice; pass "" for a fresh random key. err is non-nil only for
+// transport failures / exhausted retries.
+func (c *StripeCheckoutClient) PostRaw(ctx context.Context, path string, form url.Values, idemKey string) (int, []byte, error) {
+	return c.requestRaw(ctx, http.MethodPost, path, form.Encode(), idemKey)
 }
 
 // shouldRetryStripe returns true for transient HTTP statuses worth

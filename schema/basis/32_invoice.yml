@@ -1,0 +1,69 @@
+table: invoice
+comment: Billing invoices per partner (provider-issued or self-scheduled)
+order: 53
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: invoice_number
+    type: VARCHAR(30)
+  - name: status
+    type: CHAR(1)
+    default: D
+  - name: subtotal
+    type: NUMERIC(18,2)
+  - name: tax
+    type: NUMERIC(18,2)
+    default: "0.00"
+  - name: total
+    type: NUMERIC(18,2)
+  - name: total_minor
+    type: BIGINT
+    default: "0"
+  - name: currency
+    type: CHAR(3)
+    default: USD
+  - name: issued_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: due_at
+    type: TIMESTAMP
+    nullable: true
+  - name: paid_at
+    type: TIMESTAMP
+    nullable: true
+  - name: pdf_storage_path
+    type: VARCHAR(500)
+    nullable: true
+  - name: provider_invoice_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: provider_charge_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: attempt_count
+    type: INTEGER
+    default: "0"
+  - name: next_attempt_at
+    type: TIMESTAMP
+    nullable: true
+  - name: last_error
+    type: TEXT
+    nullable: true
+primary_key: [id]
+sequence:
+  name: invoice_seq
+  column: id
+foreign_keys:
+  - name: partner_invoices
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+indexes:
+  - name: idx_invoice_number
+    columns: [invoice_number]
+    unique: true
+  - name: idx_invoice_partner
+    columns: [partner_id]

@@ -96,7 +96,51 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 			event.SetupIntentID = s
 		}
 	}
+	// SubscriptionID: checkout / invoice events reference it via
+	// data.object.subscription; customer.subscription.* events ARE the
+	// subscription, so data.object.id is the id.
+	if s, ok := obj["subscription"].(string); ok {
+		event.SubscriptionID = s
+	}
+	if event.SubscriptionID == "" && strings.HasPrefix(raw.Type, "customer.subscription.") {
+		if s, ok := obj["id"].(string); ok {
+			event.SubscriptionID = s
+		}
+	}
+	// InvoiceID: other events reference one via data.object.invoice;
+	// invoice.* events ARE the invoice, so data.object.id is the id.
+	if s, ok := obj["invoice"].(string); ok {
+		event.InvoiceID = s
+	}
+	if event.InvoiceID == "" && strings.HasPrefix(raw.Type, "invoice.") {
+		if s, ok := obj["id"].(string); ok {
+			event.InvoiceID = s
+		}
+	}
+	event.EventKind = stripeEventKind(raw.Type)
 	return event, nil
+}
+
+// stripeEventKind maps a raw Stripe event type onto the provider-agnostic
+// PaymentEvent.EventKind. Unmapped types return KindOther.
+func stripeEventKind(eventType string) string {
+	switch eventType {
+	case "checkout.session.completed", "checkout.session.async_payment_succeeded":
+		return KindCheckoutCompleted
+	case "invoice.finalized":
+		return KindInvoiceFinalized
+	case "invoice.paid", "invoice.payment_succeeded":
+		return KindInvoicePaid
+	case "invoice.payment_failed":
+		return KindInvoicePaymentFailed
+	case "customer.subscription.updated":
+		return KindSubscriptionUpdated
+	case "customer.subscription.deleted":
+		return KindSubscriptionCanceled
+	case "setup_intent.succeeded":
+		return KindSetupCompleted
+	}
+	return KindOther
 }
 
 // stripeAmountCents reads the canonical amount field (cents) for the

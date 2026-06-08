@@ -16,4 +16,7 @@ columns:
   - name: currency
     type: CHAR(3)
     default: USD
+  - name: provider_price_id
+    type: VARCHAR(64)
+    nullable: true
 primary_key: [id]

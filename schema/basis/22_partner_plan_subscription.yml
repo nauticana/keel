@@ -20,6 +20,21 @@ columns:
   - name: auto_renew
     type: BOOLEAN
     default: "TRUE"
+  - name: provider_subscription_id
+    type: VARCHAR(64)
+    nullable: true
+  - name: billing_cycle
+    type: CHAR(1)
+    nullable: true
+  - name: renewal_date
+    type: TIMESTAMP
+    nullable: true
+  - name: cancelled_at
+    type: TIMESTAMP
+    nullable: true
+  - name: effective_cancel_date
+    type: TIMESTAMP
+    nullable: true
 primary_key: [partner_id, plan_id, begda]
 foreign_keys:
   - name: partner_plan_subscriptions
@@ -32,3 +47,6 @@ foreign_keys:
     references:
       table: subscription_plan
       columns: [id]
+indexes:
+  - name: idx_partner_plan_subscription_provider_sub
+    columns: [provider_subscription_id]

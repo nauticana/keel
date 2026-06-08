@@ -68,6 +68,14 @@ func (p *LemonSqueezyEventParser) Parse(body []byte) (*PaymentEvent, error) {
 		event.Metadata[k] = v
 	}
 
+	event.EventKind = lemonSqueezyEventKind(raw.Meta.EventName)
+	switch {
+	case strings.HasPrefix(raw.Meta.EventName, "subscription_payment_"):
+		event.InvoiceID = raw.Data.ID // the subscription-invoice id
+	case strings.HasPrefix(raw.Meta.EventName, "subscription_"):
+		event.SubscriptionID = raw.Data.ID
+	}
+
 	attr := raw.Data.Attributes
 	if attr == nil {
 		return event, nil
@@ -93,5 +101,28 @@ func (p *LemonSqueezyEventParser) Parse(body []byte) (*PaymentEvent, error) {
 			event.PaidAt = t
 		}
 	}
+	if event.SubscriptionID == "" {
+		if v, ok := attr["subscription_id"]; ok {
+			event.SubscriptionID = fmt.Sprintf("%v", v)
+		}
+	}
 	return event, nil
+}
+
+// lemonSqueezyEventKind maps a raw LemonSqueezy event_name onto the
+// provider-agnostic PaymentEvent.EventKind. Unmapped names return KindOther.
+func lemonSqueezyEventKind(eventName string) string {
+	switch eventName {
+	case "subscription_created", "order_created":
+		return KindCheckoutCompleted
+	case "subscription_payment_success":
+		return KindInvoicePaid
+	case "subscription_payment_failed":
+		return KindInvoicePaymentFailed
+	case "subscription_updated", "subscription_plan_changed", "subscription_resumed", "subscription_unpaused":
+		return KindSubscriptionUpdated
+	case "subscription_cancelled", "subscription_expired":
+		return KindSubscriptionCanceled
+	}
+	return KindOther
 }

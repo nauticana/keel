@@ -554,6 +554,84 @@ executor := &worker.JobExecutor{
 executor.Run(ctx, secrets)
 ```
 
+## Quota Service
+
+`port.QuotaService` enforces per-partner subscription limits. `data.QuotaServiceDb` is the standard implementation: it reads caps from `subscription_quota` (joined to the partner's active `partner_plan_subscription`), caches them per partner (1-hour TTL, singleflight-collapsed), and is **fail-closed** — no active plan, or a resource absent from the plan, denies. A cap of `-1` means unlimited.
+
+```go
+allowed, err := quota.CheckQuota(ctx, partnerID, "MEDIA", 1) // room for 1 more?
+hasAddon, err := quota.CheckAddon(ctx, partnerID, "PRO_LOCATIONS")
+quota.LogUsage(ctx, partnerID, "API_CALLS", 1, "public-api")
+```
+
+### Two resource categories
+
+How a resource's **current usage** is measured depends on whether it has a count query:
+
+| Category | Usage source | Semantics | Examples |
+|---|---|---|---|
+| **Live-count** | a `COUNT(*)` query keyed by resource id | concurrent — deletes free quota | `MAX_DOMAINS`, `MEDIA`, `LOCATION` |
+| **Metered** | `SUM(usage_ledger)` windowed by `period_type` (`D`/`M`/…/`L`) | cumulative — `LogUsage` ticks it up | `API_CALLS`, `AI_CREDITS` |
+
+Keel ships exactly one default live-count query — `MAX_DOMAINS` (over `partner_domain`, a keel table). Everything else defaults to the ledger.
+
+### Adopting in a downstream project
+
+To live-count **your own** tables, inject per-resource SQL via `QuotaServiceDb.Queries` — a map keyed by **resource id**:
+
+```go
+quota := &data.QuotaServiceDb{
+    Repo: db,
+    Queries: map[string]string{
+        // Partner-direct table:
+        "BUSINESS": "SELECT COUNT(*) FROM business WHERE partner_id = ? AND deleted_at IS NULL",
+        // Child table — scope to the partner via its FK chain:
+        "MEDIA":    "SELECT COUNT(*) FROM business_media m JOIN business b ON m.business_id = b.id WHERE b.partner_id = ?",
+    },
+}
+```
+
+Your entries are **merged over** keel's defaults (yours win on a key clash), and `MAX_DOMAINS` stays available unless you override it. Then seed `subscription_resource` + `subscription_quota` rows for those ids and you're done — `CheckQuota` routes to your query automatically. No keel change, no fork.
+
+**Contract for an injected count query** — keel binds and reads it positionally:
+- Exactly **one** bound parameter: `partnerID` (a single `?`).
+- Returns **one row, one column** = the partner's current usage (an integer).
+- Must be **partner-scoped** — directly (`WHERE partner_id = ?`) or via a `JOIN` to a table that has `partner_id`. There's no need for a `partner_id` column on the resource table itself; the join keeps it normalized.
+- Use bound `?` params only (never string-interpolate) — these are developer-defined SQL, but treat them as you would any prepared statement.
+
+A `COUNT(*)` query yields concurrent "N at a time" limits; a `SUM(usage_ledger)` query yields lifetime/consumption — the query you write decides the semantics. Caps, caching, period windowing, and fail-closed behavior are unchanged regardless.
+
+## Billing (v1.0.0)
+
+keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook pipeline (`payment.WebhookProcessor`), the checkout client (`payment.StripeCheckoutClient`), the quota engine (`data.QuotaServiceDb`), and the canonical `subscription_*` / `partner_plan_subscription` / `usage_ledger` / `payment_method` tables. v0.10.0 adds the repetitive **SaaS billing glue** every downstream project used to re-implement, so a new project gets billing from config + a thin wiring layer. **All additive** — existing consumers compile unchanged; adopt piece by piece.
+
+| New | What it does | Project supplies |
+|---|---|---|
+| `service.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables | `Queries` overrides, `PriceResolver`, `ResourceNames` |
+| `payment.PaymentEvent.EventKind` + `SubscriptionID`/`InvoiceID` | provider-agnostic normalized event kind (set by every parser) + the ids, so handlers stop digging raw JSON | — |
+| `payment.AbstractWebhookEventHandler` | dispatches `EventKind` → nil-safe hooks (`OnCheckoutCompleted/OnInvoicePaid/OnInvoicePaymentFailed/OnSubscriptionUpdated/…`) | the per-kind closures (your domain SQL) |
+| `handler.QuotaEnforcer` | HTTP middleware: count new resources in a POST body → `CheckQuota` → **402** + optional post-write `After` hook. `CountOpCodeRows` builds your extractors | `Extractors []ResourceExtractor` |
+| `handler.FeatureGate` | entitlement via the `cap<0` flag convention: `FeatureAllowed`, `ListFeatures`, `FilterResponseField` (strip a premium child from a GET) | `Features`, `StripFeature`/`StripRecordKey` |
+| `payment.AddonReconciler` + `StripeAddonReconciler` | sync a metered add-on quantity as a subscription item (INERT when `PriceID==""`) | `PriceID`, `DesiredQty`, `SubIDFor` closures |
+| `payment.ChargeClient` + `StripeChargeClient` | off-session charge of a vaulted method (handles SCA-required & declines); `StripeCheckoutClient.PostRaw` exposes the 4xx body | `ChargeRequest` per call |
+| `worker.AbstractBillingReconciler` | daily backstop pass over active partners (run from a systemd timer, never a CI cron) | `Partners`, `Reconcile` closures |
+| `service.BillingEngine` (+ `ProviderSubscriptionEngine`, `SelfScheduledEngine`) | the recurring-engine strategy: provider runs the cycle **or** we self-schedule (own billing-run → off-session charge → invoice → dunning) | engine choice + the self-scheduled closures |
+| basis: `invoice`/`invoice_line`, `subscription_plan.provider_price_id`, `partner_plan_subscription.{provider_subscription_id,billing_cycle,renewal_date,cancelled_at,effective_cancel_date}` | the missing billing tables/columns | per-env seed of `provider_price_id` |
+
+### Provider-driven vs self-scheduled
+
+`ProviderSubscriptionEngine` lets Stripe Billing / LemonSqueezy run the recurring cycle (you only react to webhooks via `AbstractWebhookEventHandler`); it carries the provider's recurring fee but is the least code and handles SCA/dunning/retries for you. `SelfScheduledEngine` runs the cycle itself (a systemd-timer billing-run that charges off-session via `ChargeClient`, writes its own `invoice`, and owns dunning + SCA) — it avoids the recurring fee and is maximally provider-agnostic, but you own the money-critical SCA/dunning/proration logic. **Test self-scheduled exhaustively in provider test mode before enabling**, and keep it behind a per-plan flag (it is inert until its closures are wired).
+
+### v0.9.x → v1.0.0 adoption checklist
+
+1. Bump the dependency; run your DB re-init (the new basis tables/columns are additive — regenerate + reinit).
+2. Replace your hand-rolled `OnPaymentEvent` switch with an `AbstractWebhookEventHandler`; delete any raw-JSON `subscription`/`invoice` id digging (use `e.SubscriptionID`/`e.InvoiceID`).
+3. (Optional) Embed `AbstractBillingService` in your billing service; seed `subscription_plan.provider_price_id` instead of a Go plan→price map.
+4. (Optional) Wire `QuotaEnforcer` on your resource-creating POST and `FeatureGate` for premium features.
+5. Pick a `BillingEngine`. Provider-driven needs only the webhook hooks; self-scheduled needs the `SelfScheduledEngine` closures + a systemd timer running `AbstractBillingReconciler`/`RunCycle`, fully tested first.
+
+What stays yours: the plan catalog + prices, the resource taxonomy + count SQL, the per-event domain mapping, add-on economics, feature names, and branding.
+
 ## API Key Authentication
 
 Keel ships an end-to-end API-key authentication stack for `/pubapi/*` traffic (REST) and standalone services (e.g. MCP servers exposed over Streamable HTTP). Three pieces, one chain:

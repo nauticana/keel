@@ -1,0 +1,24 @@
+table: invoice_line
+comment: Line items for an invoice
+order: 54
+columns:
+  - name: invoice_id
+    type: BIGINT
+  - name: seq
+    type: INTEGER
+  - name: description
+    type: VARCHAR(200)
+  - name: quantity
+    type: INTEGER
+    default: "1"
+  - name: unit_price
+    type: NUMERIC(18,2)
+  - name: amount
+    type: NUMERIC(18,2)
+primary_key: [invoice_id, seq]
+foreign_keys:
+  - name: invoice_lines
+    columns: [invoice_id]
+    references:
+      table: invoice
+      columns: [id]
