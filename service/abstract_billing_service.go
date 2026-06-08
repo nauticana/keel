@@ -37,6 +37,8 @@ type Subscription struct {
 	Currency     string  `json:"currency"`
 	BillingCycle string  `json:"billingCycle,omitempty"` // M=monthly, A=annual
 	AutoRenew    bool    `json:"autoRenew"`
+	TrialEnd     string  `json:"trialEnd"`
+	Seats        int     `json:"seats"`
 }
 
 // Invoice is one billing invoice row (provider-issued or self-scheduled).
@@ -54,12 +56,14 @@ type Invoice struct {
 // (Stripe price_xxx), empty for free/sales-gated plans; the frontend feeds it
 // to keel's CreateCheckout (validated against AllowedPriceIDs).
 type Plan struct {
-	ID          string  `json:"id"`
-	Caption     string  `json:"caption"`
-	MonthlyCost float64 `json:"monthlyCost"`
-	AnnualCost  float64 `json:"annualCost"`
-	Currency    string  `json:"currency"`
-	PriceID     string  `json:"priceId,omitempty"`
+	ID             string  `json:"id"`
+	Caption        string  `json:"caption"`
+	MonthlyCost    float64 `json:"monthlyCost"`
+	AnnualCost     float64 `json:"annualCost"`
+	Currency       string  `json:"currency"`
+	PriceID        string  `json:"priceId,omitempty"`
+	ActivationMode string  `json:"activationMode"`
+	TrialDays      int     `json:"trialDays"`
 }
 
 // UsageItem is one resource's current-period usage vs its plan limit.
@@ -68,33 +72,6 @@ type UsageItem struct {
 	Resource string `json:"resource"`
 	Used     int64  `json:"used"`
 	Limit    int64  `json:"limit"`
-}
-
-// BillingService is the read/write contract every consumer's billing HTTP
-// handler depends on. AbstractBillingService is the default impl; a project
-// embeds it and overrides only what differs.
-type BillingService interface {
-	GetSubscription(ctx context.Context, partnerID int64) (*Subscription, error)
-	CreateSubscription(ctx context.Context, partnerID int64, planID string) error
-	CancelSubscription(ctx context.Context, partnerID int64) error
-	GetInvoices(ctx context.Context, partnerID int64) ([]Invoice, error)
-	GetUsage(ctx context.Context, partnerID int64) ([]UsageItem, error)
-	GetPlans(ctx context.Context) ([]Plan, error)
-}
-
-// ProviderBillingStore is the provider-integration surface beyond the core
-// subscription CRUD: it records provider-issued invoices, maps a partner to its
-// provider-customer token, and lists saved methods. Webhook hooks and billing
-// bridges depend on THIS interface (not the concrete *AbstractBillingService),
-// so any keel consumer can substitute its own implementation. Kept separate
-// from BillingService so a project needing only the read/write CRUD surface
-// isn't forced to implement the webhook-write methods (interface segregation).
-type ProviderBillingStore interface {
-	RecordProviderInvoice(ctx context.Context, partnerID int64, e *payment.PaymentEvent) error
-	LinkCustomer(ctx context.Context, partnerID int64, provider, customerToken string) error
-	CustomerToken(ctx context.Context, partnerID int64, provider string) (string, error)
-	PartnerByCustomer(ctx context.Context, provider, customerToken string) (int64, error)
-	ListPaymentMethods(ctx context.Context, partnerID int64) ([]PaymentMethodInfo, error)
 }
 
 // Sentinel errors so an HTTP handler can map a billing failure to a status via
@@ -125,8 +102,8 @@ const (
 // INTERVAL syntax in bill_create_subscription) via Queries.
 var defaultBillingQueries = map[string]string{
 	qBillGetSubscription: `
-SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda,
-       ps.monthly_cost, ps.currency, ps.billing_cycle, ps.auto_renew
+SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.monthly_cost, ps.currency,
+       ps.billing_cycle, ps.auto_renew, ps.trial_end, ps.seats
   FROM partner_plan_subscription ps
   JOIN subscription_plan sp ON sp.id = ps.plan_id
  WHERE ps.partner_id = ?
@@ -165,7 +142,7 @@ SELECT COALESCE(MAX(sq.max_value), 0)
    AND sq.plan_id = ps.plan_id AND sq.resource_id = ?`,
 
 	qBillGetAllPlans: `
-SELECT id, caption, monthly_cost, annual_cost, currency, provider_price_id
+SELECT id, caption, monthly_cost, annual_cost, currency, provider_price_id, activation_mode, trial_days
   FROM subscription_plan WHERE is_active = TRUE ORDER BY monthly_cost`,
 
 	// Provider-driven invoice: written on a provider invoice.paid event so
@@ -257,6 +234,8 @@ func (s *AbstractBillingService) GetSubscription(ctx context.Context, partnerID 
 		Currency:     common.AsString(row[6]),
 		BillingCycle: common.AsString(row[7]),
 		AutoRenew:    common.AsString(row[8]) == "true" || common.AsInt64(row[8]) == 1,
+		TrialEnd:     common.AsString(row[9]),
+		Seats:        int(common.AsInt32(row[10])),
 	}, nil
 }
 
@@ -340,12 +319,14 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 			priceID = s.PriceResolver(id)
 		}
 		plans[i] = Plan{
-			ID:          id,
-			Caption:     common.AsString(row[1]),
-			MonthlyCost: common.AsFloat64(row[2]),
-			AnnualCost:  common.AsFloat64(row[3]),
-			Currency:    common.AsString(row[4]),
-			PriceID:     priceID,
+			ID:             id,
+			Caption:        common.AsString(row[1]),
+			MonthlyCost:    common.AsFloat64(row[2]),
+			AnnualCost:     common.AsFloat64(row[3]),
+			Currency:       common.AsString(row[4]),
+			PriceID:        priceID,
+			ActivationMode: common.AsString(row[6]),
+			TrialDays:      int(common.AsInt32(row[7])),
 		}
 	}
 	return plans, nil
