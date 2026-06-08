@@ -435,6 +435,8 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     annual_cost                          NUMERIC(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     provider_price_id                    VARCHAR(64)  ,
+    activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
+    trial_days                           INTEGER      ,
     CONSTRAINT subscription_plan_pk PRIMARY KEY (id)
 );
 
@@ -485,6 +487,8 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     renewal_date                         TIMESTAMP    ,
     cancelled_at                         TIMESTAMP    ,
     effective_cancel_date                TIMESTAMP    ,
+    trial_end                            TIMESTAMP    ,
+    seats                                INTEGER      ,
     CONSTRAINT partner_plan_subscription_pk PRIMARY KEY (partner_id, plan_id, begda)
 );
 CREATE INDEX IF NOT EXISTS idx_partner_plan_subscription_provider_sub ON partner_plan_subscription(provider_subscription_id);

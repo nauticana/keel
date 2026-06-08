@@ -256,8 +256,7 @@ written for.
 - **Negligible behavioural change.** Money/coordinate/rate reads that
   previously evaluated to `-1` (and produced wrong-but-non-zero
   downstream values) now evaluate to the real value or `0` for NULL.
-  Downstream math that compensated for the bug (none observed in
-  trvoo / daxoom / bdsrest) would need to drop that compensation.
+  Downstream math that compensated for the bug would need to drop that compensation.
 - **Precision.** NUMERIC values >15 significant digits round on
   float64 conversion. Standard money widths (NUMERIC(18,2)) and
   coordinate widths (NUMERIC(10,7)) are well within float64 range.
@@ -609,15 +608,17 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 |---|---|---|
 | `service.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables; returns the `ErrNoSubscription`/`ErrPlanNotFound` sentinels so a handler can `errors.Is` → 404/400 | `Queries` overrides, `PriceResolver`, `ResourceNames` |
 | `service.AbstractBillingService` provider-driven write helpers (exposed via the `ProviderBillingStore` interface): `RecordProviderInvoice` (writes the `invoice` row on a provider `invoice.paid` so `GetInvoices` isn't empty — keel otherwise writes invoices only in the SelfScheduledEngine; idempotent on `invoice_number`), `LinkCustomer`/`CustomerToken`/`PartnerByCustomer` (partner ↔ provider-customer mapping in the dedicated `partner_billing_customer` table, for the portal + recurring-invoice attribution), `ListPaymentMethods` (the partner's saved methods for sail's `listPaymentMethods()`) | — (call from your `AbstractWebhookEventHandler` hooks / billing bridges) |
+| `service.SubscriptionLifecycle` (on `AbstractBillingService`) | the subscription verbs over `partner_plan_subscription`: `Activate` (honors the plan's `activation_mode`), `ChangePlan` (atomic close+open), `CancelByPartner`/`CancelByProviderSubID` (immediate or at-period-end), `ConvertTrial`, `SetSeats`, `Reactivate`, `SetDunningState` | per-plan `activation_mode` + `trial_days`; the metadata keys |
 | `payment.PaymentEvent.EventKind` + `SubscriptionID`/`InvoiceID` | provider-agnostic normalized event kind (set by every parser) + the ids, so handlers stop digging raw JSON | — |
 | `payment.AbstractWebhookEventHandler` | dispatches `EventKind` → nil-safe hooks (`OnCheckoutCompleted/OnInvoicePaid/OnInvoicePaymentFailed/OnSubscriptionUpdated/…`) | the per-kind closures (your domain SQL) |
+| `service.ProviderSubscriptionEventHandler` (a `payment.PaymentEventHandler`) | the **default** provider-driven mapping pre-wired on `AbstractWebhookEventHandler`: `checkout_completed`→`LinkCustomer`+`Activate`, `invoice_paid`→`RecordProviderInvoice`+`ConvertTrial`, `invoice_payment_failed`→past-due (`X`), `subscription_canceled`→`CancelByProviderSubID` (fallback `CancelByPartner`). Collapses a hand-written `payment_service.go` to wiring | `NewProviderSubscriptionEventHandler(billing, billing, opts)` — partner resolution + metadata keys |
 | `handler.QuotaEnforcer` | HTTP middleware: count new resources in a POST body → `CheckQuota` → **402** + optional post-write `After` hook. `CountOpCodeRows` builds your extractors | `Extractors []ResourceExtractor` |
 | `handler.FeatureGate` | entitlement via the `cap<0` flag convention: `FeatureAllowed`, `ListFeatures`, `FilterResponseField` (strip a premium child from a GET) | `Features`, `StripFeature`/`StripRecordKey` |
 | `payment.AddonReconciler` + `StripeAddonReconciler` | sync a metered add-on quantity as a subscription item (INERT when `PriceID==""`) | `PriceID`, `DesiredQty`, `SubIDFor` closures |
 | `payment.ChargeClient` + `StripeChargeClient` | off-session charge of a vaulted method (handles SCA-required & declines); `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)` exposes the 4xx body and threads a caller idempotency key | `ChargeRequest` per call (`AmountMinor`, `IdempotencyKey`) |
 | `worker.AbstractBillingReconciler` | daily backstop pass over active partners (run from a systemd timer, never a CI cron) | `Partners`, `Reconcile` closures |
 | `service.BillingEngine` (+ `ProviderSubscriptionEngine`, `SelfScheduledEngine`) | the recurring-engine strategy: provider runs the cycle **or** we self-schedule (own billing-run → off-session charge → invoice → dunning) | engine choice + the self-scheduled closures |
-| basis: `invoice`/`invoice_line`/`partner_billing_customer`, `subscription_plan.provider_price_id`, `partner_plan_subscription.{provider_subscription_id,billing_cycle,renewal_date,cancelled_at,effective_cancel_date}` | the missing billing tables/columns | per-env seed of `provider_price_id` |
+| basis: `invoice`/`invoice_line`/`partner_billing_customer`, `subscription_plan.{provider_price_id,activation_mode,trial_days}`, `partner_plan_subscription.{provider_subscription_id,billing_cycle,renewal_date,cancelled_at,effective_cancel_date,trial_end,seats}` | the missing billing tables/columns | per-env seed of `provider_price_id` + `activation_mode` |
 
 ### Provider-driven vs self-scheduled
 
@@ -627,15 +628,34 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 
 **Off-session charge idempotency & atomicity.** `SelfScheduledEngine` charges with the invoice id as Stripe's `Idempotency-Key` (threaded via `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)`), so a charge retried after an ambiguous transport failure resolves to the original PaymentIntent instead of double-charging. Stripe remembers a key for 24h; a dunning retry past that window is treated as new, so the engine still stops once the invoice flips to paid. The `invoice` header + its lines are written in one `TxQueryService` transaction, so a half-written invoice is never charged.
 
+### Subscription lifecycle & activation modes
+
+`SubscriptionLifecycle` (default impl on `AbstractBillingService`) owns the verbs every SaaS re-implements over `partner_plan_subscription`. How a checkout *activates* a sub is the plan's **activation mode** (`subscription_plan.activation_mode`, the `SUBSCRIPTION_ACTIVATION_MODE` dictionary) — a small, **open** enum, so a new policy is a dictionary row, not a schema break:
+
+| Mode | Code | Activation |
+|---|---|---|
+| create-active | `A` | INSERT a fresh active row (provider already created the sub) — the default; preserves the old `CreateSubscription` behavior |
+| activate-pending | `P` | flip a pre-seeded `status='P'` row → `'A'` (register-then-pay flows) |
+| trial | `T` | start `status='T'` + `trial_end` (from `subscription_plan.trial_days`); `ConvertTrial` flips `T→A` on the first paid invoice |
+| free | `F` | active immediately, no provider sub / charge |
+
+These four are mutually-exclusive **policies**. Orthogonal to them are **modifiers** that overlay any policy, so they are *columns, not enum values*: `seats` (seat-based pricing — pairs with `AddonReconciler`), `trial_end`/start-date (scheduling), the engine choice (`ProviderSubscriptionEngine` vs `SelfScheduledEngine`), and the collection method (charge-now vs send-invoice). Putting `seats` in the mode enum would make "seat-based trial" inexpressible — keep it a modifier.
+
+Statuses use the `SUBSCRIPTION_STATUS` dictionary: `A` active · `P` pending payment · `T` trialing · `C` cancelled (voluntary) · `X` expired/past-due (involuntary). `SetDunningState` moves `A↔X`; cancels set `C` (immediate) or `effective_cancel_date` (at-period-end, finalized by `AbstractBillingReconciler`).
+
+*Not* activation modes (handled separately): **metered/usage** (a billing model over an already-active sub), **comp/admin grant** (set `A` via an admin path), and the transitions **change-plan / reactivate / pause** (their own verbs). Further policies — one-time/lifetime, invoice-terms (NET-x), manual/sales-approval — slot into the open dictionary when a project needs them.
+
+> **Note:** `ProviderSubscriptionEventHandler`'s `checkout_completed` always *activates* — it does not detect a plan change, so a re-checkout for a different plan creates a second active row rather than switching. Route upgrades/downgrades through `ChangePlan` (e.g. from `subscription_updated`), not a fresh checkout. Cancels (immediate or at-period-end, by partner or provider-sub-id) act on both active (`A`) and trialing (`T`) subs.
+
 ### v0.9.x → v1.0.1 adoption checklist
 
 1. Bump the dependency; run your DB re-init (the new basis tables/columns are additive — regenerate + reinit).
-2. Replace your hand-rolled `OnPaymentEvent` switch with an `AbstractWebhookEventHandler`; delete any raw-JSON `subscription`/`invoice` id digging (use `e.SubscriptionID`/`e.InvoiceID`).
-3. (Optional) Embed `AbstractBillingService` in your billing service; seed `subscription_plan.provider_price_id` instead of a Go plan→price map.
+2. Provider-driven billing: register `service.NewProviderSubscriptionEventHandler(billing, billing, opts)` and your `payment_service.go` collapses to that wiring. (For a non-standard mapping, wire an `AbstractWebhookEventHandler` directly instead.) Either way, delete raw-JSON `subscription`/`invoice` id digging — use `e.SubscriptionID`/`e.InvoiceID`.
+3. (Optional) Embed `AbstractBillingService` in your billing service; seed `subscription_plan.provider_price_id` and `activation_mode` per plan (paid→`P`, free→`F`, trial→`T`) instead of a Go plan→price/activation map.
 4. (Optional) Wire `QuotaEnforcer` on your resource-creating POST and `FeatureGate` for premium features.
 5. Pick a `BillingEngine`. Provider-driven needs only the webhook hooks; self-scheduled needs the `SelfScheduledEngine` closures + a systemd timer running `AbstractBillingReconciler`/`RunCycle`, fully tested first.
 
-What stays yours: the plan catalog + prices, the resource taxonomy + count SQL, the per-event domain mapping, add-on economics, feature names, and branding.
+What stays yours: the plan catalog + prices, the resource taxonomy + count SQL, the per-event domain mapping (or just its config when you use `ProviderSubscriptionEventHandler`), add-on economics, feature names, and branding.
 
 ## API Key Authentication
 
@@ -2153,6 +2173,9 @@ erDiagram
         NUMERIC monthly_cost
         NUMERIC annual_cost
         CHAR currency
+        VARCHAR provider_price_id
+        CHAR activation_mode
+        INTEGER trial_days
     }
     subscription_resource {
         VARCHAR id PK
@@ -2183,6 +2206,12 @@ erDiagram
         TIMESTAMP endda
         CHAR status
         BOOLEAN auto_renew
+        VARCHAR provider_subscription_id
+        CHAR billing_cycle
+        TIMESTAMP renewal_date
+        TIMESTAMP effective_cancel_date
+        TIMESTAMP trial_end
+        INTEGER seats
     }
     partner_addon_subscription {
         BIGINT partner_id PK,FK

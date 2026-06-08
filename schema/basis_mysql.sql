@@ -441,6 +441,8 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     annual_cost                          DECIMAL(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     provider_price_id                    VARCHAR(64)  ,
+    activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
+    trial_days                           INT          ,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -493,6 +495,8 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     renewal_date                         DATETIME     ,
     cancelled_at                         DATETIME     ,
     effective_cancel_date                DATETIME     ,
+    trial_end                            DATETIME     ,
+    seats                                INT          ,
     PRIMARY KEY (partner_id, plan_id, begda),
     CONSTRAINT partner_plan_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT partner_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES subscription_plan(id)

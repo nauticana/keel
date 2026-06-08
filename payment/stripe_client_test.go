@@ -189,12 +189,12 @@ func TestCreateCheckoutSession_NonSetupMode_NoMirror(t *testing.T) {
 // MUST NOT send Idempotency-Key (Stripe rejects it on read endpoints).
 func TestStripeClient_Get_RoundTrip(t *testing.T) {
 	var captured struct {
-		method         string
-		path           string
-		idempotency    string
-		authHeader     string
-		query          string
-		contentType    string
+		method      string
+		path        string
+		idempotency string
+		authHeader  string
+		query       string
+		contentType string
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured.method = r.Method

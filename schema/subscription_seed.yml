@@ -7,6 +7,7 @@ seeds:
       - [currency, "Currency"]
       - [period_type, "Period Type"]
       - [subscription_status, "Subscription Status"]
+      - [subscription_activation_mode, "Subscription Activation Mode"]
 
   - table: constant_value
     columns: [constant_id, value, caption]
@@ -26,7 +27,16 @@ seeds:
       - [period_type, S, "SECOND"]
       - [period_type, L, "LIFETIME"]
       - [subscription_status, A, "ACTIVE"]
+      - [subscription_status, P, "PENDING PAYMENT"]
+      - [subscription_status, T, "TRIALING"]
       - [subscription_status, C, "CANCELLED"]
+      - [subscription_status, X, "EXPIRED / PAST DUE"]
+      # SUBSCRIPTION_ACTIVATION_MODE — per-plan checkout activation policy. Core
+      # four; open dictionary (add O=one-time, I=invoice-terms, M=manual later).
+      - [subscription_activation_mode, A, "CREATE ACTIVE"]
+      - [subscription_activation_mode, P, "ACTIVATE PENDING"]
+      - [subscription_activation_mode, T, "TRIAL"]
+      - [subscription_activation_mode, F, "FREE"]
 
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
@@ -38,6 +48,7 @@ seeds:
       - [period_type, subscription_quota, period_type]
       - [subscription_status, partner_plan_subscription, status]
       - [subscription_status, partner_addon_subscription, status]
+      - [subscription_activation_mode, subscription_plan, activation_mode]
 
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]

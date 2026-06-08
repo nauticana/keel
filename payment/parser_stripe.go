@@ -172,17 +172,17 @@ func stripeAmountCents(eventType string, obj map[string]any) int64 {
 	// preferred slot is absent (older Stripe API versions, custom
 	// connect accounts, etc.).
 	preferred := map[string]string{
-		"checkout.session.completed":     "amount_total",
+		"checkout.session.completed":               "amount_total",
 		"checkout.session.async_payment_succeeded": "amount_total",
-		"invoice.paid":                    "amount_paid",
-		"invoice.payment_succeeded":       "amount_paid",
-		"invoice.payment_failed":          "amount_due",
-		"payment_intent.succeeded":        "amount_received",
-		"payment_intent.payment_failed":   "amount",
+		"invoice.paid":                             "amount_paid",
+		"invoice.payment_succeeded":                "amount_paid",
+		"invoice.payment_failed":                   "amount_due",
+		"payment_intent.succeeded":                 "amount_received",
+		"payment_intent.payment_failed":            "amount",
 		"payment_intent.amount_capturable_updated": "amount_capturable",
-		"charge.succeeded":                "amount",
-		"charge.failed":                   "amount",
-		"charge.captured":                 "amount_captured",
+		"charge.succeeded":                         "amount",
+		"charge.failed":                            "amount",
+		"charge.captured":                          "amount_captured",
 	}
 	if key, ok := preferred[eventType]; ok {
 		if raw, ok := obj[key]; ok {

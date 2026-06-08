@@ -35,6 +35,14 @@ columns:
   - name: effective_cancel_date
     type: TIMESTAMP
     nullable: true
+  # trial_end (trial mode) and seats (seat-based modifier — orthogonal to the
+  # activation mode, so it overlays any policy, not a peer enum value).
+  - name: trial_end
+    type: TIMESTAMP
+    nullable: true
+  - name: seats
+    type: INTEGER
+    nullable: true
 primary_key: [partner_id, plan_id, begda]
 foreign_keys:
   - name: partner_plan_subscriptions

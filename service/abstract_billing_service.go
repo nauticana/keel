@@ -147,7 +147,7 @@ SELECT ?, ?, CURRENT_TIMESTAMP, monthly_cost, currency, 'A', 'M',
 	qBillCancelSub: `
 UPDATE partner_plan_subscription
    SET status = 'C', cancelled_at = CURRENT_TIMESTAMP, auto_renew = FALSE
- WHERE partner_id = ? AND status = 'A'
+ WHERE partner_id = ? AND status IN ('A', 'T')
    AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 
 	qBillGetInvoices: `
@@ -214,19 +214,24 @@ type AbstractBillingService struct {
 	// ResourceNames are the resources GetUsage reports (e.g. ["API_CALLS"]).
 	ResourceNames []string
 
-	initOnce sync.Once
-	qs       data.QueryService
+	initOnce   sync.Once
+	qs         data.QueryService
+	allQueries map[string]string // merged default+lifecycle+override map, reused by BeginTx
 }
 
 func (s *AbstractBillingService) init(ctx context.Context) {
 	s.initOnce.Do(func() {
-		all := make(map[string]string, len(defaultBillingQueries)+len(s.Queries))
+		all := make(map[string]string, len(defaultBillingQueries)+len(lifecycleQueries)+len(s.Queries))
 		for k, v := range defaultBillingQueries {
+			all[k] = v
+		}
+		for k, v := range lifecycleQueries {
 			all[k] = v
 		}
 		for k, v := range s.Queries {
 			all[k] = v
 		}
+		s.allQueries = all
 		s.qs = s.Repo.GetQueryService(ctx, all)
 	})
 }

@@ -19,4 +19,13 @@ columns:
   - name: provider_price_id
     type: VARCHAR(64)
     nullable: true
+  # activation_mode (SUBSCRIPTION_ACTIVATION_MODE dict): how a checkout activates
+  # the sub. A=create-active, P=activate-pending, T=trial, F=free. Open dictionary
+  # — one_time/invoice_terms/manual_approval slot in later as rows, no schema break.
+  - name: activation_mode
+    type: CHAR(1)
+    default: A
+  - name: trial_days
+    type: INTEGER
+    nullable: true
 primary_key: [id]
