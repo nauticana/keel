@@ -46,13 +46,10 @@ type Invoice struct {
 }
 
 // Plan is a public catalog plan. Prices holds one entry per offer (the
-// subscription_plan_price rows); MonthlyCost/AnnualCost are convenience
-// projections of the 1-unit M/A rows for the sail display contract.
+// subscription_plan_price rows) — the single source of truth for pricing.
 type Plan struct {
 	ID             string      `json:"id"`
 	Caption        string      `json:"caption"`
-	MonthlyCost    float64     `json:"monthlyCost"`
-	AnnualCost     float64     `json:"annualCost"`
 	Currency       string      `json:"currency"`
 	ActivationMode string      `json:"activationMode"`
 	TrialDays      int         `json:"trialDays"`
@@ -345,15 +342,6 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 		}
 		price.Amount = payment.MinorToMajor(price.AmountMinor, price.Currency)
 		p.Prices = append(p.Prices, price)
-		// Convenience headline projections (per-unit price for a 1-unit term).
-		if price.TermCount == 1 {
-			switch ParseBillingPeriod(price.TermType) {
-			case PeriodMonthly:
-				p.MonthlyCost = price.Amount
-			case PeriodAnnual:
-				p.AnnualCost = price.Amount
-			}
-		}
 	}
 	plans := make([]Plan, len(order))
 	for i, id := range order {

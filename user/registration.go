@@ -169,7 +169,7 @@ UPDATE user_account
  WHERE id = ?
 `,
 	qListActivePlans: `
-SELECT sp.id, sp.caption,
+SELECT sp.id, sp.caption, sp.activation_mode, sp.trial_days,
        pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id
   FROM subscription_plan sp
   LEFT JOIN subscription_plan_price pp ON pp.plan_id = sp.id
@@ -215,14 +215,13 @@ type ConfirmRegisterResult struct {
 
 // PublicPlan is the unauthenticated registration-page view of a plan. Prices is
 // the same per-offer shape as billing.GetPlans so the shared sail price selector
-// works without auth; MonthlyCost/AnnualCost are convenience projections of the
-// 1-unit monthly/annual offers (back-compat).
+// works without auth.
 type PublicPlan struct {
-	ID          string              `json:"id"`
-	Caption     string              `json:"caption"`
-	MonthlyCost float64             `json:"monthlyCost"`
-	AnnualCost  float64             `json:"annualCost"`
-	Prices      []billing.PlanPrice `json:"prices"`
+	ID             string              `json:"id"`
+	Caption        string              `json:"caption"`
+	ActivationMode string              `json:"activationMode"` // drives the registration CTA (trial vs subscribe)
+	TrialDays      int                 `json:"trialDays"`
+	Prices         []billing.PlanPrice `json:"prices"`
 }
 
 // subscriptionOffer is the resolved price + schedule snapshot for the sub row a
@@ -590,32 +589,29 @@ func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, erro
 		id := common.AsString(row[0])
 		p, ok := byID[id]
 		if !ok {
-			p = &PublicPlan{ID: id, Caption: common.AsString(row[1])}
+			p = &PublicPlan{
+				ID:             id,
+				Caption:        common.AsString(row[1]),
+				ActivationMode: common.AsString(row[2]),
+				TrialDays:      int(common.AsInt32(row[3])),
+			}
 			byID[id] = p
 			order = append(order, id)
 		}
-		cycle := common.AsString(row[2]) // empty when the plan has no price rows (LEFT JOIN)
+		cycle := common.AsString(row[4]) // empty when the plan has no price rows (LEFT JOIN)
 		if cycle == "" {
 			continue
 		}
 		price := billing.PlanPrice{
 			BillingCycle: cycle,
-			TermCount:    int(common.AsInt32(row[3])),
-			TermType:     common.AsString(row[4]),
-			AmountMinor:  common.AsInt64(row[5]),
-			Currency:     common.AsString(row[6]),
-			PriceID:      common.AsString(row[7]),
+			TermCount:    int(common.AsInt32(row[5])),
+			TermType:     common.AsString(row[6]),
+			AmountMinor:  common.AsInt64(row[7]),
+			Currency:     common.AsString(row[8]),
+			PriceID:      common.AsString(row[9]),
 		}
 		price.Amount = payment.MinorToMajor(price.AmountMinor, price.Currency)
 		p.Prices = append(p.Prices, price)
-		if price.TermCount == 1 {
-			switch billing.ParseBillingPeriod(price.TermType) {
-			case billing.PeriodMonthly:
-				p.MonthlyCost = price.Amount
-			case billing.PeriodAnnual:
-				p.AnnualCost = price.Amount
-			}
-		}
 	}
 	out := make([]PublicPlan, len(order))
 	for i, id := range order {

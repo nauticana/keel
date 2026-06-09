@@ -271,11 +271,11 @@ func TestGetPlans_GroupsPricesByPlan(t *testing.T) {
 	if pro.ID != "pro" || len(pro.Prices) != 2 {
 		t.Fatalf("pro should have 2 prices: %+v", pro)
 	}
-	if pro.MonthlyCost != 100.0 || pro.AnnualCost != 1000.0 {
-		t.Fatalf("derived headline costs wrong: monthly=%v annual=%v", pro.MonthlyCost, pro.AnnualCost)
+	if pro.Prices[0].AmountMinor != 10000 || pro.Prices[0].TermType != "M" {
+		t.Fatalf("monthly price row wrong: %+v", pro.Prices[0])
 	}
 	if pro.Prices[1].AmountMinor != 100000 || pro.Prices[1].TermType != "A" {
-		t.Fatalf("price rows wrong: %+v", pro.Prices)
+		t.Fatalf("annual price row wrong: %+v", pro.Prices)
 	}
 	if free := plans[1]; free.ID != "free" || len(free.Prices) != 0 {
 		t.Fatalf("free should have no prices: %+v", free)
