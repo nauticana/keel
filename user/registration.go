@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nauticana/keel/billing"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/payment"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -44,22 +46,23 @@ func generateConfirmationCode() (int, error) {
 }
 
 const (
-	qAddUserRegistration         = "add_user_registration"
-	qGetUserRegistration         = "get_user_registration"
-	qSetUserRegistration         = "set_user_registration"
-	qBumpRegistrationAttempts    = "bump_registration_attempts"
-	qExpireRegistration          = "expire_registration"
-	qAddPartner                  = "add_partner"
-	qAddAddress                  = "add_address"
-	qAddDomain                   = "add_domain"
-	qAddUserAccount              = "add_user_account"
-	qAddPartnerUser              = "add_partner_user"
-	qAddUserPermission           = "add_user_permission"
-	qGetPlan                     = "get_plan"
-	qAddSubscription             = "add_subscription"
-	qActivateSubscription        = "activate_subscription"
-	qActivateUserAccount         = "activate_user_account"
-	qListActivePlans             = "list_active_plans"
+	qAddUserRegistration      = "add_user_registration"
+	qGetUserRegistration      = "get_user_registration"
+	qSetUserRegistration      = "set_user_registration"
+	qBumpRegistrationAttempts = "bump_registration_attempts"
+	qExpireRegistration       = "expire_registration"
+	qAddPartner               = "add_partner"
+	qAddAddress               = "add_address"
+	qAddDomain                = "add_domain"
+	qAddUserAccount           = "add_user_account"
+	qAddPartnerUser           = "add_partner_user"
+	qAddUserPermission        = "add_user_permission"
+	qGetPlan                  = "get_plan"
+	qPlanPrices               = "plan_prices"
+	qAddSubscription          = "add_subscription"
+	qActivateSubscription     = "activate_subscription"
+	qActivateUserAccount      = "activate_user_account"
+	qListActivePlans          = "list_active_plans"
 )
 
 // MaxRegistrationAttempts caps brute-force attempts on a pending
@@ -142,13 +145,18 @@ VALUES
  (?, 'PARTNER_ADMIN', CURRENT_TIMESTAMP)
 `,
 	qGetPlan: `
-SELECT id, monthly_cost, currency FROM subscription_plan WHERE id = ?
+SELECT currency FROM subscription_plan WHERE id = ? AND is_active = TRUE
+`,
+	qPlanPrices: `
+SELECT billing_cycle, term_type, term_count, amount_minor, currency
+  FROM subscription_plan_price WHERE plan_id = ?
 `,
 	qAddSubscription: `
 INSERT INTO partner_plan_subscription
- (partner_id, plan_id, begda, status, monthly_cost, currency, auto_renew)
+ (partner_id, plan_id, begda, status, monthly_cost, currency, auto_renew,
+  billing_cycle, term_count, term_type, amount_minor, renewal_date, next_charge_date)
 VALUES
- (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, TRUE)
+ (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?)
 `,
 	qActivateSubscription: `
 UPDATE partner_plan_subscription
@@ -161,9 +169,12 @@ UPDATE user_account
  WHERE id = ?
 `,
 	qListActivePlans: `
-SELECT id, caption, monthly_cost, annual_cost
-  FROM subscription_plan
- ORDER BY monthly_cost
+SELECT sp.id, sp.caption,
+       pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id
+  FROM subscription_plan sp
+  LEFT JOIN subscription_plan_price pp ON pp.plan_id = sp.id
+ WHERE sp.is_active = TRUE
+ ORDER BY sp.id, pp.term_type, pp.term_count, pp.billing_cycle
 `,
 }
 
@@ -184,6 +195,11 @@ type PartnerRegistration struct {
 	Longitude      float64 `json:"longitude"`
 	DomainURL      string  `json:"domainUrl"`
 	PlanID         string  `json:"planId"`
+	// Chosen offer (optional; from the plan's subscription_plan_price rows). When
+	// omitted, registration uses the plan's cheapest offer. PERIOD_TYPE codes.
+	BillingCycle string `json:"billingCycle,omitempty"`
+	TermType     string `json:"termType,omitempty"`
+	TermCount    int    `json:"termCount,omitempty"`
 }
 
 // ConfirmRegisterResult tells the client how to route the user after a
@@ -197,13 +213,95 @@ type ConfirmRegisterResult struct {
 	PaymentURL      string `json:"paymentUrl,omitempty"`
 }
 
-// PublicPlan is the reduced view of a subscription_plan surface-able to
-// unauthenticated visitors on the registration page.
+// PublicPlan is the unauthenticated registration-page view of a plan. Prices is
+// the same per-offer shape as billing.GetPlans so the shared sail price selector
+// works without auth; MonthlyCost/AnnualCost are convenience projections of the
+// 1-unit monthly/annual offers (back-compat).
 type PublicPlan struct {
-	ID          string  `json:"id"`
-	Caption     string  `json:"caption"`
-	MonthlyCost float64 `json:"monthlyCost"`
-	AnnualCost  float64 `json:"annualCost"`
+	ID          string              `json:"id"`
+	Caption     string              `json:"caption"`
+	MonthlyCost float64             `json:"monthlyCost"`
+	AnnualCost  float64             `json:"annualCost"`
+	Prices      []billing.PlanPrice `json:"prices"`
+}
+
+// subscriptionOffer is the resolved price + schedule snapshot for the sub row a
+// registration creates. The NULLable fields are nil for a free plan.
+type subscriptionOffer struct {
+	paymentRequired bool
+	monthlyCost     float64 // per-installment display (major); 0 for free
+	currency        string  // offer currency ("" for free → caller keeps plan currency)
+	billingCycle    any
+	termType        any
+	termCount       any
+	amountMinor     any
+	renewalDate     any
+	nextChargeDate  any
+}
+
+// resolveSubscriptionOffer picks the offer a registration should snapshot from a
+// plan's subscription_plan_price rows. No rows (or a zero-priced match) → free.
+// Requested terms must match an offer; with none requested, the cheapest is used.
+// The first installment is collected via the checkout PaymentURL, so
+// next_charge_date is the SECOND installment (the engine takes over from there).
+func resolveSubscriptionOffer(rows [][]any, data *PartnerRegistration, currency string, now time.Time) (subscriptionOffer, error) {
+	if len(rows) == 0 {
+		return subscriptionOffer{}, nil // free plan
+	}
+	idx := -1
+	if data.BillingCycle != "" || data.TermType != "" || data.TermCount > 0 {
+		wc := billing.ParseBillingPeriod(data.BillingCycle).Code()
+		wt := billing.ParseBillingPeriod(data.TermType).Code()
+		wn := data.TermCount
+		if wn < 1 {
+			wn = 1
+		}
+		for i, row := range rows {
+			if common.AsString(row[0]) == wc && common.AsString(row[1]) == wt && int(common.AsInt32(row[2])) == wn {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return subscriptionOffer{}, fmt.Errorf("plan does not offer the selected terms (%s/%d%s)", wc, wn, wt)
+		}
+	} else {
+		for i := range rows {
+			if idx < 0 || common.AsInt64(rows[i][3]) < common.AsInt64(rows[idx][3]) {
+				idx = i
+			}
+		}
+	}
+
+	row := rows[idx]
+	amount := common.AsInt64(row[3])
+	if amount <= 0 {
+		return subscriptionOffer{}, nil // zero-priced offer = free
+	}
+	terms := billing.BillingTerms{
+		BillingCycle: billing.ParseBillingPeriod(common.AsString(row[0])),
+		TermType:     billing.ParseBillingPeriod(common.AsString(row[1])),
+		TermCount:    int(common.AsInt32(row[2])),
+	}
+	n, err := terms.TotalInstallments()
+	if err != nil {
+		return subscriptionOffer{}, err
+	}
+	tc := terms.TermCount
+	if tc < 1 {
+		tc = 1
+	}
+	return subscriptionOffer{
+		paymentRequired: true,
+		monthlyCost:     payment.MinorToMajor(billing.InstallmentMinor(terms.ContractTotalMinor(amount), n, 0), common.AsString(row[4])),
+		currency:        common.AsString(row[4]),
+		billingCycle:    terms.BillingCycle.Code(),
+		termType:        terms.TermType.Code(),
+		termCount:       tc,
+		amountMinor:     amount,
+		renewalDate:     terms.TermEnd(now),
+		nextChargeDate:  terms.BillingCycle.NextRenewal(now),
+	}, nil
 }
 
 type RegistrationService struct {
@@ -384,14 +482,26 @@ func (r *RegistrationService) executeRegistration(ctx context.Context, data *Par
 	if len(planRes.Rows) == 0 {
 		return nil, 0, fmt.Errorf("unknown plan %q", planID)
 	}
-	monthlyCost := common.AsFloat64(planRes.Rows[0][1])
-	currency := common.AsString(planRes.Rows[0][2])
+	currency := common.AsString(planRes.Rows[0][0])
 	if currency == "" {
 		currency = "USD"
 	}
-	paymentRequired := monthlyCost > 0
+
+	// Resolve the chosen offer from subscription_plan_price. A plan with no price
+	// rows is free; otherwise pick the requested terms (or the cheapest offer).
+	priceRes, err := qs.Query(ctx, qPlanPrices, planID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to look up prices for plan %q: %w", planID, err)
+	}
+	sub, err := resolveSubscriptionOffer(priceRes.Rows, data, currency, time.Now().UTC())
+	if err != nil {
+		return nil, 0, err
+	}
+	if sub.currency != "" {
+		currency = sub.currency
+	}
 	subStatus := "A"
-	if paymentRequired {
+	if sub.paymentRequired {
 		subStatus = "P"
 	}
 
@@ -426,7 +536,8 @@ func (r *RegistrationService) executeRegistration(ctx context.Context, data *Par
 	if _, err := tx.Query(ctx, qAddUserPermission, userID); err != nil {
 		return nil, 0, fmt.Errorf("add user_permission: %w", err)
 	}
-	if _, err := tx.Query(ctx, qAddSubscription, partnerID, planID, subStatus, monthlyCost, currency); err != nil {
+	if _, err := tx.Query(ctx, qAddSubscription, partnerID, planID, subStatus, sub.monthlyCost, currency,
+		sub.billingCycle, sub.termCount, sub.termType, sub.amountMinor, sub.renewalDate, sub.nextChargeDate); err != nil {
 		return nil, 0, fmt.Errorf("add subscription: %w", err)
 	}
 	if !skipMarkRegistration {
@@ -441,8 +552,8 @@ func (r *RegistrationService) executeRegistration(ctx context.Context, data *Par
 	return &ConfirmRegisterResult{
 		PartnerID:       partnerID,
 		PlanID:          planID,
-		PaymentRequired: paymentRequired,
-		PaymentURL:      buildPaymentURL(partnerID, planID, paymentRequired),
+		PaymentRequired: sub.paymentRequired,
+		PaymentURL:      buildPaymentURL(partnerID, planID, sub.paymentRequired),
 	}, userID, nil
 }
 
@@ -472,14 +583,43 @@ func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, erro
 	if err != nil {
 		return nil, err
 	}
-	out := make([]PublicPlan, 0, len(res.Rows))
+	// One row per (plan, offer); group by plan id, preserving query order.
+	order := make([]string, 0, len(res.Rows))
+	byID := make(map[string]*PublicPlan, len(res.Rows))
 	for _, row := range res.Rows {
-		out = append(out, PublicPlan{
-			ID:          common.AsString(row[0]),
-			Caption:     common.AsString(row[1]),
-			MonthlyCost: common.AsFloat64(row[2]),
-			AnnualCost:  common.AsFloat64(row[3]),
-		})
+		id := common.AsString(row[0])
+		p, ok := byID[id]
+		if !ok {
+			p = &PublicPlan{ID: id, Caption: common.AsString(row[1])}
+			byID[id] = p
+			order = append(order, id)
+		}
+		cycle := common.AsString(row[2]) // empty when the plan has no price rows (LEFT JOIN)
+		if cycle == "" {
+			continue
+		}
+		price := billing.PlanPrice{
+			BillingCycle: cycle,
+			TermCount:    int(common.AsInt32(row[3])),
+			TermType:     common.AsString(row[4]),
+			AmountMinor:  common.AsInt64(row[5]),
+			Currency:     common.AsString(row[6]),
+			PriceID:      common.AsString(row[7]),
+		}
+		price.Amount = payment.MinorToMajor(price.AmountMinor, price.Currency)
+		p.Prices = append(p.Prices, price)
+		if price.TermCount == 1 {
+			switch billing.ParseBillingPeriod(price.TermType) {
+			case billing.PeriodMonthly:
+				p.MonthlyCost = price.Amount
+			case billing.PeriodAnnual:
+				p.AnnualCost = price.Amount
+			}
+		}
+	}
+	out := make([]PublicPlan, len(order))
+	for i, id := range order {
+		out[i] = *byID[id]
 	}
 	return out, nil
 }
