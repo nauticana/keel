@@ -11,12 +11,22 @@ columns:
   - name: is_active
     type: BOOLEAN
     default: "TRUE"
+  # monthly_cost is the price for one term_type unit (display/NUMERIC; the charge
+  # path uses minor units). Per-charge = this ÷ (term_type ÷ billing_cycle).
   - name: monthly_cost
     type: NUMERIC(18,2)
   - name: currency
     type: CHAR(3)
     default: USD
-  - name: period_type
+  # billing_cycle (PERIOD_TYPE): how often charged. term_count × term_type: the
+  # commitment. Same three-axis model as subscription_plan_price.
+  - name: billing_cycle
+    type: CHAR(1)
+    default: M
+  - name: term_count
+    type: INTEGER
+    default: "1"
+  - name: term_type
     type: CHAR(1)
     default: M
   - name: description

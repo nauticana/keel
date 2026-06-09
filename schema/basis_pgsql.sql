@@ -426,18 +426,27 @@ CREATE INDEX IF NOT EXISTS idx_device_token_user_active ON device_token(user_id,
 CREATE SEQUENCE IF NOT EXISTS device_token_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('device_token', 'id', 'device_token_seq') ON CONFLICT DO NOTHING;
 
--- Subscription plans with pricing
+-- Subscription plans (catalog). Per-interval prices live in subscription_plan_price.
 CREATE TABLE IF NOT EXISTS subscription_plan (
     id                                   VARCHAR(20)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
     is_active                            BOOLEAN       NOT NULL DEFAULT TRUE,
-    monthly_cost                         NUMERIC(18,2) NOT NULL,
-    annual_cost                          NUMERIC(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
-    provider_price_id                    VARCHAR(64)  ,
     activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
     trial_days                           INTEGER      ,
     CONSTRAINT subscription_plan_pk PRIMARY KEY (id)
+);
+
+-- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
+CREATE TABLE IF NOT EXISTS subscription_plan_price (
+    plan_id                              VARCHAR(20)   NOT NULL,
+    billing_cycle                        CHAR(1)       NOT NULL,
+    term_count                           INTEGER       NOT NULL DEFAULT 1,
+    term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
+    amount_minor                         BIGINT        NOT NULL,
+    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    provider_price_id                    VARCHAR(64)  ,
+    CONSTRAINT subscription_plan_price_pk PRIMARY KEY (plan_id, billing_cycle, term_type, term_count)
 );
 
 -- Quota-tracked resources (domains, API calls, etc.)
@@ -467,7 +476,9 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     is_active                            BOOLEAN       NOT NULL DEFAULT TRUE,
     monthly_cost                         NUMERIC(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
-    period_type                          CHAR(1)       NOT NULL DEFAULT 'M',
+    billing_cycle                        CHAR(1)       NOT NULL DEFAULT 'M',
+    term_count                           INTEGER       NOT NULL DEFAULT 1,
+    term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
     CONSTRAINT subscription_addon_pk PRIMARY KEY (id)
 );
@@ -484,7 +495,11 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     auto_renew                           BOOLEAN       NOT NULL DEFAULT TRUE,
     provider_subscription_id             VARCHAR(64)  ,
     billing_cycle                        CHAR(1)      ,
+    term_count                           INTEGER      ,
+    term_type                            CHAR(1)      ,
+    amount_minor                         BIGINT       ,
     renewal_date                         TIMESTAMP    ,
+    next_charge_date                     TIMESTAMP    ,
     cancelled_at                         TIMESTAMP    ,
     effective_cancel_date                TIMESTAMP    ,
     trial_end                            TIMESTAMP    ,
@@ -504,6 +519,12 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           BOOLEAN       NOT NULL DEFAULT TRUE,
+    billing_cycle                        CHAR(1)      ,
+    term_count                           INTEGER      ,
+    term_type                            CHAR(1)      ,
+    amount_minor                         BIGINT       ,
+    renewal_date                         TIMESTAMP    ,
+    next_charge_date                     TIMESTAMP    ,
     CONSTRAINT partner_addon_subscription_pk PRIMARY KEY (partner_id, addon_id, begda)
 );
 
@@ -693,7 +714,10 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     CONSTRAINT invoice_line_pk PRIMARY KEY (invoice_id, seq)
 );
 
--- Partner ↔ provider-customer token (one per partner+provider)
+-- Partner ↔ provider-customer token, one row per (partner, provider). Its own
+-- table (not a method_type='customer' row in payment_method) so payment_method
+-- holds only real chargeable methods. Used for billing-portal sessions and
+-- recurring-invoice attribution (the reverse token→partner lookup).
 CREATE TABLE IF NOT EXISTS partner_billing_customer (
     partner_id                           BIGINT        NOT NULL,
     provider                             VARCHAR(30)   NOT NULL,
@@ -972,6 +996,15 @@ BEGIN
      WHERE constraint_name = 'device_token_users' AND table_name = 'device_token'
   ) THEN
     ALTER TABLE device_token ADD CONSTRAINT device_token_users FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'subscription_plan_prices' AND table_name = 'subscription_plan_price'
+  ) THEN
+    ALTER TABLE subscription_plan_price ADD CONSTRAINT subscription_plan_prices FOREIGN KEY (plan_id) REFERENCES subscription_plan(id);
   END IF;
 END $$;
 DO $$

@@ -15,14 +15,14 @@ import (
 // built once, served by a sync.Once-cached QueryService accessor so the
 // placeholder rewriter doesn't re-run per webhook event.
 const (
-	qPayoutReusableAccounts  = "payout_reusable_accounts"
-	qPayoutVerifyReusable    = "payout_verify_reusable"
-	qPayoutLinkExisting      = "payout_link_existing"
-	qPayoutIsOnboarded       = "payout_is_onboarded"
-	qPayoutBankInfo          = "payout_bank_info"
-	qPayoutWriteExternal     = "payout_write_external"
-	qPayoutBackFillExternal  = "payout_backfill_external"
-	qPayoutClearExternal     = "payout_clear_external"
+	qPayoutReusableAccounts = "payout_reusable_accounts"
+	qPayoutVerifyReusable   = "payout_verify_reusable"
+	qPayoutLinkExisting     = "payout_link_existing"
+	qPayoutIsOnboarded      = "payout_is_onboarded"
+	qPayoutBankInfo         = "payout_bank_info"
+	qPayoutWriteExternal    = "payout_write_external"
+	qPayoutBackFillExternal = "payout_backfill_external"
+	qPayoutClearExternal    = "payout_clear_external"
 )
 
 var onboardingQueries = map[string]string{
@@ -38,10 +38,12 @@ SELECT ubi.partner_id, bp.caption, ubi.provider, ubi.provider_account_id,
        SELECT currency FROM user_bank_info
         WHERE user_id = ? AND partner_id = ?
    )`,
+
 	qPayoutVerifyReusable: `
 SELECT 1 FROM user_bank_info
  WHERE user_id = ? AND provider_account_id = ? AND partner_id <> ?
  LIMIT 1`,
+
 	qPayoutLinkExisting: `
 UPDATE user_bank_info
    SET provider_account_id = ?,
@@ -49,11 +51,13 @@ UPDATE user_bank_info
        provider_agreement = TRUE,
        updated_at = CURRENT_TIMESTAMP
  WHERE user_id = ? AND partner_id = ?`,
+
 	qPayoutIsOnboarded: `
 SELECT 1 FROM user_bank_info
  WHERE user_id = ? AND partner_id = ?
    AND provider_account_id IS NOT NULL
  LIMIT 1`,
+
 	qPayoutBankInfo: `
 SELECT ubi.country_code, ubi.currency, ubi.account_holder_name, ubi.billing_address,
        ubi.provider, COALESCE(ubi.provider_account_id, ''),
@@ -61,6 +65,7 @@ SELECT ubi.country_code, ubi.currency, ubi.account_holder_name, ubi.billing_addr
   FROM user_bank_info ubi
   LEFT JOIN user_account ua ON ua.id = ubi.user_id
  WHERE ubi.user_id = ? AND ubi.partner_id = ?`,
+
 	qPayoutWriteExternal: `
 UPDATE user_bank_info
    SET provider_account_id = ?,
@@ -68,12 +73,14 @@ UPDATE user_bank_info
        provider_agreement = CASE WHEN ? THEN TRUE ELSE provider_agreement END,
        updated_at = CURRENT_TIMESTAMP
  WHERE user_id = ? AND partner_id = ?`,
+
 	qPayoutBackFillExternal: `
 UPDATE user_bank_info
    SET provider_onboarded_at = CASE WHEN ? AND provider_onboarded_at IS NULL THEN CURRENT_TIMESTAMP ELSE provider_onboarded_at END,
        provider_agreement = CASE WHEN ? THEN TRUE ELSE provider_agreement END,
        updated_at = CURRENT_TIMESTAMP
  WHERE provider_account_id = ?`,
+
 	qPayoutClearExternal: `
 UPDATE user_bank_info
    SET provider_account_id = NULL,

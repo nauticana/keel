@@ -432,18 +432,28 @@ CREATE TABLE IF NOT EXISTS device_token (
 CREATE UNIQUE INDEX device_token_user_token_uq ON device_token(user_id, token);
 CREATE INDEX idx_device_token_user_active ON device_token(user_id, is_active);
 
--- Subscription plans with pricing
+-- Subscription plans (catalog). Per-interval prices live in subscription_plan_price.
 CREATE TABLE IF NOT EXISTS subscription_plan (
     id                                   VARCHAR(20)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
     is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
-    monthly_cost                         DECIMAL(18,2) NOT NULL,
-    annual_cost                          DECIMAL(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
-    provider_price_id                    VARCHAR(64)  ,
     activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
     trial_days                           INT          ,
     PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
+CREATE TABLE IF NOT EXISTS subscription_plan_price (
+    plan_id                              VARCHAR(20)   NOT NULL,
+    billing_cycle                        CHAR(1)       NOT NULL,
+    term_count                           INT           NOT NULL DEFAULT 1,
+    term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
+    amount_minor                         BIGINT        NOT NULL,
+    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    provider_price_id                    VARCHAR(64)  ,
+    PRIMARY KEY (plan_id, billing_cycle, term_type, term_count),
+    CONSTRAINT subscription_plan_prices FOREIGN KEY (plan_id) REFERENCES subscription_plan(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Quota-tracked resources (domains, API calls, etc.)
@@ -475,7 +485,9 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
     monthly_cost                         DECIMAL(18,2) NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
-    period_type                          CHAR(1)       NOT NULL DEFAULT 'M',
+    billing_cycle                        CHAR(1)       NOT NULL DEFAULT 'M',
+    term_count                           INT           NOT NULL DEFAULT 1,
+    term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -492,7 +504,11 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     auto_renew                           TINYINT(1)    NOT NULL DEFAULT 1,
     provider_subscription_id             VARCHAR(64)  ,
     billing_cycle                        CHAR(1)      ,
+    term_count                           INT          ,
+    term_type                            CHAR(1)      ,
+    amount_minor                         BIGINT       ,
     renewal_date                         DATETIME     ,
+    next_charge_date                     DATETIME     ,
     cancelled_at                         DATETIME     ,
     effective_cancel_date                DATETIME     ,
     trial_end                            DATETIME     ,
@@ -514,6 +530,12 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           TINYINT(1)    NOT NULL DEFAULT 1,
+    billing_cycle                        CHAR(1)      ,
+    term_count                           INT          ,
+    term_type                            CHAR(1)      ,
+    amount_minor                         BIGINT       ,
+    renewal_date                         DATETIME     ,
+    next_charge_date                     DATETIME     ,
     PRIMARY KEY (partner_id, addon_id, begda),
     CONSTRAINT partner_addon_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT partner_subscriptions_addon FOREIGN KEY (addon_id) REFERENCES subscription_addon(id)
@@ -699,7 +721,10 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     CONSTRAINT invoice_lines FOREIGN KEY (invoice_id) REFERENCES invoice(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Partner ↔ provider-customer token (one per partner+provider)
+-- Partner ↔ provider-customer token, one row per (partner, provider). Its own
+-- table (not a method_type='customer' row in payment_method) so payment_method
+-- holds only real chargeable methods. Used for billing-portal sessions and
+-- recurring-invoice attribution (the reverse token→partner lookup).
 CREATE TABLE IF NOT EXISTS partner_billing_customer (
     partner_id                           BIGINT        NOT NULL,
     provider                             VARCHAR(30)   NOT NULL,

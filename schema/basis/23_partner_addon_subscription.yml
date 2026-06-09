@@ -23,6 +23,25 @@ columns:
   - name: auto_renew
     type: BOOLEAN
     default: "TRUE"
+  # Same billing/term/charge model as partner_plan_subscription (see there).
+  - name: billing_cycle
+    type: CHAR(1)
+    nullable: true
+  - name: term_count
+    type: INTEGER
+    nullable: true
+  - name: term_type
+    type: CHAR(1)
+    nullable: true
+  - name: amount_minor
+    type: BIGINT
+    nullable: true
+  - name: renewal_date
+    type: TIMESTAMP
+    nullable: true
+  - name: next_charge_date
+    type: TIMESTAMP
+    nullable: true
 primary_key: [partner_id, addon_id, begda]
 foreign_keys:
   - name: partner_addon_subscriptions

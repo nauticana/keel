@@ -42,10 +42,19 @@ seeds:
     columns: [constant_id, table_name, column_name]
     rows:
       - [currency, subscription_plan, currency]
+      - [currency, subscription_plan_price, currency]
       - [currency, subscription_addon, currency]
       - [currency, partner_plan_subscription, currency]
       - [currency, partner_addon_subscription, currency]
       - [period_type, subscription_quota, period_type]
+      - [period_type, subscription_plan_price, billing_cycle]
+      - [period_type, subscription_plan_price, term_type]
+      - [period_type, subscription_addon, billing_cycle]
+      - [period_type, subscription_addon, term_type]
+      - [period_type, partner_plan_subscription, billing_cycle]
+      - [period_type, partner_plan_subscription, term_type]
+      - [period_type, partner_addon_subscription, billing_cycle]
+      - [period_type, partner_addon_subscription, term_type]
       - [subscription_status, partner_plan_subscription, status]
       - [subscription_status, partner_addon_subscription, status]
       - [subscription_activation_mode, subscription_plan, activation_mode]
@@ -54,6 +63,7 @@ seeds:
     columns: [constraint_name, lookup_style, display_column]
     rows:
       - [subscription_quotas, S, "*"]
+      - [subscription_plan_prices, S, "*"]
       - [sub_resources_quotas, D, id]
       - [partner_plan_subscriptions, S, "*"]
       - [partner_addon_subscriptions, S, "*"]
@@ -73,6 +83,7 @@ seeds:
     columns: [api_id, seq, parent_seq, constraint_name]
     rows:
       - [subscription_plan, 1, 0, subscription_quotas]
+      - [subscription_plan, 2, 0, subscription_plan_prices]
 
   - table: application_menu
     columns: [display_order, id, caption]
@@ -136,5 +147,6 @@ seeds:
       - [PARTNER_ADMIN, TABLE, DELETE, partner_user]
       # Subscription read-only
       - [PARTNER_ADMIN, TABLE, SELECT, subscription_plan]
+      - [PARTNER_ADMIN, TABLE, SELECT, subscription_plan_price]
       - [PARTNER_ADMIN, TABLE, SELECT, subscription_quota]
       - [PARTNER_ADMIN, TABLE, SELECT, usage_ledger]

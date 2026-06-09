@@ -41,6 +41,8 @@ Downstream projects adopting keel from the legacy repository should expect the b
 | `service.NewLocalUserService` | lived under `service/` | now `user.NewLocalUserService` | UserService and its impl share the `user` package. |
 | `service.NewLocalConsentService` | lived under `service/` | now `user.NewLocalConsentService` | Same — consent is part of user-account infrastructure. |
 | `service.ErrDuplicateEmail` / `ErrDuplicatePhone` | lived under `service/` | now `user.ErrDuplicateEmail` / `user.ErrDuplicatePhone` | |
+| `service.AbstractBillingService` / `SubscriptionLifecycle` / `BillingEngine` / `ProviderSubscriptionEventHandler` / `BillingTerms` (+ `Plan`, `Subscription`, `Invoice`, sentinels) | lived under `service/` | now `billing.*` (e.g. `billing.AbstractBillingService`, `billing.NewProviderSubscriptionEventHandler`) | All billing moved to its own `billing` package. Update imports + the `billing` instance variable in wiring (it now shadows the package — rename to e.g. `svc`). |
+| `data.QuotaServiceDb` | lived under `data/` | now `service.QuotaServiceDb` | The concrete `port.QuotaService` impl moved to `service`; the `port.QuotaService` interface is unchanged. Update the import + `&service.QuotaServiceDb{…}` construction. |
 
 The remaining methods on `UserService` keep their signatures. A future major version will split `UserService` into per-feature interfaces (`UserAuthenticator`, `RefreshTokenService`, `TwoFactorService`, `OTPService`, `SocialAuthService`, `AccountService`) so handlers can depend on the slice they need; for now the monolith stays for compat.
 
@@ -400,7 +402,7 @@ graph TD
 | `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), HTTP response utilities (`WriteJSON`, `WriteError` with RFC 7807), shared HTTP client, shared flag variables |
 | `model` | Domain-agnostic models: `TableDefinition`, `TableColumn`, `ForeignKey`, `UserSession`, `PasswordPolicy`, `QueryResult`, `AppError`, `UserMenu`, `DeviceToken`, `TableChangeLog` |
 | `port` | Interface definitions for all pluggable components (auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger) |
-| `data` | `AbstractRepository`, `AbstractTableService`, `DatabaseRepository` / `TxView` / `QueryService` interfaces, file-based `TableLogger`, `QuotaServiceDb`, Snowflake bigint id generator |
+| `data` | `AbstractRepository`, `AbstractTableService`, `DatabaseRepository` / `TxView` / `QueryService` interfaces, file-based `TableLogger`, Snowflake bigint id generator |
 | `pgsql` | PostgreSQL implementation using `pgx/v5` — repository, table service, query service, tx-bound query service, tx view. For typed reads against a fixed schema, use [`pgx.CollectRows[T]`](https://pkg.go.dev/github.com/jackc/pgx/v5#CollectRows) directly (already in scope; no keel wrapper needed); reserve `QueryService.Query` for metadata-driven dynamic-schema reads where the `[][]any` shape is intentional. |
 | `schema` | YAML-based schema definition + seed loader, plus the `schemagen` model used by `cmd/schemagen` to emit DDL/DML for any supported dialect |
 | `schema/dialect` | DDL dialects (PostgreSQL, MySQL) consumed by `schemagen` |
@@ -409,7 +411,7 @@ graph TD
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
 | `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values |
-| `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults) |
+| `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
@@ -417,6 +419,7 @@ graph TD
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
 | `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository |
+| `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `RunDefault`, the one-call worker bootstrap |
@@ -555,7 +558,7 @@ executor.Run(ctx, secrets)
 
 ## Quota Service
 
-`port.QuotaService` enforces per-partner subscription limits. `data.QuotaServiceDb` is the standard implementation: it reads caps from `subscription_quota` (joined to the partner's active `partner_plan_subscription`), caches them per partner (1-hour TTL, singleflight-collapsed), and is **fail-closed** — no active plan, or a resource absent from the plan, denies. A cap of `-1` means unlimited.
+`port.QuotaService` enforces per-partner subscription limits. `service.QuotaServiceDb` is the standard implementation: it reads caps from `subscription_quota` (joined to the partner's active `partner_plan_subscription`), caches them per partner (1-hour TTL, singleflight-collapsed), and is **fail-closed** — no active plan, or a resource absent from the plan, denies. A cap of `-1` means unlimited.
 
 ```go
 allowed, err := quota.CheckQuota(ctx, partnerID, "MEDIA", 1) // room for 1 more?
@@ -579,7 +582,7 @@ Keel ships exactly one default live-count query — `MAX_DOMAINS` (over `partner
 To live-count **your own** tables, inject per-resource SQL via `QuotaServiceDb.Queries` — a map keyed by **resource id**:
 
 ```go
-quota := &data.QuotaServiceDb{
+quota := &service.QuotaServiceDb{
     Repo: db,
     Queries: map[string]string{
         // Partner-direct table:
@@ -602,23 +605,23 @@ A `COUNT(*)` query yields concurrent "N at a time" limits; a `SUM(usage_ledger)`
 
 ## Billing (v1.0.1)
 
-keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook pipeline (`payment.WebhookProcessor`), the checkout client (`payment.StripeCheckoutClient`), the quota engine (`data.QuotaServiceDb`), and the canonical `subscription_*` / `partner_plan_subscription` / `usage_ledger` / `payment_method` tables. v1.0.1 adds the repetitive **SaaS billing glue** every downstream project used to re-implement, so a new project gets billing from config + a thin wiring layer. **All additive** — existing consumers compile unchanged; adopt piece by piece.
+keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook pipeline (`payment.WebhookProcessor`), the checkout client (`payment.StripeCheckoutClient`), the quota engine (`service.QuotaServiceDb`), and the canonical `subscription_*` / `partner_plan_subscription` / `usage_ledger` / `payment_method` tables. v1.0.1 adds the repetitive **SaaS billing glue** every downstream project used to re-implement, so a new project gets billing from config + a thin wiring layer. **All additive** — existing consumers compile unchanged; adopt piece by piece.
 
 | New | What it does | Project supplies |
 |---|---|---|
-| `service.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables; returns the `ErrNoSubscription`/`ErrPlanNotFound` sentinels so a handler can `errors.Is` → 404/400 | `Queries` overrides, `PriceResolver`, `ResourceNames` |
-| `service.AbstractBillingService` provider-driven write helpers (exposed via the `ProviderBillingStore` interface): `RecordProviderInvoice` (writes the `invoice` row on a provider `invoice.paid` so `GetInvoices` isn't empty — keel otherwise writes invoices only in the SelfScheduledEngine; idempotent on `invoice_number`), `LinkCustomer`/`CustomerToken`/`PartnerByCustomer` (partner ↔ provider-customer mapping in the dedicated `partner_billing_customer` table, for the portal + recurring-invoice attribution), `ListPaymentMethods` (the partner's saved methods for sail's `listPaymentMethods()`) | — (call from your `AbstractWebhookEventHandler` hooks / billing bridges) |
-| `service.SubscriptionLifecycle` (on `AbstractBillingService`) | the subscription verbs over `partner_plan_subscription`: `Activate` (honors the plan's `activation_mode`), `ChangePlan` (atomic close+open), `CancelByPartner`/`CancelByProviderSubID` (immediate or at-period-end), `ConvertTrial`, `SetSeats`, `Reactivate`, `SetDunningState` | per-plan `activation_mode` + `trial_days`; the metadata keys |
+| `billing.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables; `GetPlans` returns each plan with its `Prices[]` (one per offered billing interval); `CreateSubscription` takes the chosen interval; returns the `ErrNoSubscription`/`ErrPlanNotFound`/`ErrPriceNotFound` sentinels so a handler can `errors.Is` → 404/400 | `Queries` overrides, `ResourceNames` |
+| `billing.AbstractBillingService` provider-driven write helpers (exposed via the `ProviderBillingStore` interface): `RecordProviderInvoice` (writes the `invoice` row on a provider `invoice.paid` so `GetInvoices` isn't empty — keel otherwise writes invoices only in the SelfScheduledEngine; idempotent on `invoice_number`), `LinkCustomer`/`CustomerToken`/`PartnerByCustomer` (partner ↔ provider-customer mapping in the dedicated `partner_billing_customer` table, for the portal + recurring-invoice attribution), `ListPaymentMethods` (the partner's saved methods for sail's `listPaymentMethods()`) | — (call from your `AbstractWebhookEventHandler` hooks / billing bridges) |
+| `billing.SubscriptionLifecycle` (on `AbstractBillingService`) | the subscription verbs over `partner_plan_subscription`: `Activate(…, BillingTerms, …)`/`ChangePlan(…, BillingTerms)`/`CreateSubscription(…, BillingTerms)` take the chosen offer (billing cycle + commitment term) — they read the matching `subscription_plan_price` row and snapshot the price, set `renewal_date` (= term end), `next_charge_date`, and the per-installment `monthly_cost`, `CancelByPartner`/`CancelByProviderSubID` (immediate or at-period-end), `ConvertTrial`, `SetSeats`, `Reactivate`, `SetDunningState` | per-plan `activation_mode` + `trial_days` + the `subscription_plan_price` rows; the metadata keys |
 | `payment.PaymentEvent.EventKind` + `SubscriptionID`/`InvoiceID` | provider-agnostic normalized event kind (set by every parser) + the ids, so handlers stop digging raw JSON | — |
 | `payment.AbstractWebhookEventHandler` | dispatches `EventKind` → nil-safe hooks (`OnCheckoutCompleted/OnInvoicePaid/OnInvoicePaymentFailed/OnSubscriptionUpdated/…`) | the per-kind closures (your domain SQL) |
-| `service.ProviderSubscriptionEventHandler` (a `payment.PaymentEventHandler`) | the **default** provider-driven mapping pre-wired on `AbstractWebhookEventHandler`: `checkout_completed`→`LinkCustomer`+`Activate`, `invoice_paid`→`RecordProviderInvoice`+`ConvertTrial`, `invoice_payment_failed`→past-due (`X`), `subscription_canceled`→`CancelByProviderSubID` (fallback `CancelByPartner`). Collapses a hand-written `payment_service.go` to wiring | `NewProviderSubscriptionEventHandler(billing, billing, opts)` — partner resolution + metadata keys |
+| `billing.ProviderSubscriptionEventHandler` (a `payment.PaymentEventHandler`) | the **default** provider-driven mapping pre-wired on `AbstractWebhookEventHandler`: `checkout_completed`→`LinkCustomer`+`Activate` (terms from `metadata[BillingCycleKey/TermTypeKey/TermCountKey]`), `invoice_paid`→`RecordProviderInvoice`+`ConvertTrial`, `invoice_payment_failed`→past-due (`X`), `subscription_canceled`→`CancelByProviderSubID` (fallback `CancelByPartner`). Collapses a hand-written `payment_service.go` to wiring | `billing.NewProviderSubscriptionEventHandler(svc, svc, opts)` — partner resolution + metadata keys (`PartnerIDKey`/`PlanIDKey`/`BillingCycleKey`/`TermTypeKey`/`TermCountKey`) |
 | `handler.QuotaEnforcer` | HTTP middleware: count new resources in a POST body → `CheckQuota` → **402** + optional post-write `After` hook. `CountOpCodeRows` builds your extractors | `Extractors []ResourceExtractor` |
 | `handler.FeatureGate` | entitlement via the `cap<0` flag convention: `FeatureAllowed`, `ListFeatures`, `FilterResponseField` (strip a premium child from a GET) | `Features`, `StripFeature`/`StripRecordKey` |
 | `payment.AddonReconciler` + `StripeAddonReconciler` | sync a metered add-on quantity as a subscription item (INERT when `PriceID==""`) | `PriceID`, `DesiredQty`, `SubIDFor` closures |
 | `payment.ChargeClient` + `StripeChargeClient` | off-session charge of a vaulted method (handles SCA-required & declines); forwards `ChargeRequest.Metadata` onto the PaymentIntent so the settled charge's webhook can correlate back; `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)` exposes the 4xx body and threads a caller idempotency key | `ChargeRequest` per call (`AmountMinor`, `IdempotencyKey`, `Metadata`) |
 | `worker.AbstractBillingReconciler` | daily backstop pass over active partners (run from a systemd timer, never a CI cron) | `Partners`, `Reconcile` closures |
-| `service.BillingEngine` (+ `ProviderSubscriptionEngine`, `SelfScheduledEngine`) | the recurring-engine strategy: provider runs the cycle **or** we self-schedule (own billing-run → off-session charge → invoice → dunning) | engine choice + the self-scheduled closures |
-| basis: `invoice`/`invoice_line`/`partner_billing_customer`, `subscription_plan.{provider_price_id,activation_mode,trial_days}`, `partner_plan_subscription.{provider_subscription_id,billing_cycle,renewal_date,cancelled_at,effective_cancel_date,trial_end,seats}` | the missing billing tables/columns | per-env seed of `provider_price_id` + `activation_mode` |
+| `billing.BillingEngine` (+ `ProviderSubscriptionEngine`, `SelfScheduledEngine`) | the recurring-engine strategy: provider runs the cycle **or** we self-schedule (own billing-run → off-session charge → invoice → dunning). `SelfScheduledEngine.BillSubscriptionsFromTable` enables keel's built-in **installment engine**: charges every due `partner_plan_subscription`, computes the per-installment amount from its snapshot terms, advances `next_charge_date`, and rolls to a new term (`auto_renew`) or ends the row at term end | engine choice + the self-scheduled closures (or just the flag for the built-in installment pass) |
+| basis: `invoice`/`invoice_line`/`partner_billing_customer`, `subscription_plan_price{plan_id,billing_cycle,term_count,term_type,amount_minor,currency,provider_price_id}` (per-offer prices, nested under `subscription_plan` via `rest_api_child`), `subscription_plan.{activation_mode,trial_days}`, `subscription_addon.{billing_cycle,term_count,term_type}`, `partner_plan_subscription`/`partner_addon_subscription.{billing_cycle,term_count,term_type,amount_minor,renewal_date,next_charge_date,…}` | the missing billing tables/columns | per-env seed of `subscription_plan_price` rows (amount + `provider_price_id`) + `activation_mode` |
 
 ### Provider-driven vs self-scheduled
 
@@ -643,6 +646,24 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 
 These four are mutually-exclusive **policies**. Orthogonal to them are **modifiers** that overlay any policy, so they are *columns, not enum values*: `seats` (seat-based pricing — pairs with `AddonReconciler`), `trial_end`/start-date (scheduling), the engine choice (`ProviderSubscriptionEngine` vs `SelfScheduledEngine`), and the collection method (charge-now vs send-invoice). Putting `seats` in the mode enum would make "seat-based trial" inexpressible — keep it a modifier.
 
+**Billing is three independent axes — payment cadence, commitment term, and price — not one "interval".** Conflating them is the classic billing bug; keel keeps them separate (`billing.BillingTerms`):
+
+- **`billing_cycle`** (`PERIOD_TYPE`: `W`/`M`/`Q`/`A`) — *how often money is taken*. Drives `next_charge_date`.
+- **`term_count` × `term_type`** — *the commitment*. Drives `renewal_date` (= **term end**, when it renews or ends) and the no-refund-on-early-cancel behavior. `term_count` is usually 1; `auto_renew` continues past it.
+- **`amount_minor`** — *the price for one `term_type` unit* (e.g. $/year), authoritative integer minor units (`payment.MinorToMajor`), never a float. Per-charge = `amount ÷ installments(term_type→billing_cycle)`; contract total = `amount × term_count`.
+
+This expresses every real shape, e.g. **$1000/yr billed monthly** (`billing_cycle=M`, `term=1·A`, `amount=$1000` → twelve $83.33 charges, the last truing up the remainder) or **a 3-year fixed-price contract paid monthly** (`term=3·A`). The offers a plan sells are rows in `subscription_plan_price(plan_id, billing_cycle, term_count, term_type, amount_minor, currency, provider_price_id)` (Stripe Product→Prices), nested under `subscription_plan` via `rest_api_child`; each offer has its own `provider_price_id`. The customer picks one **at checkout** — the terms belong to the *subscription*, not the plan.
+
+- **Activation:** `Activate(…, BillingTerms, …)` / `ChangePlan(…, BillingTerms)` / `CreateSubscription(…, BillingTerms)` read the matching price row (`ErrPriceNotFound` otherwise) and **snapshot** the price onto `partner_plan_subscription`, set `renewal_date = begda + term`, `next_charge_date = begda` (first installment due), `amount_minor`, and the per-installment display `monthly_cost`. All dates are computed in Go and bound — the lifecycle INSERTs carry no dialect-specific `INTERVAL` SQL.
+- **Price locks for the term, refreshes on renewal:** the snapshot holds the price steady for the whole committed term, so a long commitment is how you lock a fixed/discount price. At renewal the engine re-reads the current offer and re-snapshots — so a month-to-month sub (1-month term) follows the current price each month, while a 3-year term holds its price for 3 years. If the offer was withdrawn, the term can't renew and the row ends.
+- **Cancellation falls out for free:** cancel-at-period-end sets `effective_cancel_date = renewal_date`. A monthly term ends next month; a committed annual/3-yr term keeps billing monthly until the term ends — exactly the discount-commitment rule. `auto_renew` then decides whether a new term begins.
+- **Installment engine:** set `SelfScheduledEngine.BillSubscriptionsFromTable = true` and each `RunCycle` charges every due subscription: it computes the installment (exact int64, remainder on the final charge of the term), advances `next_charge_date` by one `billing_cycle`, and at term end either rolls to a new term (`auto_renew`, re-reading the current price) or stops and ends the row. Pure math lives in `BillingTerms`/`InstallmentMinor` (unit-tested); `InstallmentsPerUnit` errors rather than guessing for cycles that don't divide the term unit.
+- **Provider-driven path:** `ProviderSubscriptionEventHandler` reads terms from `metadata[BillingCycleKey/TermTypeKey/TermCountKey]` (defaults `billing_cycle`/`term_type`/`term_count`, stamped by the checkout creator from the selected price); absent → monthly / 1-month term.
+- **Catalog read:** `GetPlans` returns each `Plan` with `Prices []PlanPrice` (cycle, term, `AmountMinor`, major `Amount`, currency, `PriceID`); `MonthlyCost`/`AnnualCost` remain convenience projections of the 1-unit `M`/`A` rows. Build the checkout `AllowedPriceIDs` whitelist from `Prices[].PriceID`.
+- **Annual-only products** (e.g. bdsrest) seed a single `A`-term price row per plan and pass `BillingTerms{TermType: PeriodAnnual}`; they no longer fork the lifecycle SQL.
+
+`subscription_addon` carries the same `billing_cycle`/`term_count`/`term_type` columns; the built-in installment pass currently covers plan subscriptions (addons via `AddonReconciler` / project closures as before). Multi-currency per term is a future extension (add `currency` to the price PK).
+
 Statuses use the `SUBSCRIPTION_STATUS` dictionary: `A` active · `P` pending payment · `T` trialing · `C` cancelled (voluntary) · `X` expired/past-due (involuntary). `SetDunningState` moves `A↔X`; cancels set `C` (immediate) or `effective_cancel_date` (at-period-end, finalized by `AbstractBillingReconciler`).
 
 *Not* activation modes (handled separately): **metered/usage** (a billing model over an already-active sub), **comp/admin grant** (set `A` via an admin path), and the transitions **change-plan / reactivate / pause** (their own verbs). Further policies — one-time/lifetime, invoice-terms (NET-x), manual/sales-approval — slot into the open dictionary when a project needs them.
@@ -652,8 +673,8 @@ Statuses use the `SUBSCRIPTION_STATUS` dictionary: `A` active · `P` pending pay
 ### v0.9.x → v1.0.1 adoption checklist
 
 1. Bump the dependency; run your DB re-init (the new basis tables/columns are additive — regenerate + reinit).
-2. Provider-driven billing: register `service.NewProviderSubscriptionEventHandler(billing, billing, opts)` and your `payment_service.go` collapses to that wiring. (For a non-standard mapping, wire an `AbstractWebhookEventHandler` directly instead.) Either way, delete raw-JSON `subscription`/`invoice` id digging — use `e.SubscriptionID`/`e.InvoiceID`.
-3. (Optional) Embed `AbstractBillingService` in your billing service; seed `subscription_plan.provider_price_id` and `activation_mode` per plan (paid→`P`, free→`F`, trial→`T`) instead of a Go plan→price/activation map.
+2. Provider-driven billing: register `billing.NewProviderSubscriptionEventHandler(svc, svc, opts)` and your `payment_service.go` collapses to that wiring. (For a non-standard mapping, wire an `AbstractWebhookEventHandler` directly instead.) Either way, delete raw-JSON `subscription`/`invoice` id digging — use `e.SubscriptionID`/`e.InvoiceID`.
+3. (Optional) Embed `AbstractBillingService` in your billing service; seed `subscription_plan` (`activation_mode`: paid→`P`, free→`F`, trial→`T`) plus one `subscription_plan_price` row **per offered (billing_cycle, term)** (`amount_minor` = price per `term_type` unit, `provider_price_id`) instead of a Go plan→price/activation map. Annual-only products seed a single `A`-term row and pass `billing.BillingTerms{TermType: billing.PeriodAnnual}`. For keel-run recurring billing set `SelfScheduledEngine.BillSubscriptionsFromTable = true`. **Breaking vs the prior billing API:** prices moved off `subscription_plan` (`monthly_cost`/`annual_cost`/`provider_price_id`) into `subscription_plan_price`; `Activate`/`ChangePlan`/`CreateSubscription` now take a `billing.BillingTerms`; `Plan.PriceID` became `Plan.Prices[].PriceID`; `AbstractBillingService.PriceResolver` was removed (the price table is the source of truth); `renewal_date` now means **term end** (the next-charge moment is `next_charge_date`); `ProviderSubscriptionEventHandler` reads `billing_cycle`/`term_type`/`term_count` metadata (was `billing_period`). Migrate plan pricing into the new table and pass the chosen terms.
 4. (Optional) Wire `QuotaEnforcer` on your resource-creating POST and `FeatureGate` for premium features.
 5. Pick a `BillingEngine`. Provider-driven needs only the webhook hooks; self-scheduled needs the `SelfScheduledEngine` closures + a systemd timer running `AbstractBillingReconciler`/`RunCycle`, fully tested first.
 
@@ -2162,6 +2183,7 @@ erDiagram
 erDiagram
     subscription_resource ||--o{ subscription_quota : limits
     subscription_plan ||--o{ subscription_quota : has
+    subscription_plan ||--o{ subscription_plan_price : prices
     subscription_plan ||--o{ partner_plan_subscription : subscribed
     business_partner ||--o{ partner_plan_subscription : has
     business_partner ||--o{ usage_ledger : tracks
@@ -2172,12 +2194,18 @@ erDiagram
         VARCHAR id PK
         VARCHAR caption
         BOOLEAN is_active
-        NUMERIC monthly_cost
-        NUMERIC annual_cost
         CHAR currency
-        VARCHAR provider_price_id
         CHAR activation_mode
         INTEGER trial_days
+    }
+    subscription_plan_price {
+        VARCHAR plan_id PK,FK
+        CHAR billing_cycle PK
+        CHAR term_type PK
+        INTEGER term_count PK
+        BIGINT amount_minor
+        CHAR currency
+        VARCHAR provider_price_id
     }
     subscription_resource {
         VARCHAR id PK
@@ -2199,7 +2227,9 @@ erDiagram
         BOOLEAN is_active
         NUMERIC monthly_cost
         CHAR currency
-        CHAR period_type
+        CHAR billing_cycle
+        INTEGER term_count
+        CHAR term_type
     }
     partner_plan_subscription {
         BIGINT partner_id PK,FK
@@ -2210,7 +2240,11 @@ erDiagram
         BOOLEAN auto_renew
         VARCHAR provider_subscription_id
         CHAR billing_cycle
+        INTEGER term_count
+        CHAR term_type
+        BIGINT amount_minor
         TIMESTAMP renewal_date
+        TIMESTAMP next_charge_date
         TIMESTAMP effective_cancel_date
         TIMESTAMP trial_end
         INTEGER seats
@@ -2222,6 +2256,12 @@ erDiagram
         TIMESTAMP endda
         CHAR status
         BOOLEAN auto_renew
+        CHAR billing_cycle
+        INTEGER term_count
+        CHAR term_type
+        BIGINT amount_minor
+        TIMESTAMP renewal_date
+        TIMESTAMP next_charge_date
     }
     usage_ledger {
         BIGINT partner_id FK
@@ -2430,6 +2470,7 @@ erDiagram
 | `partner_address` / `partner_domain` | Partner locations and domains |
 | `api_key` | API key management per partner |
 | `subscription_plan` / `subscription_quota` | Subscription plans with resource limits |
+| `subscription_plan_price` | Per-offer prices (billing cycle + commitment term) for a plan |
 | `subscription_resource` | Quota-tracked resources |
 | `subscription_addon` | Optional add-on features |
 | `partner_plan_subscription` / `partner_addon_subscription` | Active subscriptions per partner |
@@ -2675,8 +2716,7 @@ keel/
 ├── port/                      # Pluggable component interfaces (login, messaging, notification, quota,
 │                              #   table change logger, web socket hub, ID generator)
 ├── data/                      # AbstractRepository, AbstractTableService, DatabaseRepository / TxView /
-│                              #   QueryService interfaces, file TableLogger, QuotaServiceDb,
-│                              #   SnowflakeGenerator
+│                              #   QueryService interfaces, file TableLogger, SnowflakeGenerator
 ├── pgsql/                     # PostgreSQL adapter (pgx/v5): repository, table service,
 │                              #   query service, tx-bound query service, tx view
 ├── schema/                    # YAML schema definitions + seed loader + schemagen model
@@ -2693,7 +2733,7 @@ keel/
 ├── handler/                   # AbstractHandler + login / 2FA / OTP / social / payment / push / REST / cache
 ├── user/                      # UserService interface + LocalUserService + RegistrationService +
 │                              #   ConsentService
-├── service/                   # APIKeyService + JWT/API-key middleware + HttpBackend
+├── service/                   # APIKeyService + JWT/API-key middleware + HttpBackend + QuotaServiceDb
 ├── dispatcher/                # MailClient + LocalNotificationService + Email & Twilio dispatchers
 ├── worker/                    # JobExecutor + RunDefault one-call bootstrap
 ├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault / Infisical + factory
@@ -2703,6 +2743,8 @@ keel/
 ├── messaging/                 # GCP Pub/Sub + AWS SNS+SQS + NATS JetStream + factory
 ├── payment/                   # Stripe + LemonSqueezy webhook processor, signatures, parsers,
 │                              #   SQL webhook log repo, Stripe Checkout client
+├── billing/                   # SaaS billing: AbstractBillingService, lifecycle, BillingEngine,
+│                              #   installment math, provider webhook→billing handler
 └── push/                      # FCM + NoOp port.MessageDispatcher implementations + factory
 ```
 
@@ -2760,6 +2802,7 @@ Keel defines 6 shared roles. Projects may add domain-specific roles (e.g., SEO_A
 | PAGE | subscription_addons | | | | | A | |
 | PAGE | partner_quota_usages | | | | | A | |
 | TABLE | subscription_plan | | S | | | SIUD | S |
+| TABLE | subscription_plan_price | | S | | | SIUD | S |
 | TABLE | subscription_quota | | S | | | SIUD | S |
 | TABLE | subscription_resource | | SIUD | S | | S | |
 | TABLE | subscription_addon | | S | | | SIUD | |

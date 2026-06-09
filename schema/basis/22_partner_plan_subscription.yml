@@ -23,10 +23,27 @@ columns:
   - name: provider_subscription_id
     type: VARCHAR(64)
     nullable: true
+  # billing_cycle: how often charged (drives next_charge_date). term_count×term_type:
+  # the committed term snapshot at purchase (drives renewal_date = term end).
+  # amount_minor: price per term_type unit, snapshot so committed pricing is fixed.
   - name: billing_cycle
     type: CHAR(1)
     nullable: true
+  - name: term_count
+    type: INTEGER
+    nullable: true
+  - name: term_type
+    type: CHAR(1)
+    nullable: true
+  - name: amount_minor
+    type: BIGINT
+    nullable: true
+  # renewal_date = end of the current term (when it renews if auto_renew, else ends).
+  # next_charge_date = when the next installment is taken (begda + n×billing_cycle).
   - name: renewal_date
+    type: TIMESTAMP
+    nullable: true
+  - name: next_charge_date
     type: TIMESTAMP
     nullable: true
   - name: cancelled_at

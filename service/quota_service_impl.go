@@ -1,4 +1,4 @@
-package data
+package service
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/data"
 )
 
 const (
@@ -82,7 +83,7 @@ type QuotaMap = map[string]QuotaItem
 type AddonMap = map[string]bool
 
 type QuotaServiceDb struct {
-	Repo DatabaseRepository
+	Repo data.DatabaseRepository
 
 	// Queries injects per-resource live-count SQL keyed by RESOURCE ID (e.g.
 	// "MEDIA"). Each query is bound with a single partnerID param and must
@@ -100,7 +101,7 @@ type QuotaServiceDb struct {
 	mu         sync.RWMutex
 	quotaCache map[int64]QuotaMap
 	addonCache map[int64]AddonMap
-	qs         QueryService
+	qs         data.QueryService
 	// resourceQueries is the merged default+injected resource→count-SQL map.
 	// Its keys are the routing table CheckQuota uses to choose live-count vs
 	// usage_ledger for a given resource.

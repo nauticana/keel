@@ -1,9 +1,9 @@
-package service
+package billing
 
 import (
 	"context"
 	"errors"
-	"fmt"
+	"maps"
 	"strconv"
 	"sync"
 	"time"
@@ -13,16 +13,9 @@ import (
 	"github.com/nauticana/keel/payment"
 )
 
-// Billing read/write layer over keel's canonical basis tables
-// (subscription_plan, partner_plan_subscription, usage_ledger, invoice).
-// Every downstream project re-implemented these near-identical queries;
-// AbstractBillingService lifts them into the framework. Project-specific
-// bits — the plan catalog, the metered resource names, a custom
-// plan→price map during migration — are injected, never hardcoded.
-//
-// The JSON tags are camelCase to match the shared sail BillingService
-// model (PublicPlan / Subscription / Invoice / UsageMeter) so the Angular
-// billing components consume these shapes without an adapter.
+// Billing read/write layer over the basis tables (subscription_plan,
+// partner_plan_subscription, usage_ledger, invoice). JSON tags are camelCase to
+// match the sail BillingService model so Angular consumes these shapes directly.
 
 // Subscription is a partner's active plan subscription.
 type Subscription struct {
@@ -35,7 +28,7 @@ type Subscription struct {
 	Endda        string  `json:"endda,omitempty"`
 	MonthlyCost  float64 `json:"monthlyCost"`
 	Currency     string  `json:"currency"`
-	BillingCycle string  `json:"billingCycle,omitempty"` // M=monthly, A=annual
+	BillingCycle string  `json:"billingCycle,omitempty"` // PERIOD_TYPE code copied from the plan's billing_period (M/Q/A/…)
 	AutoRenew    bool    `json:"autoRenew"`
 	TrialEnd     string  `json:"trialEnd"`
 	Seats        int     `json:"seats"`
@@ -52,38 +45,49 @@ type Invoice struct {
 	PaidAt   string  `json:"paidAt,omitempty"`
 }
 
-// Plan is a public catalog plan. PriceID is the provider's price/variant id
-// (Stripe price_xxx), empty for free/sales-gated plans; the frontend feeds it
-// to keel's CreateCheckout (validated against AllowedPriceIDs).
+// Plan is a public catalog plan. Prices holds one entry per offer (the
+// subscription_plan_price rows); MonthlyCost/AnnualCost are convenience
+// projections of the 1-unit M/A rows for the sail display contract.
 type Plan struct {
-	ID             string  `json:"id"`
-	Caption        string  `json:"caption"`
-	MonthlyCost    float64 `json:"monthlyCost"`
-	AnnualCost     float64 `json:"annualCost"`
-	Currency       string  `json:"currency"`
-	PriceID        string  `json:"priceId,omitempty"`
-	ActivationMode string  `json:"activationMode"`
-	TrialDays      int     `json:"trialDays"`
+	ID             string      `json:"id"`
+	Caption        string      `json:"caption"`
+	MonthlyCost    float64     `json:"monthlyCost"`
+	AnnualCost     float64     `json:"annualCost"`
+	Currency       string      `json:"currency"`
+	ActivationMode string      `json:"activationMode"`
+	TrialDays      int         `json:"trialDays"`
+	Prices         []PlanPrice `json:"prices"`
 }
 
-// UsageItem is one resource's current-period usage vs its plan limit.
-// Shape matches sail's UsageMeter (resource/used/limit).
+// PlanPrice is one purchasable offer (billing cycle + commitment term + price).
+// AmountMinor is authoritative minor units for ONE term_type unit; Amount is its
+// major-unit projection. PriceID is the provider price id (empty for free plans).
+type PlanPrice struct {
+	BillingCycle string  `json:"billingCycle"` // PERIOD_TYPE code: how often charged
+	TermCount    int     `json:"termCount"`    // commitment length
+	TermType     string  `json:"termType"`     // PERIOD_TYPE code: commitment/pricing unit
+	AmountMinor  int64   `json:"amountMinor"`  // price per term_type unit
+	Amount       float64 `json:"amount"`
+	Currency     string  `json:"currency"`
+	PriceID      string  `json:"priceId,omitempty"`
+}
+
+// UsageItem is one resource's current-period usage vs its plan limit (sail's UsageMeter).
 type UsageItem struct {
 	Resource string `json:"resource"`
 	Used     int64  `json:"used"`
 	Limit    int64  `json:"limit"`
 }
 
-// Sentinel errors so an HTTP handler can map a billing failure to a status via
-// errors.Is — e.g. ErrNoSubscription → 404, ErrPlanNotFound → 400/404.
+// Sentinels for errors.Is mapping at the handler boundary (→ 404/400).
 var (
 	ErrNoSubscription = errors.New("no active subscription")
 	ErrPlanNotFound   = errors.New("plan not found")
+	ErrPriceNotFound  = errors.New("plan does not offer this billing interval")
 )
 
 const (
 	qBillGetSubscription = "bill_get_subscription"
-	qBillGetPlanDetails  = "bill_get_plan_details"
 	qBillCreateSub       = "bill_create_subscription"
 	qBillCancelSub       = "bill_cancel_subscription"
 	qBillGetInvoices     = "bill_get_invoices"
@@ -97,9 +101,7 @@ const (
 	qBillListMethods     = "bill_list_payment_methods"
 )
 
-// defaultBillingQueries is pgsql-flavored (the primary dialect for keel
-// consumers). A mysql consumer overrides the affected entries (e.g. the
-// INTERVAL syntax in bill_create_subscription) via Queries.
+// defaultBillingQueries is pgsql; a mysql consumer overrides affected entries via Queries.
 var defaultBillingQueries = map[string]string{
 	qBillGetSubscription: `
 SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.monthly_cost, ps.currency,
@@ -112,14 +114,13 @@ SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.monthly_cost, p
  ORDER BY ps.begda DESC
  LIMIT 1`,
 
-	qBillGetPlanDetails: `SELECT id FROM subscription_plan WHERE id = ? AND is_active = TRUE`,
-
+	// All billing/term/charge fields are bound from BillingTerms (computed in Go);
+	// see qLcInsertActive for the column semantics.
 	qBillCreateSub: `
 INSERT INTO partner_plan_subscription
-  (partner_id, plan_id, begda, monthly_cost, currency, status, billing_cycle, renewal_date)
-SELECT ?, ?, CURRENT_TIMESTAMP, monthly_cost, currency, 'A', 'M',
-       CURRENT_TIMESTAMP + INTERVAL '1 month'
-  FROM subscription_plan WHERE id = ?`,
+  (partner_id, plan_id, begda, monthly_cost, currency, status, billing_cycle,
+   term_count, term_type, amount_minor, renewal_date, next_charge_date)
+VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, 'A', ?, ?, ?, ?, ?, ?)`,
 
 	qBillCancelSub: `
 UPDATE partner_plan_subscription
@@ -141,22 +142,23 @@ SELECT COALESCE(MAX(sq.max_value), 0)
  WHERE ps.partner_id = ? AND ps.status = 'A'
    AND sq.plan_id = ps.plan_id AND sq.resource_id = ?`,
 
+	// One row per (plan, offer); LEFT JOIN keeps plans with no price rows.
 	qBillGetAllPlans: `
-SELECT id, caption, monthly_cost, annual_cost, currency, provider_price_id, activation_mode, trial_days
-  FROM subscription_plan WHERE is_active = TRUE ORDER BY monthly_cost`,
+SELECT sp.id, sp.caption, sp.currency, sp.activation_mode, sp.trial_days,
+       pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id
+  FROM subscription_plan sp
+  LEFT JOIN subscription_plan_price pp ON pp.plan_id = sp.id
+ WHERE sp.is_active = TRUE
+ ORDER BY sp.id, pp.term_type, pp.term_count, pp.billing_cycle`,
 
-	// Provider-driven invoice: written on a provider invoice.paid event so
-	// GetInvoices returns data (the SelfScheduledEngine writes its own; the
-	// provider path had no writer). Idempotent on the UNIQUE invoice_number so
-	// a redelivered webhook no-ops.
+	// Written on a provider invoice.paid so GetInvoices has data. Idempotent on
+	// UNIQUE invoice_number (redelivered webhook no-ops).
 	qBillRecordInvoice: `
 INSERT INTO invoice (id, partner_id, invoice_number, status, subtotal, tax, total, total_minor, currency, issued_at, paid_at, provider_invoice_id)
 VALUES (?, ?, ?, 'P', ?, 0, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
 ON CONFLICT (invoice_number) DO NOTHING`,
 
-	// Partner ↔ provider-customer token in its own table (one row per
-	// partner+provider) — keeps payment_method holding only real chargeable
-	// methods. Idempotent via the composite PK, so a redelivered webhook no-ops.
+	// Partner ↔ provider-customer token; idempotent on the composite PK.
 	qBillLinkCustomer: `
 INSERT INTO partner_billing_customer (partner_id, provider, customer_token)
 VALUES (?, ?, ?)
@@ -179,35 +181,33 @@ SELECT id, provider, method_type, is_default FROM payment_method
 type AbstractBillingService struct {
 	Repo data.DatabaseRepository
 
-	// Queries overrides/extends defaultBillingQueries (consumer entries win)
-	// — for dialect tweaks or project-specific column lists. Read once at init.
+	// Queries overrides/extends defaultBillingQueries (consumer entries win).
 	Queries map[string]string
-
-	// PriceResolver maps a plan id to its provider price id. When nil, the
-	// price is read from subscription_plan.provider_price_id. Inject to
-	// override (e.g. a Go map during migration off provider_price_id).
-	PriceResolver func(planID string) string
 
 	// ResourceNames are the resources GetUsage reports (e.g. ["API_CALLS"]).
 	ResourceNames []string
 
+	// Now is the lifecycle clock; injectable for tests (default time.Now().UTC()).
+	Now func() time.Time
+
 	initOnce   sync.Once
 	qs         data.QueryService
-	allQueries map[string]string // merged default+lifecycle+override map, reused by BeginTx
+	allQueries map[string]string // merged default+lifecycle+override, reused by BeginTx
+}
+
+func (s *AbstractBillingService) now() time.Time {
+	if s.Now != nil {
+		return s.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (s *AbstractBillingService) init(ctx context.Context) {
 	s.initOnce.Do(func() {
 		all := make(map[string]string, len(defaultBillingQueries)+len(lifecycleQueries)+len(s.Queries))
-		for k, v := range defaultBillingQueries {
-			all[k] = v
-		}
-		for k, v := range lifecycleQueries {
-			all[k] = v
-		}
-		for k, v := range s.Queries {
-			all[k] = v
-		}
+		maps.Copy(all, defaultBillingQueries)
+		maps.Copy(all, lifecycleQueries)
+		maps.Copy(all, s.Queries)
 		s.allQueries = all
 		s.qs = s.Repo.GetQueryService(ctx, all)
 	})
@@ -239,16 +239,19 @@ func (s *AbstractBillingService) GetSubscription(ctx context.Context, partnerID 
 	}, nil
 }
 
-func (s *AbstractBillingService) CreateSubscription(ctx context.Context, partnerID int64, planID string) error {
+func (s *AbstractBillingService) CreateSubscription(ctx context.Context, partnerID int64, planID string, terms BillingTerms) error {
 	s.init(ctx)
-	res, err := s.qs.Query(ctx, qBillGetPlanDetails, planID)
+	if _, err := s.loadPlanPolicy(ctx, planID); err != nil { // validates the plan exists/active
+		return err
+	}
+	now := s.now()
+	pc, err := s.loadPlanCharge(ctx, planID, terms, now)
 	if err != nil {
 		return err
 	}
-	if len(res.Rows) == 0 {
-		return fmt.Errorf("%w: %s", ErrPlanNotFound, planID)
-	}
-	_, err = s.qs.Query(ctx, qBillCreateSub, partnerID, planID, planID)
+	_, err = s.qs.Query(ctx, qBillCreateSub,
+		partnerID, planID, pc.perChargeMajor, pc.currency, pc.billingCycle,
+		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now)
 	return err
 }
 
@@ -311,30 +314,56 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	plans := make([]Plan, len(res.Rows))
-	for i, row := range res.Rows {
+	// One row per (plan, price); group by plan id, preserving query order.
+	order := make([]string, 0, len(res.Rows))
+	byID := make(map[string]*Plan, len(res.Rows))
+	for _, row := range res.Rows {
 		id := common.AsString(row[0])
-		priceID := common.AsString(row[5]) // subscription_plan.provider_price_id
-		if s.PriceResolver != nil {
-			priceID = s.PriceResolver(id)
+		p, ok := byID[id]
+		if !ok {
+			p = &Plan{
+				ID:             id,
+				Caption:        common.AsString(row[1]),
+				Currency:       common.AsString(row[2]),
+				ActivationMode: common.AsString(row[3]),
+				TrialDays:      int(common.AsInt32(row[4])),
+			}
+			byID[id] = p
+			order = append(order, id)
 		}
-		plans[i] = Plan{
-			ID:             id,
-			Caption:        common.AsString(row[1]),
-			MonthlyCost:    common.AsFloat64(row[2]),
-			AnnualCost:     common.AsFloat64(row[3]),
-			Currency:       common.AsString(row[4]),
-			PriceID:        priceID,
-			ActivationMode: common.AsString(row[6]),
-			TrialDays:      int(common.AsInt32(row[7])),
+		billing := common.AsString(row[5]) // empty when the plan has no price rows (LEFT JOIN)
+		if billing == "" {
+			continue
 		}
+		price := PlanPrice{
+			BillingCycle: billing,
+			TermCount:    int(common.AsInt32(row[6])),
+			TermType:     common.AsString(row[7]),
+			AmountMinor:  common.AsInt64(row[8]),
+			Currency:     common.AsString(row[9]),
+			PriceID:      common.AsString(row[10]),
+		}
+		price.Amount = payment.MinorToMajor(price.AmountMinor, price.Currency)
+		p.Prices = append(p.Prices, price)
+		// Convenience headline projections (per-unit price for a 1-unit term).
+		if price.TermCount == 1 {
+			switch ParseBillingPeriod(price.TermType) {
+			case PeriodMonthly:
+				p.MonthlyCost = price.Amount
+			case PeriodAnnual:
+				p.AnnualCost = price.Amount
+			}
+		}
+	}
+	plans := make([]Plan, len(order))
+	for i, id := range order {
+		plans[i] = *byID[id]
 	}
 	return plans, nil
 }
 
-// PaymentMethodInfo is one saved provider customer/method for a partner, in
-// sail's PaymentMethod wire shape. ID is a string because payment_method.id is
-// a bigint that overflows JS number precision.
+// PaymentMethodInfo is sail's PaymentMethod shape. ID is a string because the
+// bigint payment_method.id overflows JS number precision.
 type PaymentMethodInfo struct {
 	ID         string `json:"id"`
 	Provider   string `json:"provider"`
@@ -342,12 +371,8 @@ type PaymentMethodInfo struct {
 	IsDefault  bool   `json:"isDefault"`
 }
 
-// RecordProviderInvoice persists the invoice row for a provider-driven
-// invoice.paid event so GetInvoices has data to return (keel writes invoices
-// only in the SelfScheduledEngine otherwise). No-op when the event carries no
-// provider invoice id; idempotent on the UNIQUE invoice_number, so redelivered
-// webhooks don't duplicate. total_minor is authoritative; total is the
-// currency-aware major projection.
+// RecordProviderInvoice persists the invoice row on a provider invoice.paid so
+// GetInvoices has data. No-op without an invoice id; idempotent on invoice_number.
 func (s *AbstractBillingService) RecordProviderInvoice(ctx context.Context, partnerID int64, e *payment.PaymentEvent) error {
 	if e == nil || e.InvoiceID == "" {
 		return nil
@@ -359,10 +384,8 @@ func (s *AbstractBillingService) RecordProviderInvoice(ctx context.Context, part
 	return err
 }
 
-// LinkCustomer idempotently stores the partner ↔ provider-customer mapping (the
-// cus_… token) needed for billing-portal sessions and recurring-invoice
-// attribution. No-op on an empty token; keeps at most one customer row per
-// (partner, provider).
+// LinkCustomer idempotently stores the partner ↔ provider-customer token. No-op
+// on an empty token.
 func (s *AbstractBillingService) LinkCustomer(ctx context.Context, partnerID int64, provider, customerToken string) error {
 	if customerToken == "" {
 		return nil
@@ -383,9 +406,8 @@ func (s *AbstractBillingService) CustomerToken(ctx context.Context, partnerID in
 	return common.AsString(res.Rows[0][0]), nil
 }
 
-// PartnerByCustomer resolves the partner that owns a provider-customer token —
-// the reverse lookup recurring-invoice webhooks need (they carry no metadata).
-// Returns 0 when unknown.
+// PartnerByCustomer is the reverse lookup recurring-invoice webhooks need (no
+// metadata). Returns 0 when unknown.
 func (s *AbstractBillingService) PartnerByCustomer(ctx context.Context, provider, customerToken string) (int64, error) {
 	s.init(ctx)
 	res, err := s.qs.Query(ctx, qBillPartnerByCust, provider, customerToken)
@@ -395,8 +417,7 @@ func (s *AbstractBillingService) PartnerByCustomer(ctx context.Context, provider
 	return common.AsInt64(res.Rows[0][0]), nil
 }
 
-// ListPaymentMethods returns the partner's saved provider methods for the
-// GET /api/billing/payment-methods bridge sail's listPaymentMethods() calls.
+// ListPaymentMethods returns the partner's saved provider methods (sail's listPaymentMethods()).
 func (s *AbstractBillingService) ListPaymentMethods(ctx context.Context, partnerID int64) ([]PaymentMethodInfo, error) {
 	s.init(ctx)
 	res, err := s.qs.Query(ctx, qBillListMethods, partnerID)

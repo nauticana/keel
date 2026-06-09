@@ -10,6 +10,7 @@ import (
 	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
+	"github.com/nauticana/keel/service"
 	"github.com/nauticana/keel/storage"
 )
 
@@ -72,7 +73,7 @@ func RunDefault(ctx context.Context, caption string, intervalSec int, w JobWorke
 			return pgsql.NewPgSQLDatabase(ctx, sp, gen)
 		},
 		NewQuota: func(db data.DatabaseRepository) port.QuotaService {
-			return &data.QuotaServiceDb{Repo: db}
+			return &service.QuotaServiceDb{Repo: db}
 		},
 	}
 	return executor.Run(ctx, secrets)

@@ -1,0 +1,36 @@
+table: subscription_plan_price
+comment: Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
+order: 41
+columns:
+  - name: plan_id
+    type: VARCHAR(20)
+  # billing_cycle (PERIOD_TYPE): how often money is taken — drives next_charge_date.
+  - name: billing_cycle
+    type: CHAR(1)
+  # term_count × term_type (PERIOD_TYPE): the commitment length — drives renewal_date
+  # (= term end). term_count is generally 1; auto_renew continues past it.
+  - name: term_count
+    type: INTEGER
+    default: "1"
+  - name: term_type
+    type: CHAR(1)
+    default: M
+  # amount_minor is the price for ONE term_type unit (e.g. $/year when term_type=A),
+  # authoritative integer minor units (JPY=0, BHD=3 decimals). Per-charge is derived:
+  # amount_minor ÷ (term_type ÷ billing_cycle). Contract total = amount_minor × term_count.
+  - name: amount_minor
+    type: BIGINT
+  - name: currency
+    type: CHAR(3)
+    default: USD
+  - name: provider_price_id
+    type: VARCHAR(64)
+    nullable: true
+# One price per (plan, billing_cycle, term) offer. Child catalog table, no sequence.
+primary_key: [plan_id, billing_cycle, term_type, term_count]
+foreign_keys:
+  - name: subscription_plan_prices
+    columns: [plan_id]
+    references:
+      table: subscription_plan
+      columns: [id]
