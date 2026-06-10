@@ -28,6 +28,7 @@ seeds:
       - [business_partner, business_partner]
       - [partner_domain, partner_domain]
       - [partner_user, partner_user]
+      - [partner_address, partner_address]
       - [partner_registration, business_partner]
       - [partner_quota_usage, business_partner]
       - [api_key, api_key]
@@ -48,27 +49,14 @@ seeds:
       - [partner_registration, 5, 0, partner_addon_subscriptions]
       - [partner_quota_usage, 1, 0, partner_usage_ledger]
 
-  - table: application_menu
-    columns: [display_order, id, caption]
-    rows:
-      - [20, security, "Security"]
-
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:
-      - [10, false, security, authorization_roles, authorization_role, "Authorization Roles"]
-      - [20, false, security, user_accounts, user_account, "User Accounts"]
-      - [30, false, security, user_account_policies, user_account_policy, "Account Policies"]
-      # Partner-scoped team management. filter_on_list=true is a UI hint;
-      # the actual scoping is enforced server-side because partner_user
-      # has FK to business_partner and is therefore PartnerSpecific=true
-      # (data/abstract_repository.go) — list reads inject WHERE
-      # partner_id = sessionPartnerID automatically.
-      - [40, true,  security, partner_users, partner_user, "Partner Users"]
-      # business_partners, partner_domains, and api_keys live under "setup"
-      # in basis_seed.yml — they are partner identity / configuration, not
-      # security primitives. Only partner_user (the join row that grants
-      # a user access to a partner) stays here.
+      - [210, false, setup, authorization_roles, authorization_role, "Authorization Roles"]
+      - [220, false, setup, user_accounts, user_account, "User Accounts"]
+      - [230, false, setup, user_account_policies, user_account_policy, "Account Policies"]
+      - [240, false, setup, partner_addresses, partner_address, "Addresses"]
+      - [250, false, setup, partner_users, partner_user, "Partner Users"]
 
   - table: authorization_role
     columns: [id, caption]
@@ -102,6 +90,7 @@ seeds:
       - [APP_ADMIN, PAGE, ACCESS, foreign_key_lookups]
       - [APP_ADMIN, PAGE, ACCESS, partner_domains]
       - [APP_ADMIN, PAGE, ACCESS, partner_registrations]
+      - [APP_ADMIN, PAGE, ACCESS, partner_addresses]
       - [APP_ADMIN, PAGE, ACCESS, partner_users]
       - [APP_ADMIN, PAGE, ACCESS, rest_api_headers]
       - [APP_ADMIN, PAGE, ACCESS, subscription_addons]
@@ -187,6 +176,7 @@ seeds:
       - [SECURITY_ADMIN, PAGE, ACCESS, constant_headers]
       - [SECURITY_ADMIN, PAGE, ACCESS, foreign_key_lookups]
       - [SECURITY_ADMIN, PAGE, ACCESS, partner_registrations]
+      - [SECURITY_ADMIN, PAGE, ACCESS, partner_addresses]
       - [SECURITY_ADMIN, PAGE, ACCESS, partner_users]
       - [SECURITY_ADMIN, PAGE, ACCESS, rest_api_headers]
       - [SECURITY_ADMIN, PAGE, ACCESS, subscription_resources]
@@ -236,6 +226,7 @@ seeds:
       - [SECURITY_OPER, PAGE, ACCESS, authorization_objects]
       - [SECURITY_OPER, PAGE, ACCESS, authorization_roles]
       - [SECURITY_OPER, PAGE, ACCESS, partner_registrations]
+      - [SECURITY_OPER, PAGE, ACCESS, partner_addresses]
       - [SECURITY_OPER, PAGE, ACCESS, partner_users]
       - [SECURITY_OPER, PAGE, ACCESS, user_account_policies]
       - [SECURITY_OPER, PAGE, ACCESS, user_accounts]
@@ -264,7 +255,6 @@ seeds:
       - [BUSINESS_ADMIN, PAGE, ACCESS, business_partners]
       - [BUSINESS_ADMIN, PAGE, ACCESS, constant_headers]
       - [BUSINESS_ADMIN, PAGE, ACCESS, foreign_key_lookups]
-      - [BUSINESS_ADMIN, PAGE, ACCESS, partner_domains]
       - [BUSINESS_ADMIN, PAGE, ACCESS, partner_quota_usages]
       - [BUSINESS_ADMIN, PAGE, ACCESS, partner_registrations]
       - [BUSINESS_ADMIN, PAGE, ACCESS, rest_api_headers]
@@ -326,16 +316,10 @@ seeds:
       - [BUSINESS_ADMIN, TABLE, DELETE, payment_method]
       - [BUSINESS_ADMIN, TABLE, SELECT, payment_webhook_log]
 
-      # PARTNER_ADMIN — manages own partner only (auto-scoped by session
-      # partner_id via PartnerSpecific in data/abstract_repository.go).
-      # No user_account INSERT: account creation goes through registration
-      # + OTP verification which downstream projects implement themselves;
-      # this role can only link an existing user via partner_user.
-      - [PARTNER_ADMIN, PAGE, ACCESS, business_partners]
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_users]
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_domains]
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_addresses]
       - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
-      - [PARTNER_ADMIN, PAGE, ACCESS, partner_quota_usages]
       - [PARTNER_ADMIN, TABLE, SELECT, business_partner]
       - [PARTNER_ADMIN, TABLE, UPDATE, business_partner]
       - [PARTNER_ADMIN, TABLE, SELECT, partner_user]

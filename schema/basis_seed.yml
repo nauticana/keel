@@ -99,13 +99,6 @@ seeds:
       - [country, 1, 0, states]
       - [country, 2, 1, counties]
 
-  - table: application_menu
-    columns: [display_order, id, caption]
-    rows:
-      - [10, setup, "Setup"]
-      - [40, payments, "Payments"]
-      - [50, payouts, "Payouts"]
-
   - table: authorization_object
     columns: [id, caption]
     rows:
@@ -121,6 +114,13 @@ seeds:
     rows:
       - [user_payment_method, set_default, "Set Default", star, true, 10]
 
+  - table: application_menu
+    columns: [display_order, id, caption]
+    rows:
+      - [99, setup, "Setup"]
+      - [90, payments, "Payments"]
+      - [95, payouts, "Payouts"]
+
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:
@@ -132,7 +132,7 @@ seeds:
       - [60,  false, setup, rest_report_headers, rest_report_header, "Rest Report Headers"]
       - [70,  false, setup, authorization_objects, authorization_object, "Authorization Objects"]
       - [75,  true,  setup, business_partners, business_partner, "Business Partners"]
-      - [80,  false, setup, partner_domains, partner_domain, "Partner Domains"]
+      - [80,  false, setup, partner_domains, partner_domain, "Domains"]
       - [90,  false, setup, api_keys, api_key, "API Keys"]
       - [100, false, setup, countries, country, "Countries"]
       - [110, false, setup, service_registries, service_registry, "Service Registries"]

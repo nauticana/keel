@@ -78,6 +78,7 @@ seeds:
       - [subscription_plan, subscription_plan]
       - [subscription_addon, subscription_addon]
       - [user_registration, user_registration]
+      - [usage_ledger, usage_ledger]
 
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
@@ -85,18 +86,14 @@ seeds:
       - [subscription_plan, 1, 0, subscription_quotas]
       - [subscription_plan, 2, 0, subscription_plan_prices]
 
-  - table: application_menu
-    columns: [display_order, id, caption]
-    rows:
-      - [30, subscription, "Subscription"]
-
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:
-      - [10, false, subscription, subscription_resources, subscription_resource, "Subscription Resources"]
-      - [20, false, subscription, subscription_plans, subscription_plan, "Subscription Plans"]
-      - [30, false, subscription, subscription_addons, subscription_addon, "Subscription Addons"]
-      - [40, true, subscription, user_registrations, user_registration, "User Registrations"]
+      - [310, false, setup, subscription_resources, subscription_resource, "Subscription Resources"]
+      - [320, false, setup, subscription_plans, subscription_plan, "Subscription Plans"]
+      - [330, false, setup, subscription_addons, subscription_addon, "Subscription Addons"]
+      - [340, true,  setup, user_registrations, user_registration, "User Registrations"]
+      - [350, true,  setup, usage_ledger, usage_ledger, "Usage Ledger"]
 
   # PARTNER_ADMIN permissions for shared keel tables
   - table: authorization_role_permission
@@ -116,6 +113,7 @@ seeds:
       - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
       # Subscription pages
       - [PARTNER_ADMIN, PAGE, ACCESS, subscription_plans]
+      - [PARTNER_ADMIN, PAGE, ACCESS, usage_ledger]
       # Geo tables
       - [PARTNER_ADMIN, TABLE, SELECT, country]
       - [PARTNER_ADMIN, TABLE, SELECT, state]
