@@ -184,7 +184,24 @@ func (p *WebhookProcessor) Process(
 		return fmt.Errorf("payment.Process exists: %w", err)
 	}
 	if seen {
-		return nil
+		// A prior delivery exists. If it ended in StatusFailed and the
+		// repository supports reclaim, atomically re-claim it so this
+		// retry re-runs the handler — otherwise a transient handler
+		// failure would strand the event forever (provider retries all
+		// short-circuit here). Terminal / in-flight rows, and repos that
+		// don't implement WebhookReclaimer, fall through to a no-op skip.
+		reclaimer, ok := p.Repo.(WebhookReclaimer)
+		if !ok {
+			return nil
+		}
+		logID, claimed, err := reclaimer.ReclaimFailed(ctx, provider.Name(), eventID)
+		if err != nil {
+			return fmt.Errorf("payment.Process reclaim: %w", err)
+		}
+		if !claimed {
+			return nil
+		}
+		return p.dispatch(ctx, provider, logID, eventType, body, handler)
 	}
 
 	// (4) Authoritative race guard: insert with the unique index on
@@ -200,6 +217,20 @@ func (p *WebhookProcessor) Process(
 		return err
 	}
 
+	return p.dispatch(ctx, provider, logID, eventType, body, handler)
+}
+
+// dispatch runs the allowlist gate, parse, domain handler, and after-hook
+// against an already-logged row (logID), updating its status as it goes.
+// Shared by the first-delivery path and the failed-row reclaim path.
+func (p *WebhookProcessor) dispatch(
+	ctx context.Context,
+	provider PaymentProvider,
+	logID int64,
+	eventType string,
+	body []byte,
+	handler PaymentEventHandler,
+) error {
 	// (4.5) Per-event-type allowlist (v0.5.1-E). Skipping happens AFTER
 	// the log row is written so operators can see in payment_webhook_log
 	// which events were rejected at the gate vs which never arrived.

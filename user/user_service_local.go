@@ -523,9 +523,12 @@ UPDATE device_token
  WHERE user_id = ?
 `,
 
+	// expires_at is bound from --otp_ttl_seconds (the last placeholder),
+	// not hard-coded, so the DB row lifetime matches the value echoed to
+	// the client and OTPHandler's token TTL. (KR-005.)
 	qGenerateOTP: `
 INSERT INTO user_otp (id, user_id, code, purpose, expires_at, attempts)
-VALUES (nextval('user_otp_seq'), ?, ?, ?, CURRENT_TIMESTAMP + INTERVAL '2 minutes', 0)
+VALUES (nextval('user_otp_seq'), ?, ?, ?, CURRENT_TIMESTAMP + INTERVAL '1 second' * ?, 0)
 RETURNING id
 `,
 
@@ -1577,9 +1580,12 @@ func (s *LocalUserService) GetUserByPhone(phone string) (*model.UserSession, err
 }
 
 func (s *LocalUserService) GenerateOTP(userId int, purpose string) (string, error) {
-	code, _ := crand.Int(crand.Reader, big.NewInt(900000))
+	code, err := crand.Int(crand.Reader, big.NewInt(900000))
+	if err != nil {
+		return "", fmt.Errorf("generate otp: %w", err)
+	}
 	otp := fmt.Sprintf("%06d", code.Int64()+100000)
-	_, err := s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose)
+	_, err = s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose, *common.OTPTTLSeconds)
 	if err != nil {
 		return "", err
 	}

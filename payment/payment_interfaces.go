@@ -165,6 +165,24 @@ type WebhookRepository interface {
 	UpdateStatus(ctx context.Context, logID int64, status string, message string) error
 }
 
+// WebhookReclaimer is an optional extension of WebhookRepository. When a
+// repository implements it, WebhookProcessor retries webhooks whose prior
+// delivery ended in StatusFailed: a provider redelivery re-runs the domain
+// handler instead of being swallowed as "already seen". Repositories that
+// do not implement it keep the conservative behavior — any prior row
+// short-circuits — which never double-charges but strands transient
+// failures (the bug this interface fixes). The default SQLWebhookRepository
+// implements it; custom repositories opt in without a breaking change.
+type WebhookReclaimer interface {
+	// ReclaimFailed atomically transitions the (provider, eventID) row from
+	// StatusFailed back to StatusReceived and returns its logID. ok=false
+	// means there was no failed row to claim — none exists, it is terminal
+	// (P/D/S), it is in flight (R), or a concurrent retry claimed it first.
+	// The single conditional UPDATE makes the claim race-safe: at most one
+	// caller gets ok=true.
+	ReclaimFailed(ctx context.Context, provider, eventID string) (logID int64, ok bool, err error)
+}
+
 // CheckoutClient abstracts outbound calls to a payment provider's
 // checkout / billing-portal API. Stripe, LemonSqueezy, etc. each get an
 // implementation; projects inject whichever they need.

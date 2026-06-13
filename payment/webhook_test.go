@@ -21,10 +21,9 @@ import (
 // this the concurrency test (P2-31) couldn't exercise the unique-
 // violation race-guard branch in WebhookProcessor.Process.
 type memRepo struct {
-	mu        sync.Mutex
-	rows      []memRow
-	logged    map[string]bool // (provider, event_id) — set once Log succeeds
-	processed map[string]bool // key = provider|eventID
+	mu     sync.Mutex
+	rows   []memRow
+	logged map[string]bool // (provider, event_id) — set once Log succeeds
 }
 
 type memRow struct {
@@ -37,10 +36,7 @@ type memRow struct {
 }
 
 func newMemRepo() *memRepo {
-	return &memRepo{
-		logged:    map[string]bool{},
-		processed: map[string]bool{},
-	}
+	return &memRepo{logged: map[string]bool{}}
 }
 
 func (r *memRepo) Log(_ context.Context, provider, eventID, eventType string, _ []byte) (int64, error) {
@@ -61,10 +57,28 @@ func (r *memRepo) Log(_ context.Context, provider, eventID, eventType string, _ 
 	return id, nil
 }
 
+// Exists mirrors the SQL repo: true once a row has been logged for
+// (provider, eventID), regardless of its terminal status. (The previous
+// "processed-only" double diverged from production and hid KR-002.)
 func (r *memRepo) Exists(_ context.Context, provider, eventID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.processed[provider+"|"+eventID], nil
+	return r.logged[provider+"|"+eventID], nil
+}
+
+// ReclaimFailed mirrors SQLWebhookRepository: atomically flip a failed
+// row back to received and return its id; ok=false if none is in F.
+func (r *memRepo) ReclaimFailed(_ context.Context, provider, eventID string) (int64, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.rows {
+		if r.rows[i].Provider == provider && r.rows[i].EventID == eventID && r.rows[i].Status == StatusFailed {
+			r.rows[i].Status = StatusReceived
+			r.rows[i].Message = ""
+			return r.rows[i].ID, true, nil
+		}
+	}
+	return 0, false, nil
 }
 
 func (r *memRepo) UpdateStatus(_ context.Context, logID int64, status, message string) error {
@@ -74,10 +88,6 @@ func (r *memRepo) UpdateStatus(_ context.Context, logID int64, status, message s
 		if r.rows[i].ID == logID {
 			r.rows[i].Status = status
 			r.rows[i].Message = message
-			if status == StatusProcessed {
-				key := r.rows[i].Provider + "|" + r.rows[i].EventID
-				r.processed[key] = true
-			}
 			return nil
 		}
 	}
@@ -248,6 +258,39 @@ func TestProcess_HandlerFails(t *testing.T) {
 	}
 	if got := repo.statusOf(1); got != StatusFailed {
 		t.Fatalf("expected status=F, got %q", got)
+	}
+}
+
+// TestProcess_RetriesAfterTransientFailure is the KR-002 regression: a
+// delivery whose handler fails transiently (status F) must be re-claimed
+// and re-run on the provider's next retry, not swallowed as "already
+// seen". Without the reclaim path the row stays F forever and the event
+// (subscription activation, invoice reconciliation, ...) is stranded.
+func TestProcess_RetriesAfterTransientFailure(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	p := newProcessor(repo, prov)
+
+	failing := &recordingHandler{err: errors.New("transient downstream error")}
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), failing); err == nil {
+		t.Fatal("expected first delivery to fail")
+	}
+	if got := repo.statusOf(1); got != StatusFailed {
+		t.Fatalf("expected status=F after transient failure, got %q", got)
+	}
+
+	ok := &recordingHandler{}
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), ok); err != nil {
+		t.Fatalf("retry returned %v, want success", err)
+	}
+	if len(ok.events) != 1 {
+		t.Fatalf("expected handler re-run once on retry, got %d", len(ok.events))
+	}
+	if got := repo.statusOf(1); got != StatusProcessed {
+		t.Fatalf("expected status=P after successful retry, got %q", got)
+	}
+	if got := len(repo.rows); got != 1 {
+		t.Fatalf("expected exactly 1 row (reclaimed, not re-inserted), got %d", got)
 	}
 }
 

@@ -170,7 +170,9 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 	// round-tripping the id through Stripe metadata themselves
 	// (downstream feedback v0.5.1-A). Don't overwrite a caller-supplied
 	// value — admin / impersonation flows that explicitly set user_id
-	// to a different id continue to win.
+	// to a different id continue to win. That override is NOT privilege-
+	// gated here: a downstream exposing checkout to untrusted users should
+	// reject or admin-gate caller-supplied metadata["user_id"] first.
 	if session != nil {
 		if req.Metadata == nil {
 			req.Metadata = map[string]string{}

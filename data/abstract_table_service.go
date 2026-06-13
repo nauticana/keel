@@ -2,7 +2,6 @@ package data
 
 import (
 	"context"
-	"path"
 	"reflect"
 
 	"github.com/nauticana/keel/common"
@@ -56,27 +55,14 @@ func (s *AbstractTableService) CheckPermission(ctx context.Context, userID int, 
 	bypassScope := false
 	for _, rec := range res.Rows {
 		lowLimit := common.AsString(rec[0])
-		highLimit := common.AsString(rec[1])
 		rowBypass := common.AsBool(rec[2])
-		if lowLimit == s.Table.TableName {
-			allowed = true
-			if rowBypass {
-				bypassScope = true
-			}
-			continue
-		}
-		// path.Match (not filepath.Match) so the glob semantics are
-		// OS-independent — table names use `/` as a logical
-		// separator on every platform keel runs on, but
-		// filepath.Match flips to `\` on Windows and produces
-		// surprising results. (P2-23.)
-		if matched, _ := path.Match(lowLimit, s.Table.TableName); matched {
-			allowed = true
-			if rowBypass {
-				bypassScope = true
-			}
-		}
-		if highLimit != "" && s.Table.TableName >= lowLimit && s.Table.TableName <= highLimit {
+		// QCheckAuthorization filters low_limit to the exact table name or
+		// '*', so those are the only two grant shapes that reach here.
+		// Glob/range low_limit values are NOT surfaced by the query and so
+		// are deliberately unsupported — see KR-003 / the README permission
+		// notes. The explicit check also fails safe if the query is ever
+		// widened: a stray non-matching row can never grant access.
+		if lowLimit == s.Table.TableName || lowLimit == "*" {
 			allowed = true
 			if rowBypass {
 				bypassScope = true

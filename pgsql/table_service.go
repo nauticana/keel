@@ -8,9 +8,25 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 )
+
+// scopePartnerFilter pins a PartnerSpecific query to the session's
+// partner: an absent partner_id falls back to it; a caller-supplied
+// foreign partner_id is coerced back unless the caller holds a global
+// (cross-partner) role. System callers (userID<=0) and the relation
+// cascade — where partner_id already equals the session's — pass through.
+func scopePartnerFilter(where map[string]any, partnerID int64, userID int, globalRole bool) {
+	supplied, set := where["partner_id"]
+	switch {
+	case !set:
+		where["partner_id"] = partnerID
+	case userID > 0 && common.AsInt64(supplied) != partnerID && !globalRole:
+		where["partner_id"] = partnerID
+	}
+}
 
 // pgxQuerier is the minimal pgx surface that TableServicePgsql calls
 // against. Both *pgxpool.Pool and pgx.Tx satisfy it — having Client be
@@ -287,17 +303,7 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 		if where == nil {
 			where = make(map[string]any)
 		}
-		// Only fall back to the session's partner when the caller did not
-		// scope the query themselves. RelationAPI.FetchChildren propagates
-		// the parent's primary key (which includes partner_id for child
-		// tables) into `where` before calling Get; overwriting it would
-		// silently coerce every child read back to the session's partner
-		// — making a SUPER user viewing partner B's details see partner
-		// A's rows instead. The top-level /list path doesn't set this
-		// key, so the session-scoped partition guard still applies there.
-		if _, set := where["partner_id"]; !set {
-			where["partner_id"] = partnerID
-		}
+		scopePartnerFilter(where, partnerID, userID, s.IsGlobalRole(ctx, userID))
 	}
 	// Apply user_id filter only when the caller's permission is broad
 	// (wildcard match). An explicit per-table grant — typical of admin
@@ -307,13 +313,11 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 		if where == nil {
 			where = make(map[string]any)
 		}
-		// Same overwrite-vs-fallback rule as PartnerSpecific. Don't clobber
-		// a caller-supplied user_id (cascade reads from a parent that already
-		// scoped by user_id); only apply the session's user as the partition
-		// guard for top-level /list reads.
-		if _, set := where["user_id"]; !set {
-			where["user_id"] = userID
-		}
+		// Owner-lock: force `user_id = caller` so a caller-supplied
+		// ?user_id=<victim> cannot preserve a foreign scope. Force, not
+		// fall back — a wildcard-grant caller only ever reads its own rows,
+		// and the cascade's propagated user_id already equals the session's.
+		where["user_id"] = userID
 	}
 	if len(where) == len(s.Table.Keys) && len(where) > 0 {
 		match := true
@@ -590,26 +594,18 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 		if where == nil {
 			where = make(map[string]any)
 		}
-		// See the matching note in Get above. Same overwrite-vs-fallback
-		// distinction: caller-supplied `partner_id` in `where` (e.g. from
-		// a child-relation cascade) must be preserved, not coerced to the
-		// session's partner.
-		if _, set := where["partner_id"]; !set {
-			where["partner_id"] = partnerID
-		}
+		scopePartnerFilter(where, partnerID, userID, s.IsGlobalRole(ctx, userID))
 	}
-	// UserSpecific DELETE is owner-locked regardless of scope: even an
-	// admin's explicit grant cannot remove another user's row via
-	// generic CRUD. Cross-user deletes belong in custom handlers.
+	// UserSpecific DELETE is owner-locked unconditionally: even an admin's
+	// explicit grant cannot remove another user's row via generic CRUD
+	// (README behaviour matrix, Delete). Force `user_id = caller` so a
+	// caller-supplied ?user_id=<victim> cannot widen the delete to another
+	// owner's row. Cross-user deletes belong in custom handlers.
 	if s.Table.UserSpecific && userID > 0 {
 		if where == nil {
 			where = make(map[string]any)
 		}
-		// Mirror of the Get rule for user_id — fall back to the session's
-		// user when the caller didn't scope by user_id themselves.
-		if _, set := where["user_id"]; !set {
-			where["user_id"] = userID
-		}
+		where["user_id"] = userID
 	}
 	if len(where) == 0 {
 		return fmt.Errorf("filter cannot be empty for delete operations")

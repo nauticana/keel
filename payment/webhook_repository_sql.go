@@ -19,9 +19,10 @@ const (
 )
 
 const (
-	qLogWebhook          = "payment_log_webhook"
-	qCheckWebhookExists  = "payment_check_webhook_exists"
-	qUpdateWebhookStatus = "payment_update_webhook_status"
+	qLogWebhook           = "payment_log_webhook"
+	qCheckWebhookExists   = "payment_check_webhook_exists"
+	qUpdateWebhookStatus  = "payment_update_webhook_status"
+	qReclaimFailedWebhook = "payment_reclaim_failed_webhook"
 	// qVerifyWebhookIndex asserts the UNIQUE index on
 	// payment_webhook_log(provider, event_id) exists. The index is the
 	// authoritative race guard for concurrent webhook retries — if a
@@ -64,6 +65,20 @@ UPDATE payment_webhook_log
        error_message = ?,
        processed_at = CURRENT_TIMESTAMP
  WHERE id = ?
+`,
+	// Atomically re-claim a previously-failed delivery for reprocessing.
+	// The `processing_status = 'F'` predicate is the race guard: among
+	// concurrent provider retries, exactly one UPDATE flips F→R and gets
+	// the RETURNING id; the rest match no row. Terminal (P/D/S) and
+	// in-flight (R) rows are left untouched so a retry never re-runs a
+	// handler that already succeeded or is still running.
+	qReclaimFailedWebhook: `
+UPDATE payment_webhook_log
+   SET processing_status = 'R',
+       error_message = NULL,
+       processed_at = CURRENT_TIMESTAMP
+ WHERE provider = ? AND event_id = ? AND processing_status = 'F'
+RETURNING id
 `,
 	qVerifyWebhookIndex: `
 SELECT 1
@@ -138,6 +153,20 @@ func (r *SQLWebhookRepository) Exists(ctx context.Context, provider, eventID str
 	return len(res.Rows) > 0, nil
 }
 
+// ReclaimFailed atomically re-claims a StatusFailed delivery for retry.
+// ok=false when no failed row matched (absent, terminal, in-flight, or
+// claimed by a concurrent retry).
+func (r *SQLWebhookRepository) ReclaimFailed(ctx context.Context, provider, eventID string) (int64, bool, error) {
+	res, err := r.queryService(ctx).Query(ctx, qReclaimFailedWebhook, provider, eventID)
+	if err != nil {
+		return 0, false, fmt.Errorf("reclaim failed webhook: %w", err)
+	}
+	if len(res.Rows) == 0 {
+		return 0, false, nil
+	}
+	return common.AsInt64(res.Rows[0][0]), true, nil
+}
+
 // UpdateStatus flips the status + error_message on the log row.
 func (r *SQLWebhookRepository) UpdateStatus(ctx context.Context, logID int64, status, message string) error {
 	var msg any
@@ -171,4 +200,7 @@ func (r *SQLWebhookRepository) VerifySchema(ctx context.Context) error {
 	return nil
 }
 
-var _ WebhookRepository = (*SQLWebhookRepository)(nil)
+var (
+	_ WebhookRepository = (*SQLWebhookRepository)(nil)
+	_ WebhookReclaimer  = (*SQLWebhookRepository)(nil)
+)

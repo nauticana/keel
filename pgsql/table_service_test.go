@@ -98,17 +98,132 @@ func newService(t *testing.T, table *model.TableDefinition, auth *stubAuthQuery)
 	return s, qc
 }
 
-// wildcardSelectGrant returns the [low_limit, high_limit] row a SUPER
-// (or any wildcard-grant) holder would have in user_permission ×
-// authorization_role_permission for TABLE SELECT user_account.
+// wildcardSelectGrant returns the [low_limit, high_limit, bypass_scope]
+// row a SUPER (or any wildcard-grant) holder would have in
+// user_permission × authorization_role_permission for TABLE SELECT
+// user_account. The third column mirrors the real QCheckAuthorization
+// projection (`a.bypass_scope`), which CheckPermission reads at rec[2].
 func wildcardSelectGrant() [][]any {
-	return [][]any{{"*", ""}}
+	return [][]any{{"*", "", false}}
 }
 
 // explicitSelectGrant returns the per-table-grant row a PARTNER_ADMIN
-// holds for TABLE SELECT user_account (low_limit = table name).
+// holds for TABLE SELECT user_account (low_limit = table name,
+// bypass_scope = false → owner-scoped).
 func explicitSelectGrant() [][]any {
-	return [][]any{{"user_account", ""}}
+	return [][]any{{"user_account", "", false}}
+}
+
+// partnerSpecificTable builds a PartnerSpecific table (surrogate id PK +
+// a partner_id partition column) for the KR-001 scoping tests.
+func partnerSpecificTable() *model.TableDefinition {
+	idCol := &model.TableColumn{ColumnName: "id", PascalName: "Id", IsKey: true}
+	pidCol := &model.TableColumn{ColumnName: "partner_id", PascalName: "PartnerId", DataType: "integer"}
+	amtCol := &model.TableColumn{ColumnName: "amount", PascalName: "Amount"}
+	return &model.TableDefinition{
+		TableName:       "sales_order",
+		Columns:         []*model.TableColumn{idCol, pidCol, amtCol},
+		Keys:            []*model.TableColumn{idCol},
+		PartnerSpecific: true,
+	}
+}
+
+// userSpecificTable builds a UserSpecific table (surrogate id PK + a
+// user_id owner column) for the KR-001 owner-lock tests.
+func userSpecificTable() *model.TableDefinition {
+	idCol := &model.TableColumn{ColumnName: "id", PascalName: "Id", IsKey: true}
+	uidCol := &model.TableColumn{ColumnName: "user_id", PascalName: "UserId", DataType: "integer"}
+	labelCol := &model.TableColumn{ColumnName: "label", PascalName: "Label"}
+	return &model.TableDefinition{
+		TableName:    "user_address",
+		Columns:      []*model.TableColumn{idCol, uidCol, labelCol},
+		Keys:         []*model.TableColumn{idCol},
+		UserSpecific: true,
+	}
+}
+
+// TestGet_PartnerSpecific_CoercesForeignPartner is the core KR-001
+// regression: a non-global caller cannot read another partner's rows by
+// supplying ?partner_id=<other>. The data layer coerces the filter back
+// to the session's partner.
+func TestGet_PartnerSpecific_CoercesForeignPartner(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: nil}
+	s, qc := newService(t, partnerSpecificTable(), auth)
+
+	const sessionPartner int64 = 42
+	where := map[string]any{"partner_id": int64(999)}
+	if _, err := s.Get(context.Background(), sessionPartner, 7, where, ""); !errors.Is(err, errSentinel) {
+		t.Fatalf("Get returned %v, want sentinel", err)
+	}
+	if len(qc.args) != 1 || qc.args[0] != sessionPartner {
+		t.Fatalf("expected partner_id coerced to %d, got args=%v", sessionPartner, qc.args)
+	}
+}
+
+// TestGet_PartnerSpecific_GlobalRolePreservesForeignPartner verifies the
+// legitimate cross-partner read survives: a SUPER / BUSINESS_ADMIN caller
+// keeps the supplied partner_id.
+func TestGet_PartnerSpecific_GlobalRolePreservesForeignPartner(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: [][]any{{1}}}
+	s, qc := newService(t, partnerSpecificTable(), auth)
+
+	where := map[string]any{"partner_id": int64(999)}
+	if _, err := s.Get(context.Background(), 42, 7, where, ""); !errors.Is(err, errSentinel) {
+		t.Fatalf("Get returned %v, want sentinel", err)
+	}
+	if len(qc.args) != 1 || qc.args[0] != int64(999) {
+		t.Fatalf("expected supplied partner_id 999 preserved for global role, got args=%v", qc.args)
+	}
+}
+
+// TestGet_UserSpecific_ForcesOwnUserId verifies an owner-scoped caller
+// cannot read another user's rows via ?user_id=<victim> — the filter is
+// forced to the session user.
+func TestGet_UserSpecific_ForcesOwnUserId(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: nil}
+	s, qc := newService(t, userSpecificTable(), auth)
+
+	const sessionUser = 7
+	where := map[string]any{"user_id": int64(555)}
+	if _, err := s.Get(context.Background(), 42, sessionUser, where, ""); !errors.Is(err, errSentinel) {
+		t.Fatalf("Get returned %v, want sentinel", err)
+	}
+	if len(qc.args) != 1 || qc.args[0] != sessionUser {
+		t.Fatalf("expected user_id forced to %d, got args=%v", sessionUser, qc.args)
+	}
+}
+
+// TestGet_UserSpecific_BypassScopeReadsAcrossUsers documents the admin
+// path: a bypass_scope grant (ownScope=false) leaves the caller-supplied
+// user_id intact so an auditor can read a specific user's rows.
+func TestGet_UserSpecific_BypassScopeReadsAcrossUsers(t *testing.T) {
+	auth := &stubAuthQuery{permRows: [][]any{{"*", "", true}}, globalRows: nil} // wildcard + bypass_scope
+	s, qc := newService(t, userSpecificTable(), auth)
+
+	where := map[string]any{"user_id": int64(555)}
+	if _, err := s.Get(context.Background(), 42, 7, where, ""); !errors.Is(err, errSentinel) {
+		t.Fatalf("Get returned %v, want sentinel", err)
+	}
+	if len(qc.args) != 1 || qc.args[0] != int64(555) {
+		t.Fatalf("expected supplied user_id 555 preserved under bypass_scope, got args=%v", qc.args)
+	}
+}
+
+// TestDelete_UserSpecific_ForcesOwnUserId verifies the unconditional
+// owner-lock on Delete: a caller-supplied ?user_id=<victim> cannot widen
+// the delete past the session user's own rows.
+func TestDelete_UserSpecific_ForcesOwnUserId(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: nil}
+	s, qc := newService(t, userSpecificTable(), auth)
+
+	const sessionUser = 7
+	where := map[string]any{"user_id": int64(555)}
+	if err := s.Delete(context.Background(), 42, sessionUser, where); !errors.Is(err, errSentinel) {
+		t.Fatalf("Delete returned %v, want sentinel", err)
+	}
+	if len(qc.args) != 1 || qc.args[0] != sessionUser {
+		t.Fatalf("expected user_id forced to %d on delete, got args=%v", sessionUser, qc.args)
+	}
 }
 
 // TestGet_PartnerAdmin_InjectsPartnerUserScope verifies that a Get

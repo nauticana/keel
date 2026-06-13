@@ -55,9 +55,11 @@ const (
 )
 
 // OTPTokenTTL caps how long a SendOTP-issued token may be presented for
-// Verify or Resend. Slightly longer than the OTP code's own 2-minute
-// expiry so a legitimate user typing slowly can still use the token to
-// resend without re-entering their phone.
+// Verify or Resend. Sized to match the OTP code's own lifetime
+// (--otp_ttl_seconds, default 300s) so a legitimate user can use the
+// token for the full window the code is valid. Raising the flag above
+// this constant would let the code outlive its token — see the warning
+// on common.OTPTTLSeconds.
 const OTPTokenTTL = 5 * time.Minute
 
 // otpSendResponse mirrors what clients deserialize. resendCountdownSec

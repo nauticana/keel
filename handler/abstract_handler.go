@@ -55,12 +55,15 @@ func (h *AbstractHandler) ParseSession(r *http.Request) *model.UserSession {
 	if _, miss := ctx.Value(sessionMissCtxKey{}).(struct{}); miss {
 		return nil
 	}
+	// Scheme match is case-insensitive per RFC 7235 — and must agree with
+	// HttpBackend.SSOMiddleware, which also uses EqualFold, so a handler's
+	// RequireSession behaves identically inside and outside that middleware.
 	auth := r.Header.Get("Authorization")
-	if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
+	if len(auth) < 7 || !strings.EqualFold(auth[:7], "Bearer ") {
 		stashSessionMiss(r)
 		return nil
 	}
-	tokenStr := strings.TrimPrefix(auth, "Bearer ")
+	tokenStr := strings.TrimSpace(auth[7:])
 	session, err := h.UserService.ParseJWT(tokenStr)
 	if err != nil || session == nil {
 		stashSessionMiss(r)

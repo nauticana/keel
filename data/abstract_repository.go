@@ -3,7 +3,6 @@ package data
 import (
 	"context"
 	"fmt"
-	"path"
 	"strings"
 
 	"github.com/nauticana/keel/common"
@@ -179,9 +178,9 @@ func (r *AbstractRepository) IsGlobalRole(ctx context.Context, userID int) bool 
 // (uppercased) authorization_object + authorization_object_action
 // values registered by the downstream app.
 //
-// Wildcard / range semantics mirror AbstractTableService.CheckPermission:
-// an explicit `low_limit == scope` grant returns ownScope=false; a
-// pattern / range match returns ownScope=true.
+// Scope semantics mirror AbstractTableService.CheckPermission: an exact
+// `low_limit == scope` grant returns ownScope=false; a '*' grant returns
+// ownScope=true. Only exact + '*' are honored (KR-003).
 func (r *AbstractRepository) CheckActionPermission(ctx context.Context, userID int, authObject, action, scope string) (bool, bool) {
 	if userID < 0 || authObject == "" || action == "" || r.AuthQuery == nil {
 		return false, false
@@ -193,14 +192,13 @@ func (r *AbstractRepository) CheckActionPermission(ctx context.Context, userID i
 	wildcardMatched := false
 	for _, rec := range res.Rows {
 		lowLimit := common.AsString(rec[0])
-		highLimit := common.AsString(rec[1])
+		// Exact + '*' only, matching CheckPermission and the
+		// QCheckAuthorization filter (KR-003). An exact scope grant is
+		// owner-scoped (ownScope=false); a '*' grant is broad (ownScope=true).
 		if lowLimit == scope {
 			return true, false
 		}
-		if matched, _ := path.Match(lowLimit, scope); matched {
-			wildcardMatched = true
-		}
-		if highLimit != "" && scope >= lowLimit && scope <= highLimit {
+		if lowLimit == "*" {
 			wildcardMatched = true
 		}
 	}
