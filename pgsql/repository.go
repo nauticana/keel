@@ -21,6 +21,8 @@ const (
 	IT_NUMBER   = "number"
 	IT_CHECKBOX = "checkbox"
 	IT_DATETIME = "datetime-local"
+	IT_DATE     = "date"
+	IT_TIME     = "time"
 	IT_SELECT   = "select"
 )
 
@@ -474,7 +476,13 @@ func (r *RepositoryPgsql) LoadColumns(ctx context.Context) (map[string][]*model.
 		case "bool", "boolean":
 			col.DataType = model.DT_BOOL
 			col.InputType = IT_CHECKBOX
-		case "timestamp", "date", "time", "datetime":
+		case "date":
+			col.DataType = model.DT_TIME
+			col.InputType = IT_DATE
+		case "time", "timetz":
+			col.DataType = model.DT_TIME
+			col.InputType = IT_TIME
+		case "timestamp", "timestamptz", "datetime":
 			col.DataType = model.DT_TIME
 			col.InputType = IT_DATETIME
 		default:
