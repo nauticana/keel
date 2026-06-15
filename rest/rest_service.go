@@ -117,6 +117,29 @@ type RestService struct {
 	cacheApis     map[string]any
 }
 
+// childNode is one rest_api_child row resolved to its relation, pending linking.
+type childNode struct {
+	seq, parentSeq int
+	pascal         string
+	rel            RelationAPI
+}
+
+// linkChildRelations attaches each node under its parent_seq's ChildServices, or
+// to root when parent_seq is 0 or unresolved (the historic flat behavior).
+func linkChildRelations(root map[string]RelationAPI, nodes []*childNode) {
+	bySeq := make(map[int]*childNode, len(nodes))
+	for _, n := range nodes {
+		bySeq[n.seq] = n
+	}
+	for _, n := range nodes {
+		if parent, ok := bySeq[n.parentSeq]; n.parentSeq != 0 && ok {
+			parent.rel.ChildServices[n.pascal] = n.rel
+		} else {
+			root[n.pascal] = n.rel
+		}
+	}
+}
+
 func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseRepository) (map[string]*RestAPI, map[string]*RestReport, error) {
 	if oltpDatabase == nil {
 		return nil, nil, fmt.Errorf("database repository is required for REST services")
@@ -179,11 +202,6 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseReposi
 	// Nest each child per rest_api_child.parent_seq (0 = direct child of the
 	// master). Two passes so row order is irrelevant; an unresolved parent_seq
 	// falls back to the master (the historic flat behavior).
-	type childNode struct {
-		seq, parentSeq int
-		pascal         string
-		rel            RelationAPI
-	}
 	byAPI := make(map[string][]*childNode)
 	for _, row := range res.Rows {
 		apiID := common.AsString(row[0])
@@ -214,18 +232,7 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseReposi
 		})
 	}
 	for apiID, nodes := range byAPI {
-		restAPI := s.RestApis[apiID]
-		bySeq := make(map[int]*childNode, len(nodes))
-		for _, n := range nodes {
-			bySeq[n.seq] = n
-		}
-		for _, n := range nodes {
-			if parent, ok := bySeq[n.parentSeq]; n.parentSeq != 0 && ok {
-				parent.rel.ChildServices[n.pascal] = n.rel
-			} else {
-				restAPI.Relations.ChildServices[n.pascal] = n.rel
-			}
-		}
+		linkChildRelations(s.RestApis[apiID].Relations.ChildServices, nodes)
 	}
 
 	// Table actions — populate TableDefinition.Actions from the basis
