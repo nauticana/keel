@@ -77,14 +77,25 @@ func (s *AbstractTableService) CheckPermission(ctx context.Context, userID int, 
 
 func (s *AbstractTableService) ExtractValue(item any, col *model.TableColumn) any {
 	val := reflect.ValueOf(item)
+	var v any
 	if val.Kind() == reflect.Map {
 		m := item.(map[string]any)
-		if v, ok := m[col.PascalName]; ok {
-			return v
-		} else if v, ok := m[col.ColumnName]; ok {
-			return v
+		mv, ok := m[col.PascalName]
+		if !ok {
+			mv, ok = m[col.ColumnName]
 		}
+		if !ok {
+			return nil
+		}
+		v = mv
+	} else {
+		v = val.FieldByName(col.PascalName).Interface()
+	}
+	// A form sends "" for a cleared field; for a non-text column that maps to
+	// SQL NULL — Postgres can't cast '' to bigint/numeric/bool/timestamp.
+	if str, ok := v.(string); ok && str == "" &&
+		col.DataType != model.DT_STRING && col.DataType != model.DT_TEXT {
 		return nil
 	}
-	return val.FieldByName(col.PascalName).Interface()
+	return v
 }
