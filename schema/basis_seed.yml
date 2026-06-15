@@ -8,6 +8,7 @@ seeds:
       - [payout_provider, "Payout Provider"]
       - [tax_id_type, "Tax ID Type"]
       - [payment_method_type, "Payment Method Type"]
+      - [measurement_unit, "Measurement Unit"]
 
   - table: constant_value
     columns: [constant_id, value, caption]
@@ -27,6 +28,48 @@ seeds:
       - [payment_method_type, wallet,     "Wallet"]
       - [payment_method_type, apple_pay,  "Apple Pay"]
       - [payment_method_type, google_pay, "Google Pay"]
+      # Measurement / pricing units. Value is the API-returned token (AI-facing:
+      # "per hour" reads better than "HR"); caption is the dropdown label.
+      # time + service  (the units service pricing needs most)
+      - [measurement_unit, each,     "Each"]
+      - [measurement_unit, lump_sum, "Lump Sum"]
+      - [measurement_unit, minute,   "Minute"]
+      - [measurement_unit, hour,     "Hour"]
+      - [measurement_unit, day,      "Day"]
+      - [measurement_unit, week,     "Week"]
+      - [measurement_unit, month,    "Month"]
+      - [measurement_unit, year,     "Year"]
+      - [measurement_unit, session,  "Session"]
+      - [measurement_unit, visit,    "Visit"]
+      - [measurement_unit, person,   "Person"]
+      # retail packaging
+      - [measurement_unit, dozen,    "Dozen"]
+      - [measurement_unit, pair,     "Pair"]
+      - [measurement_unit, set,      "Set"]
+      - [measurement_unit, pack,     "Pack"]
+      # weight
+      - [measurement_unit, mg,       "Milligram"]
+      - [measurement_unit, gram,     "Gram"]
+      - [measurement_unit, kg,       "Kilogram"]
+      - [measurement_unit, oz,       "Ounce"]
+      - [measurement_unit, lb,       "Pound"]
+      - [measurement_unit, ton,      "Ton"]
+      # volume
+      - [measurement_unit, ml,       "Milliliter"]
+      - [measurement_unit, liter,    "Liter"]
+      - [measurement_unit, gallon,   "Gallon"]
+      # length
+      - [measurement_unit, mm,       "Millimeter"]
+      - [measurement_unit, cm,       "Centimeter"]
+      - [measurement_unit, meter,    "Meter"]
+      - [measurement_unit, km,       "Kilometer"]
+      - [measurement_unit, inch,     "Inch"]
+      - [measurement_unit, foot,     "Foot"]
+      - [measurement_unit, yard,     "Yard"]
+      - [measurement_unit, mile,     "Mile"]
+      # area
+      - [measurement_unit, sqft,     "Square Foot"]
+      - [measurement_unit, sqm,      "Square Meter"]
 
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
