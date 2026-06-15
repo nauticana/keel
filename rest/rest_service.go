@@ -43,7 +43,7 @@ SELECT authorization_object_id, action, low_limit, high_limit
 	qForeignKeyLookup: "SELECT constraint_name, lookup_style, display_column FROM foreign_key_lookup",
 	qConstantLookup:   "SELECT table_name, column_name, constant_id FROM constant_lookup",
 	qRestApiHeader:    "SELECT id, version, master_table FROM rest_api_header where is_active IS TRUE",
-	qRestApiChild:     "SELECT api_id, constraint_name FROM rest_api_child",
+	qRestApiChild:     "SELECT api_id, seq, parent_seq, constraint_name FROM rest_api_child ORDER BY api_id, seq",
 	qRestReportHeader: "SELECT id, version, query_name, description FROM rest_report_header WHERE is_active IS TRUE",
 	qRestReportParam:  "SELECT report_id, seq, param_name, data_type, constant_id FROM rest_report_param ORDER BY report_id, seq",
 	qTableAction: `
@@ -176,30 +176,55 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseReposi
 	if err != nil {
 		return nil, nil, err
 	}
+	// Nest each child per rest_api_child.parent_seq (0 = direct child of the
+	// master). Two passes so row order is irrelevant; an unresolved parent_seq
+	// falls back to the master (the historic flat behavior).
+	type childNode struct {
+		seq, parentSeq int
+		pascal         string
+		rel            RelationAPI
+	}
+	byAPI := make(map[string][]*childNode)
 	for _, row := range res.Rows {
-		restAPI, ok := s.RestApis[common.AsString(row[0])]
-		if !ok {
+		apiID := common.AsString(row[0])
+		if _, ok := s.RestApis[apiID]; !ok {
 			continue
 		}
-		consName := common.AsString(row[1])
+		consName := common.AsString(row[3])
 		fk := s.db.GetForeignKey(consName)
 		if fk == nil {
 			return nil, nil, fmt.Errorf("foreign key %s not found in the database", consName)
 		}
 		ms := s.db.GetTableService(fk.Child.TableName)
 		if ms == nil {
-			return nil, nil, fmt.Errorf("table service %s not found for REST API %s", fk.Child.TableName, restAPI.APIName)
+			return nil, nil, fmt.Errorf("table service %s not found for REST API %s", fk.Child.TableName, apiID)
 		}
-		// Key by PascalName so it matches the JSON field key sent by the frontend
-		// (e.g. "UserPermissions" rather than "user_permissions").
-		// Children inherit Database from the parent so the recursive
-		// transactional Post path can resolve tx-bound services for
-		// every level.
-		restAPI.Relations.ChildServices[fk.PascalName] = RelationAPI{
-			DataService:    ms,
-			ParentRelation: fk,
-			ChildServices:  make(map[string]RelationAPI),
-			Database:       s.db,
+		// Key by PascalName to match the frontend JSON field; children inherit
+		// Database so the recursive tx Post path resolves services at every level.
+		byAPI[apiID] = append(byAPI[apiID], &childNode{
+			seq:       int(common.AsInt64(row[1])),
+			parentSeq: int(common.AsInt64(row[2])),
+			pascal:    fk.PascalName,
+			rel: RelationAPI{
+				DataService:    ms,
+				ParentRelation: fk,
+				ChildServices:  make(map[string]RelationAPI),
+				Database:       s.db,
+			},
+		})
+	}
+	for apiID, nodes := range byAPI {
+		restAPI := s.RestApis[apiID]
+		bySeq := make(map[int]*childNode, len(nodes))
+		for _, n := range nodes {
+			bySeq[n.seq] = n
+		}
+		for _, n := range nodes {
+			if parent, ok := bySeq[n.parentSeq]; n.parentSeq != 0 && ok {
+				parent.rel.ChildServices[n.pascal] = n.rel
+			} else {
+				restAPI.Relations.ChildServices[n.pascal] = n.rel
+			}
 		}
 	}
 
