@@ -50,7 +50,6 @@ type TableServicePgsql struct {
 	Schema        string
 	sqlSelectAll  string
 	sqlSelectByID string
-	sqlInsertItem string
 	sqlUpdateByID string
 	sqlDeleteByID string
 	// sqlUpdateByIDForUser is sqlUpdateByID with an extra
@@ -239,32 +238,8 @@ func (s *TableServicePgsql) Init() error {
 			s.sqlUpdateByIDForUser = s.sqlUpdateByID + " AND " + quoteIdent("user_id") + " = " + s.Placeholder(plcCnt)
 		}
 	}
-	var insertCols []string
-	var insertPlchldr []string
-	plcCnt = 1
-	hasSequence := false
-	seqColumn := ""
-	for _, col := range s.Table.Columns {
-		// R/H (and unmoded audit timestamps) are server-managed (must stay in
-		// sync with the InsertSingle() value-binding loop below).
-		if skipInsertCol(col) {
-			continue
-		}
-		if col.SequenceName != "" {
-			hasSequence = true
-			seqColumn = col.ColumnName
-			insertCols = append(insertCols, quoteIdent(col.ColumnName))
-			insertPlchldr = append(insertPlchldr, fmt.Sprintf("nextval(%s)", quoteSQLString(col.SequenceName)))
-		} else {
-			insertCols = append(insertCols, quoteIdent(col.ColumnName))
-			insertPlchldr = append(insertPlchldr, s.Placeholder(plcCnt))
-			plcCnt++
-		}
-	}
-	s.sqlInsertItem = "INSERT INTO " + s.quotedTable() + " (" + strings.Join(insertCols, ", ") + ") VALUES (" + strings.Join(insertPlchldr, ", ") + ")"
-	if hasSequence {
-		s.sqlInsertItem += " RETURNING " + quoteIdent(seqColumn)
-	}
+	// INSERT SQL is built per row in InsertSingle so a cleared value on a
+	// column with a DB default can emit DEFAULT instead of binding NULL.
 	return nil
 }
 
@@ -438,38 +413,57 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 }
 
 func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, userID int, item any) (int64, error) {
+	var cols, vals []string
 	var args []any
 	hasSequence := false
+	seqColumn := ""
+	plc := 1
 	for _, col := range s.Table.Columns {
+		// R/H (and unmoded audit timestamps) are server-managed.
 		if skipInsertCol(col) {
 			continue
 		}
+		cols = append(cols, quoteIdent(col.ColumnName))
 		if col.SequenceName != "" {
 			hasSequence = true
+			seqColumn = col.ColumnName
+			vals = append(vals, fmt.Sprintf("nextval(%s)", quoteSQLString(col.SequenceName)))
 			continue
 		}
+		var v any
 		switch {
 		case s.Table.PartnerSpecific && col.ColumnName == "partner_id":
-			args = append(args, partnerID)
+			v = partnerID
 		case s.Table.UserSpecific && col.ColumnName == "user_id" && userID > 0:
 			// Force user_id = authenticated user. Ignore whatever the
 			// caller supplied so a row owner can never be spoofed at
 			// insert time. userID==0 (system / anonymous) keeps the
 			// caller-supplied value as a safety hatch for backfills.
-			args = append(args, userID)
+			v = userID
 		default:
-			args = append(args, s.ExtractValue(item, col))
+			v = s.ExtractValue(item, col)
 		}
+		// A cleared/missing value (nil) on a column that has a DB default emits
+		// the SQL DEFAULT keyword so the default applies (e.g. NOT NULL ...
+		// DEFAULT 0) rather than binding NULL and tripping the constraint.
+		if v == nil && col.HasDefault {
+			vals = append(vals, "DEFAULT")
+			continue
+		}
+		vals = append(vals, s.Placeholder(plc))
+		plc++
+		args = append(args, v)
 	}
+	sql := "INSERT INTO " + s.quotedTable() + " (" + strings.Join(cols, ", ") + ") VALUES (" + strings.Join(vals, ", ") + ")"
 	if hasSequence {
+		sql += " RETURNING " + quoteIdent(seqColumn)
 		var id int64
-		err := s.Client.QueryRow(ctx, s.sqlInsertItem, args...).Scan(&id)
-		if err != nil {
+		if err := s.Client.QueryRow(ctx, sql, args...).Scan(&id); err != nil {
 			return -1, fmt.Errorf("failed to insert record: %w", err)
 		}
 		return id, nil
 	}
-	_, err := s.Client.Exec(ctx, s.sqlInsertItem, args...)
+	_, err := s.Client.Exec(ctx, sql, args...)
 	return -1, err
 }
 

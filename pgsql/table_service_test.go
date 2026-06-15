@@ -360,3 +360,59 @@ func TestIsGlobalRole_QueryShape(t *testing.T) {
 		}
 	}
 }
+
+// defaultSubTable: id key, name (text, no default), sort_order (int WITH a DB
+// default), qty (int, nullable, NO default). No sequence → InsertSingle takes
+// the Exec path so captureQuerier records the SQL without a Row stub.
+func defaultSubTable() *model.TableDefinition {
+	idCol := &model.TableColumn{ColumnName: "id", PascalName: "Id", IsKey: true, DataType: model.DT_INT}
+	nameCol := &model.TableColumn{ColumnName: "name", PascalName: "Name", DataType: model.DT_STRING}
+	sortCol := &model.TableColumn{ColumnName: "sort_order", PascalName: "SortOrder", DataType: model.DT_INT, HasDefault: true}
+	qtyCol := &model.TableColumn{ColumnName: "qty", PascalName: "Qty", DataType: model.DT_INT}
+	return &model.TableDefinition{
+		TableName: "thing",
+		Columns:   []*model.TableColumn{idCol, nameCol, sortCol, qtyCol},
+		Keys:      []*model.TableColumn{idCol},
+	}
+}
+
+// TestInsertSingle_DefaultSubstitution pins the two-edge fix: a cleared/empty
+// value on a column WITH a DB default emits the SQL DEFAULT keyword (so the
+// default applies instead of NULL tripping a NOT NULL), a cleared value on a
+// column WITHOUT a default still binds NULL, and present values bind normally.
+func TestInsertSingle_DefaultSubstitution(t *testing.T) {
+	s, qc := newService(t, defaultSubTable(), &stubAuthQuery{})
+
+	t.Run("empty on defaulted column → DEFAULT, not bound", func(t *testing.T) {
+		_, _ = s.InsertSingle(context.Background(), 0, 0,
+			map[string]any{"Id": int64(1), "Name": "x", "SortOrder": "", "Qty": int64(7)})
+		if !strings.Contains(qc.sql, "DEFAULT") {
+			t.Fatalf("expected DEFAULT for empty sort_order, got: %s", qc.sql)
+		}
+		if len(qc.args) != 3 { // id, name, qty bound; sort_order is DEFAULT (unbound)
+			t.Fatalf("expected 3 bound args (id,name,qty), got %d: %v", len(qc.args), qc.args)
+		}
+	})
+
+	t.Run("all values present → no DEFAULT, all bound", func(t *testing.T) {
+		_, _ = s.InsertSingle(context.Background(), 0, 0,
+			map[string]any{"Id": int64(1), "Name": "x", "SortOrder": int64(5), "Qty": int64(7)})
+		if strings.Contains(qc.sql, "DEFAULT") {
+			t.Fatalf("did not expect DEFAULT, got: %s", qc.sql)
+		}
+		if len(qc.args) != 4 {
+			t.Fatalf("expected 4 bound args, got %d: %v", len(qc.args), qc.args)
+		}
+	})
+
+	t.Run("empty on non-defaulted column → binds NULL, no DEFAULT", func(t *testing.T) {
+		_, _ = s.InsertSingle(context.Background(), 0, 0,
+			map[string]any{"Id": int64(1), "Name": "x", "SortOrder": int64(5), "Qty": ""})
+		if strings.Contains(qc.sql, "DEFAULT") {
+			t.Fatalf("non-defaulted qty must not become DEFAULT, got: %s", qc.sql)
+		}
+		if len(qc.args) != 4 || qc.args[3] != nil { // qty coerced to nil, bound as NULL
+			t.Fatalf("expected qty bound as NULL, got args: %v", qc.args)
+		}
+	})
+}
