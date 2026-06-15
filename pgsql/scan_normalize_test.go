@@ -83,6 +83,25 @@ func TestNormalizeValue_TimestamptzToTime(t *testing.T) {
 	}
 }
 
+func TestNormalizeValue_TimeToString(t *testing.T) {
+	// 09:00:00 → 9*3600*1e6 microseconds since midnight (business_hours.opens).
+	tm := pgtype.Time{Microseconds: int64(9*3600) * 1_000_000, Valid: true}
+	got := normalizeValue(tm)
+	s, ok := got.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T (%v)", got, got)
+	}
+	if s != "09:00:00" {
+		t.Errorf("expected 09:00:00, got %q", s)
+	}
+}
+
+func TestNormalizeValue_TimeNullToNil(t *testing.T) {
+	if got := normalizeValue(pgtype.Time{Valid: false}); got != nil {
+		t.Errorf("expected nil for NULL time, got %v", got)
+	}
+}
+
 func TestNormalizeValue_PassThrough(t *testing.T) {
 	// Primitive types and unknown wrappers must round-trip untouched
 	// so AsString / AsBool / AsInt* keep working as before.

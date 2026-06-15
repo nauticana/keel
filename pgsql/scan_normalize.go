@@ -1,6 +1,8 @@
 package pgsql
 
 import (
+	"fmt"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -52,6 +54,15 @@ func normalizeValue(v any) any {
 			return nil
 		}
 		return n.Time
+	case pgtype.Time:
+		// TIME-of-day has no date component, so a "HH:MM:SS" string is the
+		// useful primitive — time.Time would marshal a bogus 0001-01-01 date,
+		// and the raw pgtype.Time renders as "[object Object]" in JSON clients.
+		if !n.Valid {
+			return nil
+		}
+		sec := n.Microseconds / 1_000_000
+		return fmt.Sprintf("%02d:%02d:%02d", sec/3600, (sec%3600)/60, sec%60)
 	}
 	return v
 }
