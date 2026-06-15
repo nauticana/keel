@@ -6,4 +6,7 @@ columns:
     type: CHAR(2)
   - name: caption
     type: VARCHAR(100)
+  - name: currency
+    type: CHAR(3)
+    comment: ISO 4217 default currency — country→currency lookup for app defaults
 primary_key: [id]
