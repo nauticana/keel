@@ -401,7 +401,9 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 		rowMap := make(map[string]any)
 		for i := range colNames {
 			jsonName := s.Table.Columns[i].PascalName
-			rowMap[jsonName] = rowVals[i]
+			// Strip pgx wrapper types (pgtype.Time/Date/Numeric/…) so JSON clients
+			// get primitives, not "[object Object]". Matches QueryService.Query.
+			rowMap[jsonName] = normalizeValue(rowVals[i])
 		}
 		rowMap["op_code"] = "R"
 		results = append(results, rowMap)
