@@ -14,7 +14,7 @@ Keel factors the highly abstracted backend code that was repeating across multip
 |---|---|---|---|
 | **`AbstractHandler.Journal`** | Did not exist. The real `detail` passed to `WriteError(w, 500, title, detail)` was dropped on the floor for any 5xx — no server-side record. | Optional `Journal logger.ApplicationLogger` field. `writeError` now logs `request_id=… status=… [METHOD PATH] title: detail` via `Journal.Error(...)` **before** sanitising the client response. The client response is unchanged (still the opaque `request_id`); the change is observability only. | **Wire it.** Set `Journal: yourLogger` on every `AbstractHandler{…}` struct literal in your controller. Nil-safe: left unset, behaviour is exactly as before (no server-side log). |
 
-Because `AbstractHandler` is embed-only, the including handler supplies the dependency — same pattern as the existing `UserService` field and `OTPHandler.Journal` (v0.8.4). A handler that does not wire `Journal` keeps compiling and keeps its old (silent) behaviour; one that wires it gets every 5xx logged server-side, keyed by the same `request_id` the client received.
+Because `AbstractHandler` is embed-only, the including handler supplies the dependency — same pattern as the existing `UserService` field and `OTPHandler.Journal` (v0.8.4). A handler that does not wire `Journal` keeps compiling and keeps its old (silent) behaviour; one that wires it gets every 5xx logged server-side, keyed by the same `request_id` the client received. Don't confuse http handler AbstractHandler with other event handler.
 
 ### Migration steps for downstream consumers
 
