@@ -121,8 +121,8 @@ func (s *TableServicePgsql) resolveColumnName(key string) (string, bool) {
 // separate (the caller checks SequenceName after this).
 func skipInsertCol(col *model.TableColumn) bool {
 	switch col.DisplayMode {
-	case model.DisplayHidden, model.DisplayReadonly, model.DisplayUpdateStamp:
-		return true // system-managed: DB default / trigger fills it (U stamps on UPDATE only)
+	case model.DisplayHidden, model.DisplayReadonly, model.DisplayUpdateStamp, model.DisplaySecret:
+		return true // system-managed: DB default / trigger fills it (U stamps on UPDATE only; S owned by dedicated flows)
 	case "":
 		return col.HasDefault && col.DataType == model.DT_TIME // unmoded audit timestamps
 	}
@@ -156,7 +156,7 @@ func updateStampKind(col *model.TableColumn) int {
 
 func skipUpdateCol(col *model.TableColumn) bool {
 	switch col.DisplayMode {
-	case model.DisplayHidden, model.DisplayReadonly, model.DisplayInsertOnly:
+	case model.DisplayHidden, model.DisplayReadonly, model.DisplayInsertOnly, model.DisplaySecret:
 		return true
 	case model.DisplayUpdateStamp:
 		return updateStampKind(col) == stampNone // unsupported type → not updatable

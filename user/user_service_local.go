@@ -143,10 +143,30 @@ const (
 	qVerifyOTP                     = "verify_otp"
 	qIncrementOTP                  = "increment_otp_attempts"
 	qClearOTP                      = "clear_otp"
+	qUpdateProfile                 = "update_profile"
+	qSetUserEmail                  = "set_user_email"
+	qSetUserPhone                  = "set_user_phone"
+	qAddContactChange              = "add_contact_change"
+	qGetContactChange              = "get_contact_change"
+	qBumpContactChange             = "bump_contact_change"
+	qExpireContactChange           = "expire_contact_change"
+	qConfirmContactChange          = "confirm_contact_change"
 )
 
 var LocalUserQueries = map[string]string{
 	qUserAccountPolicy: "SELECT id, policy_value FROM user_account_policy",
+
+	qUpdateProfile: "UPDATE user_account SET first_name = ?, last_name = ?, locale = ? WHERE id = ?",
+	qSetUserEmail:  "UPDATE user_account SET user_email = ? WHERE id = ?",
+	qSetUserPhone:  "UPDATE user_account SET phone = ? WHERE id = ?",
+	// Contact-change codes reuse user_registration (the pending-confirmation
+	// table), bound to both the new value (user_email PK) and the user_id, so
+	// a code is valid only for the exact account + address it was minted for.
+	qAddContactChange: "INSERT INTO user_registration (user_email, confirmation, payload, user_id) VALUES (?, ?, ?, ?)",
+	qGetContactChange: "SELECT confirmation, payload, attempts FROM user_registration WHERE user_email = ? AND user_id = ? AND status = 'P' AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+	qBumpContactChange:    "UPDATE user_registration SET attempts = attempts + 1 WHERE user_email = ? AND user_id = ? AND status = 'P'",
+	qExpireContactChange:  "UPDATE user_registration SET status = 'X' WHERE user_email = ? AND user_id = ? AND status = 'P'",
+	qConfirmContactChange: "UPDATE user_registration SET confirmed_at = CURRENT_TIMESTAMP, status = 'C' WHERE user_email = ? AND user_id = ? AND status = 'P'",
 
 	qUserMenu: `
 SELECT DISTINCT
@@ -1633,6 +1653,80 @@ func (s *LocalUserService) IncrementOTPAttempts(userId int) error {
 func (s *LocalUserService) ClearOTP(userId int) error {
 	_, err := s.queryService.Query(s.ctx(), qClearOTP, userId)
 	return err
+}
+
+func (s *LocalUserService) UpdateProfile(userID int, firstName, lastName, locale string) error {
+	_, err := s.queryService.Query(s.ctx(), qUpdateProfile, firstName, lastName, locale, userID)
+	if err != nil {
+		return err
+	}
+	return s.AddUserHistory(userID, 0, "", "PROFILE", "A", "")
+}
+
+// CreateContactChange mints a confirmation code for an email/phone change,
+// binds it to (userID, newValue) in user_registration, and returns the code
+// for the caller to deliver to that new address/number. Rejects a value
+// already in use by another account. channel is "email" or "phone".
+func (s *LocalUserService) CreateContactChange(userID int, channel, newValue string) (int, error) {
+	switch channel {
+	case "email":
+		newValue = normalizeEmail(newValue)
+		if u, _ := s.GetUserByEmail(newValue); u != nil && u.Id != userID {
+			return 0, fmt.Errorf("email already in use")
+		}
+	case "phone":
+		if u, _ := s.GetUserByPhone(newValue); u != nil && u.Id != userID {
+			return 0, fmt.Errorf("phone already in use")
+		}
+	default:
+		return 0, fmt.Errorf("unknown contact channel %q", channel)
+	}
+	code, err := generateConfirmationCode()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.queryService.Query(s.ctx(), qAddContactChange, newValue, code, channel, userID); err != nil {
+		return 0, err
+	}
+	return code, nil
+}
+
+// ConfirmContactChange validates the code against the pending row for
+// (userID, newValue) — TTL- and attempt-capped, same posture as the
+// registration/password-reset confirmation — then applies the change.
+func (s *LocalUserService) ConfirmContactChange(userID int, channel, newValue string, code int) error {
+	ctx := s.ctx()
+	if channel == "email" {
+		newValue = normalizeEmail(newValue)
+	}
+	cutoff := time.Now().Add(-RegistrationConfirmationTTL)
+	res, err := s.queryService.Query(ctx, qGetContactChange, newValue, userID, cutoff)
+	if err != nil {
+		return err
+	}
+	if len(res.Rows) == 0 {
+		return fmt.Errorf("invalid or expired confirmation")
+	}
+	expected := int(common.AsInt32(res.Rows[0][0]))
+	payload := common.AsString(res.Rows[0][1])
+	attempts := int(common.AsInt32(res.Rows[0][2]))
+	if attempts >= MaxRegistrationAttempts {
+		_, _ = s.queryService.Query(ctx, qExpireContactChange, newValue, userID)
+		return fmt.Errorf("invalid or expired confirmation")
+	}
+	if payload != channel || expected != code {
+		_, _ = s.queryService.Query(ctx, qBumpContactChange, newValue, userID)
+		return fmt.Errorf("invalid or expired confirmation")
+	}
+	applyQuery := qSetUserEmail
+	if channel == "phone" {
+		applyQuery = qSetUserPhone
+	}
+	if _, err := s.queryService.Query(ctx, applyQuery, newValue, userID); err != nil {
+		return err
+	}
+	_, _ = s.queryService.Query(ctx, qConfirmContactChange, newValue, userID)
+	return s.AddUserHistory(userID, 0, "", "CONTACT_"+strings.ToUpper(channel), "A", "")
 }
 
 // newSession builds a UserSession with Issuer/IssuedAt/ExpiresAt consistently

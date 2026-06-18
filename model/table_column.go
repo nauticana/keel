@@ -20,6 +20,7 @@ const (
 	DisplayDefault     = "D" // editable, prefilled with the column default on new records
 	DisplayInsertOnly  = "I" // editable on create, read-only on edit; UPDATE skips it
 	DisplayUpdateStamp = "U" // read-only audit stamp keel sets on UPDATE: timestamp→now(), integer→user_id
+	DisplaySecret      = "S" // never shown, never written, and stripped from REST reads — for hashes/secrets owned by dedicated flows
 )
 
 var TypescriptNames = map[string]string{

@@ -54,7 +54,37 @@ func (s *RelationAPI) Get(ctx context.Context, partnerID int64, userID int, wher
 			m[k] = v
 		}
 	}
+	s.maskSecrets(records)
 	return records, nil
+}
+
+// maskSecrets strips DisplaySecret ("S") columns from REST read results so
+// hashes/secrets (e.g. user_account.passtext) never reach the response. The
+// value is still read from the DB into memory; it is just never serialized.
+func (s *RelationAPI) maskSecrets(records []any) {
+	maskSecretColumns(records, s.DataService.GetTable())
+}
+
+func maskSecretColumns(records []any, table *model.TableDefinition) {
+	if table == nil {
+		return
+	}
+	var secret []string
+	for _, col := range table.Columns {
+		if col.DisplayMode == model.DisplaySecret {
+			secret = append(secret, col.PascalName)
+		}
+	}
+	if len(secret) == 0 {
+		return
+	}
+	for _, record := range records {
+		if m, ok := record.(map[string]any); ok {
+			for _, name := range secret {
+				delete(m, name)
+			}
+		}
+	}
 }
 
 func (s *RelationAPI) FetchChildren(ctx context.Context, partnerID int64, userID int, parentKeyValues map[string]any) (map[string]any, error) {
@@ -78,7 +108,12 @@ func (s *RelationAPI) FetchChildren(ctx context.Context, partnerID int64, userID
 }
 
 func (s *RelationAPI) List(ctx context.Context, partnerID int64, userID int, where map[string]any, order string) ([]any, error) {
-	return s.DataService.Get(ctx, partnerID, userID, where, order)
+	records, err := s.DataService.Get(ctx, partnerID, userID, where, order)
+	if err != nil {
+		return nil, err
+	}
+	s.maskSecrets(records)
+	return records, nil
 }
 
 func (s *RelationAPI) Insert(ctx context.Context, partnerID int64, userID int, data any) ([]int64, error) {

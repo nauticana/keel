@@ -1,6 +1,31 @@
 package rest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nauticana/keel/model"
+)
+
+// 'S' (secret) columns are stripped from read results; non-secret columns stay.
+func TestMaskSecretColumns_StripsSecretsKeepsRest(t *testing.T) {
+	table := &model.TableDefinition{Columns: []*model.TableColumn{
+		{ColumnName: "id", PascalName: "Id"},
+		{ColumnName: "passtext", PascalName: "Passtext", DisplayMode: model.DisplaySecret},
+		{ColumnName: "user_email", PascalName: "UserEmail"},
+	}}
+	records := []any{
+		map[string]any{"Id": int64(1), "Passtext": "$2a$12$hash", "UserEmail": "a@b.com"},
+	}
+	maskSecretColumns(records, table)
+
+	m := records[0].(map[string]any)
+	if _, present := m["Passtext"]; present {
+		t.Fatal("secret column Passtext should be stripped from read results")
+	}
+	if m["UserEmail"] != "a@b.com" || m["Id"] != int64(1) {
+		t.Fatal("non-secret columns must be preserved")
+	}
+}
 
 func relNode(seq, parentSeq int, pascal string) *childNode {
 	return &childNode{seq: seq, parentSeq: parentSeq, pascal: pascal,

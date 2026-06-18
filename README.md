@@ -316,11 +316,15 @@ doesn't exist, the loader skips it and behaviour is unchanged.
 | `D` (default-seeded) | editable, prefilled with the column default | written | written |
 | `I` (insert-only) | editable on create, locked on edit | written | skipped |
 | `U` (update stamp) | display-only like `R` | skipped | **keel-set**: `timestamp`→`now()`, `integer`→`user_id` |
+| `S` (secret) | never shown | skipped | skipped — **also stripped from REST read responses** |
 | `` / NULL | editable (normal) | written | written |
 
-The write rules are enforced in the SQL builders (`skipInsertCol` /
+`S` is the masking mode for hashes/secrets owned by dedicated flows (passwords,
+TOTP seeds): unlike `H`, its value is removed from `Get`/`List` results
+(`RelationAPI.maskSecrets`) so it never reaches the JSON — not just hidden in
+the form. The write rules are enforced in the SQL builders (`skipInsertCol` /
 `skipUpdateCol` / `updateStampKind` in `pgsql/table_service.go`), so
-`R`/`H`/`I`/`U` can't be set by a crafted API payload — not just hidden in
+`R`/`H`/`I`/`U`/`S` can't be set by a crafted API payload — not just hidden in
 the UI. `U` replaces the need for an `updated_at`/`updated_by` DB trigger:
 keel stamps `now()` (timestamp columns) or the authenticated user_id
 (integer columns) on every UPDATE. Explicit modes win over the legacy
@@ -352,8 +356,13 @@ project's own seed always wins.
 | `user_bank_info` | `created_at` | `R` |
 | `user_bank_info` | `updated_at` | `U` |
 | `user_payment_method` | `created_at` | `R` |
+| `user_account` | `passtext` | `S` |
+| `user_account` | `twofa_secret` | `S` |
+| `user_account` | `twofa_backup_codes` | `S` |
 
-Not seeded (deliberately): `partner_plan_subscription.begda` /
+The three `user_account` secrets ship as `S` so generic CRUD on `user_account`
+never exposes the bcrypt hash or TOTP material in the edit form or the REST
+JSON. Not seeded (deliberately): `partner_plan_subscription.begda` /
 `partner_addon_subscription.begda` are admin-entered business dates with **no**
 DB default — `R` would NULL-violate on INSERT. `*.endda` columns are
 open-ended validity end-dates, left editable. `user_permission.begda` is the
@@ -431,7 +440,7 @@ graph TD
 | `cmd/schemagen` | CLI tool that converts `schema/*.yml` files into DDL + seed SQL |
 | `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
-| `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
+| `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
@@ -933,6 +942,16 @@ Three changes to the public surface:
 | POST | `/api/user/trusted-device/revoke` | Revoke a trusted device by ID. **Side effect:** revokes all active refresh tokens. |
 | POST | `/api/user/logout-everywhere` | Revoke every active refresh token (user will re-auth on every device) |
 | DELETE | `/api/user/account` | Soft-delete the caller's account (anonymize + cascade revoke). Body `{reason}` optional. Returns 204. |
+
+**Self-service profile (`ProfileHandler`)** -- a logged-in user editing their own account. Construct with a `port.NotificationSender`; mount the routes returned by `GetAuthRoutes()` behind your JWT middleware. Name/locale apply immediately; email/phone are verify-before-apply (a code is sent to the NEW value, change lands on confirm). If `Notify` is nil, phone change returns 503 so email change can ship before an SMS provider is wired.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/user/profile` | Update own `firstName`/`lastName`/`locale` immediately |
+| POST | `/api/user/profile/email` | Request email change — code sent to the new email. Body `{value}` |
+| POST | `/api/user/profile/email/confirm` | Apply email change. Body `{value, code}` |
+| POST | `/api/user/profile/phone` | Request phone change — code via SMS (503 if `Notify` unset). Body `{value}` |
+| POST | `/api/user/profile/phone/confirm` | Apply phone change. Body `{value, code}` |
 
 ### Session-hygiene behavior bump (v0.3)
 

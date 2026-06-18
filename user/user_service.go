@@ -24,6 +24,15 @@ type UserService interface {
 	GetUserByEmail(email string) (*model.UserSession, error)
 	SetPassword(userid int, password string) error
 	GetUserMenu(userid int) ([]model.UserMenu, error)
+
+	// Self-service profile editing (session-scoped). UpdateProfile writes
+	// name/locale immediately; email/phone change via verify-before-apply —
+	// CreateContactChange returns a code bound to (user, new value) for the
+	// caller to deliver, ConfirmContactChange validates and applies it.
+	// channel is "email" or "phone".
+	UpdateProfile(userID int, firstName, lastName, locale string) error
+	CreateContactChange(userID int, channel, newValue string) (code int, err error)
+	ConfirmContactChange(userID int, channel, newValue string, code int) error
 	CreateJWT(u *model.UserSession) (string, error)
 	ParseJWT(tokenString string) (*model.UserSession, error)
 
