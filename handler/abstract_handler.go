@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/user"
 )
@@ -31,6 +32,10 @@ type sessionMissCtxKey struct{}
 
 type AbstractHandler struct {
 	UserService user.UserService
+	// Journal, when wired by the including handler, receives the real 5xx
+	// detail server-side (correlated by request_id) before writeError
+	// sanitises it out of the client response. Left nil → no server-side log.
+	Journal logger.ApplicationLogger
 }
 
 // ParseSession returns the JWT-bearing session on the request, or nil when
@@ -356,7 +361,17 @@ func (h *AbstractHandler) writeError(r *http.Request, w http.ResponseWriter, sta
 		requestID = newRequestID()
 	}
 	if status >= http.StatusInternalServerError {
-		// 5xx is operator-territory; never echo internal context.
+		// 5xx is operator-territory: record the real cause server-side
+		// (correlated by request_id) before sanitising it out of the client
+		// response. Without this the request_id maps to nothing in any log.
+		if h.Journal != nil {
+			where := ""
+			if r != nil {
+				where = " " + r.Method + " " + r.URL.Path
+			}
+			h.Journal.Error(fmt.Sprintf("request_id=%s status=%d%s %s: %s", requestID, status, where, title, detail))
+		}
+		// Never echo internal context to the client.
 		detail = "internal server error — see request_id in your logs"
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
