@@ -105,7 +105,7 @@ func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID i
 	if userID < 0 {
 		res, err = m.qs.Query(ctx, insertAPIKey, partnerID, keyName, prefix, keyHash, scopes)
 	} else {
-		res, err = m.qs.Query(ctx, insertAPIKey, partnerID, userID, keyName, prefix, keyHash, scopes)
+		res, err = m.qs.Query(ctx, insertUserAPIKey, partnerID, userID, keyName, prefix, keyHash, scopes)
 	}
 	if err != nil || len(res.Rows) == 0 {
 		return "", "", err
