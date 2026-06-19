@@ -6,6 +6,10 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.1.1 — Add userID parameter to APIKeyService.InsertKey)
+
+APIKeyService.InsertKey has now userID parameter. Any value less than 0 will insert NULL to the api_key table.
+
 ## Migration Guide (v1.0.18 — additive, 5xx server-side error logging)
 
 `AbstractHandler.writeError` (used by `WriteError` / `WriteRequestError`, and therefore by every handler that embeds `AbstractHandler`) sanitises 5xx responses: it replaces the real `detail` with `"internal server error — see request_id in your logs"` so internal context never reaches the client. The problem: the real `detail` was **discarded, not logged** — the `request_id` returned to the client correlated to nothing in any log, so a 500 was effectively invisible to operators.

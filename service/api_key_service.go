@@ -10,6 +10,7 @@ import (
 
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
@@ -42,15 +43,20 @@ type APIKeyService struct {
 }
 
 const (
-	insertAPIKey   = "insert_api_key"
-	validateAPIKey = "validate_api_key"
-	updateLastUsed = "update_last_used"
+	insertAPIKey     = "insert_api_key"
+	insertUserAPIKey = "insert_user_api_key"
+	validateAPIKey   = "validate_api_key"
+	updateLastUsed   = "update_last_used"
 )
 
 var apiKeyQueries = map[string]string{
 	insertAPIKey: `
 INSERT INTO api_key (id, partner_id, key_name, key_prefix, key_hash, scopes)
 VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?)`,
+
+	insertUserAPIKey: `
+INSERT INTO api_key (id, partner_id, key_name, key_prefix, key_hash, scopes, user_id)
+VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?, ?)`,
 
 	validateAPIKey: `
 SELECT id, partner_id, scopes, expires_at
@@ -82,7 +88,7 @@ func (m *APIKeyService) Init(ctx context.Context) {
 	}
 }
 
-func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, keyName string, scopes string) (string, string, error) {
+func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID int64, keyName string, scopes string) (string, string, error) {
 	randomBytes := make([]byte, 16)
 	if _, err := rand.Read(randomBytes); err != nil {
 		return "", "", err
@@ -94,7 +100,13 @@ func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, keyName 
 	hash := sha256.Sum256([]byte(plainKey))
 	keyHash := hex.EncodeToString(hash[:])
 
-	res, err := m.qs.Query(ctx, insertAPIKey, partnerID, keyName, prefix, keyHash, scopes)
+	var err error
+	var res *model.QueryResult
+	if userID < 0 {
+		res, err = m.qs.Query(ctx, insertAPIKey, partnerID, keyName, prefix, keyHash, scopes)
+	} else {
+		res, err = m.qs.Query(ctx, insertAPIKey, partnerID, userID, keyName, prefix, keyHash, scopes)
+	}
 	if err != nil || len(res.Rows) == 0 {
 		return "", "", err
 	}
