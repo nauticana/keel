@@ -6,7 +6,11 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
-## Migration Guide (v1.1.1 — Add userID parameter to APIKeyService.InsertKey)
+## Migration Guide (v1.1.4 — authorization object API_KEY)
+
+New authorization object API_KEY introduced with actions GENERATE and ROLL
+
+## Migration Guide (v1.1.3 — Add userID parameter to APIKeyService.InsertKey)
 
 APIKeyService.InsertKey has now userID parameter. Any value less than 0 will insert NULL to the api_key table.
 
