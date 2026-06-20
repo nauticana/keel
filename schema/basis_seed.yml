@@ -159,7 +159,7 @@ seeds:
     columns: [table_name, action_name, caption, icon, record_specific, display_order]
     rows:
       - [user_payment_method, set_default, "Set Default", star, true, 10]
-      - [api_key, generate, "Generate", plus, true, 10]
+      - [api_key, generate, "Generate", plus, false, 10]
       - [api_key, roll, "Roll", edit, true, 20]
 
   - table: application_menu
