@@ -53,11 +53,13 @@ const (
 var apiKeyQueries = map[string]string{
 	insertAPIKey: `
 INSERT INTO api_key (id, partner_id, key_name, key_prefix, key_hash, scopes)
-VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?)`,
+VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?)
+RETURNING id`,
 
 	insertUserAPIKey: `
 INSERT INTO api_key (id, partner_id, key_name, key_prefix, key_hash, scopes, user_id)
-VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?, ?)`,
+VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?, ?)
+RETURNING id`,
 
 	validateAPIKey: `
 SELECT id, partner_id, scopes, expires_at
