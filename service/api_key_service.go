@@ -47,6 +47,7 @@ const (
 	insertUserAPIKey = "insert_user_api_key"
 	validateAPIKey   = "validate_api_key"
 	updateLastUsed   = "update_last_used"
+	rotateAPIKey     = "rotate_api_key"
 )
 
 var apiKeyQueries = map[string]string{
@@ -66,6 +67,14 @@ SELECT id, partner_id, scopes, expires_at
 
 	updateLastUsed: `
 UPDATE api_key SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?`,
+
+	rotateAPIKey: `
+UPDATE api_key
+   SET expires_at       = CURRENT_TIMESTAMP + INTERVAL '24 hours',
+       rotated_at       = CURRENT_TIMESTAMP,
+       grace_expires_at = CURRENT_TIMESTAMP + INTERVAL '24 hours'
+ WHERE id = ? AND partner_id = ? AND is_active = TRUE
+RETURNING key_hash, key_name, scopes, user_id`,
 }
 
 func (m *APIKeyService) Init(ctx context.Context) {
@@ -176,4 +185,31 @@ func (m *APIKeyService) LogUsage(ctx context.Context, partnerID int64, keyID int
 	}
 	_, err = m.qs.Query(ctx, updateLastUsed, keyID)
 	return err
+}
+
+// RotateKey gives the existing key (keyID, owned by partnerID) a 24h grace
+// window via expires_at, then issues a fresh key inheriting its name, scopes,
+// and ownership (partner + user_id). The old key keeps working until grace
+// expiry so callers can swap without downtime; its cache entry is evicted so
+// the new expiry takes effect immediately rather than after the 5-minute TTL.
+// Returns the new plaintext key + prefix (shown once). Zero rows — the key is
+// not owned by partnerID or already inactive — returns ("", "", nil).
+func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID int64) (string, string, error) {
+	res, err := m.qs.Query(ctx, rotateAPIKey, keyID, partnerID)
+	if err != nil {
+		return "", "", err
+	}
+	if len(res.Rows) == 0 {
+		return "", "", nil
+	}
+	row := res.Rows[0]
+	oldHash, _ := row[0].(string)
+	keyName, _ := row[1].(string)
+	scopes, _ := row[2].(string)
+	userID := int64(-1) // NULL user_id (partner-only key) → re-issue partner-only
+	if uid, ok := row[3].(int64); ok {
+		userID = uid
+	}
+	m.InvalidateKey(oldHash)
+	return m.InsertKey(ctx, partnerID, userID, keyName, scopes)
 }

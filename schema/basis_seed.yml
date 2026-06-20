@@ -146,16 +146,21 @@ seeds:
     columns: [id, caption]
     rows:
       - [USER_PAYMENT_METHOD, "User Payment Method Actions"]
+      - [API_KEY, "API Key to access the system"]
 
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
     rows:
       - [USER_PAYMENT_METHOD, SET_DEFAULT, "Set Default"]
+      - [API_KEY, GENERATE, "Generate"]
+      - [API_KEY, ROLL, "Roll"]
 
   - table: table_action
     columns: [table_name, action_name, caption, icon, record_specific, display_order]
     rows:
       - [user_payment_method, set_default, "Set Default", star, true, 10]
+      - [api_key, generate, "Generate", plus, true, 10]
+      - [api_key, roll, "Roll", edit, true, 20]
 
   - table: application_menu
     columns: [display_order, id, caption]
@@ -206,6 +211,7 @@ seeds:
       - [user_bank_info,      created_at,         R]
       - [user_bank_info,      updated_at,         U]
       - [user_payment_method, created_at,         R]
+      - [api_key,             key_hash,           S]
       - [user_account,        passtext,           S]
       - [user_account,        twofa_secret,       S]
       - [user_account,        twofa_backup_codes, S]
