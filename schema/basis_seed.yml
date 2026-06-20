@@ -5,6 +5,7 @@ seeds:
     columns: [id, caption]
     rows:
       - [lookup_style, "Lookup Style"]
+      - [action_kind, "Action Kind"]
       - [payout_provider, "Payout Provider"]
       - [tax_id_type, "Tax ID Type"]
       - [payment_method_type, "Payment Method Type"]
@@ -15,6 +16,9 @@ seeds:
     rows:
       - [lookup_style, D, "Dropdown"]
       - [lookup_style, S, "Search Screen"]
+      - [action_kind, P, "Post"]
+      - [action_kind, R, "Redirect"]
+      - [action_kind, V, "Reveal"]
       - [payout_provider, AW, "Airwallex"]
       - [payout_provider, SC, "Stripe Connect"]
       - [payout_provider, WI, "Wise"]
@@ -75,6 +79,7 @@ seeds:
     columns: [constant_id, table_name, column_name]
     rows:
       - [lookup_style, foreign_key_lookup, lookup_style]
+      - [action_kind, table_action, action_kind]
       - [payout_provider, user_bank_info, provider]
       - [tax_id_type, user_bank_info, tax_id_type]
       - [payment_method_type, user_payment_method, method_type]
@@ -156,11 +161,11 @@ seeds:
       - [API_KEY, ROLL, "Roll"]
 
   - table: table_action
-    columns: [table_name, action_name, caption, icon, record_specific, display_order]
+    columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
     rows:
-      - [user_payment_method, set_default, "Set Default", star, true, 10]
-      - [api_key, generate, "Generate", plus, false, 10]
-      - [api_key, roll, "Roll", edit, true, 20]
+      - [user_payment_method, set_default, "Set Default", star, P, true, 10]
+      - [api_key, generate, "Generate", plus, V, false, 10]
+      - [api_key, roll, "Roll", edit, V, true, 20]
 
   - table: application_menu
     columns: [display_order, id, caption]

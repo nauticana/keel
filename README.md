@@ -6,6 +6,10 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.1.5 — Add action_kind column to table action)
+
+Also added constant header action_kind with values P/R/V (Post/Redirect/Reveal)
+
 ## Migration Guide (v1.1.4 — authorization object API_KEY)
 
 New authorization object API_KEY introduced with actions GENERATE and ROLL

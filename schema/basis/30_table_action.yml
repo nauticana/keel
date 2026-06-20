@@ -33,6 +33,9 @@ columns:
   - name: record_specific
     type: BOOLEAN
     default: "FALSE"
+  - name: action_kind
+    type: CHAR(1)
+    default: P
   - name: method_name
     type: VARCHAR(80)
     nullable: true

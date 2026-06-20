@@ -48,6 +48,7 @@ type TableAction struct {
 	Method          string `json:"method"`         // resolved URL path (POST target)
 	DisplayOrder    int    `json:"displayOrder"`
 	ConfirmMessage  string `json:"confirmMessage,omitempty"`
+	Kind            string `json:"kind,omitempty"`  // action_kind: P post (default) / R redirect / V reveal
 	AuthorityObject string `json:"authorityObject"` // uppercased TableName — for canExecute() check on client
 	AuthorityAction string `json:"authorityCheck"`  // uppercased ActionName — for canExecute() check on client
 }

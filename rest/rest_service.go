@@ -49,7 +49,8 @@ SELECT authorization_object_id, action, low_limit, high_limit
 	qTableAction: `
 SELECT table_name, action_name, caption, COALESCE(icon, ''),
        record_specific, COALESCE(method_name, ''),
-       display_order, COALESCE(confirm_message, '')
+       display_order, COALESCE(confirm_message, ''),
+       action_kind
   FROM table_action
  ORDER BY table_name, display_order, action_name`,
 }
@@ -616,6 +617,7 @@ func (s *RestService) loadTableActions(ctx context.Context) error {
 			MethodName:      common.AsString(row[5]),
 			DisplayOrder:    int(common.AsInt64(row[6])),
 			ConfirmMessage:  common.AsString(row[7]),
+			Kind:            common.AsString(row[8]),
 			AuthorityObject: strings.ToUpper(tableName),
 			AuthorityAction: strings.ToUpper(actionName),
 		}
