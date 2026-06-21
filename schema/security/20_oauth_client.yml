@@ -1,0 +1,35 @@
+table: oauth_client
+comment: OAuth 2.1 registered clients (Dynamic Client Registration)
+order: 40
+columns:
+  - name: id
+    type: BIGINT
+  - name: client_id
+    type: VARCHAR(64)
+  - name: secret_hash
+    type: VARCHAR(64)
+    nullable: true
+  - name: client_name
+    type: VARCHAR(200)
+    nullable: true
+  - name: redirect_uris
+    type: VARCHAR(2000)
+  - name: grant_types
+    type: VARCHAR(500)
+  - name: scopes
+    type: VARCHAR(1000)
+    nullable: true
+  - name: token_auth_method
+    type: VARCHAR(40)
+    default: "none"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: oauth_client_seq
+  column: id
+indexes:
+  - name: idx_oauth_client_client_id
+    columns: [client_id]
+    unique: true

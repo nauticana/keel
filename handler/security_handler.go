@@ -75,10 +75,7 @@ func (h *SecurityHandler) rateLimitVerify2FA(r *http.Request) bool {
 		return false
 	}
 	key := "2fa_verify_ip:" + TrustedClientIP(r)
-	count, _ := h.Cache.Increment(r.Context(), key)
-	if count == 1 {
-		_ = h.Cache.Set(r.Context(), key, "1", MaxVerify2FAWindow)
-	}
+	count, _ := h.Cache.IncrementWithTTL(r.Context(), key, MaxVerify2FAWindow)
 	return count > MaxVerify2FAPerIP
 }
 

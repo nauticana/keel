@@ -16,6 +16,7 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
 
@@ -213,14 +214,21 @@ func (h *AbstractHandler) PartnerFromCtx(r *http.Request) int64 {
 	return -1
 }
 
-// HasScope reports whether the API key's scope claim contains scope.
-// Scopes are stored in the request context (via APIKeyMiddleware) as a
-// comma-separated string.
+// HasScope reports whether the request's granted scopes include scope, from
+// the OAuth principal if present, else the comma-separated X-API-Key string.
 func (h *AbstractHandler) HasScope(r *http.Request, scope string) bool {
-	raw, _ := r.Context().Value(common.Scopes).(string)
-	if raw == "" || scope == "" {
+	if scope == "" {
 		return false
 	}
+	if p, ok := r.Context().Value(common.AuthPrincipal).(*port.Principal); ok && p != nil {
+		for _, s := range p.Scopes {
+			if s == scope {
+				return true
+			}
+		}
+		return false
+	}
+	raw, _ := r.Context().Value(common.Scopes).(string)
 	for _, s := range strings.Split(raw, ",") {
 		if strings.TrimSpace(s) == scope {
 			return true

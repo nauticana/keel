@@ -1,4 +1,4 @@
-package service
+package oauth
 
 import (
 	"context"
@@ -35,13 +35,18 @@ func NewJWTValidator(jwksURL, issuer, audience string, httpc *http.Client) *JWTV
 	}
 }
 
-// NewJWTValidatorFromFlags builds a validator from the --oauth_* flags, or
-// returns nil when --oauth_issuer is unset (OAuth resource auth disabled).
-func NewJWTValidatorFromFlags(httpc *http.Client) *JWTValidator {
+// NewJWTValidatorFromFlags builds a validator from the --oauth_* flags:
+// (nil, nil) when --oauth_issuer is unset; an error when it is set but
+// --oauth_jwks_url or --oauth_audience is empty (fail fast). Returns the
+// interface so the disabled case is a true nil a `!= nil` guard catches.
+func NewJWTValidatorFromFlags(httpc *http.Client) (port.TokenValidator, error) {
 	if *common.OAuthIssuer == "" {
-		return nil
+		return nil, nil
 	}
-	return NewJWTValidator(*common.OAuthJWKSURL, *common.OAuthIssuer, *common.OAuthAudience, httpc)
+	if *common.OAuthJWKSURL == "" || *common.OAuthAudience == "" {
+		return nil, fmt.Errorf("oauth: --oauth_issuer is set but --oauth_jwks_url or --oauth_audience is empty")
+	}
+	return NewJWTValidator(*common.OAuthJWKSURL, *common.OAuthIssuer, *common.OAuthAudience, httpc), nil
 }
 
 func (v *JWTValidator) Validate(ctx context.Context, bearer string) (*port.Principal, error) {

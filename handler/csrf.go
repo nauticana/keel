@@ -20,6 +20,10 @@ type CSRF struct {
 	CookieName string
 	Path       string
 	TTL        time.Duration
+	// Insecure drops the cookie's Secure flag (default keeps it). Only for local
+	// HTTP dev — a Secure cookie is not sent over plain HTTP, which would break a
+	// localhost consent POST. Never set this in production.
+	Insecure bool
 }
 
 // Issue mints a fresh token, sets the cookie, and returns the token to
@@ -35,7 +39,7 @@ func (c *CSRF) Issue(w http.ResponseWriter) (string, error) {
 		Value:    tok,
 		Path:     c.Path,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   !c.Insecure,
 		SameSite: http.SameSiteStrictMode,
 		Expires:  time.Now().Add(c.TTL),
 	})

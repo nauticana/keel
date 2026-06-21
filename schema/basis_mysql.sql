@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS service_registry (
 CREATE TABLE IF NOT EXISTS country (
     id                                   CHAR(2)       NOT NULL,
     caption                              VARCHAR(100)  NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -432,6 +433,21 @@ CREATE TABLE IF NOT EXISTS device_token (
 CREATE UNIQUE INDEX device_token_user_token_uq ON device_token(user_id, token);
 CREATE INDEX idx_device_token_user_active ON device_token(user_id, is_active);
 
+-- OAuth 2.1 registered clients (Dynamic Client Registration)
+CREATE TABLE IF NOT EXISTS oauth_client (
+    id                                   BIGINT        NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    secret_hash                          VARCHAR(64)  ,
+    client_name                          VARCHAR(200) ,
+    redirect_uris                        VARCHAR(2000) NOT NULL,
+    grant_types                          VARCHAR(500)  NOT NULL,
+    scopes                               VARCHAR(1000),
+    token_auth_method                    VARCHAR(40)   NOT NULL DEFAULT 'none',
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_oauth_client_client_id ON oauth_client(client_id);
+
 -- Subscription plans (catalog). Per-interval prices live in subscription_plan_price.
 CREATE TABLE IF NOT EXISTS subscription_plan (
     id                                   VARCHAR(20)   NOT NULL,
@@ -442,6 +458,26 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     trial_days                           INT          ,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
+CREATE TABLE IF NOT EXISTS oauth_authorization_code (
+    id                                   BIGINT        NOT NULL,
+    code_hash                            CHAR(64)      NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    scopes                               VARCHAR(1000),
+    redirect_uri                         VARCHAR(2000) NOT NULL,
+    code_challenge                       VARCHAR(128)  NOT NULL,
+    code_challenge_method                VARCHAR(10)   NOT NULL,
+    resource                             VARCHAR(500) ,
+    expires_at                           DATETIME      NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT oauth_authorization_code_user FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT oauth_authorization_code_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_oauth_code_hash ON oauth_authorization_code(code_hash);
 
 -- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
 CREATE TABLE IF NOT EXISTS subscription_plan_price (
@@ -465,6 +501,27 @@ CREATE TABLE IF NOT EXISTS subscription_resource (
     date_column                          VARCHAR(32)  ,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- OAuth 2.1 refresh tokens (hashed) with rotation family for reuse-detection; partner_id is a denormalized snapshot
+CREATE TABLE IF NOT EXISTS oauth_refresh_token (
+    id                                   BIGINT        NOT NULL,
+    token_hash                           CHAR(64)      NOT NULL,
+    family_id                            VARCHAR(64)   NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    scopes                               VARCHAR(1000),
+    resource                             VARCHAR(500) ,
+    expires_at                           DATETIME      NOT NULL,
+    revoked_at                           DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT oauth_refresh_token_user FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT oauth_refresh_token_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_oauth_refresh_hash ON oauth_refresh_token(token_hash);
+CREATE INDEX idx_oauth_refresh_family ON oauth_refresh_token(family_id);
+CREATE INDEX idx_oauth_refresh_user ON oauth_refresh_token(user_id);
 
 -- Resource limits per subscription plan
 CREATE TABLE IF NOT EXISTS subscription_quota (
@@ -676,6 +733,7 @@ CREATE TABLE IF NOT EXISTS table_action (
     caption                              VARCHAR(80)   NOT NULL,
     icon                                 VARCHAR(40)  ,
     record_specific                      TINYINT(1)    NOT NULL DEFAULT 0,
+    action_kind                          CHAR(1)       NOT NULL DEFAULT 'P',
     method_name                          VARCHAR(80)  ,
     display_order                        SMALLINT      NOT NULL DEFAULT 10,
     confirm_message                      VARCHAR(200) ,

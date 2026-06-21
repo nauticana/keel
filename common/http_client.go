@@ -1,9 +1,12 @@
 package common
 
 import (
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // DefaultOutboundTimeout caps a single outbound request lifecycle —
@@ -38,9 +41,54 @@ var (
 // drop the customization on whichever client lost the race.
 func HTTPClient() *http.Client {
 	outboundOnce.Do(func() {
+		transport := http.DefaultTransport
+		if *OutboundMaxRPS > 0 {
+			transport = &rateLimitedTransport{
+				base:    http.DefaultTransport,
+				limiter: rate.NewLimiter(rate.Limit(*OutboundMaxRPS), burstFor(*OutboundMaxRPS)),
+			}
+		}
 		outboundClient = &http.Client{
-			Timeout: DefaultOutboundTimeout,
+			Timeout:       DefaultOutboundTimeout,
+			Transport:     transport,
+			CheckRedirect: checkRedirect,
 		}
 	})
 	return outboundClient
+}
+
+// checkRedirect caps redirect following and fails fast on a same-URL loop, so a
+// misbehaving peer can't bounce the client around forever.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= *OutboundMaxRedirects {
+		return fmt.Errorf("outbound: stopped after %d redirects (loop guard)", *OutboundMaxRedirects)
+	}
+	for _, prev := range via {
+		if prev.URL.String() == req.URL.String() {
+			return fmt.Errorf("outbound: redirect loop detected at %s", req.URL.String())
+		}
+	}
+	return nil
+}
+
+// rateLimitedTransport throttles the shared client to --outbound_max_rps so a
+// runaway outbound loop is capped instead of draining edge/CDN quota. Wait
+// respects the request context (and thus the client timeout).
+type rateLimitedTransport struct {
+	base    http.RoundTripper
+	limiter *rate.Limiter
+}
+
+func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := t.limiter.Wait(req.Context()); err != nil {
+		return nil, fmt.Errorf("outbound: rate limit wait: %w", err)
+	}
+	return t.base.RoundTrip(req)
+}
+
+func burstFor(rps float64) int {
+	if rps < 1 {
+		return 1
+	}
+	return int(rps) * 2
 }

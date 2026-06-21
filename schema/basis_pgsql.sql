@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS service_registry (
 CREATE TABLE IF NOT EXISTS country (
     id                                   CHAR(2)       NOT NULL,
     caption                              VARCHAR(100)  NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
     CONSTRAINT country_pk PRIMARY KEY (id)
 );
 
@@ -426,6 +427,24 @@ CREATE INDEX IF NOT EXISTS idx_device_token_user_active ON device_token(user_id,
 CREATE SEQUENCE IF NOT EXISTS device_token_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('device_token', 'id', 'device_token_seq') ON CONFLICT DO NOTHING;
 
+-- OAuth 2.1 registered clients (Dynamic Client Registration)
+CREATE TABLE IF NOT EXISTS oauth_client (
+    id                                   BIGINT        NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    secret_hash                          VARCHAR(64)  ,
+    client_name                          VARCHAR(200) ,
+    redirect_uris                        VARCHAR(2000) NOT NULL,
+    grant_types                          VARCHAR(500)  NOT NULL,
+    scopes                               VARCHAR(1000),
+    token_auth_method                    VARCHAR(40)   NOT NULL DEFAULT 'none',
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT oauth_client_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_client_client_id ON oauth_client(client_id);
+
+CREATE SEQUENCE IF NOT EXISTS oauth_client_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('oauth_client', 'id', 'oauth_client_seq') ON CONFLICT DO NOTHING;
+
 -- Subscription plans (catalog). Per-interval prices live in subscription_plan_price.
 CREATE TABLE IF NOT EXISTS subscription_plan (
     id                                   VARCHAR(20)   NOT NULL,
@@ -436,6 +455,27 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     trial_days                           INTEGER      ,
     CONSTRAINT subscription_plan_pk PRIMARY KEY (id)
 );
+
+-- Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
+CREATE TABLE IF NOT EXISTS oauth_authorization_code (
+    id                                   BIGINT        NOT NULL,
+    code_hash                            CHAR(64)      NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    scopes                               VARCHAR(1000),
+    redirect_uri                         VARCHAR(2000) NOT NULL,
+    code_challenge                       VARCHAR(128)  NOT NULL,
+    code_challenge_method                VARCHAR(10)   NOT NULL,
+    resource                             VARCHAR(500) ,
+    expires_at                           TIMESTAMP     NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT oauth_authorization_code_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_code_hash ON oauth_authorization_code(code_hash);
+
+CREATE SEQUENCE IF NOT EXISTS oauth_authorization_code_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('oauth_authorization_code', 'id', 'oauth_authorization_code_seq') ON CONFLICT DO NOTHING;
 
 -- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
 CREATE TABLE IF NOT EXISTS subscription_plan_price (
@@ -458,6 +498,28 @@ CREATE TABLE IF NOT EXISTS subscription_resource (
     date_column                          VARCHAR(32)  ,
     CONSTRAINT subscription_resource_pk PRIMARY KEY (id)
 );
+
+-- OAuth 2.1 refresh tokens (hashed) with rotation family for reuse-detection; partner_id is a denormalized snapshot
+CREATE TABLE IF NOT EXISTS oauth_refresh_token (
+    id                                   BIGINT        NOT NULL,
+    token_hash                           CHAR(64)      NOT NULL,
+    family_id                            VARCHAR(64)   NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    scopes                               VARCHAR(1000),
+    resource                             VARCHAR(500) ,
+    expires_at                           TIMESTAMP     NOT NULL,
+    revoked_at                           TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT oauth_refresh_token_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_refresh_hash ON oauth_refresh_token(token_hash);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_family ON oauth_refresh_token(family_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_user ON oauth_refresh_token(user_id);
+
+CREATE SEQUENCE IF NOT EXISTS oauth_refresh_token_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('oauth_refresh_token', 'id', 'oauth_refresh_token_seq') ON CONFLICT DO NOTHING;
 
 -- Resource limits per subscription plan
 CREATE TABLE IF NOT EXISTS subscription_quota (
@@ -668,6 +730,7 @@ CREATE TABLE IF NOT EXISTS table_action (
     caption                              VARCHAR(80)   NOT NULL,
     icon                                 VARCHAR(40)  ,
     record_specific                      BOOLEAN       NOT NULL DEFAULT FALSE,
+    action_kind                          CHAR(1)       NOT NULL DEFAULT 'P',
     method_name                          VARCHAR(80)  ,
     display_order                        SMALLINT      NOT NULL DEFAULT 10,
     confirm_message                      VARCHAR(200) ,
@@ -1002,9 +1065,45 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'oauth_authorization_code_user' AND table_name = 'oauth_authorization_code'
+  ) THEN
+    ALTER TABLE oauth_authorization_code ADD CONSTRAINT oauth_authorization_code_user FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'oauth_authorization_code_client' AND table_name = 'oauth_authorization_code'
+  ) THEN
+    ALTER TABLE oauth_authorization_code ADD CONSTRAINT oauth_authorization_code_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'subscription_plan_prices' AND table_name = 'subscription_plan_price'
   ) THEN
     ALTER TABLE subscription_plan_price ADD CONSTRAINT subscription_plan_prices FOREIGN KEY (plan_id) REFERENCES subscription_plan(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'oauth_refresh_token_user' AND table_name = 'oauth_refresh_token'
+  ) THEN
+    ALTER TABLE oauth_refresh_token ADD CONSTRAINT oauth_refresh_token_user FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'oauth_refresh_token_client' AND table_name = 'oauth_refresh_token'
+  ) THEN
+    ALTER TABLE oauth_refresh_token ADD CONSTRAINT oauth_refresh_token_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE;
   END IF;
 END $$;
 DO $$

@@ -183,3 +183,17 @@ func TitleCase(s string) string {
 	}
 	return strings.Join(words, " ")
 }
+
+func SplitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}

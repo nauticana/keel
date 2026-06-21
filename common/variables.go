@@ -1,6 +1,9 @@
 package common
 
-import "flag"
+import (
+	"flag"
+	"time"
+)
 
 type ContextKey string
 
@@ -115,8 +118,26 @@ var (
 	OAuthIssuer          = flag.String("oauth_issuer", "", "OAuth 2.1 authorization-server issuer URL trusted by the resource-server validator. Empty disables OAuth token auth.")
 	OAuthJWKSURL         = flag.String("oauth_jwks_url", "", "JWKS URL used to verify access-token signatures (often <issuer>/.well-known/jwks.json). Required when --oauth_issuer is set.")
 	OAuthAudience        = flag.String("oauth_audience", "", "Expected access-token audience = this protected resource's identifier (RFC 8707). Required when --oauth_issuer is set.")
-	OAuthResource        = flag.String("oauth_resource", "", "Canonical resource URL advertised in /.well-known/oauth-protected-resource. Empty falls back to --oauth_audience.")
+	OAuthResource        = flag.String("oauth_resource", "", "Canonical resource URL advertised in /.well-known/oauth-protected-resource (single value). Empty falls back to --oauth_audience.")
+	OAuthResources       = flag.String("oauth_resources", "", "CSV of additional valid RFC 8707 resource indicators the local AS mints audience-bound tokens for, beyond --oauth_audience / --oauth_resource. Only needed when more than one endpoint is OAuth-protected.")
 	OAuthScopesSupported = flag.String("oauth_scopes_supported", "", "Comma-separated scopes advertised in protected-resource metadata. Optional.")
+	// OAuth 2.1 authorization server. When keel issues its own
+	// tokens (local AS) rather than delegating to an external IdP. --oauth_as_mode
+	// selects the provider: "local" (keel is the AS, default), "external" (delegate
+	// to the IdP at --oauth_issuer; keel stays resource-server only), or "disabled".
+	// In local mode --oauth_issuer is keel's own public base URL and the validator
+	// trusts the in-process signer; in external mode it is the IdP. The AS is only
+	// exposed when the consuming app mounts handler.OAuthASHandler, so existing
+	// services are unaffected regardless of mode.
+	OAuthASMode           = flag.String("oauth_as_mode", "local", "OAuth 2.1 authorization-server provider: local (keel issues tokens), external (delegate to --oauth_issuer IdP), or disabled.")
+	OAuthSigningKeySecret = flag.String("oauth_signing_key_secret", "", "Secret name (in the keystore/provider) holding the RS256 signing private key PEM for the local AS. Empty generates an ephemeral dev key (not for multi-node/production).")
+	OAuthAccessTokenTTL   = flag.Duration("oauth_access_token_ttl", time.Hour, "Lifetime of access tokens issued by the local AS.")
+	OAuthRefreshTokenTTL  = flag.Duration("oauth_refresh_token_ttl", 720*time.Hour, "Lifetime of refresh tokens issued by the local AS (default 30 days).")
+	OAuthCodeTTL          = flag.Duration("oauth_code_ttl", time.Minute, "Lifetime of authorization codes issued by the local AS (OAuth 2.1: short-lived, single-use).")
+	OAuthMaxAuthRedirects = flag.Int("oauth_max_auth_redirects", 2, "Max /authorize→login bounces before the AS returns 508 instead of redirecting again (loop guard against draining edge/CDN quota).")
+	// Outbound HTTP loop guards on the shared client (common.HTTPClient).
+	OutboundMaxRedirects = flag.Int("outbound_max_redirects", 10, "Max redirects the shared outbound HTTP client follows; it also fails fast on a same-URL redirect loop.")
+	OutboundMaxRPS       = flag.Float64("outbound_max_rps", 0, "Global rate cap (requests/sec, token bucket) on the shared outbound HTTP client. 0 = unlimited. A finite value is a backstop that throttles a runaway outbound loop instead of draining edge/CDN quota.")
 	// TrustedProxyCIDR limits which inbound socket addresses the
 	// X-Forwarded-For / X-Real-IP headers will be honored from. CSV of
 	// CIDRs — e.g. "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32". Empty (the

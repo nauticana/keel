@@ -1,4 +1,4 @@
-package service
+package oauth
 
 import (
 	"context"
@@ -28,6 +28,9 @@ type PartnerResolver func(ctx context.Context, p *port.Principal) (int64, error)
 // if the resolver errors. It does not gate by path — the caller decides which
 // routes require OAuth, leaving X-API-Key / JWT routes untouched.
 func OAuthResourceMiddleware(validator port.TokenValidator, metadataURL string, journal logger.ApplicationLogger, resolve PartnerResolver) func(http.Handler) http.Handler {
+	if validator == nil {
+		panic("oauth: OAuthResourceMiddleware requires a non-nil TokenValidator")
+	}
 	challenge := "Bearer"
 	if metadataURL != "" {
 		challenge = fmt.Sprintf("Bearer resource_metadata=%q", metadataURL)

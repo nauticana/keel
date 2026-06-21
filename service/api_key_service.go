@@ -189,6 +189,13 @@ func (m *APIKeyService) LogUsage(ctx context.Context, partnerID int64, keyID int
 	return err
 }
 
+// TouchLastUsed updates only the key's last_used_at — the key-specific half of
+// LogUsage. Quota accounting is QuotaMiddleware's job, keyed on partner_id.
+func (m *APIKeyService) TouchLastUsed(ctx context.Context, keyID int64) error {
+	_, err := m.qs.Query(ctx, updateLastUsed, keyID)
+	return err
+}
+
 // RotateKey gives the existing key (keyID, owned by partnerID) a 24h grace
 // window via expires_at, then issues a fresh key inheriting its name, scopes,
 // and ownership (partner + user_id). The old key keeps working until grace

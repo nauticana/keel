@@ -1,0 +1,52 @@
+table: oauth_authorization_code
+comment: Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
+order: 41
+columns:
+  - name: id
+    type: BIGINT
+  - name: code_hash
+    type: CHAR(64)
+  - name: client_id
+    type: VARCHAR(64)
+  - name: user_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: scopes
+    type: VARCHAR(1000)
+    nullable: true
+  - name: redirect_uri
+    type: VARCHAR(2000)
+  - name: code_challenge
+    type: VARCHAR(128)
+  - name: code_challenge_method
+    type: VARCHAR(10)
+  - name: resource
+    type: VARCHAR(500)
+    nullable: true
+  - name: expires_at
+    type: TIMESTAMP
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: oauth_authorization_code_seq
+  column: id
+foreign_keys:
+  - name: oauth_authorization_code_user
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: oauth_authorization_code_client
+    columns: [client_id]
+    references:
+      table: oauth_client
+      columns: [client_id]
+    on_delete: CASCADE
+indexes:
+  - name: idx_oauth_code_hash
+    columns: [code_hash]
+    unique: true

@@ -142,6 +142,23 @@ func (c *MemoryCacheService) Increment(ctx context.Context, key string) (int64, 
 	return n, nil
 }
 
+func (c *MemoryCacheService) IncrementWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.kv[key]
+	if ok && !e.expires.IsZero() && time.Now().After(e.expires) {
+		ok = false
+	}
+	if !ok {
+		c.kv[key] = &kvEntry{value: "1", expires: time.Now().Add(ttl)}
+		return 1, nil
+	}
+	n, _ := strconv.ParseInt(e.value, 10, 64)
+	n++
+	e.value = strconv.FormatInt(n, 10) // keep the existing window expiry
+	return n, nil
+}
+
 func (c *MemoryCacheService) RPush(ctx context.Context, key, value string) error {
 	c.mu.Lock()
 	c.lists[key] = append(c.lists[key], value)

@@ -472,7 +472,8 @@ func (h *HttpBackend) SSOMiddleware(next http.Handler) http.Handler {
 // auth on every request (e.g. an MCP server) call APIKeyAuthMiddleware
 // directly instead of going through HttpBackend.
 func (h *HttpBackend) APIKeyMiddleware(next http.Handler) http.Handler {
-	authed := APIKeyAuthMiddleware(h.ApiKeyService, h.QuotaService, h.Journal)(next)
+	quotaed := QuotaMiddleware(h.QuotaService, h.ApiKeyService.QuotaResource, h.ApiKeyService.QuotaCaption, h.Journal)(next)
+	authed := APIKeyAuthMiddleware(h.ApiKeyService, h.Journal)(quotaed)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, common.PubapiPrefix) {
 			next.ServeHTTP(w, r)

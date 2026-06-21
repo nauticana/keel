@@ -1,9 +1,8 @@
-package service
+package oauth
 
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/nauticana/keel/common"
 )
@@ -34,7 +33,7 @@ func ProtectedResourceMetadataFromFlags() ProtectedResourceMetadata {
 	return ProtectedResourceMetadata{
 		Resource:             resource,
 		AuthorizationServers: []string{*common.OAuthIssuer},
-		ScopesSupported:      splitCSV(*common.OAuthScopesSupported),
+		ScopesSupported:      common.SplitCSV(*common.OAuthScopesSupported),
 	}
 }
 
@@ -50,18 +49,4 @@ func ProtectedResourceMetadataHandler(meta ProtectedResourceMetadata) http.Handl
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		_, _ = w.Write(body)
 	}
-}
-
-func splitCSV(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if v := strings.TrimSpace(p); v != "" {
-			out = append(out, v)
-		}
-	}
-	return out
 }

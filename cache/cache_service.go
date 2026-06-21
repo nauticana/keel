@@ -27,6 +27,10 @@ type CacheService interface {
 	Set(ctx context.Context, key string, value string, ttl time.Duration) error
 	Delete(ctx context.Context, key string) error
 	Increment(ctx context.Context, key string) (int64, error)
+	// IncrementWithTTL atomically increments key and, on first creation, sets a
+	// fixed-window TTL — without the Increment-then-Set race that can reset the
+	// counter. Use it for rate limiting (fixed window per key).
+	IncrementWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error)
 
 	RPush(ctx context.Context, key string, value string) error
 	LPopAll(ctx context.Context, key string) ([]string, error)

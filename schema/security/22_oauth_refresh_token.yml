@@ -1,0 +1,55 @@
+table: oauth_refresh_token
+comment: OAuth 2.1 refresh tokens (hashed) with rotation family for reuse-detection; partner_id is a denormalized snapshot
+order: 42
+columns:
+  - name: id
+    type: BIGINT
+  - name: token_hash
+    type: CHAR(64)
+  - name: family_id
+    type: VARCHAR(64)
+  - name: client_id
+    type: VARCHAR(64)
+  - name: user_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: scopes
+    type: VARCHAR(1000)
+    nullable: true
+  - name: resource
+    type: VARCHAR(500)
+    nullable: true
+  - name: expires_at
+    type: TIMESTAMP
+  - name: revoked_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: oauth_refresh_token_seq
+  column: id
+foreign_keys:
+  - name: oauth_refresh_token_user
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: oauth_refresh_token_client
+    columns: [client_id]
+    references:
+      table: oauth_client
+      columns: [client_id]
+    on_delete: CASCADE
+indexes:
+  - name: idx_oauth_refresh_hash
+    columns: [token_hash]
+    unique: true
+  - name: idx_oauth_refresh_family
+    columns: [family_id]
+  - name: idx_oauth_refresh_user
+    columns: [user_id]
