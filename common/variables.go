@@ -25,6 +25,14 @@ const (
 	// common.RequestID, "<token>")` before calling the next handler
 	// (P2-09).
 	RequestID ContextKey = "requestID"
+	// Subject and AuthPrincipal carry the OAuth 2.1 access-token identity
+	// injected by service.OAuthResourceMiddleware. Subject is the `sub`
+	// string; AuthPrincipal holds the full *port.Principal. The same
+	// middleware also sets Scopes (space-delimited) and PartnerID (when a
+	// resolver maps the subject), so HasScope / partner helpers work
+	// uniformly across X-API-Key, JWT, and OAuth requests.
+	Subject       ContextKey = "subject"
+	AuthPrincipal ContextKey = "authPrincipal"
 )
 
 var (
@@ -98,6 +106,17 @@ var (
 	// Developer portal. Required when handler/social_handler.go is
 	// mounted with provider="apple". Empty disables Apple sign-in.
 	AppleClientID = flag.String("apple_client_id", "", "Apple Sign-In client identifier (bundle id for native, Service ID for web)")
+	// OAuth 2.1 resource server (keel 1.2.0). keel can validate access
+	// tokens minted by an external authorization server (IdP) and advertise
+	// RFC 9728 protected-resource metadata — the path ChatGPT Apps SDK and
+	// other OAuth MCP clients expect. All non-secret (issuer/JWKS/audience
+	// are public). Empty --oauth_issuer disables it entirely; X-API-Key and
+	// JWT auth are unaffected. Wire via service.OAuthResourceMiddleware.
+	OAuthIssuer          = flag.String("oauth_issuer", "", "OAuth 2.1 authorization-server issuer URL trusted by the resource-server validator. Empty disables OAuth token auth.")
+	OAuthJWKSURL         = flag.String("oauth_jwks_url", "", "JWKS URL used to verify access-token signatures (often <issuer>/.well-known/jwks.json). Required when --oauth_issuer is set.")
+	OAuthAudience        = flag.String("oauth_audience", "", "Expected access-token audience = this protected resource's identifier (RFC 8707). Required when --oauth_issuer is set.")
+	OAuthResource        = flag.String("oauth_resource", "", "Canonical resource URL advertised in /.well-known/oauth-protected-resource. Empty falls back to --oauth_audience.")
+	OAuthScopesSupported = flag.String("oauth_scopes_supported", "", "Comma-separated scopes advertised in protected-resource metadata. Optional.")
 	// TrustedProxyCIDR limits which inbound socket addresses the
 	// X-Forwarded-For / X-Real-IP headers will be honored from. CSV of
 	// CIDRs — e.g. "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32". Empty (the

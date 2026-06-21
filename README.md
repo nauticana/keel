@@ -6,6 +6,31 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.0 — OAuth 2.1 resource server, additive)
+
+Keel can now act as an **OAuth 2.1 protected resource**: validate access tokens minted by an external authorization server (IdP) and advertise RFC 9728 protected-resource metadata — the auth shape ChatGPT Apps SDK and other OAuth-based MCP clients require, where a custom `X-API-Key` header is not accepted. Purely additive; `X-API-Key` and JWT auth are unchanged.
+
+New surface, all injected at composition time:
+
+| Piece | Where | Purpose |
+|---|---|---|
+| `port.TokenValidator` + `port.Principal` | `port/token_validator.go` | Resource-server seam: validate a bearer token → principal. |
+| `crypto.JWKSProvider` / `crypto.VerifyRS256` | `crypto/jwks.go` | Shared RS256 JWKS verifier — relocated from the social ID-token path so there is one impl. |
+| `service.JWTValidator` | `service/jwt_validator.go` | JWKS-backed `TokenValidator`; asserts audience (RFC 8707) + issuer. |
+| `service.OAuthResourceMiddleware` | `service/oauth_resource_middleware.go` | `func(http.Handler) http.Handler` — Bearer auth + RFC 9728 challenge; injects principal / subject / scopes (+ partner id via optional resolver). |
+| `service.ProtectedResourceMetadataHandler` | `service/protected_resource.go` | Serves `/.well-known/oauth-protected-resource`. |
+| `--oauth_issuer / _jwks_url / _audience / _resource / _scopes_supported` | `common/variables.go` | Non-secret config. Empty `--oauth_issuer` = disabled. |
+
+### Migration steps for downstream consumers
+
+1. **Bump to `github.com/nauticana/keel v1.2.0`**, `go mod tidy`, rebuild. No source change required — every piece is opt-in and the JWKS relocation is internal (social-login call sites unchanged).
+2. **To add an OAuth-protected endpoint** (e.g. a ChatGPT-facing MCP server): delegate the authorization server to an IdP (Auth0 / Stytch / WorkOS / Clerk / Keycloak), set the `--oauth_*` flags, compose `service.OAuthResourceMiddleware` around the handler, and mount `service.ProtectedResourceMetadataHandler` at `service.ProtectedResourceMetadataPath` (keyless). See the **OAuth 2.1 Resource Server** section below.
+3. **Account linking / per-user quota:** pass a `service.PartnerResolver` mapping the token `sub` → your partner id; the middleware then injects `common.PartnerID` so existing partner/quota helpers work for OAuth requests too.
+
+### Breaking-change risk
+
+None — additive. The only relocated code is the JWKS verifier (`handler` → `crypto`); `handler` keeps thin aliases so social sign-in compiles and behaves identically (covered by the existing `handler` tests).
+
 ## Migration Guide (v1.1.6 — Add action_kind column to table action)
 
 Also added constant header action_kind with values P/R/V (Post/Redirect/Reveal)
@@ -806,6 +831,51 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 | Table | Purpose |
 |---|---|
 | `api_key` | Issued keys: `id`, `partner_id`, `key_name`, `key_prefix` (visible), `key_hash` (SHA-256), `scopes` (CSV), `is_active`, `expires_at`, `last_used_at`. |
+
+## OAuth 2.1 Resource Server (v1.2.0)
+
+For OAuth-based clients that won't send a custom `X-API-Key` — notably **ChatGPT Apps SDK** — keel validates access tokens issued by an external authorization server and publishes RFC 9728 discovery metadata. Sits beside the X-API-Key / JWT paths; nothing existing changes.
+
+```
+Authorization: Bearer <token> → OAuthResourceMiddleware → TokenValidator (JWKS RS256) → context-injected (principal, subject, scopes, partner_id)
+```
+
+**Delegate the authorization server.** keel is the *resource server* (token validation + metadata); it does not issue tokens. Front it with an IdP that provides OAuth 2.1 + PKCE + Dynamic Client Registration (Auth0, Stytch, WorkOS, Clerk, Keycloak); keel verifies that IdP's RS256 tokens against its JWKS.
+
+### Wiring (standalone — e.g. an MCP server)
+
+```go
+// 1. Validator from --oauth_* flags (nil when --oauth_issuer is empty).
+validator := service.NewJWTValidatorFromFlags(common.HTTPClient())
+
+// 2. Optional account-linking: map token subject → keel partner id (0 = unlinked).
+resolve := func(ctx context.Context, p *port.Principal) (int64, error) {
+    return myDirectory.PartnerForSubject(ctx, p.Issuer, p.Subject)
+}
+
+// 3. Keyless metadata route + Bearer auth on the protected handler.
+meta := service.ProtectedResourceMetadataFromFlags()
+oauth := service.OAuthResourceMiddleware(validator, meta.Resource+service.ProtectedResourceMetadataPath, journal, resolve)
+
+mux := http.NewServeMux()
+mux.HandleFunc(service.ProtectedResourceMetadataPath, service.ProtectedResourceMetadataHandler(meta))
+mux.Handle("/", oauth(mcpHandler)) // tokens required on the MCP route; metadata stays keyless
+http.ListenAndServe(":8091", mux)
+```
+
+Downstream handlers read identity with the same accessors as the X-API-Key path — `common.PartnerID` (when a resolver maps one) and `common.Scopes` (so `AbstractHandler.HasScope` / `RequireScope` work) — plus `service.PrincipalFromContext(ctx)` for subject / issuer / raw claims.
+
+### Configuration
+
+| Flag | Purpose |
+|---|---|
+| `--oauth_issuer` | AS issuer URL trusted by the validator. Empty = OAuth disabled. |
+| `--oauth_jwks_url` | JWKS URL for token signatures (often `<issuer>/.well-known/jwks.json`). |
+| `--oauth_audience` | Expected token audience = this resource's id (RFC 8707). |
+| `--oauth_resource` | Canonical resource URL in the metadata doc. Empty → `--oauth_audience`. |
+| `--oauth_scopes_supported` | CSV scopes advertised in metadata. Optional. |
+
+All non-secret. For multiple issuers, construct one `service.JWTValidator` per issuer and dispatch on the token's `iss`.
 
 ## Reusable Primitives (upstreamed from downstream services)
 
