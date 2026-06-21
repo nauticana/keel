@@ -318,7 +318,9 @@ func (a *AuthorizationServerLocal) authenticateClient(ctx context.Context, auth 
 
 func validRedirectURI(raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Fragment != "" {
+	// Reject userinfo ("user:pass@host"): it lets a registered URI read as one
+	// host while routing to another — an open-redirect / code-leak vector.
+	if err != nil || !u.IsAbs() || u.Fragment != "" || u.User != nil {
 		return false
 	}
 	if u.Scheme == "https" {

@@ -356,6 +356,20 @@ func TestRegisterRejectsUnsupportedScopeAndAuthMethod(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsUserinfoRedirect(t *testing.T) {
+	as, _ := newTestAS(t)
+	for _, uri := range []string{
+		"https://app.example@evil.example/cb", // host is evil.example, reads as app.example
+		"https://user:pass@app.example/cb",
+	} {
+		if _, err := as.Register(context.Background(), port.ClientRegistration{
+			RedirectURIs: []string{uri},
+		}); err != ErrOAuthInvalidRequest {
+			t.Fatalf("userinfo redirect %q: want invalid_request, got %v", uri, err)
+		}
+	}
+}
+
 func TestBoundScopesClampsToSupported(t *testing.T) {
 	as, _ := newTestAS(t) // supports read, write
 	// A client whose stored scopes include an unsupported one (defense-in-depth):
