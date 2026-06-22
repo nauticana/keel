@@ -11,7 +11,7 @@ import (
 
 func TestNormalizeValue_NumericToFloat(t *testing.T) {
 	// 3.50 → Int=350, Exp=-2 — the shape pgx hands back for
-	// NUMERIC(18,2) values like trvoo's pricing_rate.base_fare.
+	// NUMERIC(18,2) values like a pricing rate's base fare.
 	n := pgtype.Numeric{Int: big.NewInt(350), Exp: -2, Valid: true}
 	got := normalizeValue(n)
 	f, ok := got.(float64)

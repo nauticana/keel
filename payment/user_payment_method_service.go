@@ -119,7 +119,7 @@ func (s *UserPaymentMethodService) RecordFromSetupIntent(ctx context.Context, us
 // StripeSetupIntentCardClient is a thin adapter that wraps the keel
 // StripeCheckoutClient.Get helper into the SetupIntentCardClient port.
 // Use this when wiring UserPaymentMethodService against the keel
-// Stripe client (matches what trvoo's RidePaymentService used to do
+// Stripe client (matches what a consuming app's payment service used to do
 // inline).
 type StripeSetupIntentCardClient struct {
 	Client interface {
