@@ -1,6 +1,9 @@
 package payment
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
 
 // Money is represented authoritatively as integer minor units (int64). These
 // tables convert to/from the major-unit decimal value used only for display and
@@ -44,4 +47,17 @@ func MinorToMajor(minor int64, currency string) float64 {
 		scale *= 10
 	}
 	return float64(minor) / scale
+}
+
+// MajorToMinor converts a major-unit decimal amount (e.g. an operator-entered
+// price) to integer minor units for the currency, using CurrencyExponent so
+// JPY (0 places) and BHD (3) are correct rather than a hardcoded ×100. Rounded
+// to nearest to absorb float-precision noise at the input boundary; keep all
+// downstream math in the returned int64.
+func MajorToMinor(major float64, currency string) int64 {
+	scale := 1.0
+	for i := 0; i < CurrencyExponent(currency); i++ {
+		scale *= 10
+	}
+	return int64(math.Round(major * scale))
 }

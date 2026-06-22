@@ -22,10 +22,18 @@ type SubscriptionHandlerOptions struct {
 	PartnerIDKey string // default "partner_id"
 	PlanIDKey    string // default "plan_id"
 	// Chosen offer keys (PERIOD_TYPE codes + count); defaults
-	// "billing_cycle"/"term_type"/"term_count". Absent → monthly, 1-month term.
+	// "billing_cycle"/"term_type"/"term_count". A field absent from the checkout
+	// metadata falls back to DefaultTerms.
 	BillingCycleKey string
 	TermTypeKey     string
 	TermCountKey    string
+
+	// DefaultTerms is the offer used when the checkout metadata omits a term
+	// field — for products with a fixed billing interval (e.g. annual-only) that
+	// don't thread term metadata through every checkout. The zero value keeps the
+	// historical behavior: monthly cycle, 1-unit term (via
+	// BillingTerms.normalized()). Metadata, when present, overrides per field.
+	DefaultTerms BillingTerms
 
 	// ResolvePartner overrides partner resolution (e.g. a user_id mapped via
 	// UserService). nil → metadata[PartnerIDKey] then PartnerByCustomer.
@@ -90,12 +98,7 @@ func NewProviderSubscriptionEventHandler(life SubscriptionLifecycle, store Provi
 					return err
 				}
 			}
-			terms := BillingTerms{
-				BillingCycle: ParseBillingPeriod(e.Metadata[opts.BillingCycleKey]),
-				TermType:     ParseBillingPeriod(e.Metadata[opts.TermTypeKey]),
-				TermCount:    int(metaInt(e.Metadata, opts.TermCountKey)),
-			}
-			return life.Activate(ctx, partnerID, e.Metadata[opts.PlanIDKey], terms, e.SubscriptionID, metaInt(e.Metadata, "seats"))
+			return life.Activate(ctx, partnerID, e.Metadata[opts.PlanIDKey], opts.termsFrom(e.Metadata), e.SubscriptionID, metaInt(e.Metadata, "seats"))
 		},
 
 		OnSetupCompleted: func(ctx context.Context, e *payment.PaymentEvent) error {
@@ -156,6 +159,24 @@ func NewProviderSubscriptionEventHandler(life SubscriptionLifecycle, store Provi
 		},
 	}
 	return h
+}
+
+// termsFrom builds the BillingTerms for a checkout: each axis is taken from the
+// checkout metadata when present, else from DefaultTerms. A zero DefaultTerms
+// preserves the historical monthly/1-unit default — BillingTerms.normalized()
+// fills any empties downstream in Activate.
+func (o SubscriptionHandlerOptions) termsFrom(m map[string]string) BillingTerms {
+	t := o.DefaultTerms
+	if v := m[o.BillingCycleKey]; v != "" {
+		t.BillingCycle = ParseBillingPeriod(v)
+	}
+	if v := m[o.TermTypeKey]; v != "" {
+		t.TermType = ParseBillingPeriod(v)
+	}
+	if v := m[o.TermCountKey]; v != "" {
+		t.TermCount = int(metaInt(m, o.TermCountKey))
+	}
+	return t
 }
 
 // metaInt reads an int64 from an event-metadata map; 0 when absent/unparsable.
