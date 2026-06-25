@@ -2,6 +2,7 @@ package authserver
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"slices"
 	"strconv"
@@ -39,6 +40,17 @@ const (
 	ErrOAuthInvalidTarget      = oauthErr("invalid_target")
 	ErrOAuthAccessDenied       = oauthErr("access_denied")
 )
+
+// ProtocolErrorCode reports the RFC 6749 error code for a client-facing AS error.
+// Anything else is internal (DB/signer/rand) — the caller logs it and returns a
+// generic server_error rather than leaking detail.
+func ProtocolErrorCode(err error) (string, bool) {
+	var oe oauthErr
+	if errors.As(err, &oe) {
+		return string(oe), true
+	}
+	return "", false
+}
 
 func subjectForUser(userID int64) string { return "user:" + strconv.FormatInt(userID, 10) }
 

@@ -3,9 +3,13 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/logger"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -41,7 +45,7 @@ func NewGoogleProvider(svc CredentialStore, name, callbackURL, clientID, secretN
 func NewGBPProvider(svc CredentialStore, name, callbackURL, clientID, secretName string, scopes []string) *BaseProvider {
 	b := NewGoogleProvider(svc, name, callbackURL, clientID, secretName, scopes, "")
 	b.DeriveAPIEndpoint = func(ctx context.Context, accessToken string) string {
-		return DiscoverGBPAccountName(ctx, accessToken)
+		return DiscoverGBPAccountName(ctx, accessToken, b.Journal)
 	}
 	b.PostCallback = func(ctx context.Context, partnerID int64, t *oauth2.Token) error {
 		return svc.SaveRefreshToken(ctx, partnerID, name, t.RefreshToken)
@@ -49,30 +53,47 @@ func NewGBPProvider(svc CredentialStore, name, callbackURL, clientID, secretName
 	return b
 }
 
-// DiscoverGBPAccountName returns the first GBP account resource name (e.g.
-// "accounts/123"), or "" on failure so callers can fall back to on-demand
-// discovery.
-func DiscoverGBPAccountName(ctx context.Context, accessToken string) string {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://mybusinessaccountmanagement.googleapis.com/v1/accounts", nil)
+const gbpAccountsURL = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts"
+
+// DiscoverGBPAccountName returns the first GBP account resource name, or "" so
+// callers fall back to on-demand discovery. Failures are logged (the 4xx/5xx
+// branch with status + body, e.g. 429 quota / 403 scope) so "" is never silent.
+func DiscoverGBPAccountName(ctx context.Context, accessToken string, journal logger.ApplicationLogger) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, gbpAccountsURL, nil)
 	if err != nil {
+		gbpDiscoveryLog(journal, "build request failed: %v", err)
 		return ""
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := common.HTTPClient().Do(req)
 	if err != nil {
+		gbpDiscoveryLog(journal, "request to %s failed: %v", gbpAccountsURL, err)
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		gbpDiscoveryLog(journal, "%s returned %d: %s", gbpAccountsURL, resp.StatusCode, strings.TrimSpace(string(body)))
 		return ""
 	}
-	var body struct {
+	var parsed struct {
 		Accounts []struct {
 			Name string `json:"name"`
 		} `json:"accounts"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || len(body.Accounts) == 0 {
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		gbpDiscoveryLog(journal, "decode response failed: %v", err)
 		return ""
 	}
-	return body.Accounts[0].Name
+	if len(parsed.Accounts) == 0 {
+		gbpDiscoveryLog(journal, "no accounts returned for token")
+		return ""
+	}
+	return parsed.Accounts[0].Name
+}
+
+func gbpDiscoveryLog(journal logger.ApplicationLogger, format string, args ...any) {
+	if journal != nil {
+		journal.Error("gbp account discovery: " + fmt.Sprintf(format, args...))
+	}
 }

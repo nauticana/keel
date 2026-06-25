@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/nauticana/keel/logger"
 	"golang.org/x/oauth2"
 )
 
@@ -20,7 +21,8 @@ type BaseProvider struct {
 	Service      CredentialStore
 	CallbackURL  string
 	ProviderName string
-	ConnType     string // defaults to ConnTypeOAuth
+	ConnType     string                   // defaults to ConnTypeOAuth
+	Journal      logger.ApplicationLogger // optional; logs provider-side failures (e.g. GBP discovery 429/403) instead of swallowing them
 
 	ClientID        string
 	SecretName      string

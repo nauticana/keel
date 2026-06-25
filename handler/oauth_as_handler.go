@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"html/template"
 	"net"
 	"net/http"
@@ -111,7 +110,7 @@ func (h *OAuthASHandler) register(w http.ResponseWriter, r *http.Request) {
 		ClientName              string   `json:"client_name"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
-		writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
+		h.writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
 		return
 	}
 	client, err := h.AS.Register(r.Context(), port.ClientRegistration{
@@ -122,7 +121,7 @@ func (h *OAuthASHandler) register(w http.ResponseWriter, r *http.Request) {
 		Name:            body.ClientName,
 	})
 	if err != nil {
-		writeOAuthError(w, err)
+		h.writeOAuthError(w, err)
 		return
 	}
 	resp := map[string]any{
@@ -198,7 +197,7 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 
 func (h *OAuthASHandler) token(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
+		h.writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
 		return
 	}
 	_ = r.ParseForm()
@@ -217,7 +216,7 @@ func (h *OAuthASHandler) token(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.AS.Token(r.Context(), req)
 	if err != nil {
-		writeOAuthError(w, err)
+		h.writeOAuthError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -233,7 +232,7 @@ func (h *OAuthASHandler) revoke(w http.ResponseWriter, r *http.Request) {
 	// RFC 7009: 200 on success/no-op; 401 only when client auth fails.
 	if err := h.AS.Revoke(r.Context(), strings.TrimSpace(r.PostForm.Get("token")),
 		strings.TrimSpace(r.PostForm.Get("token_type_hint")), extractClientAuth(r)); err != nil {
-		writeOAuthError(w, err)
+		h.writeOAuthError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -247,7 +246,7 @@ func (h *OAuthASHandler) introspect(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	res, err := h.AS.Introspect(r.Context(), strings.TrimSpace(r.PostForm.Get("token")), extractClientAuth(r))
 	if err != nil {
-		writeOAuthError(w, err)
+		h.writeOAuthError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -358,12 +357,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeOAuthError(w http.ResponseWriter, err error) {
+// writeOAuthError returns RFC 6749 protocol errors to the client verbatim, but
+// logs internal errors (DB/signer/rand) server-side and replies with a generic
+// server_error/500 so their detail never leaks and a failure is never silent.
+func (h *OAuthASHandler) writeOAuthError(w http.ResponseWriter, err error) {
+	code, ok := authserver.ProtocolErrorCode(err)
+	if !ok {
+		if h.Journal != nil {
+			h.Journal.Error("oauth/as: " + err.Error())
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
 	status := http.StatusBadRequest
-	if errors.Is(err, authserver.ErrOAuthInvalidClient) {
+	if code == "invalid_client" {
 		status = http.StatusUnauthorized
 	}
-	writeJSON(w, status, map[string]string{"error": err.Error()})
+	writeJSON(w, status, map[string]string{"error": code})
 }
 
 var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
