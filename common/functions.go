@@ -197,3 +197,21 @@ func SplitCSV(s string) []string {
 	}
 	return out
 }
+
+var dbTimestampLayouts = []string{
+	time.RFC3339,
+	"2006-01-02 15:04:05.999999",
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05",
+}
+
+// ParseDBTimestamp parses the textual timestamp layouts Postgres/pgx return,
+// trying each in order, so callers don't each re-implement the fallback.
+func ParseDBTimestamp(s string) (time.Time, error) {
+	for _, layout := range dbTimestampLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognised timestamp: %q", s)
+}

@@ -6,6 +6,16 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.4 — MCP server layer + trust guards, additive)
+
+A new MCP (Model Context Protocol) server layer plus a reusable trust-guard chain. **Fully additive — existing consumers compile and behave unchanged.** Bump to `github.com/nauticana/keel v1.2.4`, `go mod tidy`. The one dependency change: `github.com/mark3labs/mcp-go v0.46.0` becomes a direct dependency of keel (it pulls `spf13/cast` and `yosida95/uritemplate/v3`). Consumers that never import `keel/mcp` still link none of it into binaries that don't use it.
+
+- **`mcp` package** — MCP server over `mark3labs/mcp-go`: `BaseServer` (stdio / SSE / Streamable HTTP transports) with name-keyed tool & resource registration via the `ToolProvider` / `ResourceProvider` interfaces, the `{data, _meta}` response `Envelopes` (source injected per-server, not hardcoded), `ResourceFunc` adapter, and `TextBundle` / `BaseTextBundle` for localizable tool copy. See **MCP Server Layer** below.
+- **`mcp/mcptest` package** — conformance assertions (`AssertToolsMatchManifest`, `AssertResourcesMatchManifest`, `AssertToolTextComplete`, `AssertSameSet`, `AssertIdentityMatches`, `AssertDescriptionsPresent` + a `LoadManifest` helper) that fail a build when a published server manifest or text bundle drifts from the registered tools.
+- **`guard` trust guards** — `DuplicateGuard` (debounce/idempotency, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` (rate / velocity cap), `MinCountGuard` (require a floor, e.g. ≥N prior actions), `MinAgeGuard`, composed by `GuardChain`. Each is constructed with an app-owned named-SQL query + threshold; keel ships the mechanism. The `guard.TrustGuard` / `GuardInput` / `GuardQuerier` contract is transport-neutral (usable from REST handlers, not just MCP).
+- **Field catalog** — `port.FieldCatalog` (schema-introspection contract) + `mcp.BaseFieldCatalog`, which merges a static core descriptor set with catalog-backed `DescriptorProvider`s and owns the `attr.`/`question.`-style prefix dispatch behind `list_fields` / `describe_field`. The app supplies the core slice, the named SQL, and the row→descriptor mappers.
+- **DTOs & helpers** — `model.Envelope` / `EnvelopeMeta` / `ProvenanceMeta` / `PaginationMeta` / `FieldDescriptor` (no mcp-go dependency), `handler.WithClientIPContext` / `ClientIPFromContext`, `oauth.PartnerFromClaims`, `common.ParseDBTimestamp`.
+
 ## Migration Guide (v1.2.3 — `payment.MajorToMinor` + provider-handler `DefaultTerms`, additive)
 
 Two small additive billing helpers; **existing consumers compile and behave unchanged** — bump to `github.com/nauticana/keel v1.2.3`, `go mod tidy`, no schema change, no API break.
@@ -515,7 +525,7 @@ graph TD
 |---------|-------------|
 | `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), HTTP response utilities (`WriteJSON`, `WriteError` with RFC 7807), shared HTTP client, shared flag variables |
 | `model` | Domain-agnostic models: `TableDefinition`, `TableColumn`, `ForeignKey`, `UserSession`, `PasswordPolicy`, `QueryResult`, `AppError`, `UserMenu`, `DeviceToken`, `TableChangeLog` |
-| `port` | Interface definitions for all pluggable components (auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger) |
+| `port` | Interface definitions for all pluggable components (auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger, `TrustGuard` admission checks, `FieldCatalog` schema introspection) |
 | `data` | `AbstractRepository`, `AbstractTableService`, `DatabaseRepository` / `TxView` / `QueryService` interfaces, file-based `TableLogger`, Snowflake bigint id generator |
 | `pgsql` | PostgreSQL implementation using `pgx/v5` — repository, table service, query service, tx-bound query service, tx view. For typed reads against a fixed schema, use [`pgx.CollectRows[T]`](https://pkg.go.dev/github.com/jackc/pgx/v5#CollectRows) directly (already in scope; no keel wrapper needed); reserve `QueryService.Query` for metadata-driven dynamic-schema reads where the `[][]any` shape is intentional. |
 | `schema` | YAML-based schema definition + seed loader, plus the `schemagen` model used by `cmd/schemagen` to emit DDL/DML for any supported dialect |
@@ -526,6 +536,8 @@ graph TD
 | `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
+| `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected; no mcp-go dependency. |
+| `mcp` | MCP server layer over `mark3labs/mcp-go`: `BaseServer` (stdio/SSE/Streamable HTTP), name-keyed `ToolProvider`/`ResourceProvider` registry, `{data, _meta}` `Envelopes`, `ResourceFunc` adapter, `TextBundle`. Subpackage `mcp/mcptest` ships manifest/text conformance assertions. See **MCP Server Layer** below. |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
@@ -923,6 +935,78 @@ Downstream handlers read identity with the same accessors as the X-API-Key path 
 | `--oauth_scopes_supported` | CSV scopes advertised in metadata. Optional. |
 
 All non-secret. For multiple issuers, construct one `oauth.JWTValidator` per issuer and dispatch on the token's `iss`.
+
+## MCP Server Layer (v1.2.4)
+
+`keel/mcp` is the horizontal layer every keel-based MCP server would otherwise copy. It sits on `mark3labs/mcp-go` and reuses keel's existing auth, quota, and query primitives — an MCP server is just another transport in front of the same services. Apps supply only domain logic: concrete tools, their SQL, and their text.
+
+### Tools as objects, not slice indices
+
+A tool implements `mcp.ToolProvider` (`Name()`, `Definition()`, `Handle()`); a browsable resource implements `mcp.ResourceProvider`. `BaseServer.Register` binds each by `Name()`/`URI()`, so registration order is irrelevant and a reordered list can't silently mis-wire a handler.
+
+```go
+srv := mcp.NewServer(mcp.ServerConfig{
+    Name:         "acme-intel",
+    Version:      "1.0.0",
+    Instructions: bundle.Instructions(),
+    Source:       "acme",                 // stamped into every envelope's _meta.source
+    // ClientIPHook defaults to handler.WithClientIPContext (gated by --trusted_proxy_cidr)
+})
+srv.Register(summaryTool, topActionsTool)     // []mcp.ToolProvider
+srv.RegisterResource(categoriesResource)      // []mcp.ResourceProvider
+
+// transport chosen in the binary; wrap with keel's APIKey/OAuth middleware for remote
+_ = srv.ServeStdio()
+```
+
+### Response envelope
+
+`srv.Envelopes()` returns an `Envelopes` builder stamped with the server's `Source`. Tool handlers shape every result as `{data, _meta}`:
+
+```go
+env := srv.Envelopes()
+return env.WrapWithPagination(rows, limit, offset, len(rows), hasMore), nil
+return env.WrapWithProvenance(profile, prov), nil
+return mcp.WrapError(err), nil   // tool-execution error, so the model can self-correct
+```
+
+The `model.Envelope` / `EnvelopeMeta` / `ProvenanceMeta` / `PaginationMeta` DTOs carry no mcp-go dependency, so an HTTP or chat surface can reuse the same shape.
+
+### Trust guards (write/queue tools)
+
+A retry loop must not flood a worker queue or double-write. Compose `guard` guards into a `GuardChain` and run it before persisting. keel ships the mechanism; the app owns the named SQL and thresholds.
+
+```go
+guards := guard.NewGuardChain(
+    guard.NewMinAgeGuard("qKeyAge", 7*24*time.Hour),
+    guard.NewDuplicateGuard("qDupeJob", 5*time.Minute),         // debounce window
+    guard.NewMaxCountGuard("qDailyRate", "daily rate", 100, 24*time.Hour),
+)
+
+in := port.GuardInput{PartnerID: pid, DedupKey: dedup, ClientIP: ip, Now: time.Now().UTC()}
+if err := guards.Check(ctx, qs, in); err != nil {
+    var dup *guard.DuplicateError
+    if errors.As(err, &dup) {
+        return existingJob(dup.ExistingID), nil   // return the in-flight job, don't re-enqueue
+    }
+    return mcp.WrapError(err), nil                 // ErrGuardRejected → refuse
+}
+```
+
+`GuardInput.Now` is injected so guards are deterministic in tests. The `port.TrustGuard` contract takes a `port.GuardQuerier` (which `data.QueryService` satisfies) and is independent of mcp-go — usable from any REST write handler too.
+
+### Manifest conformance
+
+`mcp/mcptest` keeps a published server manifest honest. In a `_test.go`:
+
+```go
+mcptest.AssertToolsMatchManifest(t, tools, manifest.ToolNames())
+mcptest.AssertToolTextComplete(t, tools, bundle)
+```
+
+### What the application owns
+
+Concrete `ToolProvider`/`ResourceProvider` implementations, the named-SQL strings and thresholds the guards run, the populated `BaseTextBundle`, the field-catalog descriptors (core slice + `DescriptorProvider` SQL/mappers), and the published manifest file. keel owns the transport, registry, envelope, guard mechanism, field-catalog merge/dispatch, and conformance helpers.
 
 ## Reusable Primitives (upstreamed from downstream services)
 

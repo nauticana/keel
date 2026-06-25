@@ -41,6 +41,17 @@ func claimInt64(v any) int64 {
 	return 0
 }
 
+// PartnerFromClaims reads partner_id from a decoded JWT claim set (tolerating
+// int64-vs-float64 from JSON). The bool reports whether a usable (non-zero) id
+// was present, so callers can tell "no tenant" from "tenant 0".
+func PartnerFromClaims(claims map[string]any) (int64, bool) {
+	if claims == nil {
+		return 0, false
+	}
+	id := claimInt64(claims["partner_id"])
+	return id, id != 0
+}
+
 func splitSpace(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return nil

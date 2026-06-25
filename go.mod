@@ -21,6 +21,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/infisical/go-sdk v0.7.2
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/mark3labs/mcp-go v0.46.0
 	github.com/nats-io/nats.go v1.51.0
 	github.com/nyaruka/phonenumbers v1.7.2
 	github.com/pquerna/otp v1.5.0
@@ -33,10 +34,13 @@ require (
 require (
 	github.com/go-resty/resty/v2 v2.13.1 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
+	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/oracle/oci-go-sdk/v65 v65.95.2 // indirect
 	github.com/rs/zerolog v1.26.1 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect
+	github.com/spf13/cast v1.7.1 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 )
 
