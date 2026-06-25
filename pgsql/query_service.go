@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
@@ -62,3 +63,5 @@ func (s *QueryServicePgsql) Query(ctx context.Context, queryName string, args ..
 func (s *QueryServicePgsql) GenID() int64 {
 	return s.IdGenerator.NextID()
 }
+
+var _ data.QueryService = (*QueryServicePgsql)(nil)

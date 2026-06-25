@@ -78,3 +78,5 @@ func (s *SecretProviderInfisical) GetSecret(ctx context.Context, path string) (s
 	}
 	return strings.TrimSpace(secret.SecretValue), nil
 }
+
+var _ SecretProvider = (*SecretProviderInfisical)(nil)

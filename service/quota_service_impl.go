@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 )
 
 const (
@@ -321,3 +322,5 @@ func (s *QuotaServiceDb) LogUsage(ctx context.Context, partnerID int64, quotaNam
 func (s *QuotaServiceDb) ReportAddonUsage(ctx context.Context, partnerID int64, addonID string, amount int64, notes string) error {
 	return s.LogUsage(ctx, partnerID, addonID, amount, notes)
 }
+
+var _ port.QuotaService = (*QuotaServiceDb)(nil)

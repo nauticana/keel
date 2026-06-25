@@ -195,3 +195,5 @@ func (d *MySQL) GenerateSchema(s *schema.Schema) string {
 
 	return sb.String()
 }
+
+var _ Dialect = (*MySQL)(nil)

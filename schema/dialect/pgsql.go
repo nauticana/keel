@@ -256,3 +256,5 @@ func (d *PgSQL) GenerateSchema(s *schema.Schema) string {
 
 	return sb.String()
 }
+
+var _ Dialect = (*PgSQL)(nil)

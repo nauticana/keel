@@ -105,3 +105,5 @@ func (s *StorageAzure) GetSignedURL(ctx context.Context, bucket, key string, exp
 }
 
 func to[T any](v T) *T { return &v }
+
+var _ ObjectStorage = (*StorageAzure)(nil)

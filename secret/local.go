@@ -66,3 +66,5 @@ func (s *SecretProviderLocal) GetSecret(ctx context.Context, path string) (strin
 	}
 	return value, nil
 }
+
+var _ SecretProvider = (*SecretProviderLocal)(nil)

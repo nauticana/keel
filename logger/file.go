@@ -150,3 +150,5 @@ func (l *LoggerFile) Access(log string) {
 	_, _ = l.accessLogWriter.WriteString(lgSep + l.serverName + lgSep + lgAccess + lgSep + log + eol)
 	_ = l.accessLogWriter.Flush()
 }
+
+var _ ApplicationLogger = (*LoggerFile)(nil)

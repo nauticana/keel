@@ -536,3 +536,5 @@ func NewPgSQLDatabase(ctx context.Context, secretProvider secret.SecretProvider,
 	}
 	return repoOLTP, nil
 }
+
+var _ data.DatabaseRepository = (*RepositoryPgsql)(nil)

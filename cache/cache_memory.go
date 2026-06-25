@@ -246,3 +246,5 @@ func (c *MemoryCacheService) Close() error {
 	c.mu.Unlock()
 	return nil
 }
+
+var _ CacheService = (*MemoryCacheService)(nil)

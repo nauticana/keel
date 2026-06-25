@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nauticana/keel/port"
 )
 
 // EpochMs2026 is 2026-01-01T00:00:00Z in Unix milliseconds.
@@ -260,3 +262,5 @@ func (s *SnowflakeGenerator) DecomposeBigintID(id int64, epochMs int64) (timesta
 	timestampMs = (id >> timeShift) + epochMs
 	return
 }
+
+var _ port.BigintGenerator = (*SnowflakeGenerator)(nil)

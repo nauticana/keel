@@ -95,3 +95,5 @@ func (s *StorageGCS) GetSignedURL(ctx context.Context, bucket, key string, expir
 	}
 	return url, nil
 }
+
+var _ ObjectStorage = (*StorageGCS)(nil)

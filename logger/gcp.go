@@ -84,3 +84,5 @@ func (l *LoggerGcp) Fatal(log string) {
 	os.Exit(1)
 }
 func (l *LoggerGcp) Access(log string) { l.write("INFO", l.LogAccess, log) }
+
+var _ ApplicationLogger = (*LoggerGcp)(nil)

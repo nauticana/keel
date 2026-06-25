@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
@@ -68,3 +69,5 @@ func (s *TxQueryServicePgsql) Rollback(ctx context.Context) error {
 func (s *TxQueryServicePgsql) GenID() int64 {
 	return s.IdGenerator.NextID()
 }
+
+var _ data.TxQueryService = (*TxQueryServicePgsql)(nil)

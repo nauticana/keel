@@ -33,3 +33,5 @@ func (s *SecretProviderGSM) GetSecret(ctx context.Context, path string) (string,
 	}
 	return strings.TrimSpace(string(result.Payload.Data)), nil
 }
+
+var _ SecretProvider = (*SecretProviderGSM)(nil)

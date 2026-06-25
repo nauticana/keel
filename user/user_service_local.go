@@ -16,6 +16,7 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -162,8 +163,8 @@ var LocalUserQueries = map[string]string{
 	// Contact-change codes reuse user_registration (the pending-confirmation
 	// table), bound to both the new value (user_email PK) and the user_id, so
 	// a code is valid only for the exact account + address it was minted for.
-	qAddContactChange: "INSERT INTO user_registration (user_email, confirmation, payload, user_id) VALUES (?, ?, ?, ?)",
-	qGetContactChange: "SELECT confirmation, payload, attempts FROM user_registration WHERE user_email = ? AND user_id = ? AND status = 'P' AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+	qAddContactChange:     "INSERT INTO user_registration (user_email, confirmation, payload, user_id) VALUES (?, ?, ?, ?)",
+	qGetContactChange:     "SELECT confirmation, payload, attempts FROM user_registration WHERE user_email = ? AND user_id = ? AND status = 'P' AND created_at > ? ORDER BY created_at DESC LIMIT 1",
 	qBumpContactChange:    "UPDATE user_registration SET attempts = attempts + 1 WHERE user_email = ? AND user_id = ? AND status = 'P'",
 	qExpireContactChange:  "UPDATE user_registration SET status = 'X' WHERE user_email = ? AND user_id = ? AND status = 'P'",
 	qConfirmContactChange: "UPDATE user_registration SET confirmed_at = CURRENT_TIMESTAMP, status = 'C' WHERE user_email = ? AND user_id = ? AND status = 'P'",
@@ -2211,3 +2212,7 @@ func verifyBackupCodeHash(stored, candidate string) bool {
 	got := sha256.Sum256(append(append([]byte{}, salt...), []byte(candidate)...))
 	return subtle.ConstantTimeCompare(want, got[:]) == 1
 }
+
+var _ UserService = (*LocalUserService)(nil)
+
+var _ port.RecipientResolver = (*LocalUserService)(nil)

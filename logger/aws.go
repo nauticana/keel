@@ -215,3 +215,5 @@ func (l *LoggerAWS) flushOnce() {
 	l.seqToken = out.NextSequenceToken
 	l.mu.Unlock()
 }
+
+var _ ApplicationLogger = (*LoggerAWS)(nil)

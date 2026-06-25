@@ -59,3 +59,5 @@ func (s *SecretProviderAzure) GetSecret(ctx context.Context, path string) (strin
 	}
 	return strings.TrimSpace(*resp.Value), nil
 }
+
+var _ SecretProvider = (*SecretProviderAzure)(nil)

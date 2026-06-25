@@ -25,3 +25,5 @@ func (v *pgsqlTxView) Table(name string) data.TableService {
 	}
 	return base.WithTx(v.tx)
 }
+
+var _ data.TxView = (*pgsqlTxView)(nil)

@@ -121,3 +121,5 @@ func (s *StorageS3) GetSignedURL(ctx context.Context, bucket, key string, expiry
 	}
 	return result.URL, nil
 }
+
+var _ ObjectStorage = (*StorageS3)(nil)

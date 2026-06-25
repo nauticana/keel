@@ -139,3 +139,5 @@ func (l *TableLoggerFile) FindChanges(tableName string, userId int, key string, 
 }
 
 func (l *TableLoggerFile) Close() {}
+
+var _ port.TableLogger = (*TableLoggerFile)(nil)

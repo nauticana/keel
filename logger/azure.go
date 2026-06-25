@@ -222,3 +222,5 @@ func (l *LoggerAzure) flushOnce() {
 		fmt.Fprintf(os.Stderr, "azure logs upload failed: %v (dropped %d records)\n", err, len(batch))
 	}
 }
+
+var _ ApplicationLogger = (*LoggerAzure)(nil)

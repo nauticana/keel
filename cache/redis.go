@@ -188,3 +188,5 @@ func (s *CacheServiceImpl) Subscribe(ctx context.Context, channel string) (<-cha
 	}()
 	return ch, nil
 }
+
+var _ CacheService = (*CacheServiceImpl)(nil)

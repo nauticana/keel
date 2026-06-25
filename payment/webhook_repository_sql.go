@@ -204,3 +204,5 @@ var (
 	_ WebhookRepository = (*SQLWebhookRepository)(nil)
 	_ WebhookReclaimer  = (*SQLWebhookRepository)(nil)
 )
+
+var _ WebhookRepository = (*SQLWebhookRepository)(nil)

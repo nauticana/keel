@@ -158,3 +158,5 @@ func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, se
 	cd := parsed.PaymentMethod.Card
 	return cd.Last4, cd.Brand, cd.ExpMonth, cd.ExpYear, true
 }
+
+var _ SetupIntentCardClient = (*StripeSetupIntentCardClient)(nil)

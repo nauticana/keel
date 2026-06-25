@@ -693,3 +693,5 @@ func (s *TableServicePgsql) Post(ctx context.Context, partnerID int64, userID in
 	}
 	return nil
 }
+
+var _ data.TableService = (*TableServicePgsql)(nil)
