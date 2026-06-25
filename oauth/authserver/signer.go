@@ -1,4 +1,4 @@
-package oauth
+package authserver
 
 import (
 	"context"
@@ -10,8 +10,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
 
@@ -70,31 +72,31 @@ func (s *RS256Signer) JWKS() port.JWKS {
 // validator can verify in-process, without an HTTP JWKS round-trip to self.
 func (s *RS256Signer) PublicKey() *rsa.PublicKey { return &s.priv.PublicKey }
 
-// LocalJWTValidator verifies tokens minted by an in-process RS256Signer
+// LocalValidator verifies tokens minted by an in-process RS256Signer
 // (local AS mode), asserting issuer, audience, expiry, and sub — the same
 // guarantees as the JWKS-backed JWTValidator but without the HTTP fetch. With a
 // single audience it pins it (resource-server use); with several it accepts a
 // token whose aud matches any (the AS's own introspection / token-exchange
 // across every resource it mints for).
-type LocalJWTValidator struct {
+type LocalValidator struct {
 	signer    *RS256Signer
 	issuer    string
 	audiences []string
 }
 
-var _ port.TokenValidator = (*LocalJWTValidator)(nil)
+var _ port.TokenValidator = (*LocalValidator)(nil)
 
-func NewLocalJWTValidator(signer *RS256Signer, issuer, audience string) *LocalJWTValidator {
-	return &LocalJWTValidator{signer: signer, issuer: issuer, audiences: []string{audience}}
+func NewLocalValidator(signer *RS256Signer, issuer, audience string) *LocalValidator {
+	return &LocalValidator{signer: signer, issuer: issuer, audiences: []string{audience}}
 }
 
-// NewLocalJWTValidatorMulti accepts a token whose audience matches ANY of
+// NewLocalValidatorMulti accepts a token whose audience matches ANY of
 // audiences — for AS-internal introspection / token-exchange across resources.
-func NewLocalJWTValidatorMulti(signer *RS256Signer, issuer string, audiences []string) *LocalJWTValidator {
-	return &LocalJWTValidator{signer: signer, issuer: issuer, audiences: audiences}
+func NewLocalValidatorMulti(signer *RS256Signer, issuer string, audiences []string) *LocalValidator {
+	return &LocalValidator{signer: signer, issuer: issuer, audiences: audiences}
 }
 
-func (v *LocalJWTValidator) Validate(_ context.Context, bearer string) (*port.Principal, error) {
+func (v *LocalValidator) Validate(_ context.Context, bearer string) (*port.Principal, error) {
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"RS256"}),
 		jwt.WithExpirationRequired(),
@@ -109,31 +111,20 @@ func (v *LocalJWTValidator) Validate(_ context.Context, bearer string) (*port.Pr
 	if err != nil {
 		return nil, err
 	}
-	claims, ok := tok.Claims.(jwt.MapClaims)
+	mc, ok := tok.Claims.(jwt.MapClaims)
 	if !ok || !tok.Valid {
 		return nil, fmt.Errorf("oauth: invalid token")
 	}
-	if len(v.audiences) > 1 && !audienceAllowed(claims["aud"], v.audiences) {
+	if len(v.audiences) > 1 && !audienceAllowed(mc["aud"], v.audiences) {
 		return nil, fmt.Errorf("oauth: token audience not in allowed set")
 	}
-	sub, _ := claims["sub"].(string)
-	if sub == "" {
-		return nil, fmt.Errorf("oauth: token missing sub claim")
-	}
-	iss, _ := claims["iss"].(string)
-	return &port.Principal{
-		Subject:  sub,
-		Issuer:   iss,
-		Audience: audienceClaim(claims["aud"]),
-		Scopes:   scopeClaim(claims),
-		Claims:   claims,
-	}, nil
+	return claims.Principal(mc)
 }
 
 // audienceAllowed reports whether the token's aud claim intersects allowed.
 func audienceAllowed(raw any, allowed []string) bool {
-	for _, aud := range audienceClaim(raw) {
-		if contains(allowed, aud) {
+	for _, aud := range claims.Audience(raw) {
+		if slices.Contains(allowed, aud) {
 			return true
 		}
 	}

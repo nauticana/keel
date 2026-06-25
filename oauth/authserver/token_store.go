@@ -1,11 +1,13 @@
-package oauth
+package authserver
 
 import (
 	"context"
 	"errors"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
 
@@ -33,32 +35,32 @@ SELECT token_hash, family_id, client_id, user_id, partner_id, scopes, resource, 
 	// Atomic single-use consume: only one concurrent refresh flips an active row.
 	oauthConsumeRefresh: `UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL RETURNING token_hash`,
 	oauthRevokeRefresh:  `UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ?`,
-	oauthRevokeFamily:  `UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP WHERE family_id = ? AND revoked_at IS NULL`,
-	oauthRevokeUser:    `UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL`,
+	oauthRevokeFamily:   `UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP WHERE family_id = ? AND revoked_at IS NULL`,
+	oauthRevokeUser:     `UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL`,
 }
 
-// OAuthTokenStoreDB persists refresh tokens (token_hash, never the raw token).
+// TokenStoreDB persists refresh tokens (token_hash, never the raw token).
 // The caller hashes before storing/looking up.
-type OAuthTokenStoreDB struct {
+type TokenStoreDB struct {
 	DB data.DatabaseRepository
 	qs data.QueryService
 }
 
-var _ port.OAuthTokenStore = (*OAuthTokenStoreDB)(nil)
+var _ port.OAuthTokenStore = (*TokenStoreDB)(nil)
 
-func (s *OAuthTokenStoreDB) Init(ctx context.Context) {
+func (s *TokenStoreDB) Init(ctx context.Context) {
 	if s.qs == nil {
 		s.qs = s.DB.GetQueryService(ctx, oauthTokenQueries)
 	}
 }
 
-func (s *OAuthTokenStoreDB) SaveRefreshToken(ctx context.Context, t *port.RefreshToken) error {
+func (s *TokenStoreDB) SaveRefreshToken(ctx context.Context, t *port.RefreshToken) error {
 	_, err := s.qs.Query(ctx, oauthInsertRefresh, t.TokenHash, t.FamilyID, t.ClientID, t.UserID,
 		t.PartnerID, joinSpace(t.Scopes), t.Resource, t.ExpiresAt)
 	return err
 }
 
-func (s *OAuthTokenStoreDB) Rotate(ctx context.Context, oldHash string, t *port.RefreshToken) error {
+func (s *TokenStoreDB) Rotate(ctx context.Context, oldHash string, t *port.RefreshToken) error {
 	tx, err := s.DB.BeginTx(ctx, oauthTokenQueries)
 	if err != nil {
 		return err
@@ -89,7 +91,7 @@ func (s *OAuthTokenStoreDB) Rotate(ctx context.Context, oldHash string, t *port.
 	return nil
 }
 
-func (s *OAuthTokenStoreDB) GetRefreshToken(ctx context.Context, tokenHash string) (*port.RefreshToken, error) {
+func (s *TokenStoreDB) GetRefreshToken(ctx context.Context, tokenHash string) (*port.RefreshToken, error) {
 	res, err := s.qs.Query(ctx, oauthGetRefresh, tokenHash)
 	if err != nil {
 		return nil, err
@@ -100,13 +102,13 @@ func (s *OAuthTokenStoreDB) GetRefreshToken(ctx context.Context, tokenHash strin
 	r := res.Rows[0]
 	expires, _ := r[7].(time.Time)
 	t := &port.RefreshToken{
-		TokenHash: oauthStr(r[0]),
-		FamilyID:  oauthStr(r[1]),
-		ClientID:  oauthStr(r[2]),
-		UserID:    oauthInt64(r[3]),
-		PartnerID: oauthInt64(r[4]),
-		Scopes:    splitSpace(oauthStr(r[5])),
-		Resource:  oauthStr(r[6]),
+		TokenHash: common.AsString(r[0]),
+		FamilyID:  common.AsString(r[1]),
+		ClientID:  common.AsString(r[2]),
+		UserID:    claims.Int64(r[3]),
+		PartnerID: claims.Int64(r[4]),
+		Scopes:    splitSpace(common.AsString(r[5])),
+		Resource:  common.AsString(r[6]),
 		ExpiresAt: expires,
 	}
 	if rev, ok := r[8].(time.Time); ok && !rev.IsZero() {
@@ -115,17 +117,17 @@ func (s *OAuthTokenStoreDB) GetRefreshToken(ctx context.Context, tokenHash strin
 	return t, nil
 }
 
-func (s *OAuthTokenStoreDB) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
+func (s *TokenStoreDB) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
 	_, err := s.qs.Query(ctx, oauthRevokeRefresh, tokenHash)
 	return err
 }
 
-func (s *OAuthTokenStoreDB) RevokeFamily(ctx context.Context, familyID string) error {
+func (s *TokenStoreDB) RevokeFamily(ctx context.Context, familyID string) error {
 	_, err := s.qs.Query(ctx, oauthRevokeFamily, familyID)
 	return err
 }
 
-func (s *OAuthTokenStoreDB) RevokeForUser(ctx context.Context, userID int64) error {
+func (s *TokenStoreDB) RevokeForUser(ctx context.Context, userID int64) error {
 	_, err := s.qs.Query(ctx, oauthRevokeUser, userID)
 	return err
 }

@@ -1,4 +1,4 @@
-package oauth
+package authserver
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func TestRS256SignerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewLocalJWTValidator(signer, "https://as.example", "https://rs.example")
+	v := NewLocalValidator(signer, "https://as.example", "https://rs.example")
 	p, err := v.Validate(context.Background(), tok)
 	if err != nil {
 		t.Fatalf("validate: %v", err)
@@ -37,7 +37,7 @@ func TestRS256SignerWrongAudienceRejected(t *testing.T) {
 	tok, _ := signer.Sign(context.Background(), map[string]any{
 		"iss": "https://as.example", "sub": "u", "aud": "https://other", "exp": 9999999999,
 	})
-	v := NewLocalJWTValidator(signer, "https://as.example", "https://rs.example")
+	v := NewLocalValidator(signer, "https://as.example", "https://rs.example")
 	if _, err := v.Validate(context.Background(), tok); err == nil {
 		t.Fatal("want audience mismatch rejected")
 	}

@@ -1,9 +1,10 @@
-package oauth
+package authserver
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"slices"
 	"testing"
 	"time"
 
@@ -94,7 +95,7 @@ func (s *memTokens) Rotate(_ context.Context, oldHash string, t *port.RefreshTok
 	return nil
 }
 
-func newTestAS(t *testing.T) (*AuthorizationServerLocal, *RS256Signer) {
+func newTestAS(t *testing.T) (*Local, *RS256Signer) {
 	t.Helper()
 	signer, err := NewEphemeralRS256Signer()
 	if err != nil {
@@ -103,11 +104,11 @@ func newTestAS(t *testing.T) (*AuthorizationServerLocal, *RS256Signer) {
 	clients := &memClients{m: map[string]*port.OAuthClient{}}
 	codes := &memCodes{m: map[string]*port.AuthCode{}}
 	tokens := &memTokens{m: map[string]*port.RefreshToken{}}
-	cfg := OAuthASConfig{
+	cfg := Config{
 		Issuer: "https://as.example", DefaultAudience: "https://rs.example",
 		Scopes: []string{"read", "write"}, AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour, CodeTTL: time.Minute,
 	}
-	return NewAuthorizationServerLocal(signer, clients, codes, tokens, cfg), signer
+	return NewLocal(signer, clients, codes, tokens, cfg), signer
 }
 
 func pkce(verifier string) string {
@@ -116,7 +117,7 @@ func pkce(verifier string) string {
 }
 
 // registers a public client + runs authorize, returns the code.
-func authCodeFor(t *testing.T, as *AuthorizationServerLocal, challenge string) (string, *port.OAuthClient) {
+func authCodeFor(t *testing.T, as *Local, challenge string) (string, *port.OAuthClient) {
 	t.Helper()
 	client, err := as.Register(context.Background(), port.ClientRegistration{
 		RedirectURIs: []string{"https://app.example/cb"}, Scopes: []string{"read", "write"},
@@ -298,7 +299,7 @@ func TestTokenEnforcesClientGrantTypes(t *testing.T) {
 }
 
 func TestScopelessClientBoundedToASSupported(t *testing.T) {
-	as, _ := newTestAS(t) // cfg.Scopes = read, write
+	as, _ := newTestAS(t)                                                                                                     // cfg.Scopes = read, write
 	client, _ := as.Register(context.Background(), port.ClientRegistration{RedirectURIs: []string{"https://app.example/cb"}}) // no scopes
 	base := port.AuthorizeRequest{ClientID: client.ClientID, RedirectURI: "https://app.example/cb", CodeChallenge: "x", CodeChallengeMethod: "S256"}
 
@@ -314,7 +315,7 @@ func TestScopelessClientBoundedToASSupported(t *testing.T) {
 
 // mintToken registers a client (with the given scopes) and runs the full
 // auth-code flow, returning an access token + the client.
-func mintToken(t *testing.T, as *AuthorizationServerLocal, scopes []string, resource string) (string, *port.OAuthClient) {
+func mintToken(t *testing.T, as *Local, scopes []string, resource string) (string, *port.OAuthClient) {
 	t.Helper()
 	client, err := as.Register(context.Background(), port.ClientRegistration{
 		RedirectURIs: []string{"https://app.example/cb"}, Scopes: scopes,
@@ -378,7 +379,7 @@ func TestBoundScopesClampsToSupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contains(got, "admin") || !contains(got, "read") {
+	if slices.Contains(got, "admin") || !slices.Contains(got, "read") {
 		t.Fatalf("clamp failed: got %v, want just read", got)
 	}
 }
@@ -438,12 +439,12 @@ func TestTokenExchangeBoundedByClientScopes(t *testing.T) {
 
 func TestMultiResourceIntrospect(t *testing.T) {
 	signer, _ := NewEphemeralRS256Signer()
-	cfg := OAuthASConfig{
+	cfg := Config{
 		Issuer: "https://as.example", DefaultAudience: "https://rs.example",
 		Resources: []string{"https://rs2.example"}, Scopes: []string{"read"},
 		AccessTTL: time.Hour, RefreshTTL: time.Hour, CodeTTL: time.Minute,
 	}
-	as := NewAuthorizationServerLocal(signer,
+	as := NewLocal(signer,
 		&memClients{m: map[string]*port.OAuthClient{}},
 		&memCodes{m: map[string]*port.AuthCode{}},
 		&memTokens{m: map[string]*port.RefreshToken{}}, cfg)
@@ -524,7 +525,7 @@ func TestTokenExchangeRequiresAccessTokenType(t *testing.T) {
 	subject, _ := mintToken(t, as, []string{"read"}, "https://rs.example")
 	ex, _ := as.Register(context.Background(), port.ClientRegistration{
 		RedirectURIs: []string{"https://app.example/cb"}, Scopes: []string{"read"},
-		GrantTypes:   []string{"urn:ietf:params:oauth:grant-type:token-exchange"}, TokenAuthMethod: "client_secret_basic",
+		GrantTypes: []string{"urn:ietf:params:oauth:grant-type:token-exchange"}, TokenAuthMethod: "client_secret_basic",
 	})
 	tx := func(typ string) error {
 		_, err := as.Token(context.Background(), port.TokenRequest{

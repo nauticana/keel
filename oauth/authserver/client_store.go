@@ -1,9 +1,10 @@
-package oauth
+package authserver
 
 import (
 	"context"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/port"
 )
@@ -28,27 +29,27 @@ UPDATE oauth_client SET secret_hash = ?, client_name = ?, redirect_uris = ?, gra
 	oauthDeleteClient: `DELETE FROM oauth_client WHERE client_id = ?`,
 }
 
-// OAuthClientStoreDB persists DCR clients in the oauth_client table.
-type OAuthClientStoreDB struct {
+// ClientStoreDB persists DCR clients in the oauth_client table.
+type ClientStoreDB struct {
 	DB data.DatabaseRepository
 	qs data.QueryService
 }
 
-var _ port.OAuthClientStore = (*OAuthClientStoreDB)(nil)
+var _ port.OAuthClientStore = (*ClientStoreDB)(nil)
 
-func (s *OAuthClientStoreDB) Init(ctx context.Context) {
+func (s *ClientStoreDB) Init(ctx context.Context) {
 	if s.qs == nil {
 		s.qs = s.DB.GetQueryService(ctx, oauthClientQueries)
 	}
 }
 
-func (s *OAuthClientStoreDB) CreateClient(ctx context.Context, c *port.OAuthClient) error {
+func (s *ClientStoreDB) CreateClient(ctx context.Context, c *port.OAuthClient) error {
 	_, err := s.qs.Query(ctx, oauthInsertClient, c.ClientID, c.SecretHash, c.Name,
 		joinSpace(c.RedirectURIs), joinSpace(c.GrantTypes), joinSpace(c.Scopes), c.TokenAuthMethod)
 	return err
 }
 
-func (s *OAuthClientStoreDB) GetClient(ctx context.Context, clientID string) (*port.OAuthClient, error) {
+func (s *ClientStoreDB) GetClient(ctx context.Context, clientID string) (*port.OAuthClient, error) {
 	res, err := s.qs.Query(ctx, oauthGetClient, clientID)
 	if err != nil {
 		return nil, err
@@ -59,24 +60,24 @@ func (s *OAuthClientStoreDB) GetClient(ctx context.Context, clientID string) (*p
 	r := res.Rows[0]
 	created, _ := r[7].(time.Time)
 	return &port.OAuthClient{
-		ClientID:        oauthStr(r[0]),
-		SecretHash:      oauthStr(r[1]),
-		Name:            oauthStr(r[2]),
-		RedirectURIs:    splitSpace(oauthStr(r[3])),
-		GrantTypes:      splitSpace(oauthStr(r[4])),
-		Scopes:          splitSpace(oauthStr(r[5])),
-		TokenAuthMethod: oauthStr(r[6]),
+		ClientID:        common.AsString(r[0]),
+		SecretHash:      common.AsString(r[1]),
+		Name:            common.AsString(r[2]),
+		RedirectURIs:    splitSpace(common.AsString(r[3])),
+		GrantTypes:      splitSpace(common.AsString(r[4])),
+		Scopes:          splitSpace(common.AsString(r[5])),
+		TokenAuthMethod: common.AsString(r[6]),
 		CreatedAt:       created,
 	}, nil
 }
 
-func (s *OAuthClientStoreDB) UpdateClient(ctx context.Context, c *port.OAuthClient) error {
+func (s *ClientStoreDB) UpdateClient(ctx context.Context, c *port.OAuthClient) error {
 	_, err := s.qs.Query(ctx, oauthUpdateClient, c.SecretHash, c.Name,
 		joinSpace(c.RedirectURIs), joinSpace(c.GrantTypes), joinSpace(c.Scopes), c.TokenAuthMethod, c.ClientID)
 	return err
 }
 
-func (s *OAuthClientStoreDB) DeleteClient(ctx context.Context, clientID string) error {
+func (s *ClientStoreDB) DeleteClient(ctx context.Context, clientID string) error {
 	_, err := s.qs.Query(ctx, oauthDeleteClient, clientID)
 	return err
 }

@@ -1,4 +1,4 @@
-package oauth
+package resource
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 // Optional — pass nil to inject the principal/scopes without a partner id.
 type PartnerResolver func(ctx context.Context, p *port.Principal) (int64, error)
 
-// OAuthResourceMiddleware authenticates requests with an OAuth 2.1 bearer
+// Middleware authenticates requests with an OAuth 2.1 bearer
 // access token (resource-server role). It validates the token via validator,
 // injects the principal, subject, and space-delimited scopes (plus partner id
 // when resolve maps one) into the request context, and challenges callers
@@ -27,9 +27,9 @@ type PartnerResolver func(ctx context.Context, p *port.Principal) (int64, error)
 // Streamable-HTTP server) or a sub-router. 401 on missing/invalid token, 500
 // if the resolver errors. It does not gate by path — the caller decides which
 // routes require OAuth, leaving X-API-Key / JWT routes untouched.
-func OAuthResourceMiddleware(validator port.TokenValidator, metadataURL string, journal logger.ApplicationLogger, resolve PartnerResolver) func(http.Handler) http.Handler {
+func Middleware(validator port.TokenValidator, metadataURL string, journal logger.ApplicationLogger, resolve PartnerResolver) func(http.Handler) http.Handler {
 	if validator == nil {
-		panic("oauth: OAuthResourceMiddleware requires a non-nil TokenValidator")
+		panic("oauth: Middleware requires a non-nil TokenValidator")
 	}
 	challenge := "Bearer"
 	if metadataURL != "" {
@@ -71,7 +71,7 @@ func OAuthResourceMiddleware(validator port.TokenValidator, metadataURL string, 
 }
 
 // PrincipalFromContext returns the OAuth principal injected by
-// OAuthResourceMiddleware, or nil for non-OAuth requests.
+// Middleware, or nil for non-OAuth requests.
 func PrincipalFromContext(ctx context.Context) *port.Principal {
 	p, _ := ctx.Value(common.AuthPrincipal).(*port.Principal)
 	return p

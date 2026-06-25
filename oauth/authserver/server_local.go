@@ -1,12 +1,15 @@
-package oauth
+package authserver
 
 import (
 	"context"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
 
@@ -39,8 +42,8 @@ const (
 
 func subjectForUser(userID int64) string { return "user:" + strconv.FormatInt(userID, 10) }
 
-// OAuthASConfig holds the local AS's non-secret settings.
-type OAuthASConfig struct {
+// Config holds the local AS's non-secret settings.
+type Config struct {
 	Issuer          string // public base URL of this AS (also the token iss)
 	DefaultAudience string
 	Scopes          []string // AS-supported scopes; the upper bound on any grant
@@ -50,8 +53,8 @@ type OAuthASConfig struct {
 	CodeTTL         time.Duration
 }
 
-// AuthorizationServerLocal is keel's local OAuth 2.1 authorization server.
-type AuthorizationServerLocal struct {
+// Local is keel's local OAuth 2.1 authorization server.
+type Local struct {
 	clients   port.OAuthClientStore
 	codes     port.AuthCodeStore
 	tokens    port.OAuthTokenStore
@@ -59,15 +62,15 @@ type AuthorizationServerLocal struct {
 	validator port.TokenValidator
 	issuer    *oauthIssuer
 	grants    map[string]port.GrantHandler
-	cfg       OAuthASConfig
+	cfg       Config
 }
 
-var _ port.AuthorizationServer = (*AuthorizationServerLocal)(nil)
+var _ port.AuthorizationServer = (*Local)(nil)
 
-func NewAuthorizationServerLocal(signer *RS256Signer, clients port.OAuthClientStore, codes port.AuthCodeStore, tokens port.OAuthTokenStore, cfg OAuthASConfig) *AuthorizationServerLocal {
+func NewLocal(signer *RS256Signer, clients port.OAuthClientStore, codes port.AuthCodeStore, tokens port.OAuthTokenStore, cfg Config) *Local {
 	resources := []string{cfg.DefaultAudience}
 	for _, r := range cfg.Resources {
-		if r != "" && !contains(resources, r) {
+		if r != "" && !slices.Contains(resources, r) {
 			resources = append(resources, r)
 		}
 	}
@@ -84,8 +87,8 @@ func NewAuthorizationServerLocal(signer *RS256Signer, clients port.OAuthClientSt
 	// AS-internal validator accepts a token minted for ANY configured resource,
 	// so introspection and token-exchange work across all of them (not just the
 	// default audience).
-	internal := NewLocalJWTValidatorMulti(signer, cfg.Issuer, resources)
-	as := &AuthorizationServerLocal{
+	internal := NewLocalValidatorMulti(signer, cfg.Issuer, resources)
+	as := &Local{
 		clients: clients, codes: codes, tokens: tokens, signer: signer,
 		validator: internal, issuer: iss, cfg: cfg,
 		grants: map[string]port.GrantHandler{},
@@ -101,7 +104,7 @@ func NewAuthorizationServerLocal(signer *RS256Signer, clients port.OAuthClientSt
 	return as
 }
 
-func (a *AuthorizationServerLocal) Metadata() port.AuthServerMetadata {
+func (a *Local) Metadata() port.AuthServerMetadata {
 	base := strings.TrimRight(a.cfg.Issuer, "/")
 	grants := make([]string, 0, len(a.grants))
 	for gt := range a.grants {
@@ -123,9 +126,9 @@ func (a *AuthorizationServerLocal) Metadata() port.AuthServerMetadata {
 	}
 }
 
-func (a *AuthorizationServerLocal) JWKS() port.JWKS { return a.signer.JWKS() }
+func (a *Local) JWKS() port.JWKS { return a.signer.JWKS() }
 
-func (a *AuthorizationServerLocal) Register(ctx context.Context, req port.ClientRegistration) (*port.OAuthClient, error) {
+func (a *Local) Register(ctx context.Context, req port.ClientRegistration) (*port.OAuthClient, error) {
 	if len(req.RedirectURIs) == 0 {
 		return nil, ErrOAuthInvalidRequest
 	}
@@ -157,7 +160,7 @@ func (a *AuthorizationServerLocal) Register(ctx context.Context, req port.Client
 	if len(a.issuer.supportedScopes) > 0 && !isSubset(req.Scopes, a.issuer.supportedScopes) {
 		return nil, ErrOAuthInvalidScope
 	}
-	cid, err := oauthRandToken()
+	cid, err := randToken()
 	if err != nil {
 		return nil, err
 	}
@@ -170,11 +173,11 @@ func (a *AuthorizationServerLocal) Register(ctx context.Context, req port.Client
 		Name:            req.Name,
 	}
 	if method != "none" {
-		secret, err := oauthRandToken()
+		secret, err := randToken()
 		if err != nil {
 			return nil, err
 		}
-		c.SecretHash = oauthHash(secret)
+		c.SecretHash = hashToken(secret)
 		c.Secret = secret // returned once to the registrant
 	}
 	if err := a.clients.CreateClient(ctx, c); err != nil {
@@ -183,7 +186,7 @@ func (a *AuthorizationServerLocal) Register(ctx context.Context, req port.Client
 	return c, nil
 }
 
-func (a *AuthorizationServerLocal) ValidateAuthorizeRequest(ctx context.Context, req port.AuthorizeRequest) (*port.OAuthClient, []string, error) {
+func (a *Local) ValidateAuthorizeRequest(ctx context.Context, req port.AuthorizeRequest) (*port.OAuthClient, []string, error) {
 	client, err := a.clients.GetClient(ctx, req.ClientID)
 	if err != nil {
 		return nil, nil, err
@@ -191,13 +194,13 @@ func (a *AuthorizationServerLocal) ValidateAuthorizeRequest(ctx context.Context,
 	if client == nil {
 		return nil, nil, ErrOAuthInvalidClient
 	}
-	if !contains(client.RedirectURIs, req.RedirectURI) {
+	if !slices.Contains(client.RedirectURIs, req.RedirectURI) {
 		return nil, nil, ErrOAuthInvalidRequest
 	}
 	if req.CodeChallenge == "" || req.CodeChallengeMethod != "S256" {
 		return nil, nil, ErrOAuthInvalidRequest
 	}
-	if req.Resource != "" && !contains(a.issuer.resources, req.Resource) {
+	if req.Resource != "" && !slices.Contains(a.issuer.resources, req.Resource) {
 		return nil, nil, ErrOAuthInvalidTarget
 	}
 	scopes, err := a.issuer.boundScopes(req.Scopes, client.Scopes)
@@ -207,7 +210,7 @@ func (a *AuthorizationServerLocal) ValidateAuthorizeRequest(ctx context.Context,
 	return client, scopes, nil
 }
 
-func (a *AuthorizationServerLocal) Authorize(ctx context.Context, req port.AuthorizeRequest) (*port.AuthorizeResult, error) {
+func (a *Local) Authorize(ctx context.Context, req port.AuthorizeRequest) (*port.AuthorizeResult, error) {
 	if req.User == nil || !req.ConsentGranted {
 		return nil, ErrOAuthAccessDenied
 	}
@@ -215,7 +218,7 @@ func (a *AuthorizationServerLocal) Authorize(ctx context.Context, req port.Autho
 	if err != nil {
 		return nil, err
 	}
-	code, err := oauthRandToken()
+	code, err := randToken()
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +239,7 @@ func (a *AuthorizationServerLocal) Authorize(ctx context.Context, req port.Autho
 	return &port.AuthorizeResult{Code: code, State: req.State}, nil
 }
 
-func (a *AuthorizationServerLocal) Token(ctx context.Context, req port.TokenRequest) (*port.TokenResponse, error) {
+func (a *Local) Token(ctx context.Context, req port.TokenRequest) (*port.TokenResponse, error) {
 	g, ok := a.grants[req.GrantType]
 	if !ok {
 		return nil, ErrOAuthUnsupportedGrant
@@ -245,13 +248,13 @@ func (a *AuthorizationServerLocal) Token(ctx context.Context, req port.TokenRequ
 	if err != nil {
 		return nil, err
 	}
-	if !contains(client.GrantTypes, req.GrantType) {
+	if !slices.Contains(client.GrantTypes, req.GrantType) {
 		return nil, ErrOAuthUnauthorizedClient
 	}
 	return g.Handle(ctx, req, client)
 }
 
-func (a *AuthorizationServerLocal) Revoke(ctx context.Context, token, hint string, clientAuth port.ClientAuth) error {
+func (a *Local) Revoke(ctx context.Context, token, hint string, clientAuth port.ClientAuth) error {
 	// RFC 7009: authenticate the client; an unknown or other-client token is a
 	// 200 no-op. Access tokens are stateless and expire via TTL — we revoke the
 	// refresh token's whole rotation family.
@@ -259,14 +262,14 @@ func (a *AuthorizationServerLocal) Revoke(ctx context.Context, token, hint strin
 	if err != nil {
 		return err
 	}
-	stored, err := a.tokens.GetRefreshToken(ctx, oauthHash(token))
+	stored, err := a.tokens.GetRefreshToken(ctx, hashToken(token))
 	if err != nil || stored == nil || stored.ClientID != client.ClientID {
 		return nil
 	}
 	return a.tokens.RevokeFamily(ctx, stored.FamilyID)
 }
 
-func (a *AuthorizationServerLocal) Introspect(ctx context.Context, token string, clientAuth port.ClientAuth) (*port.Introspection, error) {
+func (a *Local) Introspect(ctx context.Context, token string, clientAuth port.ClientAuth) (*port.Introspection, error) {
 	// RFC 7662: authenticate the caller, and only reveal a token to the client
 	// that owns it — otherwise active:false rather than leak another client's token.
 	client, err := a.authenticateClient(ctx, clientAuth)
@@ -277,22 +280,22 @@ func (a *AuthorizationServerLocal) Introspect(ctx context.Context, token string,
 	if err != nil {
 		return &port.Introspection{Active: false}, nil
 	}
-	if oauthStr(principal.Claims["client_id"]) != client.ClientID {
+	if common.AsString(principal.Claims["client_id"]) != client.ClientID {
 		return &port.Introspection{Active: false}, nil
 	}
 	return &port.Introspection{
 		Active:   true,
 		Scope:    strings.Join(principal.Scopes, " "),
-		ClientID: oauthStr(principal.Claims["client_id"]),
+		ClientID: common.AsString(principal.Claims["client_id"]),
 		Sub:      principal.Subject,
 		Aud:      strings.Join(principal.Audience, " "),
-		Exp:      claimInt64(principal.Claims["exp"]),
+		Exp:      claims.Int64(principal.Claims["exp"]),
 	}, nil
 }
 
 // authenticateClient resolves the client and, for confidential clients, checks
 // the secret. Public clients (token_auth_method=none) are protected by PKCE.
-func (a *AuthorizationServerLocal) authenticateClient(ctx context.Context, auth port.ClientAuth) (*port.OAuthClient, error) {
+func (a *Local) authenticateClient(ctx context.Context, auth port.ClientAuth) (*port.OAuthClient, error) {
 	if auth.ClientID == "" {
 		return nil, ErrOAuthInvalidClient
 	}
@@ -309,7 +312,7 @@ func (a *AuthorizationServerLocal) authenticateClient(ctx context.Context, auth 
 		if auth.Method != client.TokenAuthMethod {
 			return nil, ErrOAuthInvalidClient
 		}
-		if auth.ClientSecret == "" || oauthHash(auth.ClientSecret) != client.SecretHash {
+		if auth.ClientSecret == "" || hashToken(auth.ClientSecret) != client.SecretHash {
 			return nil, ErrOAuthInvalidClient
 		}
 	}
@@ -327,13 +330,4 @@ func validRedirectURI(raw string) bool {
 		return true
 	}
 	return u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1")
-}
-
-func contains(list []string, v string) bool {
-	for _, s := range list {
-		if s == v {
-			return true
-		}
-	}
-	return false
 }

@@ -1,4 +1,4 @@
-package oauth
+package resource
 
 import (
 	"encoding/json"

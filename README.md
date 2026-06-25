@@ -6,6 +6,56 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.6 — OAuth client framework + `oauth/` role subpackages)
+
+Two changes ship together. **(A)** a new OAuth 2.1 **client** framework (`oauth/client`) — additive. **(B)** the flat `oauth` package is split by OAuth role into subpackages — a mechanical **import-path break** for the existing AS/RS symbols (no behavior, DB, or flag change). Bump to `github.com/nauticana/keel v1.2.6`, `go mod tidy`. (`golang.org/x/oauth2` is already a keel dependency.)
+
+After the split each OAuth role is its own package, mirroring the spec; `oauth` (root) keeps only the wiring:
+
+```
+oauth/client      consume external providers (Google APIs, Meta, …)        [new]
+oauth/authserver  the authorization server (keel issues RS256 tokens)
+oauth/resource    the resource server (validate incoming bearers)
+oauth/claims      shared JWT-claim → Principal helpers (used by both validators)
+oauth             NewOAuthFromFlags wiring  ← import path unchanged
+```
+
+### A. OAuth client framework (`oauth/client`, additive)
+
+Connect an app, on behalf of each partner, to external providers and persist the credentials. One engine serves every provider; they differ only by config + optional hooks. **Nothing is hardcoded** — the caller supplies its own client id, secret name, and scopes per use case.
+
+| Symbol | File | Role |
+| --- | --- | --- |
+| `client.Provider` | `oauth/client/provider.go` | The flow contract: `AuthURL` (start consent) / `Callback` (exchange + persist) / `Test` (re-validate). |
+| `client.CredentialStore` | `oauth/client/provider.go` | Persistence the providers depend on — **you implement it** (e.g. over a `partner_credential` table). Keeps keel free of schema. |
+| `client.BaseProvider` | `oauth/client/base_provider.go` | The embeddable engine: default oauth2-library flow + four hooks (`DeriveAPIEndpoint`, `DeriveCredential`, `PostCallback`, `TestHealthcheck`) for provider variations. |
+| `client.NewGoogleProvider` | `oauth/client/providers_google.go` | Standard Google offline-access provider for **any** Google API — caller supplies scopes + client + apiEndpoint (Search Console, Analytics, YouTube, …). |
+| `client.NewGBPProvider` / `DiscoverGBPAccountName` | `oauth/client/providers_google.go` | Google Business Profile: a Google provider plus account-name discovery + refresh-token persistence. |
+| `client.NewMetaProvider` | `oauth/client/providers_meta.go` | Facebook-Graph provider (Meta/Instagram): long-lived-token swap + `/me` healthcheck. |
+| `client.RefreshAccessToken` / `ExchangeMetaLongLivedToken` | `oauth/client/token.go` | Reusable token helpers — back `CredentialStore.RefreshAccessToken` with the former. |
+
+To adopt: **(1)** implement `client.CredentialStore` against your storage (typically an `internal/service` type, so the provider package never reverse-imports your service layer); **(2)** construct a provider with your own client id + secret name + scopes, e.g. `client.NewGBPProvider(store, "gbp", callbackURL, *common.GoogleClientID, "google_client_secret", []string{"https://www.googleapis.com/auth/business.manage"})` — or embed `client.BaseProvider` and override `AuthURL`/`Callback` for a non-standard (PKCE / manual-exchange) provider; **(3)** drive the flow from your handlers: `AuthURL` → redirect, `Callback` on return, `Test` to re-validate.
+
+### B. `oauth/` role subpackages (breaking import paths)
+
+A pure move + stutter-killing rename — no behavior change. `oauth.NewOAuthFromFlags` and the `handler.OAuthASHandler` wiring are **unchanged**; only the symbols the AS/RS expose move. Re-point imports per the table (a compile error flags each):
+
+| Was (v1.2.5, `oauth.`) | Now (v1.2.6) |
+| --- | --- |
+| `AuthorizationServerLocal` / `NewAuthorizationServerLocal` | `authserver.Local` / `authserver.NewLocal` |
+| `OAuthASConfig` | `authserver.Config` |
+| `RS256Signer` / `NewRS256Signer` / `NewEphemeralRS256Signer` | `authserver.RS256Signer` / `authserver.New…` (unchanged names) |
+| `LocalJWTValidator` / `NewLocalJWTValidator` | `authserver.LocalValidator` / `authserver.NewLocalValidator` |
+| `OAuthClientStoreDB` / `AuthCodeStoreDB` / `OAuthTokenStoreDB` | `authserver.ClientStoreDB` / `CodeStoreDB` / `TokenStoreDB` |
+| `OAuth*Path` (endpoint consts) / `ErrOAuth*` (sentinels) | `authserver.OAuth*Path` / `authserver.ErrOAuth*` |
+| `JWTValidator` / `NewJWTValidatorFromFlags` | `resource.JWTValidator` / `resource.NewJWTValidatorFromFlags` |
+| `OAuthResourceMiddleware` | `resource.Middleware` |
+| `ProtectedResourceMetadata*` (`…Path` / `…Handler` / `…FromFlags`) | `resource.ProtectedResourceMetadata*` |
+| `PartnerResolver` / `PrincipalFromContext` | `resource.PartnerResolver` / `resource.PrincipalFromContext` |
+| `PartnerFromClaims` | `claims.PartnerID` |
+| `OAuthSetup` | `oauth.Setup` |
+| `NewOAuthFromFlags` | `oauth.NewOAuthFromFlags` *(unchanged)* |
+
 ## Migration Guide (v1.2.5 — `common` + `crypto` helpers, additive)
 
 Small generic helpers upstreamed from downstream services into `common` and `crypto`. **Fully additive — existing consumers compile and behave unchanged.** Bump to `github.com/nauticana/keel v1.2.5`, `go mod tidy`. One dependency change: `golang.org/x/net` becomes a direct dependency (used by `common.RegistrableDomain` for public-suffix lookup).
@@ -22,7 +72,7 @@ A new MCP (Model Context Protocol) server layer plus a reusable trust-guard chai
 - **`mcp/mcptest` package** — conformance assertions (`AssertToolsMatchManifest`, `AssertResourcesMatchManifest`, `AssertToolTextComplete`, `AssertSameSet`, `AssertIdentityMatches`, `AssertDescriptionsPresent` + a `LoadManifest` helper) that fail a build when a published server manifest or text bundle drifts from the registered tools.
 - **`guard` trust guards** — `DuplicateGuard` (debounce/idempotency, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` (rate / velocity cap), `MinCountGuard` (require a floor, e.g. ≥N prior actions), `MinAgeGuard`, composed by `GuardChain`. Each is constructed with an app-owned named-SQL query + threshold; keel ships the mechanism. The `guard.TrustGuard` / `GuardInput` / `GuardQuerier` contract is transport-neutral (usable from REST handlers, not just MCP).
 - **Field catalog** — `port.FieldCatalog` (schema-introspection contract) + `mcp.BaseFieldCatalog`, which merges a static core descriptor set with catalog-backed `DescriptorProvider`s and owns the `attr.`/`question.`-style prefix dispatch behind `list_fields` / `describe_field`. The app supplies the core slice, the named SQL, and the row→descriptor mappers.
-- **DTOs & helpers** — `model.Envelope` / `EnvelopeMeta` / `ProvenanceMeta` / `PaginationMeta` / `FieldDescriptor` (no mcp-go dependency), `handler.WithClientIPContext` / `ClientIPFromContext`, `oauth.PartnerFromClaims`, `common.ParseDBTimestamp`.
+- **DTOs & helpers** — `model.Envelope` / `EnvelopeMeta` / `ProvenanceMeta` / `PaginationMeta` / `FieldDescriptor` (no mcp-go dependency), `handler.WithClientIPContext` / `ClientIPFromContext`, `claims.PartnerID`, `common.ParseDBTimestamp`.
 
 ## Migration Guide (v1.2.3 — `payment.MajorToMinor` + provider-handler `DefaultTerms`, additive)
 
@@ -51,9 +101,9 @@ New surface, injected at composition time:
 | Piece | Where | Purpose |
 |---|---|---|
 | `port.AuthorizationServer` (+ store/signer/grant interfaces) | `port/authorization_server.go` | AS contract; storage, signing, per-grant logic all injectable. |
-| `oauth.AuthorizationServerLocal` | `oauth/authorization_server_local.go` | Local AS orchestrator. |
-| `oauth.RS256Signer` / `oauth.LocalJWTValidator` | `oauth/oauth_signer.go` | RS256 minting + in-process validation (no self-JWKS fetch). |
-| `oauth.OAuthClientStoreDB` / `AuthCodeStoreDB` / `OAuthTokenStoreDB` | `oauth/oauth_*_store.go` | DB stores; codes single-use via `DELETE … RETURNING`; refresh rotation family. |
+| `authserver.Local` | `oauth/authserver/local.go` | Local AS orchestrator. |
+| `authserver.RS256Signer` / `authserver.LocalValidator` | `oauth/authserver/signer.go` | RS256 minting + in-process validation (no self-JWKS fetch). |
+| `authserver.ClientStoreDB` / `CodeStoreDB` / `TokenStoreDB` | `oauth/authserver/*_store.go` | DB stores; codes single-use via `DELETE … RETURNING`; refresh rotation family. |
 | `oauth.NewOAuthFromFlags` | `oauth/oauth_factory.go` | Wires local / external / disabled from flags. |
 | `handler.OAuthASHandler` | `handler/oauth_as_handler.go` | HTTP bridge; mount via `backend.Handle(h.Routes())`. |
 | `service.QuotaMiddleware` | `service/auth_middleware.go` | Per-partner quota, auth-agnostic (X-API-Key **and** OAuth). Not OAuth-specific. |
@@ -63,7 +113,7 @@ New surface, injected at composition time:
 ### Migration steps for downstream consumers
 
 1. **Bump to `github.com/nauticana/keel v1.2.1`**, `go mod tidy`, rebuild, and apply the three new `oauth_*` tables (from `schema/basis_pgsql.sql`).
-2. **Local AS:** set `--oauth_as_mode=local`, `--oauth_issuer=<your public base URL>`, `--oauth_signing_key_secret=<keystore key name>`, and `--oauth_scopes_supported=<csv>` (**required** in local mode — `NewOAuthFromFlags` fails fast on an empty allowlist, since empty would let open DCR mint arbitrary scopes); call `oauth.NewOAuthFromFlags(...)`, mount `handler.OAuthASHandler{AS, ResolveUser, LoginURL}` via `backend.Handle(h.Routes())`, and wrap protected routes with `oauth.OAuthResourceMiddleware(setup.Validator, …)`. `ResolveUser` maps your session → `port.UserRef`.
+2. **Local AS:** set `--oauth_as_mode=local`, `--oauth_issuer=<your public base URL>`, `--oauth_signing_key_secret=<keystore key name>`, and `--oauth_scopes_supported=<csv>` (**required** in local mode — `NewOAuthFromFlags` fails fast on an empty allowlist, since empty would let open DCR mint arbitrary scopes); call `oauth.NewOAuthFromFlags(...)`, mount `handler.OAuthASHandler{AS, ResolveUser, LoginURL}` via `backend.Handle(h.Routes())`, and wrap protected routes with `resource.Middleware(setup.Validator, …)`. `ResolveUser` maps your session → `port.UserRef`.
 3. **External AS (unchanged):** set `--oauth_as_mode=external` plus the v1.2.0 `--oauth_issuer / _jwks_url / _audience` flags.
 
 ### Breaking-change risk
@@ -80,16 +130,16 @@ New surface, all injected at composition time:
 |---|---|---|
 | `port.TokenValidator` + `port.Principal` | `port/token_validator.go` | Resource-server seam: validate a bearer token → principal. |
 | `crypto.JWKSProvider` / `crypto.VerifyRS256` | `crypto/jwks.go` | Shared RS256 JWKS verifier — relocated from the social ID-token path so there is one impl. |
-| `oauth.JWTValidator` | `oauth/jwt_validator.go` | JWKS-backed `TokenValidator`; asserts audience (RFC 8707) + issuer. |
-| `oauth.OAuthResourceMiddleware` | `oauth/oauth_resource_middleware.go` | `func(http.Handler) http.Handler` — Bearer auth + RFC 9728 challenge; injects principal / subject / scopes (+ partner id via optional resolver). |
-| `oauth.ProtectedResourceMetadataHandler` | `oauth/protected_resource.go` | Serves `/.well-known/oauth-protected-resource`. |
+| `resource.JWTValidator` | `oauth/resource/jwt_validator.go` | JWKS-backed `TokenValidator`; asserts audience (RFC 8707) + issuer. |
+| `resource.Middleware` | `oauth/resource/middleware.go` | `func(http.Handler) http.Handler` — Bearer auth + RFC 9728 challenge; injects principal / subject / scopes (+ partner id via optional resolver). |
+| `resource.ProtectedResourceMetadataHandler` | `oauth/resource/protected_resource.go` | Serves `/.well-known/oauth-protected-resource`. |
 | `--oauth_issuer / _jwks_url / _audience / _resource / _scopes_supported` | `common/variables.go` | Non-secret config. Empty `--oauth_issuer` = disabled. |
 
 ### Migration steps for downstream consumers
 
 1. **Bump to `github.com/nauticana/keel v1.2.0`**, `go mod tidy`, rebuild. No source change required — every piece is opt-in and the JWKS relocation is internal (social-login call sites unchanged).
-2. **To add an OAuth-protected endpoint** (e.g. a ChatGPT-facing MCP server): delegate the authorization server to an IdP (Auth0 / Stytch / WorkOS / Clerk / Keycloak), set the `--oauth_*` flags, compose `oauth.OAuthResourceMiddleware` around the handler, and mount `oauth.ProtectedResourceMetadataHandler` at `oauth.ProtectedResourceMetadataPath` (keyless). See the **OAuth 2.1 Resource Server** section below.
-3. **Account linking / per-user quota:** pass an `oauth.PartnerResolver` mapping the token `sub` → your partner id; the middleware then injects `common.PartnerID` so existing partner/quota helpers work for OAuth requests too.
+2. **To add an OAuth-protected endpoint** (e.g. a ChatGPT-facing MCP server): delegate the authorization server to an IdP (Auth0 / Stytch / WorkOS / Clerk / Keycloak), set the `--oauth_*` flags, compose `resource.Middleware` around the handler, and mount `resource.ProtectedResourceMetadataHandler` at `resource.ProtectedResourceMetadataPath` (keyless). See the **OAuth 2.1 Resource Server** section below.
+3. **Account linking / per-user quota:** pass an `resource.PartnerResolver` mapping the token `sub` → your partner id; the middleware then injects `common.PartnerID` so existing partner/quota helpers work for OAuth requests too.
 
 ### Breaking-change risk
 
@@ -903,7 +953,7 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 For OAuth-based clients that won't send a custom `X-API-Key` — notably **ChatGPT Apps SDK** — keel validates access tokens issued by an external authorization server and publishes RFC 9728 discovery metadata. Sits beside the X-API-Key / JWT paths; nothing existing changes.
 
 ```
-Authorization: Bearer <token> → OAuthResourceMiddleware → TokenValidator (JWKS RS256) → context-injected (principal, subject, scopes, partner_id)
+Authorization: Bearer <token> → resource.Middleware → TokenValidator (JWKS RS256) → context-injected (principal, subject, scopes, partner_id)
 ```
 
 **Delegate the authorization server** (external mode). In this mode keel is the *resource server* (token validation + metadata) and does not issue tokens — front it with an IdP that provides OAuth 2.1 + PKCE + Dynamic Client Registration (Auth0, Stytch, WorkOS, Clerk, Keycloak), and keel verifies that IdP's RS256 tokens against its JWKS. To have keel issue its own tokens instead, use the v1.2.1 local authorization server (above).
@@ -912,7 +962,7 @@ Authorization: Bearer <token> → OAuthResourceMiddleware → TokenValidator (JW
 
 ```go
 // 1. Validator from --oauth_* flags (nil when --oauth_issuer is empty; error on misconfig).
-validator, err := oauth.NewJWTValidatorFromFlags(common.HTTPClient())
+validator, err := resource.NewJWTValidatorFromFlags(common.HTTPClient())
 if err != nil { log.Fatal(err) }
 
 // 2. Optional account-linking: map token subject → keel partner id (0 = unlinked).
@@ -921,16 +971,16 @@ resolve := func(ctx context.Context, p *port.Principal) (int64, error) {
 }
 
 // 3. Keyless metadata route + Bearer auth on the protected handler.
-meta := oauth.ProtectedResourceMetadataFromFlags()
-mw := oauth.OAuthResourceMiddleware(validator, meta.Resource+oauth.ProtectedResourceMetadataPath, journal, resolve)
+meta := resource.ProtectedResourceMetadataFromFlags()
+mw := resource.Middleware(validator, meta.Resource+resource.ProtectedResourceMetadataPath, journal, resolve)
 
 mux := http.NewServeMux()
-mux.HandleFunc(oauth.ProtectedResourceMetadataPath, oauth.ProtectedResourceMetadataHandler(meta))
+mux.HandleFunc(resource.ProtectedResourceMetadataPath, resource.ProtectedResourceMetadataHandler(meta))
 mux.Handle("/", mw(mcpHandler)) // tokens required on the MCP route; metadata stays keyless
 http.ListenAndServe(":8091", mux)
 ```
 
-Downstream handlers read identity with the same accessors as the X-API-Key path — `common.PartnerID` (when a resolver maps one) and `common.Scopes` (so `AbstractHandler.HasScope` / `RequireScope` work) — plus `oauth.PrincipalFromContext(ctx)` for subject / issuer / raw claims.
+Downstream handlers read identity with the same accessors as the X-API-Key path — `common.PartnerID` (when a resolver maps one) and `common.Scopes` (so `AbstractHandler.HasScope` / `RequireScope` work) — plus `resource.PrincipalFromContext(ctx)` for subject / issuer / raw claims.
 
 ### Configuration
 
@@ -942,7 +992,7 @@ Downstream handlers read identity with the same accessors as the X-API-Key path 
 | `--oauth_resource` | Canonical resource URL in the metadata doc. Empty → `--oauth_audience`. |
 | `--oauth_scopes_supported` | CSV scopes advertised in metadata. Optional. |
 
-All non-secret. For multiple issuers, construct one `oauth.JWTValidator` per issuer and dispatch on the token's `iss`.
+All non-secret. For multiple issuers, construct one `resource.JWTValidator` per issuer and dispatch on the token's `iss`.
 
 ## MCP Server Layer (v1.2.4)
 

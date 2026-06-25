@@ -13,7 +13,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
-	"github.com/nauticana/keel/oauth"
+	"github.com/nauticana/keel/oauth/authserver"
 	"github.com/nauticana/keel/port"
 )
 
@@ -48,7 +48,7 @@ func (h *OAuthASHandler) csrfGuard(r *http.Request) *CSRF {
 	// plain-HTTP localhost dev so the consent cookie is actually sent.
 	return &CSRF{
 		CookieName: "keel_oauth_csrf",
-		Path:       oauth.OAuthAuthorizePath,
+		Path:       authserver.OAuthAuthorizePath,
 		TTL:        10 * time.Minute,
 		Insecure:   isLocalhostPlainHTTP(r),
 	}
@@ -79,13 +79,13 @@ type ConsentView struct {
 
 func (h *OAuthASHandler) Routes() map[string]func(http.ResponseWriter, *http.Request) {
 	return map[string]func(http.ResponseWriter, *http.Request){
-		oauth.OAuthASMetadataPath: h.metadata,
-		oauth.OAuthJWKSPath:       h.jwks,
-		oauth.OAuthRegisterPath:   h.register,
-		oauth.OAuthAuthorizePath:  h.authorize,
-		oauth.OAuthTokenPath:      h.token,
-		oauth.OAuthRevokePath:     h.revoke,
-		oauth.OAuthIntrospectPath: h.introspect,
+		authserver.OAuthASMetadataPath: h.metadata,
+		authserver.OAuthJWKSPath:       h.jwks,
+		authserver.OAuthRegisterPath:   h.register,
+		authserver.OAuthAuthorizePath:  h.authorize,
+		authserver.OAuthTokenPath:      h.token,
+		authserver.OAuthRevokePath:     h.revoke,
+		authserver.OAuthIntrospectPath: h.introspect,
 	}
 }
 
@@ -111,7 +111,7 @@ func (h *OAuthASHandler) register(w http.ResponseWriter, r *http.Request) {
 		ClientName              string   `json:"client_name"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
-		writeOAuthError(w, oauth.ErrOAuthInvalidRequest)
+		writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
 		return
 	}
 	client, err := h.AS.Register(r.Context(), port.ClientRegistration{
@@ -198,7 +198,7 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 
 func (h *OAuthASHandler) token(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeOAuthError(w, oauth.ErrOAuthInvalidRequest)
+		writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
 		return
 	}
 	_ = r.ParseForm()
@@ -307,7 +307,7 @@ func (h *OAuthASHandler) renderConsent(w http.ResponseWriter, r *http.Request, c
 	view := ConsentView{
 		ClientName: clientLabel(client),
 		Scopes:     scopes,
-		Action:     oauth.OAuthAuthorizePath,
+		Action:     authserver.OAuthAuthorizePath,
 		Fields: map[string]string{
 			"response_type":         "code",
 			"client_id":             req.ClientID,
@@ -360,7 +360,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeOAuthError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
-	if errors.Is(err, oauth.ErrOAuthInvalidClient) {
+	if errors.Is(err, authserver.ErrOAuthInvalidClient) {
 		status = http.StatusUnauthorized
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})

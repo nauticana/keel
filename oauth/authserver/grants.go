@@ -1,13 +1,15 @@
-package oauth
+package authserver
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
 
@@ -56,14 +58,14 @@ func (i *oauthIssuer) boundScopes(requested, clientScopes []string) ([]string, e
 // starts a new rotation family; a non-empty familyID continues one (refresh).
 func (i *oauthIssuer) issue(ctx context.Context, sub string, userID, partnerID int64, clientID string, scopes []string, resource, familyID, rotateFromHash string, withRefresh bool) (*port.TokenResponse, error) {
 	now := time.Now()
-	if resource != "" && !contains(i.resources, resource) {
+	if resource != "" && !slices.Contains(i.resources, resource) {
 		return nil, ErrOAuthInvalidTarget
 	}
 	aud := resource
 	if aud == "" {
 		aud = i.defaultAud
 	}
-	claims := map[string]any{
+	claimSet := map[string]any{
 		"iss":       i.issuer,
 		"sub":       sub,
 		"aud":       aud,
@@ -73,9 +75,9 @@ func (i *oauthIssuer) issue(ctx context.Context, sub string, userID, partnerID i
 		"client_id": clientID,
 	}
 	if partnerID > 0 {
-		claims["partner_id"] = partnerID
+		claimSet["partner_id"] = partnerID
 	}
-	access, err := i.signer.Sign(ctx, claims)
+	access, err := i.signer.Sign(ctx, claimSet)
 	if err != nil {
 		return nil, err
 	}
@@ -86,19 +88,19 @@ func (i *oauthIssuer) issue(ctx context.Context, sub string, userID, partnerID i
 		Scope:       strings.Join(scopes, " "),
 	}
 	if withRefresh {
-		raw, err := oauthRandToken()
+		raw, err := randToken()
 		if err != nil {
 			return nil, err
 		}
 		fam := familyID
 		if fam == "" {
-			fam, err = oauthRandToken()
+			fam, err = randToken()
 			if err != nil {
 				return nil, err
 			}
 		}
 		rt := &port.RefreshToken{
-			TokenHash: oauthHash(raw),
+			TokenHash: hashToken(raw),
 			FamilyID:  fam,
 			ClientID:  clientID,
 			UserID:    userID,
@@ -156,7 +158,7 @@ func (g *authorizationCodeGrant) Handle(ctx context.Context, req port.TokenReque
 	}
 	sub := subjectForUser(code.UserID)
 	// Only mint a refresh token if the client registered the refresh_token grant.
-	withRefresh := contains(client.GrantTypes, "refresh_token")
+	withRefresh := slices.Contains(client.GrantTypes, "refresh_token")
 	return g.issuer.issue(ctx, sub, code.UserID, code.PartnerID, client.ClientID, code.Scopes, code.Resource, "", "", withRefresh)
 }
 
@@ -172,7 +174,7 @@ func (g *refreshTokenGrant) Handle(ctx context.Context, req port.TokenRequest, c
 	if req.RefreshToken == "" {
 		return nil, ErrOAuthInvalidRequest
 	}
-	stored, err := g.tokens.GetRefreshToken(ctx, oauthHash(req.RefreshToken))
+	stored, err := g.tokens.GetRefreshToken(ctx, hashToken(req.RefreshToken))
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +258,7 @@ func (g *tokenExchangeGrant) Handle(ctx context.Context, req port.TokenRequest, 
 	if !isSubset(requested, principal.Scopes) || !isSubset(requested, g.issuer.clientGrantable(client.Scopes)) {
 		return nil, ErrOAuthInvalidScope
 	}
-	partnerID := claimInt64(principal.Claims["partner_id"])
+	partnerID := claims.Int64(principal.Claims["partner_id"])
 	return g.issuer.issue(ctx, principal.Subject, 0, partnerID, client.ClientID, requested, req.Resource, "", "", false)
 }
 

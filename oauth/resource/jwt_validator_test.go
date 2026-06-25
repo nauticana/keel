@@ -1,4 +1,4 @@
-package oauth
+package resource
 
 import (
 	"testing"
@@ -56,5 +56,5 @@ func TestOAuthResourceMiddleware_NilValidatorPanics(t *testing.T) {
 			t.Fatal("want panic wiring a nil validator")
 		}
 	}()
-	OAuthResourceMiddleware(nil, "", nil, nil)
+	Middleware(nil, "", nil, nil)
 }

@@ -1,4 +1,4 @@
-package oauth
+package resource
 
 import (
 	"context"
@@ -35,7 +35,7 @@ func serve(mw func(http.Handler) http.Handler, next http.Handler, setup func(*ht
 func ok200(http.ResponseWriter, *http.Request) {}
 
 func TestOAuthResourceMiddleware_MissingToken(t *testing.T) {
-	mw := OAuthResourceMiddleware(stubValidator{}, "https://r/"+ProtectedResourceMetadataPath, nil, nil)
+	mw := Middleware(stubValidator{}, "https://r/"+ProtectedResourceMetadataPath, nil, nil)
 	rec := serve(mw, http.HandlerFunc(ok200), nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", rec.Code)
@@ -46,7 +46,7 @@ func TestOAuthResourceMiddleware_MissingToken(t *testing.T) {
 }
 
 func TestOAuthResourceMiddleware_InvalidToken(t *testing.T) {
-	mw := OAuthResourceMiddleware(stubValidator{err: errors.New("bad")}, "https://r/m", nil, nil)
+	mw := Middleware(stubValidator{err: errors.New("bad")}, "https://r/m", nil, nil)
 	rec := serve(mw, http.HandlerFunc(ok200), func(r *http.Request) {
 		r.Header.Set("Authorization", "Bearer nope")
 	})
@@ -61,7 +61,7 @@ func TestOAuthResourceMiddleware_InvalidToken(t *testing.T) {
 func TestOAuthResourceMiddleware_ValidInjectsContext(t *testing.T) {
 	principal := &port.Principal{Subject: "sub-1", Scopes: []string{"read", "write"}}
 	resolve := func(context.Context, *port.Principal) (int64, error) { return 42, nil }
-	mw := OAuthResourceMiddleware(stubValidator{principal: principal}, "", nil, resolve)
+	mw := Middleware(stubValidator{principal: principal}, "", nil, resolve)
 
 	var gotPartner int64
 	var gotScopes string
@@ -103,14 +103,5 @@ func TestProtectedResourceMetadataHandler(t *testing.T) {
 	}
 	if len(got.BearerMethodsSupported) != 1 || got.BearerMethodsSupported[0] != "header" {
 		t.Fatalf("want default bearer_methods_supported=[header], got %v", got.BearerMethodsSupported)
-	}
-}
-
-func TestScopeClaim(t *testing.T) {
-	if got := scopeClaim(map[string]any{"scope": "a b c"}); strings.Join(got, ",") != "a,b,c" {
-		t.Fatalf("scope string parse: %v", got)
-	}
-	if got := scopeClaim(map[string]any{"scp": []any{"x", "y"}}); strings.Join(got, ",") != "x,y" {
-		t.Fatalf("scp array parse: %v", got)
 	}
 }

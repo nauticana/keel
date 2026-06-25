@@ -61,7 +61,7 @@ func APIKeyAuthMiddleware(apiKeys *APIKeyService, journal logger.ApplicationLogg
 }
 
 // QuotaMiddleware enforces per-partner quota after authentication, reading
-// partner_id from context (set by APIKeyAuthMiddleware or OAuthResourceMiddleware)
+// partner_id from context (set by APIKeyAuthMiddleware or oauth/resource.Middleware)
 // so one gate serves every auth method. Requests with no partner (anonymous
 // OAuth) pass through — gate those with an IP/client limiter if needed. 429 over
 // quota, 500 on quota-service error; usage is logged async on success.
