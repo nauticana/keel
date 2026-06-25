@@ -75,3 +75,21 @@ func TestDecodeKEK(t *testing.T) {
 		t.Fatal("non-hex KEK accepted")
 	}
 }
+
+func TestEncryptDecryptToken(t *testing.T) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	enc, err := EncryptToken(key, "secret-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecryptToken(key, enc)
+	if err != nil || got != "secret-token" {
+		t.Fatalf("roundtrip got %q err %v", got, err)
+	}
+	if _, err := DecryptToken(make([]byte, 32), enc); err == nil {
+		t.Error("wrong key should error")
+	}
+}

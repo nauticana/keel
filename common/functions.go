@@ -1,7 +1,10 @@
 package common
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math/big"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -214,4 +217,38 @@ func ParseDBTimestamp(s string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("unrecognised timestamp: %q", s)
+}
+
+// NullIfEmpty returns nil for a blank string so COALESCE-style UPSERTs preserve
+// existing non-NULL values instead of overwriting them with empty data.
+func NullIfEmpty(s string) interface{} {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
+}
+
+var slugInvalid = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// Slugify lowercases, turns spaces into hyphens, and drops any character outside
+// [a-z0-9-] — a URL-safe slug from a display name.
+func Slugify(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = strings.ReplaceAll(s, " ", "-")
+	return slugInvalid.ReplaceAllString(s, "")
+}
+
+// GenerateNumericCode returns a cryptographically random zero-padded numeric code
+// of the given length (e.g. 6 → "042315"), for email/SMS verification. digits
+// must be 1..18.
+func GenerateNumericCode(digits int) (string, error) {
+	if digits < 1 || digits > 18 {
+		return "", fmt.Errorf("GenerateNumericCode: digits must be 1..18, got %d", digits)
+	}
+	bound := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits)), nil)
+	n, err := rand.Int(rand.Reader, bound)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%0*d", digits, n.Int64()), nil
 }

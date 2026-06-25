@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -76,4 +77,19 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
+}
+
+// EncryptToken seals a string secret with AES-256-GCM (Seal) under a 32-byte
+// key, returning the "enc:v1:" envelope form — for tokens at rest (e.g. OAuth).
+func EncryptToken(key []byte, plaintext string) (string, error) {
+	return Seal(key, []byte(plaintext))
+}
+
+// DecryptToken reverses EncryptToken; errors on a wrong key or tampered value.
+func DecryptToken(key []byte, encoded string) (string, error) {
+	plain, ok := Open(key, encoded)
+	if !ok {
+		return "", fmt.Errorf("decrypt: invalid key or ciphertext")
+	}
+	return string(plain), nil
 }

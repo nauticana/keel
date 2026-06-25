@@ -6,6 +6,14 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.5 — `common` + `crypto` helpers, additive)
+
+Small generic helpers upstreamed from downstream services into `common` and `crypto`. **Fully additive — existing consumers compile and behave unchanged.** Bump to `github.com/nauticana/keel v1.2.5`, `go mod tidy`. One dependency change: `golang.org/x/net` becomes a direct dependency (used by `common.RegistrableDomain` for public-suffix lookup).
+
+- **`common` string / DB helpers** — `NullIfEmpty` (blank string → `nil`, so COALESCE-style UPSERTs don't overwrite existing values), `Slugify` (URL-safe slug from a display name), `GenerateNumericCode` (cryptographically-random zero-padded numeric code for email/SMS verification).
+- **`common` domain / URL helpers** (new `domain.go`) — `DomainFromEmail`, `HostFromURL`, `RegistrableDomain` (eTLD+1 via the public-suffix list), `DomainsMatch` (two hosts share a registrable domain), `IsPublicDomain` (free mailbox such as gmail).
+- **`crypto` token encryption** — `EncryptToken` / `DecryptToken`: AES-256-GCM string wrappers producing the `enc:v1:` envelope, for secrets at rest (e.g. OAuth tokens).
+
 ## Migration Guide (v1.2.4 — MCP server layer + trust guards, additive)
 
 A new MCP (Model Context Protocol) server layer plus a reusable trust-guard chain. **Fully additive — existing consumers compile and behave unchanged.** Bump to `github.com/nauticana/keel v1.2.4`, `go mod tidy`. The one dependency change: `github.com/mark3labs/mcp-go v0.46.0` becomes a direct dependency of keel (it pulls `spf13/cast` and `yosida95/uritemplate/v3`). Consumers that never import `keel/mcp` still link none of it into binaries that don't use it.
@@ -523,7 +531,7 @@ graph TD
 
 | Package | Description |
 |---------|-------------|
-| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), HTTP response utilities (`WriteJSON`, `WriteError` with RFC 7807), shared HTTP client, shared flag variables |
+| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), string/DB helpers (`NullIfEmpty`, `Slugify`, `GenerateNumericCode`, `ParseDBTimestamp`), email/URL domain helpers (`DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`), HTTP response utilities (`WriteJSON`, `WriteError` with RFC 7807), shared HTTP client, shared flag variables |
 | `model` | Domain-agnostic models: `TableDefinition`, `TableColumn`, `ForeignKey`, `UserSession`, `PasswordPolicy`, `QueryResult`, `AppError`, `UserMenu`, `DeviceToken`, `TableChangeLog` |
 | `port` | Interface definitions for all pluggable components (auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger, `TrustGuard` admission checks, `FieldCatalog` schema introspection) |
 | `data` | `AbstractRepository`, `AbstractTableService`, `DatabaseRepository` / `TxView` / `QueryService` interfaces, file-based `TableLogger`, Snowflake bigint id generator |
@@ -534,7 +542,7 @@ graph TD
 | `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
 | `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
-| `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values |
+| `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected; no mcp-go dependency. |
 | `mcp` | MCP server layer over `mark3labs/mcp-go`: `BaseServer` (stdio/SSE/Streamable HTTP), name-keyed `ToolProvider`/`ResourceProvider` registry, `{data, _meta}` `Envelopes`, `ResourceFunc` adapter, `TextBundle`. Subpackage `mcp/mcptest` ships manifest/text conformance assertions. See **MCP Server Layer** below. |
