@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/dispatcher"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
 
@@ -16,7 +16,7 @@ import (
 // GOOGLE_APPLICATION_CREDENTIALS elsewhere; see FCMPushProvider doc).
 // "noop" returns a provider that silently discards dispatches — the
 // default for non-mobile consumers.
-func NewPushProvider(ctx context.Context, users user.UserService, journal logger.ApplicationLogger) (dispatcher.MessageDispatcher, error) {
+func NewPushProvider(ctx context.Context, users user.UserService, journal logger.ApplicationLogger) (port.MessageDispatcher, error) {
 	switch *common.PushMode {
 	case "fcm":
 		return New(ctx, users, journal)

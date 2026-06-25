@@ -18,7 +18,10 @@ import "context"
 // continue to compile during migration. New code should depend on
 // MessageDispatcher directly.
 type MessageDispatcher interface {
+	// email or phone resolved from userID
 	Dispatch(ctx context.Context, userID int, title, body string, data map[string]string) error
+	// to is actual email or phone
+	Send(ctx context.Context, to string, title, body string, data map[string]string) error
 }
 
 // PushProvider is the legacy name for MessageDispatcher kept as a

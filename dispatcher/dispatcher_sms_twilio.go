@@ -13,6 +13,7 @@ import (
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
+	"github.com/nyaruka/phonenumbers"
 )
 
 // twilioSendURL is the Twilio Messages API endpoint. The %s slot is the
@@ -39,7 +40,7 @@ type TwilioSMSDispatcher struct {
 }
 
 // Compile-time check: TwilioSMSDispatcher satisfies port.MessageDispatcher.
-var _ MessageDispatcher = (*TwilioSMSDispatcher)(nil)
+var _ port.MessageDispatcher = (*TwilioSMSDispatcher)(nil)
 
 // NewTwilioSMSDispatcher pulls credentials from the secret provider and the
 // Messaging Service SID from the keel common flag --twilio_messaging_service_sid.
@@ -103,7 +104,36 @@ func (d *TwilioSMSDispatcher) Dispatch(ctx context.Context, userID int, _ string
 	if to == "" {
 		return nil
 	}
+	if err := d.post(ctx, to, body); err != nil {
+		return fmt.Errorf("twilio: user %d: %w", userID, err)
+	}
+	return nil
+}
 
+// Send delivers an SMS to an explicit recipient, skipping userID resolution —
+// for recipients that aren't users (e.g. a business contact during claim
+// verification). to may be E.164 or a national number; data["country"] is the
+// ISO-3166 region used to normalize a national number (ignored once to starts
+// with "+"). title is unused — SMS carries only a body. Empty to is a no-op.
+func (d *TwilioSMSDispatcher) Send(ctx context.Context, to, _, body string, data map[string]string) error {
+	to = strings.TrimSpace(to)
+	if to == "" {
+		return nil
+	}
+	e164, err := ToE164(to, data["country"])
+	if err != nil {
+		return fmt.Errorf("twilio: %w", err)
+	}
+	if err := d.post(ctx, e164, body); err != nil {
+		return fmt.Errorf("twilio: %w", err)
+	}
+	return nil
+}
+
+// post performs the Twilio Messages API call to an E.164 recipient. Errors are
+// recipient-free so callers add their own context (user id, or none) without
+// leaking the phone number into logs.
+func (d *TwilioSMSDispatcher) post(ctx context.Context, to, body string) error {
 	form := url.Values{}
 	form.Set("To", to)
 	form.Set("Body", body)
@@ -112,7 +142,7 @@ func (d *TwilioSMSDispatcher) Dispatch(ctx context.Context, userID int, _ string
 	endpoint := fmt.Sprintf(twilioSendURL, d.accountSID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return fmt.Errorf("twilio: build request: %w", err)
+		return fmt.Errorf("build request: %w", err)
 	}
 	req.SetBasicAuth(d.accountSID, d.authToken)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -120,7 +150,7 @@ func (d *TwilioSMSDispatcher) Dispatch(ctx context.Context, userID int, _ string
 
 	resp, err := d.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("twilio: send to user %d: %w", userID, err)
+		return fmt.Errorf("send: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -138,5 +168,21 @@ func (d *TwilioSMSDispatcher) Dispatch(ctx context.Context, userID int, _ string
 		return nil
 	}
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	return fmt.Errorf("twilio: user %d: http %d: %s", userID, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	return fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+}
+
+func ToE164(phone, isoCountry string) (string, error) {
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return "", fmt.Errorf("phone is empty")
+	}
+	region := strings.ToUpper(strings.TrimSpace(isoCountry))
+	num, err := phonenumbers.Parse(phone, region)
+	if err != nil {
+		return "", fmt.Errorf("parse phone %q (region %q): %w", phone, region, err)
+	}
+	if !phonenumbers.IsValidNumber(num) {
+		return "", fmt.Errorf("invalid phone number %q for region %q", phone, region)
+	}
+	return phonenumbers.Format(num, phonenumbers.E164), nil
 }

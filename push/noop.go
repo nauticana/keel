@@ -3,7 +3,7 @@ package push
 import (
 	"context"
 
-	"github.com/nauticana/keel/dispatcher"
+	"github.com/nauticana/keel/port"
 )
 
 // NoOpPushProvider drops every Dispatch call. Wired for non-mobile consumers and for local development where FCM credentials are unavailable. Always safe; never errors.
@@ -13,4 +13,8 @@ func (NoOpPushProvider) Dispatch(_ context.Context, _ int, _, _ string, _ map[st
 	return nil
 }
 
-var _ dispatcher.MessageDispatcher = NoOpPushProvider{}
+func (NoOpPushProvider) Send(_ context.Context, _, _, _ string, _ map[string]string) error {
+	return nil
+}
+
+var _ port.MessageDispatcher = NoOpPushProvider{}

@@ -6,6 +6,30 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.8 — `MessageDispatcher.Send` + explicit-recipient routing)
+
+`MessageDispatcher` gains a `Send` method that delivers to an **explicit** address (email / phone / device token), alongside the existing `Dispatch`, which resolves the address from a `userID`:
+
+```go
+type MessageDispatcher interface {
+    Dispatch(ctx context.Context, userID int, title, body string, data map[string]string) error // address resolved from userID
+    Send(ctx context.Context, to string, title, body string, data map[string]string) error      // explicit address
+}
+```
+
+**Breaking for custom dispatchers:** any consumer-supplied `MessageDispatcher` must add a `Send` method — the keel-shipped dispatchers (email, SMS, FCM, no-op) already have it. Bump to `github.com/nauticana/keel v1.2.8`, `go mod tidy`.
+
+`NotificationRequest` also gains a `To` field: `LocalNotificationService.Send` routes to the dispatcher's `Send` when `To` is set, else falls back to `Dispatch(UserID, …)`. For SMS to a national number, pass the ISO-3166 region in `Data["country"]` so it normalizes to E.164 (a `+…` number passes through and the region is ignored):
+
+```go
+notif.Send(ctx, port.NotificationRequest{
+    Channel: "sms",
+    To:      "9493946318", // national; "+19493946318" works too
+    Data:    map[string]string{"country": "US"},
+    Body:    "Your code is 123456",
+})
+```
+
 ## Migration Guide (v1.2.6 — OAuth client framework + `oauth/` role subpackages)
 
 Two changes ship together. **(A)** a new OAuth 2.1 **client** framework (`oauth/client`) — additive. **(B)** the flat `oauth` package is split by OAuth role into subpackages — a mechanical **import-path break** for the existing AS/RS symbols (no behavior, DB, or flag change). Bump to `github.com/nauticana/keel v1.2.6`, `go mod tidy`. (`golang.org/x/oauth2` is already a keel dependency.)
@@ -1538,19 +1562,28 @@ Keel exposes a channel-keyed dispatcher abstraction so consumer code can fire `n
 
 ### `port.MessageDispatcher`
 
-Single-channel delivery contract — implementations resolve `userID` to the channel-specific address and send. Returning `nil` when the user has no usable address for the channel is correct (the channel-level "nobody to notify" no-op); reserve non-nil errors for transport failures.
+Single-channel delivery contract with two entry points. **`Dispatch`** resolves a `userID` to the channel-specific address (via `RecipientResolver`) and sends. **`Send`** delivers to an explicit `to` address — for recipients that aren't users (e.g. a business contact during claim verification). Returning `nil` for an empty/absent address is correct (the channel-level "nobody to notify" no-op); reserve non-nil errors for transport failures.
 
 ```go
 type MessageDispatcher interface {
     Dispatch(ctx context.Context, userID int, title, body string, data map[string]string) error
+    Send(ctx context.Context, to string, title, body string, data map[string]string) error
 }
 ```
+
+`Send`'s arguments carry per-channel meaning:
+
+- **Email** — `to` = address, `title` = subject, `body` = text.
+- **SMS** — `to` = E.164 or a national number; `data["country"]` = ISO-3166 region used to normalize a national number to E.164 (ignored once `to` starts with `+`); `title` is unused (SMS has no subject).
+- **Push** — `to` = device token; `title`/`body` = the notification. Unlike `Dispatch`, `Send` can't auto-revoke a stale token (no userID), so the caller handles delivery errors.
+
+> Note the two same-named methods at different layers: `NotificationService.Send(req)` is the **router** (picks a channel, then calls `Dispatch` or the dispatcher's `Send`); `MessageDispatcher.Send(ctx, to, …)` is a **channel's** explicit-address delivery.
 
 `port.PushProvider` is now a deprecated alias of `MessageDispatcher` (same shape). FCM continues to satisfy both names; new code should depend on `MessageDispatcher`.
 
 ### `dispatcher.LocalNotificationService` — registry + router
 
-Default keel implementation of `port.NotificationService`. Holds a channel name → dispatcher map; `Send(req)` routes by `req.Channel`:
+Default keel implementation of `port.NotificationService`. Holds a channel name → dispatcher map; `Send(req)` routes by `req.Channel`, then delivers via the dispatcher's `Send` when `req.To` is set (explicit recipient) or `Dispatch` otherwise (resolve from `req.UserID`):
 
 ```go
 notif := dispatcher.NewLocalNotificationService()
@@ -1558,11 +1591,20 @@ notif.Register("email", &dispatcher.EmailDispatcher{Mail: mailClient, Users: use
 notif.Register("push",  fcmProvider)             // FCMPushProvider satisfies MessageDispatcher
 notif.Register("sms",   twilioSMS)               // TwilioSMSDispatcher (keel-shipped)
 
+// Resolve the recipient from a userID:
 err := notif.Send(ctx, port.NotificationRequest{
     UserID:  42,
     Channel: "email",
     Title:   "Receipt",
     Body:    "Thanks for your order…",
+})
+
+// …or deliver to an explicit address (no userID needed):
+err = notif.Send(ctx, port.NotificationRequest{
+    Channel: "sms",
+    To:      "9493946318",
+    Data:    map[string]string{"country": "US"}, // → +19493946318
+    Body:    "Your verification code is 123456",
 })
 ```
 

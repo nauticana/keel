@@ -3,12 +3,13 @@ package push
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
 
-	"github.com/nauticana/keel/dispatcher"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
 
@@ -113,4 +114,24 @@ func (p *FCMPushProvider) Dispatch(ctx context.Context, userID int, title, body 
 	return nil
 }
 
-var _ dispatcher.MessageDispatcher = (*FCMPushProvider)(nil)
+// Send delivers a push notification to an explicit device token, skipping
+// userID resolution. Unlike Dispatch it can't auto-revoke a stale token (no
+// userID to revoke against) — the caller handles delivery errors. Empty to is
+// a no-op.
+func (p *FCMPushProvider) Send(ctx context.Context, to, title, body string, data map[string]string) error {
+	to = strings.TrimSpace(to)
+	if to == "" {
+		return nil
+	}
+	msg := &messaging.Message{
+		Token:        to,
+		Notification: &messaging.Notification{Title: title, Body: body},
+		Data:         data,
+	}
+	if _, err := p.client.Send(ctx, msg); err != nil {
+		return fmt.Errorf("push: FCM send to token: %w", err)
+	}
+	return nil
+}
+
+var _ port.MessageDispatcher = (*FCMPushProvider)(nil)

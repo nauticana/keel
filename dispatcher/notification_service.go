@@ -24,7 +24,7 @@ import (
 // failed". Concurrent Register and Send are safe.
 type LocalNotificationService struct {
 	mu          sync.RWMutex
-	dispatchers map[string]MessageDispatcher
+	dispatchers map[string]port.MessageDispatcher
 }
 
 // Compile-time check: LocalNotificationService satisfies port.NotificationService.
@@ -34,13 +34,13 @@ var _ port.NotificationService = (*LocalNotificationService)(nil)
 // dispatchers registered. Call Register at app startup for each channel
 // the deployment supports.
 func NewLocalNotificationService() *LocalNotificationService {
-	return &LocalNotificationService{dispatchers: make(map[string]MessageDispatcher)}
+	return &LocalNotificationService{dispatchers: make(map[string]port.MessageDispatcher)}
 }
 
 // Register binds a MessageDispatcher to a channel name. Re-registering
 // the same channel overwrites the previous dispatcher — useful for tests.
 // Empty channel or nil dispatcher is silently ignored.
-func (s *LocalNotificationService) Register(channel string, d MessageDispatcher) {
+func (s *LocalNotificationService) Register(channel string, d port.MessageDispatcher) {
 	if channel == "" || d == nil {
 		return
 	}
@@ -73,6 +73,11 @@ func (s *LocalNotificationService) Send(ctx context.Context, req port.Notificati
 	s.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("notification: no dispatcher registered for channel %q", req.Channel)
+	}
+	// An explicit address routes to Send (no userID resolution); otherwise
+	// resolve the recipient from UserID via Dispatch.
+	if req.To != "" {
+		return d.Send(ctx, req.To, req.Title, req.Body, req.Data)
 	}
 	return d.Dispatch(ctx, req.UserID, req.Title, req.Body, req.Data)
 }
