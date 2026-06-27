@@ -2,7 +2,10 @@ package common
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	maps0 "maps"
 	"math/big"
 	"regexp"
 	"strings"
@@ -251,4 +254,23 @@ func GenerateNumericCode(digits int) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%0*d", digits, n.Int64()), nil
+}
+
+// Sha256Hex returns the hex-encoded SHA-256 of s. Used for content drift
+// detection / change keys (not for passwords — use a KDF for those).
+func Sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// MergeMaps returns a new map combining all inputs; later maps win on key
+// collisions. Inputs are never mutated — use it to assemble a worker's
+// GetOLTPQueries() from several named-query sets without aliasing (and
+// accidentally mutating) the shared source maps.
+func MergeMaps[K comparable, V any](maps ...map[K]V) map[K]V {
+	out := make(map[K]V)
+	for _, m := range maps {
+		maps0.Copy(out, m)
+	}
+	return out
 }

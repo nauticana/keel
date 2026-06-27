@@ -53,12 +53,12 @@ type JobExecutor struct {
 	Caption     string
 	Interval    int
 	Journal     logger.ApplicationLogger
-	Worker      JobWorker
+	Worker      Worker
 	NewDatabase func(ctx context.Context, sp secret.SecretProvider) (data.DatabaseRepository, error)
 	NewQuota    func(db data.DatabaseRepository) port.QuotaService
 
 	// Storage is the optional object-storage backend selected by
-	// --storage_mode, populated by RunDefault when the flag is set (nil
+	// --storage_mode, populated by AbstractWorker.Run when the flag is set (nil
 	// otherwise). ProcessQueue does not receive it as a parameter to keep
 	// the JobWorker interface stable; workers that need storage should hold
 	// a reference to their JobExecutor, or build their own via
@@ -110,6 +110,15 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 		qsOLTP = dbOLTP.GetQueryService(ctx, oltpQueries)
 	}
 	e.registerService(ctx, dbOLTP.GetQueryService(ctx, ServiceQueries), e.Caption)
+
+	// QueueWorker drains via a JobLoop the framework owns; build it once (QS +
+	// query names are static) and reuse it each tick.
+	var loop *JobLoop
+	if qw, ok := e.Worker.(QueueWorker); ok {
+		pending, claim, reclaim, name := qw.QueueQueries()
+		loop = &JobLoop{QS: qsOLTP, Journal: e.Journal, GetPendingQuery: pending, ClaimQuery: claim, ReclaimQuery: reclaim, WorkerName: name}
+	}
+
 	ticker := time.NewTicker(time.Duration(e.Interval) * time.Second)
 	defer ticker.Stop()
 	for {
@@ -117,24 +126,31 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			// P1-54: panic recovery so a single bad job doesn't
-			// take down the daemon. The recover'd error is logged;
-			// the next tick re-runs ProcessQueue cleanly.
-			e.runProcessQueue(ctx, dbOLTP, quotaService, qsOLTP)
+			e.runTick(ctx, dbOLTP, quotaService, qsOLTP, loop)
 		}
 	}
 }
 
-// runProcessQueue invokes Worker.ProcessQueue inside a panic-safety
-// barrier. Crashes inside user-supplied job handlers must not kill
-// the executor — the next tick should re-attempt processing.
-func (e *JobExecutor) runProcessQueue(ctx context.Context, dbOLTP data.DatabaseRepository, quotaService port.QuotaService, qsOLTP data.QueryService) {
+// runTick runs one pass in a panic barrier so a single bad job can't kill the
+// daemon. A QueueWorker is drained via its JobLoop; a JobWorker drives its own
+// ProcessQueue.
+func (e *JobExecutor) runTick(ctx context.Context, dbOLTP data.DatabaseRepository, quotaService port.QuotaService, qsOLTP data.QueryService, loop *JobLoop) {
 	defer func() {
 		if r := recover(); r != nil {
-			e.Journal.Error(fmt.Sprintf("worker: ProcessQueue panic recovered: %v", r))
+			e.Journal.Error(fmt.Sprintf("worker: tick panic recovered: %v", r))
 		}
 	}()
-	e.Worker.ProcessQueue(ctx, e.Journal, dbOLTP, quotaService, qsOLTP)
+	switch w := e.Worker.(type) {
+	case QueueWorker:
+		loop.Reclaim(ctx)
+		loop.Run(ctx, func(ctx context.Context, jobID int64, row []any) error {
+			return w.HandleJob(ctx, e.Journal, dbOLTP, quotaService, qsOLTP, jobID, row)
+		})
+	case JobWorker:
+		w.ProcessQueue(ctx, e.Journal, dbOLTP, quotaService, qsOLTP)
+	default:
+		e.Journal.Error("worker: implements neither QueueWorker nor JobWorker")
+	}
 }
 
 func (e *JobExecutor) registerService(ctx context.Context, qs data.QueryService, serviceName string) {

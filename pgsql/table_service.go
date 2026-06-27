@@ -13,17 +13,23 @@ import (
 	"github.com/nauticana/keel/model"
 )
 
-// scopePartnerFilter pins a PartnerSpecific query to the session's
-// partner: an absent partner_id falls back to it; a caller-supplied
-// foreign partner_id is coerced back unless the caller holds a global
-// (cross-partner) role. System callers (userID<=0) and the relation
-// cascade — where partner_id already equals the session's — pass through.
+// scopePartnerFilter pins a PartnerSpecific query to the caller's partner: a
+// foreign partner_id is coerced to the caller's scope (to 0 — no rows — for a
+// user with no partner) unless the caller holds a global role or is a trusted
+// system caller (no user AND no partner scope). So API-key callers (userID==0,
+// partnerID>0) can't read another tenant via ?partner_id, and a user with no
+// partner (e.g. a cross-partner rider) can't read a partner through generic
+// CRUD — that access belongs in a custom owner-scoped (user_id) handler.
 func scopePartnerFilter(where map[string]any, partnerID int64, userID int, globalRole bool) {
 	supplied, set := where["partner_id"]
 	switch {
 	case !set:
 		where["partner_id"] = partnerID
-	case userID > 0 && common.AsInt64(supplied) != partnerID && !globalRole:
+	case globalRole:
+		// cross-partner role: honor the supplied partner_id.
+	case userID <= 0 && partnerID <= 0:
+		// trusted system caller with no scope (worker/job): honor the filter.
+	case common.AsInt64(supplied) != partnerID:
 		where["partner_id"] = partnerID
 	}
 }

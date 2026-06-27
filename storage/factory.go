@@ -21,8 +21,8 @@ import (
 //
 // An empty mode is treated as a configuration error: callers that want
 // storage to be optional should check *common.StorageMode == "" themselves
-// and skip wiring (RunDefault does exactly this) rather than relying on a
-// nil backend.
+// and skip wiring (AbstractWorker.Run does exactly this) rather than relying on
+// a nil backend.
 func New(ctx context.Context, mode string) (ObjectStorage, error) {
 	switch mode {
 	case "s3":

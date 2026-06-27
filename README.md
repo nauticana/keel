@@ -6,6 +6,16 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.9 — tenant-scope hardening + worker/common helpers)
+
+**Security — tenant-scope hardening (behavior change, action: review).** `scopePartnerFilter` (generic-CRUD `Get`/`List` on PartnerSpecific tables) now coerces a caller-supplied foreign `partner_id` to the caller's scope **unless** the caller holds a global role or is a trusted system caller (no user AND no partner scope — `userID <= 0 && partnerID <= 0`, e.g. a worker). Previously coercion was gated on `userID > 0`, so **API-key callers (`userID == 0`, `partnerID > 0`) could read another tenant's rows by passing `?partner_id=<other>`** (cross-tenant IDOR). Two consequences after upgrading: (1) API-key REST callers are confined to their key's partner; (2) a **user with no partner** (`userID > 0`, `partnerID == 0`) is coerced to `partner_id = 0` (no rows) on PartnerSpecific generic CRUD — cross-partner user access (e.g. a ride-sharing rider whose data spans partners) must go through a **custom owner-scoped (`user_id`) handler/UserSpecific table**, not generic partner CRUD. Workers/system callers (`partnerID <= 0`, no user) and global roles are unaffected. No call-site change — re-test any API-key surface and any cross-partner *user* read.
+
+**Additive — `worker.QueueWorker` + `worker.JobLoop` (framework-owned queue drain).** Implement `QueueQueries` + `HandleJob` (one job) and `JobExecutor` builds a `JobLoop` and drives reclaim → poll → atomic claim → handle each tick — no hand-rolled `ProcessQueue`. `JobWorker`/`ProcessQueue` workers are unaffected. See [How the background job scheduler works](#how-the-background-job-scheduler-works) for the three-layer design (process / drain / one job).
+
+**Worker bootstrap — `worker.AbstractWorker` replaces `RunDefault`/`RunDefaultFactory` (action: migrate).** The free-function entry points are gone. Embed `worker.AbstractWorker`, set `Caption`/`Interval`/`HCPort`, implement only `ProcessQueue` + `GetOLTPQueries`, then call `w.Run(ctx, w)` from main. `Run` builds the runtime and publishes the secret provider on `.Secret` before the loop, so AI/OAuth workers no longer inject it from `main` (this is what `RunDefaultFactory` was for). Convert each `worker.RunDefault(ctx, caption, n, &W{})` main to a `&W{AbstractWorker{Caption, Interval, HCPort}}` + `w.Run(ctx, w)`.
+
+**Additive — `common.MergeMaps[K,V](maps…)`** (non-mutating map merge — assemble `GetOLTPQueries()` from several named-query sets without aliasing the sources) and **`common.Sha256Hex(s)`** (hex SHA-256 for content-drift keys).
+
 ## Migration Guide (v1.2.8 — `MessageDispatcher.Send` + explicit-recipient routing)
 
 `MessageDispatcher` gains a `Send` method that delivers to an **explicit** address (email / phone / device token), alongside the existing `Dispatch`, which resolves the address from a `userID`:
@@ -630,7 +640,7 @@ graph TD
 | `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
-| `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `RunDefault`, the one-call worker bootstrap |
+| `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
 ## Quick Start
@@ -724,7 +734,7 @@ for name, api := range apis {
 
 ### 4. Run a background worker
 
-For binaries that don't need a custom database/quota wiring, `worker.RunDefault` is the one-call entry point:
+For binaries that don't need custom database/quota wiring, embed `worker.AbstractWorker` and call `w.Run(ctx, w)` — it is the one-call entry point:
 
 ```go
 import (
@@ -733,18 +743,26 @@ import (
     "log"
 
     "github.com/nauticana/keel/worker"
-    yourworker "yourapp/internal/worker"
 )
+
+type AnalyticsWorker struct {
+    worker.AbstractWorker // supplies GetHealthcheckPort + Run; reads .Secret in ProcessQueue
+}
+
+func (w *AnalyticsWorker) GetOLTPQueries() map[string]string { return analyticsQueries }
+func (w *AnalyticsWorker) ProcessQueue(ctx context.Context, journal logger.ApplicationLogger,
+    db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService) { /* ... */ }
 
 func main() {
     flag.Parse()
-    if err := worker.RunDefault(context.Background(), "analytics", 3600, &yourworker.AnalyticsWorker{}); err != nil {
+    w := &AnalyticsWorker{worker.AbstractWorker{Caption: "analytics", Interval: 3600, HCPort: 8108}}
+    if err := w.Run(context.Background(), w); err != nil {
         log.Fatal(err)
     }
 }
 ```
 
-`RunDefault` builds the standard logger, secret provider, snowflake id generator, pgsql database, and `QuotaServiceDb` — wires them into a `JobExecutor` and runs the loop. Worker types must implement `port.JobWorker` (`GetHealthcheckPort`, `ProcessQueue`, `GetOLTPQueries`).
+`Run` builds the standard logger, secret provider, snowflake id generator, pgsql database, and `QuotaServiceDb`, publishes the secret provider on `.Secret` before the loop, wires everything into a `JobExecutor`, and runs. The embedder implements only `GetOLTPQueries` plus **one processing contract** — `worker.JobWorker` (`ProcessQueue`, shown above) or `worker.QueueWorker` (`QueueQueries` + `HandleJob`, see the next section); `GetHealthcheckPort` comes from `AbstractWorker`. The `, w` is the concrete instance ("self") — Go has no virtual dispatch, so the embedded base can't reach the embedder's processing methods without it.
 
 Use `JobExecutor` directly when you need to inject extra services or a non-default database flavor:
 
@@ -763,6 +781,58 @@ executor := &worker.JobExecutor{
 }
 executor.Run(ctx, secrets)
 ```
+
+### How the background job scheduler works
+
+keel's background processing is **three layers, each at a different cadence**. Keeping them separate is what makes the design robust: each layer is independently testable and reusable, and a single bad job can never take down the daemon.
+
+```
+main: w := &PublishWorker{AbstractWorker{Caption, Interval, HCPort}}; w.Run(ctx, w)
+  │
+  ├─ AbstractWorker.Run            ── once at startup ──
+  │     logger → secret provider (published on .Secret) → snowflake → storage → JobExecutor → Run
+  │
+  ├─ JobExecutor                   ── the PROCESS: 1 per binary, runs forever ──
+  │     health server, service-registry + heartbeat, build db/quota/qs ONCE, panic barrier, ticker
+  │     every Interval seconds → one tick:
+  │        │
+  │        ├─ JobLoop              ── the DRAIN of ONE queue: per tick ──
+  │        │     Reclaim(ctx)            demote stale 'A' claims (crashed runs) → 'P'
+  │        │     Run(ctx, handle):       poll pending → claim each atomically → if won:
+  │        │        │
+  │        │        └─ HandleJob   ── ONE job: per claimed row ──
+  │        │              the worker's business logic for a single job; returns error
+```
+
+| Layer | Type | Scope / cadence | Responsibility |
+|---|---|---|---|
+| Process | `JobExecutor` | one per binary, runs forever | health check, service registry + heartbeat, build db/quota/QS once, ticker, panic recovery |
+| Drain | `JobLoop` | one per queue, per tick | reclaim stale claims, poll pending, claim atomically, dispatch each claimed job |
+| One job | `HandleJob` / `ProcessQueue` | per claimed row / per tick | the worker's business logic |
+
+**Two worker contracts.** A worker implements exactly one:
+
+- **`QueueWorker`** (recommended for queue drainers) — supply the queue identity and one-job logic; the framework owns the drain. `JobExecutor` detects the contract, builds the `JobLoop` once, and drives `Reclaim` + `Run(HandleJob)` each tick:
+
+  ```go
+  type PublishWorker struct{ worker.AbstractWorker }
+
+  func (w *PublishWorker) GetOLTPQueries() map[string]string { return publishQueries }
+  func (w *PublishWorker) QueueQueries() (pending, claim, reclaim, name string) {
+      return qPendingPublish, qClaimPublish, qReclaimPublish, "publish"
+  }
+  func (w *PublishWorker) HandleJob(ctx context.Context, journal logger.ApplicationLogger,
+      db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService,
+      jobID int64, row []any) error {
+      // process exactly one job; return err to surface it loudly (framework logs it)
+  }
+  ```
+
+- **`JobWorker`** (custom / multi-queue / non-queue) — own the whole per-tick pass in `ProcessQueue`. Use this when a tick drains several queues (run multiple `JobLoop`s yourself) or does non-queue work (aggregation, sweeps).
+
+**Why `JobLoop` is a separate class, not folded into `JobExecutor`:** (1) one process can drain several queues — N loops per tick; (2) it is unit-testable with a fake `QueryService` (claim-won / claim-lost / reclaim / handler-error paths) with no HTTP/registry/ticker scaffolding; (3) it is reusable outside a daemon (a CLI one-shot drain or backfill). `JobExecutor` *drives* a `JobLoop`; it does not *become* one. The driver lives in `JobExecutor` because that is where the worker is held as an interface, so it can call `HandleJob` polymorphically.
+
+**Queue table convention.** Status flows `P` (pending) → `A` (active/claimed) → done, with `R` for retry. The claim is an atomic `UPDATE … SET status='A' WHERE id=? AND status IN ('P','R') RETURNING id` so two nodes can't both win. `Reclaim` demotes rows stuck in `A` (a worker that crashed mid-job) back to `P` after a grace period. Route a retryable failure to `R` with a `scheduled_time`, and have the pending query select `R` rows whose time has arrived — backoff is a handler concern, not the loop's.
 
 ## Quota Service
 
@@ -2092,7 +2162,7 @@ Selection is driven by flag variables:
 - `--log_type=local|gcp|aws|azure`
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
 - `--storage_mode=s3|gcs|azure`
-  - Build a backend with `storage.New(ctx, *common.StorageMode)`; it is also wired onto `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.RunDefault` when `--storage_mode` is set), so app code calls `svc.Storage.Upload(...)` and `svc.Storage.PublicURL(...)`. Empty `--storage_mode` disables storage (the field stays `nil`).
+  - Build a backend with `storage.New(ctx, *common.StorageMode)`; it is also wired onto `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.AbstractWorker.Run` when `--storage_mode` is set), so app code calls `svc.Storage.Upload(...)` and `svc.Storage.PublicURL(...)`. Empty `--storage_mode` disables storage (the field stays `nil`).
   - **Cloudflare R2 / S3-compatible**: use `s3` plus `--s3_endpoint=https://<account>.r2.cloudflarestorage.com` (this switches the client to path-style addressing). `--s3_endpoint` replaces the former `S3_ENDPOINT` env var. AWS/R2 credentials still resolve through the AWS SDK's own chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `AWS_REGION=auto` for R2) — that is the SDK's concern, not a keel knob.
   - **Public URLs**: `ObjectStorage.PublicURL(bucket, key)` returns a stable, non-expiring served URL (no signing, no API call) for publicly-readable buckets. GCS → `https://storage.googleapis.com/<bucket>/<key>`; S3/R2 → `<--storage_public_base_url>/<key>` (set `--storage_public_base_url` to an R2 custom domain or `*.r2.dev` host — the bucket is not in the path because the domain already maps to it; empty returns `""`); Azure → `<account-url>/<container>/<key>`. Use `GetSignedURL` instead when the bucket is private.
   - **Azure**: requires `--storage_account_url=https://<account>.blob.core.windows.net/`; auth via `azidentity.DefaultAzureCredential`.
@@ -3089,7 +3159,7 @@ keel/
 │                              #   ConsentService
 ├── service/                   # APIKeyService + JWT/API-key middleware + HttpBackend + QuotaServiceDb
 ├── dispatcher/                # MailClient + LocalNotificationService + Email & Twilio dispatchers
-├── worker/                    # JobExecutor + RunDefault one-call bootstrap
+├── worker/                    # JobExecutor + AbstractWorker one-call bootstrap
 ├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault / Infisical + factory
 ├── logger/                    # File / GCP Cloud Logging / AWS CloudWatch / Azure Monitor Logs + factory
 ├── cache/                     # Redis / Valkey single-node + cluster + NoOp fallback
