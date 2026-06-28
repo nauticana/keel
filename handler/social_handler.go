@@ -2,6 +2,9 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -10,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/user"
 )
@@ -25,6 +29,9 @@ const (
 	googleIssuer1 = "https://accounts.google.com"
 	googleIssuer2 = "accounts.google.com"
 	appleIssuer   = "https://appleid.apple.com"
+
+	socialNonceKey = "social_nonce:"
+	socialNonceTTL = 10 * time.Minute
 )
 
 // Lazy package-scoped JWKs providers. Constructed on first use so the
@@ -54,10 +61,19 @@ func getAppleJWKs() *jwksProvider {
 // SocialLoginHandler handles OAuth/social login (Google, Apple).
 type SocialLoginHandler struct {
 	AbstractHandler
+	// NonceCache, when set, turns on single-use nonce binding: a GET issues,
+	// the POST login requires + consumes. Nil = nonce check off.
+	NonceCache cache.CacheService
 }
 
-// LoginSocial authenticates a user via a social provider ID token.
+// LoginSocial verifies a social provider ID token (POST). A GET on the same
+// route issues the single-use nonce that token must carry — reusing the one
+// route so no extra application signature has to be registered downstream.
 func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		h.issueSocialNonce(w, r)
+		return
+	}
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -73,10 +89,16 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 	// Verify token signature against the provider's JWKs and extract
 	// claims. Both providers issue RS256 ID tokens; keel pins that
 	// algorithm and rejects everything else.
-	email, firstName, lastName, emailVerified, providerID, err := verifySocialToken(r.Context(), req.Provider, req.Token)
+	email, firstName, lastName, emailVerified, providerID, nonce, err := verifySocialToken(r.Context(), req.Provider, req.Token)
 	if err != nil {
 		// Don't echo the verifier's diagnostic — leaking "kid not found"
 		// vs "exp expired" gives an attacker a usable signal.
+		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
+		return
+	}
+	// Replay/impersonation guard: the id_token must carry a nonce we issued
+	// and have not yet seen. Same opaque 401 on failure as a bad signature.
+	if h.NonceCache != nil && !h.consumeSocialNonce(r.Context(), nonce) {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
 		return
 	}
@@ -107,6 +129,46 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		"partnerId": session.PartnerId,
 		"isNewUser": isNewUser,
 	})
+}
+
+// issueSocialNonce returns a single-use nonce the client feeds to the provider
+// SDK; the POST login then requires it back inside the signed id_token — the
+// state-parameter equivalent for the id_token flow. Nil cache ⇒ empty ⇒ off.
+func (h *SocialLoginHandler) issueSocialNonce(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store") // single-use — never let an edge cache it
+	if h.NonceCache == nil {
+		common.WriteJSON(w, http.StatusOK, map[string]any{"nonce": ""})
+		return
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate nonce")
+		return
+	}
+	nonce := hex.EncodeToString(b)
+	if err := h.NonceCache.Set(r.Context(), socialNonceKey+nonce, "1", socialNonceTTL); err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to store nonce")
+		return
+	}
+	// Google echoes the raw nonce in the id_token, Apple its SHA-256 — store
+	// both keys so LoginSocial matches whichever the provider returns.
+	sum := sha256.Sum256([]byte(nonce))
+	_ = h.NonceCache.Set(r.Context(), socialNonceKey+hex.EncodeToString(sum[:]), "1", socialNonceTTL)
+	common.WriteJSON(w, http.StatusOK, map[string]any{"nonce": nonce})
+}
+
+// consumeSocialNonce reports whether nonce was issued and unused, deleting it
+// so it cannot be replayed.
+func (h *SocialLoginHandler) consumeSocialNonce(ctx context.Context, nonce string) bool {
+	if nonce == "" {
+		return false
+	}
+	key := socialNonceKey + nonce
+	if _, err := h.NonceCache.Get(ctx, key); err != nil {
+		return false
+	}
+	_ = h.NonceCache.Delete(ctx, key)
+	return true
 }
 
 // socialLoginRequest is the JSON body accepted by LoginSocial. Consent
@@ -300,14 +362,14 @@ func getTrustedProxyNets(cfg string) []*net.IPNet {
 // Callers MUST honor emailVerified — linking on an unverified
 // provider-asserted email is the standard account-takeover vector for
 // misconfigured OAuth clients.
-func verifySocialToken(ctx context.Context, provider, token string) (email, firstName, lastName string, emailVerified bool, providerID string, err error) {
+func verifySocialToken(ctx context.Context, provider, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
 	switch provider {
 	case "google":
 		return verifyGoogleToken(ctx, token)
 	case "apple":
 		return verifyAppleToken(ctx, token)
 	default:
-		return "", "", "", false, "", fmt.Errorf("unsupported provider: %s", provider)
+		return "", "", "", false, "", "", fmt.Errorf("unsupported provider: %s", provider)
 	}
 }
 
@@ -318,33 +380,34 @@ func verifySocialToken(ctx context.Context, provider, token string) (email, firs
 //
 // Google's email_verified claim arrives as either a JSON bool or a
 // JSON string; both shapes are accepted.
-func verifyGoogleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID string, err error) {
+func verifyGoogleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
 	aud := *common.GoogleClientID
 	if aud == "" {
-		return "", "", "", false, "", fmt.Errorf("google_client_id is not configured")
+		return "", "", "", false, "", "", fmt.Errorf("google_client_id is not configured")
 	}
 	claims, err := verifyJWKsToken(ctx, getGoogleJWKs(), token, aud, "")
 	if err != nil {
-		return "", "", "", false, "", err
+		return "", "", "", false, "", "", err
 	}
 	iss, _ := claims["iss"].(string)
 	if iss != googleIssuer1 && iss != googleIssuer2 {
-		return "", "", "", false, "", fmt.Errorf("google: unexpected issuer %q", iss)
+		return "", "", "", false, "", "", fmt.Errorf("google: unexpected issuer %q", iss)
 	}
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
-		return "", "", "", false, "", fmt.Errorf("google: missing sub")
+		return "", "", "", false, "", "", fmt.Errorf("google: missing sub")
 	}
 	emailStr, _ := claims["email"].(string)
 	firstName, _ = claims["given_name"].(string)
 	lastName, _ = claims["family_name"].(string)
+	nonceStr, _ := claims["nonce"].(string)
 	switch v := claims["email_verified"].(type) {
 	case bool:
 		emailVerified = v
 	case string:
 		emailVerified = v == "true"
 	}
-	return emailStr, firstName, lastName, emailVerified, sub, nil
+	return emailStr, firstName, lastName, emailVerified, sub, nonceStr, nil
 }
 
 // verifyAppleToken verifies an Apple-issued ID token against Apple's
@@ -357,25 +420,26 @@ func verifyGoogleToken(ctx context.Context, token string) (email, firstName, las
 // Apple still sets email_verified=true, but those addresses must not be
 // used to link to existing password-account emails. That policy lives
 // in GetOrCreateUserFromSocial.
-func verifyAppleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID string, err error) {
+func verifyAppleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
 	aud := *common.AppleClientID
 	if aud == "" {
-		return "", "", "", false, "", fmt.Errorf("apple_client_id is not configured")
+		return "", "", "", false, "", "", fmt.Errorf("apple_client_id is not configured")
 	}
 	claims, err := verifyJWKsToken(ctx, getAppleJWKs(), token, aud, appleIssuer)
 	if err != nil {
-		return "", "", "", false, "", err
+		return "", "", "", false, "", "", err
 	}
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
-		return "", "", "", false, "", fmt.Errorf("apple: missing sub")
+		return "", "", "", false, "", "", fmt.Errorf("apple: missing sub")
 	}
 	emailStr, _ := claims["email"].(string)
+	nonceStr, _ := claims["nonce"].(string)
 	switch v := claims["email_verified"].(type) {
 	case bool:
 		emailVerified = v
 	case string:
 		emailVerified = v == "true"
 	}
-	return emailStr, "", "", emailVerified, sub, nil
+	return emailStr, "", "", emailVerified, sub, nonceStr, nil
 }

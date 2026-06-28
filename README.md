@@ -6,6 +6,26 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.10 — social-login id_token nonce, additive)
+
+**Additive — replay/impersonation guard for social login (`SocialLoginHandler.NonceCache`, opt-in).** The "Sign in with Google/Apple" id_token flow carries no OAuth `state` parameter, so a captured id_token can be replayed (this is what Google's *Use secure flows* console warning flags). `SocialLoginHandler` gains an optional `NonceCache cache.CacheService`:
+
+- **Wired** → a `GET` on the existing social-login route issues a single-use nonce (`Cache-Control: no-store`, 10-min TTL); the `POST` login then **requires that nonce back inside the signed id_token** (Google echoes it raw, Apple as its SHA-256 — both accepted, consumed once).
+- **Nil** → `GET` returns `{"nonce":""}` and `POST` skips the check. No behavior change; existing consumers compile and run unmodified.
+
+**To adopt:** set `NonceCache` on the handler you already construct, reusing the same `cache.CacheService` (memory or redis) the app uses elsewhere. There is **no new route and no new application URL signature** — the one social-login path now answers `GET` (nonce) and `POST` (login):
+
+```go
+socialHandler := keelhandler.SocialLoginHandler{
+    AbstractHandler: keelhandler.AbstractHandler{UserService: userSvc},
+    NonceCache:      cacheSvc, // ← turns the guard on; omit to keep it off
+}
+// the existing route-map entry is unchanged:
+mux[publicPrefix+"/login/social"] = socialHandler.LoginSocial
+```
+
+**Frontend:** adopt `@nauticana/sail` ≥ 1.1.5 — `SocialLoginComponent` GETs the nonce from the same social-login URL and feeds it to the provider SDK automatically. Roll backend + frontend together: once `NonceCache` is set, a sign-in from an older frontend (no nonce) is rejected.
+
 ## Migration Guide (v1.2.9 — tenant-scope hardening + worker/common helpers)
 
 **Security — tenant-scope hardening (behavior change, action: review).** `scopePartnerFilter` (generic-CRUD `Get`/`List` on PartnerSpecific tables) now coerces a caller-supplied foreign `partner_id` to the caller's scope **unless** the caller holds a global role or is a trusted system caller (no user AND no partner scope — `userID <= 0 && partnerID <= 0`, e.g. a worker). Previously coercion was gated on `userID > 0`, so **API-key callers (`userID == 0`, `partnerID > 0`) could read another tenant's rows by passing `?partner_id=<other>`** (cross-tenant IDOR). Two consequences after upgrading: (1) API-key REST callers are confined to their key's partner; (2) a **user with no partner** (`userID > 0`, `partnerID == 0`) is coerced to `partner_id = 0` (no rows) on PartnerSpecific generic CRUD — cross-partner user access (e.g. a ride-sharing rider whose data spans partners) must go through a **custom owner-scoped (`user_id`) handler/UserSpecific table**, not generic partner CRUD. Workers/system callers (`partnerID <= 0`, no user) and global roles are unaffected. No call-site change — re-test any API-key surface and any cross-partner *user* read.
