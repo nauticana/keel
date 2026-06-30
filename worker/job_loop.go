@@ -38,6 +38,12 @@ type JobLoop struct {
 	//    WHERE status='A' AND updated_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
 	//   RETURNING id
 	ReclaimQuery string
+
+	// Leased mints a unique lease token (QS.GenID()) per claim, binds it as
+	// ClaimQuery's first parameter (id is second), and passes the claim's
+	// RETURNING row to the handler so it can scope completion to its own claim.
+	// Off by default; set by the run paths for a LeasedQueueWorker.
+	Leased bool
 }
 
 // Reclaim runs ReclaimQuery (no-op when empty), logging only when rows were
@@ -70,7 +76,11 @@ func (l *JobLoop) Run(ctx context.Context, handle func(ctx context.Context, jobI
 			return
 		}
 		jobID := common.AsInt64(row[0])
-		claimRes, err := l.QS.Query(ctx, l.ClaimQuery, jobID)
+		claimArgs := []any{jobID}
+		if l.Leased {
+			claimArgs = []any{l.QS.GenID(), jobID} // token first, id second
+		}
+		claimRes, err := l.QS.Query(ctx, l.ClaimQuery, claimArgs...)
 		if err != nil {
 			l.Journal.Error(fmt.Sprintf("%s: failed to claim job %d: %v", l.WorkerName, jobID, err))
 			continue
@@ -78,7 +88,11 @@ func (l *JobLoop) Run(ctx context.Context, handle func(ctx context.Context, jobI
 		if len(claimRes.Rows) == 0 {
 			continue
 		}
-		if err := handle(ctx, jobID, row); err != nil {
+		jobRow := row
+		if l.Leased {
+			jobRow = claimRes.Rows[0] // carries the lease token + projected columns
+		}
+		if err := handle(ctx, jobID, jobRow); err != nil {
 			l.Journal.Error(fmt.Sprintf("%s: job %d failed: %v", l.WorkerName, jobID, err))
 		}
 	}

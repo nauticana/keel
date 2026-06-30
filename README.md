@@ -6,6 +6,25 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.13 — security & worker hardening; additive)
+
+Existing call sites and keyed struct literals compile unchanged. Four structs gained
+fields — `outbox.Event`, `worker.AbstractWorker`, `worker.JobLoop`, `client.BaseProvider`
+— so recompile any positional/unkeyed literals of them. One line per fix; only the
+first two need action, and only if you use the feature:
+
+- **Outbox schema** — `outbox_event` gains a nullable `lease_token` column + a `partner_id` FK (`ON DELETE SET NULL`); apply the additive delta if you use the outbox.
+- **`--s3_credential_mode`** (default `chain`) — worker object storage reads S3/R2 credentials from the keystore only when set to `secret`; default keeps the ambient AWS chain / IAM role.
+- **Outbox lease ownership** — the drain is now a `LeasedQueueWorker`: each claim stamps a unique `lease_token` and completion is scoped to `(id, lease_token)`, so a stale reclaimed worker can't overwrite a newer claim or resurrect a delivered event.
+- **`outbox.Event.Id`** — drained events carry their id as a stable idempotency key for dispatchers.
+- **`claims.Scopes`** — parses Entra's space-delimited `scp` string (was array-only → empty scopes).
+- **OAuth revocation / refresh-reuse** — DB failures surface instead of reporting success; reuse detection no longer swallows family-revocation errors.
+- **OAuth `/authorize`** — internal errors are logged and replaced with a generic message / `server_error` code instead of leaking into responses or redirect params.
+- **Social-login nonce** — single-use enforced atomically (`IncrementWithTTL`), closing the check-then-delete replay race.
+- **`BaseProvider.SkipRefreshOnTest`** — long-lived-token providers (Meta) test the stored credential without forcing a refresh.
+- **`RestHandler.PostWrite`** — now runs on a request-detached context bounded by a fixed 10s deadline (semantic change): a client disconnect can't cancel post-commit cache invalidation, and a hung hook can't hold back the 201.
+- **`RunQueueInProcess`** — each in-process tick is panic-guarded, matching the standalone runner.
+
 ## Migration Guide (v1.2.11 — PostWrite hook, transactional outbox, error→status registry, S3 credential injection; all additive)
 
 Four independent additive primitives; existing consumers compile and run unmodified. Adopt each on its own.
@@ -34,7 +53,7 @@ outbox.EnqueueTx(ctx, tx, outbox.Event{
 tx.Commit(ctx)
 ```
 
-Drain — a lease-based `QueueWorker` (claim sets `lease_until` so a crashed worker's row is reclaimed; dispatch failures back off exponentially; dead-letter after `MaxAttempts`). It runs **two ways from the same type** — pick by operational need, the worker code is identical:
+Drain — a lease-based worker. Each claim stamps a unique `lease_token`; completion/retry/dead-letter are scoped to `(id, lease_token)`, so a worker whose lease expired and was reclaimed cannot overwrite a newer claim or resurrect a delivered event. Dispatch failures back off exponentially; dead-letter after `MaxAttempts`. It runs **two ways from the same type** — pick by operational need, the worker code is identical:
 
 ```go
 w := &outbox.Worker{
@@ -724,7 +743,7 @@ graph TD
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
-| `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based `QueueWorker` that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`. No dual-write race. |
+| `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
 ## Quick Start

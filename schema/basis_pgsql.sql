@@ -802,6 +802,7 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     attempts                             INTEGER       NOT NULL DEFAULT 0,
     available_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     lease_until                          TIMESTAMP    ,
+    lease_token                          BIGINT       ,
     last_error                           TEXT         ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1271,5 +1272,14 @@ BEGIN
      WHERE constraint_name = 'partner_billing_customers' AND table_name = 'partner_billing_customer'
   ) THEN
     ALTER TABLE partner_billing_customer ADD CONSTRAINT partner_billing_customers FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'outbox_event_partner' AND table_name = 'outbox_event'
+  ) THEN
+    ALTER TABLE outbox_event ADD CONSTRAINT outbox_event_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL;
   END IF;
 END $$;

@@ -12,6 +12,9 @@ func TestScopes(t *testing.T) {
 	if got := Scopes(map[string]any{"scp": []any{"x", "y"}}); strings.Join(got, ",") != "x,y" {
 		t.Fatalf("scp array parse: %v", got)
 	}
+	if got := Scopes(map[string]any{"scp": "User.Read Mail.Read"}); strings.Join(got, ",") != "User.Read,Mail.Read" {
+		t.Fatalf("Entra scp string parse: %v", got)
+	}
 	if got := Scopes(map[string]any{}); got != nil {
 		t.Fatalf("no scope claim → nil, got %v", got)
 	}

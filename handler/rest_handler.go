@@ -15,6 +15,9 @@ import (
 	"github.com/nauticana/keel/rest"
 )
 
+// postWriteTimeout bounds a PostWrite hook so a hung one can't hold back the 201.
+const postWriteTimeout = 10 * time.Second
+
 type RestHandler struct {
 	AbstractHandler
 	Api rest.RestAPI
@@ -300,7 +303,12 @@ func (h *RestHandler) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.PostWrite != nil {
-		if err := h.PostWrite(r.Context(), session.PartnerId, h.Api.GetTable().TableName, items); err != nil && h.Journal != nil {
+		// The write already committed, so detach from request cancellation (a client
+		// disconnect must not skip cache invalidation) but bound it with a deadline so
+		// a hung hook can't hold back the 201 indefinitely.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), postWriteTimeout)
+		defer cancel()
+		if err := h.PostWrite(ctx, session.PartnerId, h.Api.GetTable().TableName, items); err != nil && h.Journal != nil {
 			h.Journal.Error(fmt.Sprintf("post-write hook for %s failed: %v", h.Api.GetTable().TableName, err))
 		}
 	}

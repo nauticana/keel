@@ -13,8 +13,9 @@ import (
 )
 
 // Dispatcher delivers one drained event to its destination (email, queue, HTTP,
-// cache invalidation, …). A non-nil error triggers retry with exponential
-// backoff until MaxAttempts, after which the event is dead-lettered (status F).
+// cache invalidation, …). A non-nil error triggers retry with exponential backoff
+// until MaxAttempts, after which the event is dead-lettered (status F). Event.Id
+// is a stable idempotency key the destination can dedupe on.
 type Dispatcher interface {
 	Dispatch(ctx context.Context, e Event) error
 }
@@ -28,10 +29,12 @@ const (
 	qFail    = "keel_outbox_fail"
 )
 
-// Worker drains outbox_event with lease semantics and at-least-once delivery:
-// claim sets lease_until (crashed claims are reclaimed), failures back off, and an
-// event dead-letters after MaxAttempts. Run it in-process via
-// worker.RunQueueInProcess or as a standalone binary via w.Run.
+// Worker drains outbox_event with lease semantics and at-least-once delivery. It
+// is a LeasedQueueWorker: each claim stamps a unique lease_token and HandleJob
+// scopes completion/retry/dead-letter to (id, lease_token), so a worker whose
+// lease expired and was reclaimed cannot overwrite a newer claim or resurrect a
+// delivered event. Run standalone via the worker runtime or in-process via
+// worker.RunQueueInProcess.
 type Worker struct {
 	worker.AbstractWorker
 	Dispatcher  Dispatcher
@@ -47,6 +50,12 @@ func (w *Worker) maxAttempts() int {
 	return w.MaxAttempts
 }
 
+func (w *Worker) LeaseClaim() bool { return true }
+
+func (w *Worker) QueueQueries() (pending, claim, reclaim, name string) {
+	return qPending, qClaim, qReclaim, "outbox"
+}
+
 func (w *Worker) GetOLTPQueries() map[string]string {
 	leaseSec := 300
 	if w.LeaseTTL > 0 {
@@ -57,56 +66,86 @@ func (w *Worker) GetOLTPQueries() map[string]string {
 		batch = w.BatchLimit
 	}
 	return map[string]string{
-		qPending: fmt.Sprintf(`SELECT id, partner_id, aggregate_type, aggregate_id, event_type, payload, attempts
-			  FROM outbox_event
+		qPending: fmt.Sprintf(`SELECT id FROM outbox_event
 			 WHERE status = 'P' AND available_at <= CURRENT_TIMESTAMP
 			 ORDER BY available_at
 			 LIMIT %d`, batch),
+		// Token first, id second (LeasedQueueWorker contract); RETURNING projects
+		// every column HandleJob reads.
 		qClaim: fmt.Sprintf(`UPDATE outbox_event
-			   SET status = 'A', lease_until = CURRENT_TIMESTAMP + INTERVAL '%d seconds', updated_at = CURRENT_TIMESTAMP
+			   SET status = 'A', lease_token = ?, lease_until = CURRENT_TIMESTAMP + INTERVAL '%d seconds', updated_at = CURRENT_TIMESTAMP
 			 WHERE id = ? AND status = 'P'
-			RETURNING id`, leaseSec),
+			RETURNING id, partner_id, aggregate_type, aggregate_id, event_type, payload, attempts, lease_token`, leaseSec),
 		qReclaim: `UPDATE outbox_event
-			   SET status = 'P', lease_until = NULL, updated_at = CURRENT_TIMESTAMP
+			   SET status = 'P', lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
 			 WHERE status = 'A' AND lease_until < CURRENT_TIMESTAMP
 			RETURNING id`,
-		qDone: `UPDATE outbox_event SET status = 'D', lease_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		// RETURNING id so a zero-row result (lease lost to a reclaim) is detectable
+		// rather than silently logged as success.
+		qDone: `UPDATE outbox_event SET status = 'D', lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
+			 WHERE id = ? AND lease_token = ? RETURNING id`,
 		qRetry: `UPDATE outbox_event
-			   SET status = 'P', attempts = attempts + 1, lease_until = NULL,
+			   SET status = 'P', attempts = attempts + 1, lease_token = NULL, lease_until = NULL,
 			       available_at = CURRENT_TIMESTAMP + (INTERVAL '1 second' * ?), last_error = ?, updated_at = CURRENT_TIMESTAMP
-			 WHERE id = ?`,
-		qFail: `UPDATE outbox_event SET status = 'F', attempts = attempts + 1, lease_until = NULL, last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+			 WHERE id = ? AND lease_token = ? RETURNING id`,
+		qFail: `UPDATE outbox_event SET status = 'F', attempts = attempts + 1, lease_token = NULL, lease_until = NULL, last_error = ?, updated_at = CURRENT_TIMESTAMP
+			 WHERE id = ? AND lease_token = ? RETURNING id`,
 	}
 }
 
-func (w *Worker) QueueQueries() (pending, claim, reclaim, name string) {
-	return qPending, qClaim, qReclaim, "outbox"
-}
-
+// HandleJob dispatches one claimed event and records the outcome scoped to its
+// lease token. row is the claim's RETURNING row: id, partner_id, aggregate_type,
+// aggregate_id, event_type, payload, attempts, lease_token.
 func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger, db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService, jobID int64, row []any) error {
 	if w.Dispatcher == nil {
 		return fmt.Errorf("outbox: no Dispatcher configured")
 	}
+	partnerID := common.AsInt64(row[1])
+	if partnerID < 0 {
+		partnerID = 0 // NULL partner_id (not partner-scoped)
+	}
 	e := Event{
-		PartnerID:     common.AsInt64(row[1]),
+		Id:            jobID,
+		PartnerID:     partnerID,
 		AggregateType: common.AsString(row[2]),
 		AggregateID:   common.AsString(row[3]),
 		EventType:     common.AsString(row[4]),
 		Payload:       common.AsString(row[5]),
 	}
 	attempts := int(common.AsInt64(row[6]))
+	token := common.AsInt64(row[7])
 
-	if err := w.Dispatcher.Dispatch(ctx, e); err != nil {
+	if derr := w.Dispatcher.Dispatch(ctx, e); derr != nil {
 		if attempts+1 >= w.maxAttempts() {
-			_, _ = qs.Query(ctx, qFail, truncErr(err), jobID)
-			return fmt.Errorf("outbox %d dead-lettered after %d attempts: %w", jobID, attempts+1, err)
+			res, err := qs.Query(ctx, qFail, truncErr(derr), jobID, token)
+			if err != nil {
+				return fmt.Errorf("outbox %d: dead-letter write failed (event still active): %w", jobID, err)
+			}
+			if len(res.Rows) == 0 {
+				journal.Warning(fmt.Sprintf("outbox %d: lease lost before dead-letter; another worker now owns it", jobID))
+				return nil
+			}
+			journal.Error(fmt.Sprintf("outbox %d dead-lettered after %d attempts: %v", jobID, attempts+1, derr))
+			return nil
 		}
 		backoff := backoffSeconds(attempts + 1)
-		_, _ = qs.Query(ctx, qRetry, backoff, truncErr(err), jobID)
-		return fmt.Errorf("outbox %d dispatch failed (attempt %d), retry in %ds: %w", jobID, attempts+1, backoff, err)
+		res, err := qs.Query(ctx, qRetry, backoff, truncErr(derr), jobID, token)
+		if err != nil {
+			return fmt.Errorf("outbox %d: retry write failed (event may stay claimed): %w", jobID, err)
+		}
+		if len(res.Rows) == 0 {
+			journal.Warning(fmt.Sprintf("outbox %d: lease lost before retry; another worker now owns it", jobID))
+			return nil
+		}
+		journal.Warning(fmt.Sprintf("outbox %d dispatch failed (attempt %d), retry in %ds: %v", jobID, attempts+1, backoff, derr))
+		return nil
 	}
-	if _, err := qs.Query(ctx, qDone, jobID); err != nil {
-		return fmt.Errorf("outbox %d mark done: %w", jobID, err)
+	res, err := qs.Query(ctx, qDone, jobID, token)
+	if err != nil {
+		return fmt.Errorf("outbox %d: mark done failed (will be re-dispatched): %w", jobID, err)
+	}
+	if len(res.Rows) == 0 {
+		journal.Warning(fmt.Sprintf("outbox %d: lease lost before completion; will be re-dispatched", jobID))
 	}
 	return nil
 }
@@ -128,4 +167,7 @@ func truncErr(err error) string {
 	return s
 }
 
-var _ worker.QueueWorker = (*Worker)(nil)
+var (
+	_ worker.QueueWorker       = (*Worker)(nil)
+	_ worker.LeasedQueueWorker = (*Worker)(nil)
+)

@@ -28,6 +28,9 @@ columns:
   - name: lease_until
     type: TIMESTAMP
     nullable: true
+  - name: lease_token
+    type: BIGINT
+    nullable: true
   - name: last_error
     type: TEXT
     nullable: true
@@ -41,6 +44,13 @@ primary_key: [id]
 sequence:
   name: outbox_event_seq
   column: id
+foreign_keys:
+  - name: outbox_event_partner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: SET NULL
 indexes:
   - name: idx_outbox_drain
     columns: [status, available_at]

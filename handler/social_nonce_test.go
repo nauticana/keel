@@ -69,8 +69,11 @@ func TestConsumeSocialNonce_EmptyAndUnknown(t *testing.T) {
 	if h.consumeSocialNonce(ctx, "") {
 		t.Fatal("empty nonce must be rejected")
 	}
-	if h.consumeSocialNonce(ctx, "deadbeef") {
-		t.Fatal("unknown nonce must be rejected")
+	// An unknown nonce must stay rejected on EVERY submission, not just the first.
+	for i := 0; i < 4; i++ {
+		if h.consumeSocialNonce(ctx, "deadbeef") {
+			t.Fatalf("unknown nonce accepted on submission %d", i+1)
+		}
 	}
 }
 

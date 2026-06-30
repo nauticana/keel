@@ -37,6 +37,7 @@ type BaseProvider struct {
 	PostCallback      func(ctx context.Context, partnerID int64, t *oauth2.Token) error
 	TestEndpoint      string // default Test does a bearer healthcheck here; empty = status-only
 	TestHealthcheck   func(ctx context.Context, svc CredentialStore, partnerID int64, accessToken, apiEndpoint string) error
+	SkipRefreshOnTest bool // long-lived-token providers (e.g. Meta) test the stored credential directly
 }
 
 var _ Provider = (*BaseProvider)(nil)
@@ -134,9 +135,11 @@ func (b *BaseProvider) Test(ctx context.Context, partnerID int64) error {
 	if err != nil {
 		return err
 	}
-	accessToken, err := b.Service.RefreshAccessToken(ctx, partnerID, b.ProviderName, credRef)
-	if err != nil {
-		return err
+	accessToken := credRef
+	if !b.SkipRefreshOnTest {
+		if accessToken, err = b.Service.RefreshAccessToken(ctx, partnerID, b.ProviderName, credRef); err != nil {
+			return err
+		}
 	}
 	switch {
 	case b.TestHealthcheck != nil:

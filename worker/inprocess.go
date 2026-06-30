@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/nauticana/keel/data"
@@ -9,22 +10,14 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// RunQueueInProcess drives a QueueWorker's drain loop on a ticker over an existing
-// DB connection until ctx is cancelled — for running a drain as a goroutine in
-// another binary (e.g. the API) instead of a standalone worker. The atomic claim
-// keeps it correct even when several replicas run it. See README for the trade-off
-// against AbstractWorker.Run.
-func RunQueueInProcess(ctx context.Context, qw QueueWorker, db data.DatabaseRepository, journal logger.ApplicationLogger, quota port.QuotaService, interval time.Duration) {
-	qs := db.GetQueryService(ctx, qw.GetOLTPQueries())
-	pending, claim, reclaim, name := qw.QueueQueries()
-	loop := &JobLoop{
-		QS:              qs,
-		Journal:         journal,
-		GetPendingQuery: pending,
-		ClaimQuery:      claim,
-		ReclaimQuery:    reclaim,
-		WorkerName:      name,
-	}
+// RunQueueInProcess drives a QueueWorker on a ticker over an existing DB
+// connection until ctx is cancelled, panic-guarding each tick — for a light drain
+// run as a goroutine in another binary. Heavy or long-running work belongs in a
+// standalone binary via AbstractWorker.Run.
+func RunQueueInProcess(ctx context.Context, w QueueWorker, db data.DatabaseRepository, journal logger.ApplicationLogger, quota port.QuotaService, interval time.Duration) {
+	qs := db.GetQueryService(ctx, w.GetOLTPQueries())
+	pending, claim, reclaim, name := w.QueueQueries()
+	loop := &JobLoop{QS: qs, Journal: journal, GetPendingQuery: pending, ClaimQuery: claim, ReclaimQuery: reclaim, WorkerName: name, Leased: leasedClaim(w)}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -32,10 +25,19 @@ func RunQueueInProcess(ctx context.Context, qw QueueWorker, db data.DatabaseRepo
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			loop.Reclaim(ctx)
-			loop.Run(ctx, func(ctx context.Context, jobID int64, row []any) error {
-				return qw.HandleJob(ctx, journal, db, quota, qs, jobID, row)
-			})
+			runQueueTick(ctx, w, db, quota, qs, journal, loop)
 		}
 	}
+}
+
+func runQueueTick(ctx context.Context, w QueueWorker, db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService, journal logger.ApplicationLogger, loop *JobLoop) {
+	defer func() {
+		if r := recover(); r != nil {
+			journal.Error(fmt.Sprintf("in-process worker tick panic recovered: %v", r))
+		}
+	}()
+	loop.Reclaim(ctx)
+	loop.Run(ctx, func(ctx context.Context, jobID int64, row []any) error {
+		return w.HandleJob(ctx, journal, db, quota, qs, jobID, row)
+	})
 }

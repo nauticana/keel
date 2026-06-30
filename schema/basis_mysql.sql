@@ -805,10 +805,12 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     attempts                             INT           NOT NULL DEFAULT 0,
     available_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     lease_until                          DATETIME     ,
+    lease_token                          BIGINT       ,
     last_error                           TEXT         ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT outbox_event_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_outbox_drain ON outbox_event(status, available_at);
 CREATE INDEX idx_outbox_aggregate ON outbox_event(aggregate_type, aggregate_id);

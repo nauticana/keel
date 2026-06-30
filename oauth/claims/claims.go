@@ -27,16 +27,22 @@ func Principal(m map[string]any) (*port.Principal, error) {
 	}, nil
 }
 
-// Scopes reads OAuth scopes from the space-delimited `scope` string (RFC 8693)
-// or a `scp` array (Entra and others).
+// Scopes reads OAuth scopes from the space-delimited `scope` string (RFC 8693) or
+// the `scp` claim, which Entra emits as a space-delimited string and some IdPs as
+// an array.
 func Scopes(m map[string]any) []string {
 	if s, ok := m["scope"].(string); ok && s != "" {
 		return strings.Fields(s)
 	}
-	if arr, ok := m["scp"].([]any); ok {
-		out := make([]string, 0, len(arr))
-		for _, v := range arr {
-			if s, ok := v.(string); ok {
+	switch v := m["scp"].(type) {
+	case string:
+		if v != "" {
+			return strings.Fields(v)
+		}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
 				out = append(out, s)
 			}
 		}

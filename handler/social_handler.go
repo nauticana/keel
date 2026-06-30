@@ -146,29 +146,33 @@ func (h *SocialLoginHandler) issueSocialNonce(w http.ResponseWriter, r *http.Req
 		return
 	}
 	nonce := hex.EncodeToString(b)
-	if err := h.NonceCache.Set(r.Context(), socialNonceKey+nonce, "1", socialNonceTTL); err != nil {
+	// Store -1 so the first consume's INCR yields exactly 0; a never-issued nonce
+	// starts absent (INCR → 1) and can never reach 0, closing the replay/guess gap.
+	if err := h.NonceCache.Set(r.Context(), socialNonceKey+nonce, "-1", socialNonceTTL); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to store nonce")
 		return
 	}
 	// Google echoes the raw nonce in the id_token, Apple its SHA-256 — store
 	// both keys so LoginSocial matches whichever the provider returns.
 	sum := sha256.Sum256([]byte(nonce))
-	_ = h.NonceCache.Set(r.Context(), socialNonceKey+hex.EncodeToString(sum[:]), "1", socialNonceTTL)
+	if err := h.NonceCache.Set(r.Context(), socialNonceKey+hex.EncodeToString(sum[:]), "-1", socialNonceTTL); err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to store nonce")
+		return
+	}
 	common.WriteJSON(w, http.StatusOK, map[string]any{"nonce": nonce})
 }
 
-// consumeSocialNonce reports whether nonce was issued and unused, deleting it
-// so it cannot be replayed.
+// consumeSocialNonce atomically claims a previously-issued nonce, returning true
+// only for the first caller. The issued key holds -1, so the first INCR yields 0
+// (valid) and every later INCR is ≥1 (replay); a never-issued nonce starts absent
+// (INCR → 1) and never yields 0. The atomic increment closes the check-then-delete
+// race and the second-submission-of-an-unknown-nonce bypass.
 func (h *SocialLoginHandler) consumeSocialNonce(ctx context.Context, nonce string) bool {
 	if nonce == "" {
 		return false
 	}
-	key := socialNonceKey + nonce
-	if _, err := h.NonceCache.Get(ctx, key); err != nil {
-		return false
-	}
-	_ = h.NonceCache.Delete(ctx, key)
-	return true
+	n, err := h.NonceCache.IncrementWithTTL(ctx, socialNonceKey+nonce, socialNonceTTL)
+	return err == nil && n == 0
 }
 
 // socialLoginRequest is the JSON body accepted by LoginSocial. Consent

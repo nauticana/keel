@@ -26,6 +26,9 @@ func NewMetaProvider(svc CredentialStore, name, callbackURL, appID, appSecretNam
 		Endpoint:     facebook.Endpoint,
 		Scopes:       scopes,
 		APIEndpoint:  "https://graph.facebook.com/v21.0/me",
+		// The persisted credential is a long-lived (60-day) token, not a refreshable
+		// one — Test exercises it directly rather than forcing a refresh.
+		SkipRefreshOnTest: true,
 	}
 	b.DeriveCredential = func(ctx context.Context, t *oauth2.Token) (string, error) {
 		appSecret, err := svc.GetSecret(ctx, appSecretName)
@@ -38,12 +41,8 @@ func NewMetaProvider(svc CredentialStore, name, callbackURL, appID, appSecretNam
 		}
 		return longLived, nil
 	}
-	b.TestHealthcheck = func(ctx context.Context, s CredentialStore, partnerID int64, _, _ string) error {
-		credRef, _, err := s.GetConnectionCredentials(ctx, partnerID, name)
-		if err != nil {
-			return err
-		}
-		testURL := fmt.Sprintf("https://graph.facebook.com/v21.0/me?access_token=%s", url.QueryEscape(credRef))
+	b.TestHealthcheck = func(ctx context.Context, s CredentialStore, partnerID int64, accessToken, _ string) error {
+		testURL := fmt.Sprintf("https://graph.facebook.com/v21.0/me?access_token=%s", url.QueryEscape(accessToken))
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
 		if err != nil {
 			return err

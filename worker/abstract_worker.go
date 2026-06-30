@@ -24,6 +24,7 @@ type AbstractWorker struct {
 	Interval int                   // poll interval, seconds
 	HCPort   int                   // /health port
 	Secret   secret.SecretProvider // set by Run before the loop; for AI/OAuth workers
+	Storage  storage.ObjectStorage // set by Run when --storage_mode is set; nil otherwise
 }
 
 func (a *AbstractWorker) GetHealthcheckPort() int { return a.HCPort }
@@ -49,16 +50,12 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 		return fmt.Errorf("worker %q: snowflake: %w", a.Caption, err)
 	}
 
-	// Object storage is optional: only build it when --storage_mode is set. A
-	// misconfigured backend (e.g. azure without --storage_account_url) is a hard
-	// startup error, consistent with the secret provider.
-	var objStore storage.ObjectStorage
-	if mode := *common.StorageMode; mode != "" {
-		objStore, err = storage.New(ctx, mode)
-		if err != nil {
-			return fmt.Errorf("worker %q: storage: %w", a.Caption, err)
-		}
+	// Object storage is optional; the factory picks the backend + credential source.
+	objStore, err := storage.NewFromConfig(ctx, secrets)
+	if err != nil {
+		return fmt.Errorf("worker %q: storage: %w", a.Caption, err)
 	}
+	a.Storage = objStore // expose to the concrete worker, not just the executor
 
 	executor := &JobExecutor{
 		Caption:  a.Caption,

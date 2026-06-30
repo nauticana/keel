@@ -19,9 +19,12 @@ const (
 	StatusFailed  = "F" // dead-lettered after MaxAttempts
 )
 
-// Event is one row to enqueue. The id, status, attempt count, and timestamps are
-// assigned by EnqueueTx; callers supply only the routing + payload fields.
+// Event is one row to enqueue. Id is assigned by EnqueueTx and set on drained
+// events delivered to a Dispatcher, where it serves as a stable idempotency key;
+// callers of EnqueueTx supply only the routing + payload fields. status, attempt
+// count, and timestamps are managed by the store/worker.
 type Event struct {
+	Id            int64  // outbox_event.id — stable idempotency key (set on dispatch)
 	PartnerID     int64  // 0 → stored NULL (event is not partner-scoped)
 	AggregateType string // the kind of entity the event is about, e.g. "business"
 	AggregateID   string // the entity's id (string for flexibility across key types)

@@ -179,6 +179,11 @@ var (
 	// is a flag knob like every other deployable switch; the AWS
 	// credentials themselves still resolve via the SDK's own chain.
 	S3Endpoint = flag.String("s3_endpoint", "", "S3-compatible endpoint override (e.g. https://<account>.r2.cloudflarestorage.com for Cloudflare R2). Empty = AWS default.")
+	// S3CredentialMode selects where the auto-built worker storage sources its
+	// S3/R2 credentials: "chain" (the AWS SDK's ambient chain / IAM role) or
+	// "secret" (keystore s3_access_key_id + s3_secret_access_key). The app's own
+	// API storage chooses directly via storage.WithSecretProvider.
+	S3CredentialMode = flag.String("s3_credential_mode", "chain", "Worker storage S3/R2 credential source: 'chain' (ambient AWS chain / IAM role) or 'secret' (keystore).")
 	// StoragePublicBaseURL is the public-read base for ObjectStorage.PublicURL
 	// on the s3/R2 backend — an R2 custom domain or *.r2.dev host, e.g.
 	// https://media.example.com. PublicURL returns <base>/<key>; the bucket

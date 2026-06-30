@@ -116,7 +116,7 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 	var loop *JobLoop
 	if qw, ok := e.Worker.(QueueWorker); ok {
 		pending, claim, reclaim, name := qw.QueueQueries()
-		loop = &JobLoop{QS: qsOLTP, Journal: e.Journal, GetPendingQuery: pending, ClaimQuery: claim, ReclaimQuery: reclaim, WorkerName: name}
+		loop = &JobLoop{QS: qsOLTP, Journal: e.Journal, GetPendingQuery: pending, ClaimQuery: claim, ReclaimQuery: reclaim, WorkerName: name, Leased: leasedClaim(qw)}
 	}
 
 	ticker := time.NewTicker(time.Duration(e.Interval) * time.Second)

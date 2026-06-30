@@ -24,6 +24,7 @@ type fakeQS struct {
 	fixed map[string]*model.QueryResult
 	errs  map[string]error
 	calls []qcall
+	genID int64
 }
 
 func (f *fakeQS) Query(_ context.Context, name string, args ...any) (*model.QueryResult, error) {
@@ -37,7 +38,16 @@ func (f *fakeQS) Query(_ context.Context, name string, args ...any) (*model.Quer
 	return &model.QueryResult{}, nil
 }
 
-func (f *fakeQS) GenID() int64 { return 0 }
+func (f *fakeQS) GenID() int64 { return f.genID }
+
+func (f *fakeQS) argsFor(name string) []any {
+	for _, c := range f.calls {
+		if c.name == name {
+			return c.args
+		}
+	}
+	return nil
+}
 
 func (f *fakeQS) countCalls(name string) int {
 	n := 0
@@ -111,6 +121,31 @@ func TestJobLoop_Run_claimsAndHandles(t *testing.T) {
 	}
 	if qs.countCalls("claim") != 2 {
 		t.Fatalf("claim calls = %d, want 2", qs.countCalls("claim"))
+	}
+}
+
+func TestJobLoop_Run_leasedThreadsTokenAndPassesClaimRow(t *testing.T) {
+	qs := &fakeQS{
+		genID: 555,
+		fixed: map[string]*model.QueryResult{
+			"pending": qr([]any{int64(7)}),                     // id only
+			"claim":   qr([]any{int64(7), "data", int64(555)}), // full row incl token
+		},
+	}
+	loop := newLoop(qs, &fakeLogger{})
+	loop.Leased = true
+
+	var gotRow []any
+	loop.Run(context.Background(), func(_ context.Context, _ int64, row []any) error {
+		gotRow = row
+		return nil
+	})
+
+	if len(gotRow) != 3 || gotRow[2] != int64(555) {
+		t.Fatalf("handler got %v, want the claim row carrying token 555", gotRow)
+	}
+	if a := qs.argsFor("claim"); len(a) != 2 || a[0] != int64(555) || a[1] != int64(7) {
+		t.Fatalf("claim args = %v, want [token=555, id=7]", a)
 	}
 }
 

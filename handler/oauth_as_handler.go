@@ -158,7 +158,14 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// guard). scopes is the effective granted set the consent page must show.
 	client, scopes, err := h.AS.ValidateAuthorizeRequest(r.Context(), req)
 	if err != nil {
-		http.Error(w, "invalid authorization request: "+err.Error(), http.StatusBadRequest)
+		if code, ok := authserver.ProtocolErrorCode(err); ok {
+			http.Error(w, code, http.StatusBadRequest)
+			return
+		}
+		if h.Journal != nil { // internal (DB/signer) — log and sanitize
+			h.Journal.Error("oauth/as: validate authorize: " + err.Error())
+		}
+		http.Error(w, "server_error", http.StatusInternalServerError)
 		return
 	}
 	user := h.resolveUser(r)
@@ -182,7 +189,14 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	req.ConsentGranted = true
 	res, err := h.AS.Authorize(r.Context(), req)
 	if err != nil {
-		h.redirectErr(w, r, req.RedirectURI, err.Error(), req.State)
+		code, ok := authserver.ProtocolErrorCode(err)
+		if !ok { // internal (DB/signer/rand) — log and sanitize
+			if h.Journal != nil {
+				h.Journal.Error("oauth/as: authorize: " + err.Error())
+			}
+			code = "server_error"
+		}
+		h.redirectErr(w, r, req.RedirectURI, code, req.State)
 		return
 	}
 	u, _ := url.Parse(req.RedirectURI)

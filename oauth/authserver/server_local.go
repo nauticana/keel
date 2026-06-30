@@ -275,8 +275,11 @@ func (a *Local) Revoke(ctx context.Context, token, hint string, clientAuth port.
 		return err
 	}
 	stored, err := a.tokens.GetRefreshToken(ctx, hashToken(token))
-	if err != nil || stored == nil || stored.ClientID != client.ClientID {
-		return nil
+	if err != nil {
+		return err // DB failure — never report success while the token is still valid
+	}
+	if stored == nil || stored.ClientID != client.ClientID {
+		return nil // unknown / other-client token: RFC 7009 200 no-op
 	}
 	return a.tokens.RevokeFamily(ctx, stored.FamilyID)
 }

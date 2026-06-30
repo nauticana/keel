@@ -181,9 +181,12 @@ func (g *refreshTokenGrant) Handle(ctx context.Context, req port.TokenRequest, c
 	if stored == nil || stored.ClientID != client.ClientID {
 		return nil, ErrOAuthInvalidGrant
 	}
-	// Replay of an already-rotated token → revoke the whole family.
+	// Replay of an already-rotated token → revoke the whole family. A failed revoke
+	// leaves the stolen chain valid, so surface it rather than swallow it.
 	if stored.RevokedAt != nil {
-		_ = g.tokens.RevokeFamily(ctx, stored.FamilyID)
+		if err := g.tokens.RevokeFamily(ctx, stored.FamilyID); err != nil {
+			return nil, err
+		}
 		return nil, ErrOAuthInvalidGrant
 	}
 	if time.Now().After(stored.ExpiresAt) {
@@ -201,7 +204,11 @@ func (g *refreshTokenGrant) Handle(ctx context.Context, req port.TokenRequest, c
 	// treat as reuse and kill the whole family.
 	resp, err := g.issuer.issue(ctx, subjectForUser(stored.UserID), stored.UserID, stored.PartnerID, client.ClientID, scopes, stored.Resource, stored.FamilyID, stored.TokenHash, true)
 	if errors.Is(err, errRefreshConsumed) {
-		_ = g.tokens.RevokeFamily(ctx, stored.FamilyID)
+		// Lost the rotation race → reuse: kill the family, surfacing a failed revoke
+		// rather than swallowing it (a stale chain must not stay valid).
+		if rerr := g.tokens.RevokeFamily(ctx, stored.FamilyID); rerr != nil {
+			return nil, rerr
+		}
 		return nil, ErrOAuthInvalidGrant
 	}
 	return resp, err
