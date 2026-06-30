@@ -231,14 +231,15 @@ func NullIfEmpty(s string) interface{} {
 	return s
 }
 
-var slugInvalid = regexp.MustCompile(`[^a-z0-9-]+`)
+var slugInvalid = regexp.MustCompile(`[^a-z0-9]+`)
 
-// Slugify lowercases, turns spaces into hyphens, and drops any character outside
-// [a-z0-9-] — a URL-safe slug from a display name.
+// Slugify lowercases, replaces each run of characters outside [a-z0-9] with a
+// single hyphen, and trims leading/trailing hyphens — a URL-safe slug from a
+// display name.
 func Slugify(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = strings.ReplaceAll(s, " ", "-")
-	return slugInvalid.ReplaceAllString(s, "")
+	s := strings.ToLower(name)
+	s = slugInvalid.ReplaceAllString(s, "-")
+	return strings.Trim(s, "-")
 }
 
 // GenerateNumericCode returns a cryptographically random zero-padded numeric code
