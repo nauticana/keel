@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -17,6 +18,12 @@ import (
 type RestHandler struct {
 	AbstractHandler
 	Api rest.RestAPI
+
+	// PostWrite, if set, runs after a successful Post commits (before the 201),
+	// receiving the table name and the posted items — each carrying its PK after
+	// the write. Apps use it to invalidate caches / recompute derived state. The
+	// write has already committed, so a hook error is logged, not surfaced.
+	PostWrite func(ctx context.Context, partnerID int64, table string, items []any) error
 
 	// columnByPascal is a lazy lookup map from PascalName → *TableColumn,
 	// built once on first request and reused across every Get / List
@@ -291,6 +298,11 @@ func (h *RestHandler) Post(w http.ResponseWriter, r *http.Request) {
 	if err := h.Api.Post(r.Context(), session.PartnerId, session.Id, items...); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "internal server error")
 		return
+	}
+	if h.PostWrite != nil {
+		if err := h.PostWrite(r.Context(), session.PartnerId, h.Api.GetTable().TableName, items); err != nil && h.Journal != nil {
+			h.Journal.Error(fmt.Sprintf("post-write hook for %s failed: %v", h.Api.GetTable().TableName, err))
+		}
 	}
 	common.WriteJSON(w, http.StatusCreated, items)
 }

@@ -790,6 +790,29 @@ CREATE TABLE IF NOT EXISTS partner_billing_customer (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_partner_billing_customer_token ON partner_billing_customer(provider, customer_token);
 
+-- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
+CREATE TABLE IF NOT EXISTS outbox_event (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    aggregate_type                       VARCHAR(64)   NOT NULL,
+    aggregate_id                         VARCHAR(128)  NOT NULL,
+    event_type                           VARCHAR(64)   NOT NULL,
+    payload                              TEXT         ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    attempts                             INTEGER       NOT NULL DEFAULT 0,
+    available_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    lease_until                          TIMESTAMP    ,
+    last_error                           TEXT         ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT outbox_event_pk PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_drain ON outbox_event(status, available_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_aggregate ON outbox_event(aggregate_type, aggregate_id);
+
+CREATE SEQUENCE IF NOT EXISTS outbox_event_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('outbox_event', 'id', 'outbox_event_seq') ON CONFLICT DO NOTHING;
+
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
 BEGIN

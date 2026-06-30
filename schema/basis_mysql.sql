@@ -792,3 +792,23 @@ CREATE TABLE IF NOT EXISTS partner_billing_customer (
     CONSTRAINT partner_billing_customers FOREIGN KEY (partner_id) REFERENCES business_partner(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_partner_billing_customer_token ON partner_billing_customer(provider, customer_token);
+
+-- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
+CREATE TABLE IF NOT EXISTS outbox_event (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    aggregate_type                       VARCHAR(64)   NOT NULL,
+    aggregate_id                         VARCHAR(128)  NOT NULL,
+    event_type                           VARCHAR(64)   NOT NULL,
+    payload                              TEXT         ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    attempts                             INT           NOT NULL DEFAULT 0,
+    available_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    lease_until                          DATETIME     ,
+    last_error                           TEXT         ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_outbox_drain ON outbox_event(status, available_at);
+CREATE INDEX idx_outbox_aggregate ON outbox_event(aggregate_type, aggregate_id);

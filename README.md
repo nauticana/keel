@@ -6,6 +6,69 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.11 — PostWrite hook, transactional outbox, error→status registry, S3 credential injection; all additive)
+
+Four independent additive primitives; existing consumers compile and run unmodified. Adopt each on its own.
+
+**1. `RestHandler.PostWrite` hook — generic post-commit side effects.** A single extension point every generic writer flows through, for cache invalidation / derived-state recompute. The optional field runs after a successful `Post` commits (before the 201), receiving the table name and the posted items — each carrying its PK after the write. The write has already committed, so a hook error is logged (via `AbstractHandler.Journal`), not surfaced to the client.
+
+```go
+rh := keelhandler.RestHandler{Api: api, AbstractHandler: ah}
+rh.PostWrite = func(ctx context.Context, partnerID int64, table string, items []any) error {
+    return cache.Invalidate(ctx, table, items) // best-effort; logged on error, never fails the write
+}
+```
+
+**2. Transactional outbox (`outbox` package).** Capture an event in the *same transaction* as a domain write, then drain it reliably with a lease worker — no dual-write race. Requires the new `outbox_event` table: apply the keel basis delta (`outbox_event` + `outbox_event_seq`, now in `schema/basis_pgsql.sql`).
+
+Capture — merge `outbox.WriteQueries()` into your `BeginTx` query map, enqueue in-tx:
+```go
+queries := map[string]string{ /* your domain write queries */ }
+for k, v := range outbox.WriteQueries() { queries[k] = v }
+tx, _ := db.BeginTx(ctx, queries)
+defer tx.Rollback(ctx)
+// ... domain writes on tx ...
+outbox.EnqueueTx(ctx, tx, outbox.Event{
+    PartnerID: pid, AggregateType: "business", AggregateID: id, EventType: "profile.updated", Payload: payloadJSON,
+})
+tx.Commit(ctx)
+```
+
+Drain — a lease-based `QueueWorker` (claim sets `lease_until` so a crashed worker's row is reclaimed; dispatch failures back off exponentially; dead-letter after `MaxAttempts`). It runs **two ways from the same type** — pick by operational need, the worker code is identical:
+
+```go
+w := &outbox.Worker{
+    Dispatcher:  myDispatcher, // implements outbox.Dispatcher: Dispatch(ctx, Event) error
+    MaxAttempts: 5,            // optional (default 5); LeaseTTL/BatchLimit also optional
+}
+
+// (a) In-process — a goroutine in your API binary, reusing its DB. No second
+// binary/DB pool/health server. Safe across replicas: the atomic claim hands each
+// event to exactly one. Best for light side effects (cache bust, email, reconcile).
+go worker.RunQueueInProcess(ctx, w, db, journal, quota, 5*time.Second)
+
+// (b) Standalone binary — its own runtime + /health + service-registry heartbeat,
+// scales/deploys independently. Best for heavy or independently-scaled work.
+w.AbstractWorker = worker.AbstractWorker{Caption: "outbox", Interval: 5, HCPort: 8090}
+w.Run(ctx, w)
+```
+
+**3. Typed-error → HTTP status registry.** Stop hand-rolling `errors.Is` ladders in every handler. Register sentinels once at wiring time; map at the boundary:
+```go
+keelhandler.RegisterErrorStatus(service.ErrAlreadyClaimed, http.StatusConflict)
+keelhandler.RegisterErrorStatus(service.ErrRateLimited, http.StatusTooManyRequests)
+// in a handler:
+if err != nil { h.WriteServiceError(w, r, err); return }
+```
+`WriteServiceError` looks up the status via `errors.Is` (so wrapped sentinels match), defaulting to 500. Registered 4xx pass the error text through; 500 keeps the existing sanitize-and-log behavior.
+
+**4. S3 credential injection (`storage.WithSecretProvider`).** Source S3/R2 credentials from the keystore instead of the AWS SDK's ambient env chain (`AWS_SECRET_ACCESS_KEY` in the process environment is exactly the secret-in-config anti-pattern keel forbids). Opt in by passing the option — missing/empty secrets are a hard error, no silent fall-through:
+```go
+store, err := storage.New(ctx, *common.StorageMode, storage.WithSecretProvider(secrets))
+// reads keystore secrets "s3_access_key_id" + "s3_secret_access_key"
+```
+Omit the option to keep the ambient chain (e.g. an EC2/EKS IAM role) — behavior unchanged. The version above is a placeholder; set the real tag when releasing.
+
 ## Migration Guide (v1.2.10 — social-login id_token nonce, additive)
 
 **Additive — replay/impersonation guard for social login (`SocialLoginHandler.NonceCache`, opt-in).** The "Sign in with Google/Apple" id_token flow carries no OAuth `state` parameter, so a captured id_token can be replayed (this is what Google's *Use secure flows* console warning flags). `SocialLoginHandler` gains an optional `NonceCache cache.CacheService`:
@@ -654,13 +717,14 @@ graph TD
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `--redis_url` / `--valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
-| `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob |
+| `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob. `New(ctx, mode, WithSecretProvider(sp))` sources S3 credentials from the keystore instead of the AWS ambient env chain |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
 | `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository |
 | `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
+| `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based `QueueWorker` that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
 ## Quick Start

@@ -11,8 +11,15 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+// Keystore secret names for injected S3 credentials (see WithSecretProvider).
+const (
+	secretS3AccessKeyID     = "s3_access_key_id"
+	secretS3SecretAccessKey = "s3_secret_access_key"
 )
 
 // S3-compatible endpoint overrides. Set --s3_endpoint to point the client at a
@@ -27,17 +34,14 @@ import (
 // (Credentials still resolve via the AWS SDK's own chain — that is the SDK's
 // concern, not a keel knob; only keel's own switches go through flags.)
 
-// s3MultipartThreshold is the body size at which Upload switches from
-// a single PutObject to the SDK's multipart Uploader. A single
-// PutObject silently rejects bodies > 5 GiB, so callers expecting to
-// upload large objects need the multipart path. Setting the threshold
-// at 5 MiB matches AWS's recommended cut-over for most workloads.
+// s3MultipartThreshold is the body size at which UploadObject switches from a
+// single PutObject (which silently rejects bodies > 5 GiB) to multipart.
 const s3MultipartThreshold = 5 * 1024 * 1024
 
 type StorageS3 struct {
 	client        *s3.Client
 	presignClient *s3.PresignClient
-	uploader      *manager.Uploader
+	uploader      *transfermanager.Client
 
 	// publicBaseURL is the public-read base for PublicURL, from
 	// --storage_public_base_url (an R2 custom domain or *.r2.dev host).
@@ -45,10 +49,17 @@ type StorageS3 struct {
 	publicBaseURL string
 }
 
+// NewStorageS3 builds the S3 backend using the AWS SDK's ambient credential
+// chain. Prefer storage.New(ctx, "s3", storage.WithSecretProvider(sp)) to source
+// credentials from the keystore instead.
 func NewStorageS3() (*StorageS3, error) {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+	return newStorageS3(context.Background(), &storageOptions{})
+}
+
+func newStorageS3(ctx context.Context, o *storageOptions) (*StorageS3, error) {
+	cfg, err := loadS3Config(ctx, o)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return nil, err
 	}
 	opts := []func(*s3.Options){}
 	if endpoint := strings.TrimSpace(*common.S3Endpoint); endpoint != "" {
@@ -60,12 +71,41 @@ func NewStorageS3() (*StorageS3, error) {
 		})
 	}
 	client := s3.NewFromConfig(cfg, opts...)
+	uploader := transfermanager.New(client, func(o *transfermanager.Options) {
+		o.MultipartUploadThreshold = s3MultipartThreshold
+	})
 	return &StorageS3{
 		client:        client,
 		presignClient: s3.NewPresignClient(client),
-		uploader:      manager.NewUploader(client),
+		uploader:      uploader,
 		publicBaseURL: strings.TrimRight(strings.TrimSpace(*common.StoragePublicBaseURL), "/"),
 	}, nil
+}
+
+// loadS3Config builds the AWS config. With a secret provider (WithSecretProvider)
+// it injects static credentials from the keystore and fails loudly if they are
+// missing or empty; without one it falls back to the AWS SDK's ambient chain.
+func loadS3Config(ctx context.Context, o *storageOptions) (aws.Config, error) {
+	if o != nil && o.secrets != nil {
+		id, err := o.secrets.GetSecret(ctx, secretS3AccessKeyID)
+		if err != nil {
+			return aws.Config{}, fmt.Errorf("storage s3: reading secret %q: %w", secretS3AccessKeyID, err)
+		}
+		key, err := o.secrets.GetSecret(ctx, secretS3SecretAccessKey)
+		if err != nil {
+			return aws.Config{}, fmt.Errorf("storage s3: reading secret %q: %w", secretS3SecretAccessKey, err)
+		}
+		if strings.TrimSpace(id) == "" || strings.TrimSpace(key) == "" {
+			return aws.Config{}, fmt.Errorf("storage s3: credential injection requested but %q/%q are empty in the keystore", secretS3AccessKeyID, secretS3SecretAccessKey)
+		}
+		return config.LoadDefaultConfig(ctx,
+			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(id, key, "")))
+	}
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("storage s3: load AWS config: %w", err)
+	}
+	return cfg, nil
 }
 
 // PublicURL returns <--storage_public_base_url>/<key>. The bucket arg is
@@ -80,13 +120,10 @@ func (s *StorageS3) PublicURL(bucket, key string) string {
 	return s.publicBaseURL + "/" + strings.TrimLeft(key, "/")
 }
 
-// Upload writes reader to the named (bucket, key). Always routes via
-// the multipart Uploader (P1-29) so bodies larger than 5 GiB succeed
-// — the previous single PutObject path would silently fail on those.
-// For small bodies the Uploader still issues one PutObject request,
-// so the perf cost on the common-case path is negligible.
+// Upload writes reader to the named (bucket, key) via the transfer manager, so
+// bodies over s3MultipartThreshold use multipart instead of failing.
 func (s *StorageS3) Upload(ctx context.Context, bucket, key string, reader io.Reader, contentType string) error {
-	_, err := s.uploader.Upload(ctx, &s3.PutObjectInput{
+	_, err := s.uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket:      &bucket,
 		Key:         &key,
 		Body:        reader,

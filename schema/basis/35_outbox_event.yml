@@ -1,0 +1,48 @@
+table: outbox_event
+comment: Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
+order: 60
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: aggregate_type
+    type: VARCHAR(64)
+  - name: aggregate_id
+    type: VARCHAR(128)
+  - name: event_type
+    type: VARCHAR(64)
+  - name: payload
+    type: TEXT
+    nullable: true
+  - name: status
+    type: CHAR(1)
+    default: P
+  - name: attempts
+    type: INTEGER
+    default: "0"
+  - name: available_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: lease_until
+    type: TIMESTAMP
+    nullable: true
+  - name: last_error
+    type: TEXT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: outbox_event_seq
+  column: id
+indexes:
+  - name: idx_outbox_drain
+    columns: [status, available_at]
+  - name: idx_outbox_aggregate
+    columns: [aggregate_type, aggregate_id]
