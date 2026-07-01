@@ -1415,6 +1415,7 @@ Three changes to the public surface:
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/user/profile` | Read own profile: `firstName`/`lastName`/`email`/`phoneNumber`/`language`/`twoFactorEnabled` |
 | POST | `/api/user/profile` | Update own `firstName`/`lastName`/`locale` immediately |
 | POST | `/api/user/profile/email` | Request email change — code sent to the new email. Body `{value}` |
 | POST | `/api/user/profile/email/confirm` | Apply email change. Body `{value, code}` |

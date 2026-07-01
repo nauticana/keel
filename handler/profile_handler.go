@@ -20,12 +20,45 @@ type ProfileHandler struct {
 
 func (h *ProfileHandler) GetAuthRoutes() map[string]func(w http.ResponseWriter, r *http.Request) {
 	return map[string]func(w http.ResponseWriter, r *http.Request){
-		common.RestPrefix + "/user/profile":              h.UpdateProfile,
+		common.RestPrefix + "/user/profile":               h.Profile,
 		common.RestPrefix + "/user/profile/email":         h.RequestEmailChange,
 		common.RestPrefix + "/user/profile/email/confirm": h.ConfirmEmailChange,
 		common.RestPrefix + "/user/profile/phone":         h.RequestPhoneChange,
 		common.RestPrefix + "/user/profile/phone/confirm": h.ConfirmPhoneChange,
 	}
+}
+
+// Profile serves the editable account profile: GET reads it, POST updates it.
+func (h *ProfileHandler) Profile(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.GetProfile(w, r)
+	case http.MethodPost:
+		h.UpdateProfile(w, r)
+	default:
+		h.WriteError(w, http.StatusMethodNotAllowed, "Method Not Allowed", "use GET or POST")
+	}
+}
+
+// GET /user/profile → the session user's editable profile.
+func (h *ProfileHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.RequireSession(w, r)
+	if !ok {
+		return
+	}
+	u, err := h.UserService.GetUserById(session.Id)
+	if err != nil || u == nil {
+		h.WriteError(w, http.StatusInternalServerError, "Server Error", "could not load profile")
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]any{
+		"firstName":        u.FirstName,
+		"lastName":         u.LastName,
+		"email":            u.Email,
+		"phoneNumber":      u.PhoneNumber,
+		"language":         u.Language,
+		"twoFactorEnabled": u.TwoFactorEnabled,
+	})
 }
 
 // POST /user/profile  {firstName, lastName, locale}
