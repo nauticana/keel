@@ -167,11 +167,12 @@ func (h *ProfileHandler) confirmContactChange(w http.ResponseWriter, r *http.Req
 	if !h.ReadRequest(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Value) == "" || req.Code == 0 {
+	value := strings.TrimSpace(req.Value) // match the trim applied when the code was requested
+	if value == "" || req.Code == 0 {
 		h.WriteError(w, http.StatusBadRequest, "Invalid Request", "value and code are required")
 		return
 	}
-	if err := h.UserService.ConfirmContactChange(session.Id, channel, req.Value, req.Code); err != nil {
+	if err := h.UserService.ConfirmContactChange(session.Id, channel, value, req.Code); err != nil {
 		h.WriteError(w, http.StatusBadRequest, "Invalid Confirmation", "invalid or expired confirmation")
 		return
 	}
