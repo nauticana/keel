@@ -9,6 +9,9 @@ import (
 // the consent redirect (see WithEntity).
 const StateEntityKey = "entity_id"
 
+// StatePKCEKey carries the PKCE verifier through the OAuth state (BaseProvider.UsePKCE).
+const StatePKCEKey = "pkce_verifier"
+
 // entityCtxKey scopes a credential to a specific business/entity within a
 // partner (0 = tenant-wide). It rides the OAuth state across the consent
 // redirect and the request context into the CredentialStore, so no interface

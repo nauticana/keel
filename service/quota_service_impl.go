@@ -17,6 +17,7 @@ import (
 const (
 	qGetPartnerSubscription = "get_partner_subscription"
 	qGetResourceUsage       = "get_resource_usage"
+	qGetPartnerQuota        = "get_partner_quota"
 	qGetPartnerAddon        = "get_partner_addon"
 	qAddUsage               = "add_usage"
 )
@@ -50,6 +51,17 @@ SELECT addon_id, COUNT(*) AS active_count
 `,
 
 	qAddUsage: "INSERT INTO usage_ledger (partner_id, resource_name, amount, notes) VALUES (?, ?, ?, ?)",
+
+	qGetPartnerQuota: `
+SELECT MAX(a.max_value)
+  FROM subscription_quota a, partner_plan_subscription b
+ WHERE b.status = 'A'
+   AND b.partner_id = ?
+   AND b.begda <= CURRENT_TIMESTAMP
+   AND (b.endda IS NULL OR b.endda >= CURRENT_TIMESTAMP)
+   AND a.plan_id = b.plan_id
+   AND a.resource_id = ?
+`,
 }
 
 // defaultResourceCountQueries holds keel's built-in per-resource live-count SQL,
@@ -321,6 +333,18 @@ func (s *QuotaServiceDb) LogUsage(ctx context.Context, partnerID int64, quotaNam
 
 func (s *QuotaServiceDb) ReportAddonUsage(ctx context.Context, partnerID int64, addonID string, amount int64, notes string) error {
 	return s.LogUsage(ctx, partnerID, addonID, amount, notes)
+}
+
+func (s *QuotaServiceDb) GetPartnerQuota(ctx context.Context, partnerID int64, resource string, def int64) (int64, error) {
+	s.init(ctx)
+	res, err := s.qs.Query(ctx, qGetPartnerQuota, partnerID, resource)
+	if err != nil {
+		return 0, fmt.Errorf("get partner quota %s: %w", resource, err)
+	}
+	if len(res.Rows) == 0 || res.Rows[0][0] == nil {
+		return def, nil // no active plan / resource absent → caller's default
+	}
+	return common.AsInt64(res.Rows[0][0]), nil // configured value, incl. 0 and the -1 unlimited sentinel
 }
 
 var _ port.QuotaService = (*QuotaServiceDb)(nil)

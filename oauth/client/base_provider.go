@@ -32,6 +32,7 @@ type BaseProvider struct {
 	Scopes          []string
 	AuthCodeOptions []oauth2.AuthCodeOption
 	RequireRefresh  bool // fail Callback when the exchange returns no refresh token
+	UsePKCE         bool // RFC 7636: engine handles the verifier/challenge (Twitter/X and any PKCE-required provider)
 
 	APIEndpoint       string
 	DeriveAPIEndpoint func(ctx context.Context, accessToken string) string
@@ -77,11 +78,28 @@ func (b *BaseProvider) AuthURL(ctx context.Context, partnerID int64, params map[
 	if err != nil {
 		return "", err
 	}
+	opts := b.AuthCodeOptions
+	if b.UsePKCE {
+		verifier, challenge, err := GeneratePKCE()
+		if err != nil {
+			return "", err
+		}
+		// copy so we don't mutate the caller's map
+		merged := make(map[string]string, len(params)+1)
+		for k, v := range params {
+			merged[k] = v
+		}
+		merged[StatePKCEKey] = verifier
+		params = merged
+		opts = append(append([]oauth2.AuthCodeOption{}, opts...),
+			oauth2.SetAuthURLParam("code_challenge", challenge),
+			oauth2.SetAuthURLParam("code_challenge_method", "S256"))
+	}
 	state, err := b.Service.CreateOAuthState(ctx, partnerID, b.ProviderName, params)
 	if err != nil {
 		return "", err
 	}
-	return cfg.AuthCodeURL(state, b.AuthCodeOptions...), nil
+	return cfg.AuthCodeURL(state, opts...), nil
 }
 
 // Callback is the default exchange + persist flow. Providers with manual token
@@ -91,16 +109,36 @@ func (b *BaseProvider) Callback(ctx context.Context, code, state string) error {
 	if err != nil {
 		return err
 	}
-	token, err := cfg.Exchange(ctx, code)
+	// PKCE needs the verifier from state as an exchange param, so consume state
+	// up front; the default flow consumes it after exchange.
+	var (
+		partnerID    int64
+		extra        map[string]string
+		exchangeOpts []oauth2.AuthCodeOption
+	)
+	if b.UsePKCE {
+		partnerID, extra, err = b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
+		if err != nil {
+			return err
+		}
+		verifier := extra[StatePKCEKey]
+		if verifier == "" {
+			return fmt.Errorf("%s: PKCE verifier missing from state", b.ProviderName)
+		}
+		exchangeOpts = append(exchangeOpts, oauth2.SetAuthURLParam("code_verifier", verifier))
+	}
+	token, err := cfg.Exchange(ctx, code, exchangeOpts...)
 	if err != nil {
 		return fmt.Errorf("token exchange: %w", err)
 	}
 	if b.RequireRefresh && token.RefreshToken == "" {
 		return fmt.Errorf("%s: no refresh token; re-authorize with prompt=consent", b.ProviderName)
 	}
-	partnerID, extra, err := b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
-	if err != nil {
-		return err
+	if !b.UsePKCE {
+		partnerID, extra, err = b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
+		if err != nil {
+			return err
+		}
 	}
 	// Recover the entity scope stashed at AuthURL so the store writes the right
 	// (partner, entity) row; 0 = tenant-wide for callers that never set it.
