@@ -6,6 +6,75 @@ Shared Go module providing infrastructure for backend projects built on the hexa
 
 Keel factors the highly abstracted backend code that was repeating across multiple Go services into generic, drop-in components. Consumers import `keel`, wire the adapters they need, and keep their codebase focused on domain logic.
 
+## Migration Guide (v1.2.16 — OAuth-connect credential store + Shopify provider)
+
+Finishes the OAuth-client primitive: keel already shipped the `client.Provider` /
+`client.CredentialStore` interfaces and provider engine — now it ships the concrete
+persistence, HTTP flow, and refresh sweep every app used to hand-roll.
+
+**Breaking:** `client.CredentialStore.SaveRefreshToken` was removed (the separate
+refresh-token cache is gone — `cred_ref` is the single source of truth). Downstreams
+adopt keel's `connect.CredentialStoreDB` wholesale rather than implementing the
+interface. `BaseProvider.AuthURL` now forwards its `params` into the OAuth state
+(previously ignored).
+
+- **Schema** — two new keel-core tables: `partner_credential` (sealed OAuth/API-key
+  connections, one per `(partner_id, entity_id, provider)`) and `auth_nonce`
+  (single-use connect-state). `cred_ref` is seeded as `column_display_attribute` `'S'`,
+  so auto-CRUD never emits or accepts it. Run `make gen-schema` and apply the delta.
+- **`oauth/connect.CredentialStoreDB`** — a drop-in `client.CredentialStore` over
+  `partner_credential`, sealing `cred_ref` at rest with an AES-256-GCM KEK (`crypto`)
+  from the secret provider; also implements the connect extras (`api_endpoint` cache,
+  `ListActiveCredentials`, the CAS-based `RefreshDue`).
+- **Entity scope** — `entity_id` (0 = tenant-wide, >0 = a specific business) is part of the
+  key; it rides the OAuth state across the redirect and the request context
+  (`client.WithEntity`), so no interface method carries it and existing callers stay at 0.
+- **PKCE** — verifiers ride the OAuth state (`auth_nonce`), never the credential row, so
+  an in-flight re-authorization can't clobber a working credential.
+- **Concurrency** — `partner_credential.rev` gives optimistic concurrency: rotation and
+  error-status writes CAS on the rev read at refresh time, so concurrent reauthorizations
+  and multiple worker replicas can't overwrite each other or strand a rotated token.
+- **`handler.OAuthConnectHandler`** — mounts `Routes()` for `authorize` (GET) / `callback`
+  (GET) / `test` (POST) under `/api/oauth/{provider}/…` (+ a sealed `/api/oauth/apikey`
+  POST when a `Store` is set); providers may implement `ValidateCallback` (Shopify HMAC).
+- **`connect.RefreshStale`** — a provider-agnostic sweep (refresh stale tokens, mark
+  failures) your worker binary schedules; back the store's `Refresh` (a `Refresher`
+  returning a `RefreshResult`) with your registry — a rotated refresh token in the result
+  is persisted to `cred_ref`.
+- **Authorization** — the mutating routes **fail closed** unless the app sets
+  `OAuthConnectHandler.Authz` (e.g. `WrapTableAction(db, userSvc, "PARTNER_CREDENTIAL",
+  "MANAGE", "partner_credential", inner)`) or opts out with `AllowAnyPartner: true`. keel
+  seeds the `PARTNER_CREDENTIAL/MANAGE` object + a `PARTNER_ADMIN` grant (+ `SELECT`/
+  `DELETE` on `partner_credential`). The API-key endpoint rejects OAuth-registered providers.
+- **`client.NewShopifyProvider`** — Shopify joins Google/GBP/Meta as a built-in provider
+  (canonical `*.myshopify.com` validation + HMAC callback), config injected (no globals).
+  It implements the **non-expiring offline-token + REST** flow (proven for custom/partner
+  apps). New *public* apps that require expiring offline tokens (`expiring=1` + refresh
+  rotation) and GraphQL are **not yet supported** — the store now persists rotated refresh
+  tokens (below), so that mode is a follow-up, not a rework.
+- **Consts** — `client.ConnTypeAPIKey`, `ConnStatusPending`, `ConnStatusInactive` added.
+
+**1-line migration:** construct `connect.CredentialStoreDB{DB, Secrets, Nonce:
+&connect.NonceService{DB}, EncKeySecret: "credential_enc_key", Refresh: myRefresher}`,
+call `Init(ctx)`, mount `handler.OAuthConnectHandler{Providers: myRegistry,
+FrontendReturnURL: url, Store: store, Authz: myGate}.Routes()`, then `make gen-schema` +
+apply the two tables. Apps supply the provider registry and the `Authz` gate (or set
+`AllowAnyPartner: true` to opt out — the gated routes fail closed otherwise).
+
+**Adopting a hand-rolled credential store** (drop your own `OAuthService` for
+`CredentialStoreDB`):
+
+| Old call | Replacement |
+|---|---|
+| implement `CredentialStore.SaveRefreshToken` | removed — `UpsertConnection(p, provider, connType, token, apiEndpoint)` stores a token |
+| `svc.GetRefreshToken(p, provider)` | `store.GetConnectionCredentials(p, provider)` → `credRef` (the stored refresh token) |
+| `svc.RefreshAccessToken(p, provider, token)` | `store.RefreshAccessToken(p, provider)` — re-reads + rotates internally; drop the token arg and the preceding `GetRefreshToken` read |
+| `cmd/credcheck` sweep glue | `connect.RefreshStale(ctx, store, journal)` (atomic per-credential claim; multi-replica safe) |
+
+Google multi-API reuse (one consent shared across GA4/GSC/GBP) still works: store the
+combined-scope refresh token on one provider row; `RefreshAccessToken(p, provider)` mints an
+access token carrying all granted scopes.
+
 ## Migration Guide (v1.2.13 — security & worker hardening; additive)
 
 Existing call sites and keyed struct literals compile unchanged. Four structs gained
@@ -168,7 +237,7 @@ Connect an app, on behalf of each partner, to external providers and persist the
 | `client.NewGoogleProvider` | `oauth/client/providers_google.go` | Standard Google offline-access provider for **any** Google API — caller supplies scopes + client + apiEndpoint (Search Console, Analytics, YouTube, …). |
 | `client.NewGBPProvider` / `DiscoverGBPAccountName` | `oauth/client/providers_google.go` | Google Business Profile: a Google provider plus account-name discovery + refresh-token persistence. |
 | `client.NewMetaProvider` | `oauth/client/providers_meta.go` | Facebook-Graph provider (Meta/Instagram): long-lived-token swap + `/me` healthcheck. |
-| `client.RefreshAccessToken` / `ExchangeMetaLongLivedToken` | `oauth/client/token.go` | Reusable token helpers — back `CredentialStore.RefreshAccessToken` with the former. |
+| `client.RefreshAccessToken` / `ManualTokenExchange` | `oauth/client/token.go` | Reusable token helpers — back `CredentialStore.RefreshAccessToken` with the former; `ManualTokenExchange` builds custom (non-oauth2-library) providers. |
 
 To adopt: **(1)** implement `client.CredentialStore` against your storage (typically an `internal/service` type, so the provider package never reverse-imports your service layer); **(2)** construct a provider with your own client id + secret name + scopes, e.g. `client.NewGBPProvider(store, "gbp", callbackURL, *common.GoogleClientID, "google_client_secret", []string{"https://www.googleapis.com/auth/business.manage"})` — or embed `client.BaseProvider` and override `AuthURL`/`Callback` for a non-standard (PKCE / manual-exchange) provider; **(3)** drive the flow from your handlers: `AuthURL` → redirect, `Callback` on return, `Test` to re-validate.
 

@@ -2,10 +2,13 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 
+	"github.com/nauticana/keel/common"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/facebook"
 )
@@ -35,19 +38,52 @@ func NewMetaProvider(svc CredentialStore, name, callbackURL, appID, appSecretNam
 		if err != nil {
 			return "", fmt.Errorf("get %s: %w", appSecretName, err)
 		}
-		longLived, err := ExchangeMetaLongLivedToken(ctx, appID, appSecret, t.AccessToken)
+		longLived, err := exchangeMetaLongLivedToken(ctx, appID, appSecret, t.AccessToken)
 		if err != nil {
 			return "", fmt.Errorf("long-lived token exchange: %w", err)
 		}
 		return longLived, nil
 	}
-	b.TestHealthcheck = func(ctx context.Context, s CredentialStore, partnerID int64, accessToken, _ string) error {
+	b.TestHealthcheck = func(ctx context.Context, _ CredentialStore, partnerID int64, accessToken, _ string) error {
 		testURL := fmt.Sprintf("https://graph.facebook.com/v21.0/me?access_token=%s", url.QueryEscape(accessToken))
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
 		if err != nil {
 			return err
 		}
-		return runHealthcheck(ctx, s, partnerID, name, ConnTypeOAuth, req)
+		return b.runHealthcheck(ctx, partnerID, req)
 	}
 	return b
+}
+
+// exchangeMetaLongLivedToken swaps a short-lived Meta/Facebook token for a
+// long-lived (60-day) one. The caller supplies the app id + secret.
+func exchangeMetaLongLivedToken(ctx context.Context, appID, appSecret, shortLivedToken string) (string, error) {
+	u := fmt.Sprintf("https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=%s&client_secret=%s&fb_exchange_token=%s",
+		url.QueryEscape(appID), url.QueryEscape(appSecret), url.QueryEscape(shortLivedToken))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := common.HTTPClient().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("meta token exchange: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("meta token exchange HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	var r struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return "", fmt.Errorf("parse meta token exchange: %w", err)
+	}
+	if r.AccessToken == "" {
+		return "", fmt.Errorf("empty access token in meta exchange response")
+	}
+	return r.AccessToken, nil
 }

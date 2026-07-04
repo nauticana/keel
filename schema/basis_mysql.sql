@@ -534,6 +534,26 @@ CREATE TABLE IF NOT EXISTS subscription_quota (
     CONSTRAINT sub_resources_quotas FOREIGN KEY (resource_id) REFERENCES subscription_resource(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- OAuth / API-key credentials for partner connections to external providers
+CREATE TABLE IF NOT EXISTS partner_credential (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    entity_id                            BIGINT        NOT NULL DEFAULT 0,
+    provider                             VARCHAR(30)   NOT NULL,
+    connection_type                      CHAR(1)       NOT NULL DEFAULT 'O',
+    cred_ref                             TEXT          NOT NULL,
+    api_endpoint                         VARCHAR(255) ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    rev                                  INT           NOT NULL DEFAULT 0,
+    lease_until                          DATETIME     ,
+    issued_at                            DATETIME     ,
+    last_checked                         DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_credential_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX partner_credential_uq ON partner_credential(partner_id, entity_id, provider);
+
 -- Optional add-on features with separate pricing
 CREATE TABLE IF NOT EXISTS subscription_addon (
     id                                   VARCHAR(20)   NOT NULL,
@@ -547,6 +567,15 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
     PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Single-use, TTL-bounded nonces (OAuth connect-state, JWT handoff). Natural key, no sequence.
+CREATE TABLE IF NOT EXISTS auth_nonce (
+    nonce                                VARCHAR(64)   NOT NULL,
+    purpose                              VARCHAR(20)   NOT NULL,
+    payload                              TEXT          NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (nonce)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Active plan subscriptions per business partner

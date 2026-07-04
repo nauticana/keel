@@ -1,0 +1,14 @@
+table: auth_nonce
+comment: Single-use, TTL-bounded nonces (OAuth connect-state, JWT handoff). Natural key, no sequence.
+order: 44
+columns:
+  - name: nonce
+    type: VARCHAR(64)
+  - name: purpose
+    type: VARCHAR(20)
+  - name: payload
+    type: TEXT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [nonce]

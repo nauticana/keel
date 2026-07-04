@@ -530,6 +530,28 @@ CREATE TABLE IF NOT EXISTS subscription_quota (
     CONSTRAINT subscription_quota_pk PRIMARY KEY (plan_id, resource_id)
 );
 
+-- OAuth / API-key credentials for partner connections to external providers
+CREATE TABLE IF NOT EXISTS partner_credential (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    entity_id                            BIGINT        NOT NULL DEFAULT 0,
+    provider                             VARCHAR(30)   NOT NULL,
+    connection_type                      CHAR(1)       NOT NULL DEFAULT 'O',
+    cred_ref                             TEXT          NOT NULL,
+    api_endpoint                         VARCHAR(255) ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    rev                                  INTEGER       NOT NULL DEFAULT 0,
+    lease_until                          TIMESTAMP    ,
+    issued_at                            TIMESTAMP    ,
+    last_checked                         TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT partner_credential_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS partner_credential_uq ON partner_credential(partner_id, entity_id, provider);
+
+CREATE SEQUENCE IF NOT EXISTS partner_credential_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('partner_credential', 'id', 'partner_credential_seq') ON CONFLICT DO NOTHING;
+
 -- Optional add-on features with separate pricing
 CREATE TABLE IF NOT EXISTS subscription_addon (
     id                                   VARCHAR(20)   NOT NULL,
@@ -543,6 +565,15 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
     CONSTRAINT subscription_addon_pk PRIMARY KEY (id)
+);
+
+-- Single-use, TTL-bounded nonces (OAuth connect-state, JWT handoff). Natural key, no sequence.
+CREATE TABLE IF NOT EXISTS auth_nonce (
+    nonce                                VARCHAR(64)   NOT NULL,
+    purpose                              VARCHAR(20)   NOT NULL,
+    payload                              TEXT          NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT auth_nonce_pk PRIMARY KEY (nonce)
 );
 
 -- Active plan subscriptions per business partner
@@ -1146,6 +1177,15 @@ BEGIN
      WHERE constraint_name = 'sub_resources_quotas' AND table_name = 'subscription_quota'
   ) THEN
     ALTER TABLE subscription_quota ADD CONSTRAINT sub_resources_quotas FOREIGN KEY (resource_id) REFERENCES subscription_resource(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_credential_partners' AND table_name = 'partner_credential'
+  ) THEN
+    ALTER TABLE partner_credential ADD CONSTRAINT partner_credential_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id);
   END IF;
 END $$;
 DO $$

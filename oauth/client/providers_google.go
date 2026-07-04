@@ -39,16 +39,13 @@ func NewGoogleProvider(svc CredentialStore, name, callbackURL, clientID, secretN
 }
 
 // NewGBPProvider builds a Google Business Profile provider: a Google provider
-// (caller supplies the scopes, e.g. business.manage) plus two GBP behaviors —
-// discover + cache the account name in api_endpoint, and persist the refresh
-// token (GBP reuses it for other Google APIs) via SaveRefreshToken.
+// (caller supplies the scopes, e.g. business.manage) that also discovers + caches
+// the account name in api_endpoint. The refresh token is stored in cred_ref by the
+// default flow.
 func NewGBPProvider(svc CredentialStore, name, callbackURL, clientID, secretName string, scopes []string) *BaseProvider {
 	b := NewGoogleProvider(svc, name, callbackURL, clientID, secretName, scopes, "")
 	b.DeriveAPIEndpoint = func(ctx context.Context, accessToken string) string {
 		return DiscoverGBPAccountName(ctx, accessToken, b.Journal)
-	}
-	b.PostCallback = func(ctx context.Context, partnerID int64, t *oauth2.Token) error {
-		return svc.SaveRefreshToken(ctx, partnerID, name, t.RefreshToken)
 	}
 	return b
 }

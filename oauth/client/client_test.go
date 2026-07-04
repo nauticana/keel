@@ -28,8 +28,7 @@ func (s *fakeStore) UpdateConnectionStatus(_ context.Context, _ int64, _, _, _ s
 func (s *fakeStore) GetConnectionCredentials(_ context.Context, _ int64, _ string) (string, string, error) {
 	return "", "", nil
 }
-func (s *fakeStore) SaveRefreshToken(_ context.Context, _ int64, _, _ string) error { return nil }
-func (s *fakeStore) RefreshAccessToken(_ context.Context, _ int64, _, _ string) (string, error) {
+func (s *fakeStore) RefreshAccessToken(_ context.Context, _ int64, _ string) (string, error) {
 	return "access", nil
 }
 func (s *fakeStore) GetSecret(_ context.Context, key string) (string, error) {
@@ -70,8 +69,8 @@ func TestGBPProvider_Config(t *testing.T) {
 	if len(b.Scopes) != 1 || b.Scopes[0] != "https://www.googleapis.com/auth/business.manage" {
 		t.Errorf("GBP scopes (caller-supplied) not preserved: %v", b.Scopes)
 	}
-	if b.DeriveAPIEndpoint == nil || b.PostCallback == nil {
-		t.Error("GBP must set DeriveAPIEndpoint + PostCallback hooks")
+	if b.DeriveAPIEndpoint == nil {
+		t.Error("GBP must set the DeriveAPIEndpoint hook")
 	}
 }
 

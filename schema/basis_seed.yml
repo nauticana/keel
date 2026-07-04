@@ -127,6 +127,7 @@ seeds:
       - [rest_api_header, rest_api_header]
       - [rest_report_header, rest_report_header]
       - [authorization_object, authorization_object]
+      - [partner_credential, partner_credential]
       - [country, country]
       - [payment_webhook_log, payment_webhook_log]
       - [payment_record, payment_record]
@@ -152,6 +153,7 @@ seeds:
     rows:
       - [USER_PAYMENT_METHOD, "User Payment Method Actions"]
       - [API_KEY, "API Key to access the system"]
+      - [PARTNER_CREDENTIAL, "Partner Connection Actions"]
 
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
@@ -159,6 +161,7 @@ seeds:
       - [USER_PAYMENT_METHOD, SET_DEFAULT, "Set Default"]
       - [API_KEY, GENERATE, "Generate"]
       - [API_KEY, ROLL, "Roll"]
+      - [PARTNER_CREDENTIAL, MANAGE, "Manage Connections"]
 
   - table: table_action
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
@@ -220,3 +223,5 @@ seeds:
       - [user_account,        passtext,           S]
       - [user_account,        twofa_secret,       S]
       - [user_account,        twofa_backup_codes, S]
+      - [partner_credential,  created_at,         R]
+      - [partner_credential,  cred_ref,           S]

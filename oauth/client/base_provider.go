@@ -3,7 +3,9 @@ package client
 import (
 	"context"
 	"fmt"
+	"net/http"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
 	"golang.org/x/oauth2"
 )
@@ -15,7 +17,7 @@ import (
 //
 //	DeriveAPIEndpoint — per-connection api_endpoint (e.g. GBP account name)
 //	DeriveCredential  — map exchanged token → stored credential (Meta long-lived swap)
-//	PostCallback      — extra writes after UpsertConnection (GBP SaveRefreshToken)
+//	PostCallback      — extra writes after UpsertConnection
 //	TestHealthcheck   — custom Test API call (Meta query-string auth)
 type BaseProvider struct {
 	Service      CredentialStore
@@ -67,13 +69,15 @@ func (b *BaseProvider) oauthConfig(ctx context.Context) (*oauth2.Config, error) 
 }
 
 // AuthURL is the default oauth2-library consent URL builder. Providers with a
-// custom URL shape (PKCE, client_key) override this on the outer struct.
-func (b *BaseProvider) AuthURL(ctx context.Context, partnerID int64, _ map[string]string) (string, error) {
+// custom URL shape (PKCE, client_key) override this on the outer struct. params
+// (e.g. entity_id) ride the OAuth state across the redirect so Callback can
+// recover them.
+func (b *BaseProvider) AuthURL(ctx context.Context, partnerID int64, params map[string]string) (string, error) {
 	cfg, err := b.oauthConfig(ctx)
 	if err != nil {
 		return "", err
 	}
-	state, err := b.Service.CreateOAuthState(ctx, partnerID, b.ProviderName, nil)
+	state, err := b.Service.CreateOAuthState(ctx, partnerID, b.ProviderName, params)
 	if err != nil {
 		return "", err
 	}
@@ -94,10 +98,13 @@ func (b *BaseProvider) Callback(ctx context.Context, code, state string) error {
 	if b.RequireRefresh && token.RefreshToken == "" {
 		return fmt.Errorf("%s: no refresh token; re-authorize with prompt=consent", b.ProviderName)
 	}
-	partnerID, _, err := b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
+	partnerID, extra, err := b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
 	if err != nil {
 		return err
 	}
+	// Recover the entity scope stashed at AuthURL so the store writes the right
+	// (partner, entity) row; 0 = tenant-wide for callers that never set it.
+	ctx = WithEntity(ctx, entityFromExtra(extra))
 	credRef, err := b.deriveCredential(ctx, token)
 	if err != nil {
 		return err
@@ -137,7 +144,7 @@ func (b *BaseProvider) Test(ctx context.Context, partnerID int64) error {
 	}
 	accessToken := credRef
 	if !b.SkipRefreshOnTest {
-		if accessToken, err = b.Service.RefreshAccessToken(ctx, partnerID, b.ProviderName, credRef); err != nil {
+		if accessToken, err = b.Service.RefreshAccessToken(ctx, partnerID, b.ProviderName); err != nil {
 			return err
 		}
 	}
@@ -145,8 +152,37 @@ func (b *BaseProvider) Test(ctx context.Context, partnerID int64) error {
 	case b.TestHealthcheck != nil:
 		return b.TestHealthcheck(ctx, b.Service, partnerID, accessToken, apiEndpoint)
 	case b.TestEndpoint != "":
-		return bearerHealthcheck(ctx, b.Service, partnerID, b.ProviderName, b.connType(), b.TestEndpoint, accessToken)
+		return b.bearerHealthcheck(ctx, partnerID, accessToken)
 	default:
 		return b.Service.UpdateConnectionStatus(ctx, partnerID, b.ProviderName, b.connType(), ConnStatusActive)
 	}
+}
+
+// bearerHealthcheck GETs TestEndpoint with a bearer token and records the
+// resulting connection status.
+func (b *BaseProvider) bearerHealthcheck(ctx context.Context, partnerID int64, accessToken string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.TestEndpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build healthcheck request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	return b.runHealthcheck(ctx, partnerID, req)
+}
+
+// runHealthcheck executes req and maps the outcome to a connection status
+// (Active on 2xx/3xx, Error otherwise or on transport failure). Providers with a
+// non-bearer auth scheme (Shopify header, Meta query string) build req then call
+// this to record the result.
+func (b *BaseProvider) runHealthcheck(ctx context.Context, partnerID int64, req *http.Request) error {
+	resp, err := common.HTTPClient().Do(req)
+	if err != nil {
+		_ = b.Service.UpdateConnectionStatus(ctx, partnerID, b.ProviderName, b.connType(), ConnStatusError)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		_ = b.Service.UpdateConnectionStatus(ctx, partnerID, b.ProviderName, b.connType(), ConnStatusError)
+		return fmt.Errorf("%s API returned HTTP %d", b.ProviderName, resp.StatusCode)
+	}
+	return b.Service.UpdateConnectionStatus(ctx, partnerID, b.ProviderName, b.connType(), ConnStatusActive)
 }
