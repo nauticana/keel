@@ -25,7 +25,7 @@ func APIKeyAuthMiddleware(apiKeys *APIKeyService, journal logger.ApplicationLogg
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			apiKey := r.Header.Get("X-API-Key")
 			if apiKey == "" {
-				http.Error(w, `{"error":"missing X-API-Key header"}`, http.StatusUnauthorized)
+				common.WriteJSONError(w, http.StatusUnauthorized, "missing X-API-Key header")
 				return
 			}
 			hash := sha256.Sum256([]byte(apiKey))
@@ -34,15 +34,15 @@ func APIKeyAuthMiddleware(apiKeys *APIKeyService, journal logger.ApplicationLogg
 			entry, err := apiKeys.LookupKey(r.Context(), keyHash)
 			if err != nil {
 				journal.Error(fmt.Sprintf("API key lookup error: %s", err.Error()))
-				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+				common.WriteJSONError(w, http.StatusInternalServerError, "internal server error")
 				return
 			}
 			if entry == nil {
-				http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
+				common.WriteJSONError(w, http.StatusUnauthorized, "invalid API key")
 				return
 			}
 			if entry.ExpiresAt.Year() > 1 && time.Now().After(entry.ExpiresAt) {
-				http.Error(w, `{"error":"API key expired"}`, http.StatusUnauthorized)
+				common.WriteJSONError(w, http.StatusUnauthorized, "API key expired")
 				return
 			}
 			go func() {
@@ -63,8 +63,9 @@ func APIKeyAuthMiddleware(apiKeys *APIKeyService, journal logger.ApplicationLogg
 // QuotaMiddleware enforces per-partner quota after authentication, reading
 // partner_id from context (set by APIKeyAuthMiddleware or oauth/resource.Middleware)
 // so one gate serves every auth method. Requests with no partner (anonymous
-// OAuth) pass through — gate those with an IP/client limiter if needed. 429 over
-// quota, 500 on quota-service error; usage is logged async on success.
+// OAuth) pass through — gate those with an IP/client limiter if needed.
+// Consumption is atomic and fail-closed: 429 (+Retry-After) over quota, 500
+// on quota-service error.
 func QuotaMiddleware(quota port.QuotaService, resource, caption string, journal logger.ApplicationLogger) func(http.Handler) http.Handler {
 	if resource == "" {
 		resource = "API_CALLS"
@@ -79,25 +80,21 @@ func QuotaMiddleware(quota port.QuotaService, resource, caption string, journal 
 				next.ServeHTTP(w, r)
 				return
 			}
-			allowed, err := quota.CheckQuota(r.Context(), partnerID, resource, 1)
+			allowed, resetAt, err := quota.ConsumeQuota(r.Context(), partnerID, resource, 1, caption)
 			if err != nil {
 				if journal != nil {
-					journal.Error(fmt.Sprintf("Quota check error for partner %d: %s", partnerID, err.Error()))
+					journal.Error(fmt.Sprintf("Quota consume error for partner %d: %s", partnerID, err.Error()))
 				}
-				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+				common.WriteJSONError(w, http.StatusInternalServerError, "internal server error")
 				return
 			}
 			if !allowed {
-				http.Error(w, `{"error":"daily API quota exceeded"}`, http.StatusTooManyRequests)
+				if !resetAt.IsZero() {
+					w.Header().Set("Retry-After", strconv.Itoa(int(time.Until(resetAt).Seconds())+1))
+				}
+				common.WriteJSONError(w, http.StatusTooManyRequests, "API quota exceeded")
 				return
 			}
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := quota.LogUsage(ctx, partnerID, resource, 1, caption); err != nil && journal != nil {
-					journal.Error(fmt.Sprintf("Quota usage log error for partner %d: %s", partnerID, err.Error()))
-				}
-			}()
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -131,7 +128,7 @@ func RateLimitMiddleware(c cache.CacheService, limit int64, window time.Duration
 			}
 			if count > limit {
 				w.Header().Set("Retry-After", strconv.Itoa(int(window.Seconds())))
-				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+				common.WriteJSONError(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return
 			}
 			next.ServeHTTP(w, r)

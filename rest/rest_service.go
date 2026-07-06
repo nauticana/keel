@@ -87,9 +87,9 @@ type ReportParam struct {
 }
 
 type RestReport struct {
-	Id          string
-	Version     string
-	QueryName   string
+	Id        string
+	Version   string
+	QueryName string
 	// Long-form text rendered as the report's page header. The short
 	// nav-rail label comes from application_menu_item.caption — there's
 	// no need to duplicate it here. NOT NULL in the schema; every report

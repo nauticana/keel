@@ -37,7 +37,7 @@ func (s *PubSubSubscriber) Subscribe(ctx context.Context, subscription string, h
 			Ack:        m.Ack,
 			Nack:       m.Nack,
 		}
-		if err := handler(ctx, msg); err != nil {
+		if err := safeHandle(ctx, handler, msg); err != nil {
 			m.Nack()
 			return
 		}

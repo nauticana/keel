@@ -120,8 +120,8 @@ func (s *RelationAPI) Insert(ctx context.Context, partnerID int64, userID int, d
 	return s.DataService.Insert(ctx, partnerID, userID, data)
 }
 
-func (s *RelationAPI) Update(ctx context.Context, userID int, data any) error {
-	return s.DataService.Update(ctx, userID, data)
+func (s *RelationAPI) Update(ctx context.Context, partnerID int64, userID int, data any) error {
+	return s.DataService.Update(ctx, partnerID, userID, data)
 }
 
 func (s *RelationAPI) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {
@@ -354,7 +354,7 @@ func (s *RelationAPI) postInTx(ctx context.Context, view data.TxView, partnerID 
 				return err
 			}
 		case "U":
-			if err := parentSvc.Update(ctx, userID, item); err != nil {
+			if err := parentSvc.Update(ctx, partnerID, userID, item); err != nil {
 				return err
 			}
 			s.propogateKeys(item)

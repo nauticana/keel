@@ -50,6 +50,11 @@ func NewJWTValidatorFromFlags(httpc *http.Client) (port.TokenValidator, error) {
 }
 
 func (v *JWTValidator) Validate(ctx context.Context, bearer string) (*port.Principal, error) {
+	// Issuer is a required control (NewJWTValidator doc); fail closed rather
+	// than let an empty issuer silently skip iss validation in VerifyRS256.
+	if v.issuer == "" {
+		return nil, fmt.Errorf("oauth: JWT validator has no issuer configured")
+	}
 	mc, err := crypto.VerifyRS256(ctx, v.jwks, bearer, v.audience, v.issuer)
 	if err != nil {
 		return nil, err

@@ -150,8 +150,16 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 	return nil
 }
 
-// backoffSeconds is exponential (2^attempt) capped at one hour.
+// backoffSeconds is exponential (2^attempt) capped at one hour. attempt is
+// clamped before the shift so a large MaxAttempts can't overflow int into a
+// negative delay (which would schedule the retry in the past → hot loop).
 func backoffSeconds(attempt int) int {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt >= 12 { // 2^12 = 4096 > 3600 cap; higher shifts risk overflow
+		return 3600
+	}
 	s := 1 << attempt
 	if s > 3600 {
 		return 3600

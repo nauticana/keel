@@ -18,6 +18,11 @@ import (
 // SQS's visibility timeout elapses, causing duplicate processing.
 const sqsAckDeadline = 10 * time.Second
 
+// sqsNackBackoffSeconds delays redelivery after a handler failure. A zero
+// visibility timeout would make a poison message reappear instantly and spin
+// the receive loop; a short backoff paces retries instead.
+const sqsNackBackoffSeconds int32 = 30
+
 // SQSSubscriber subscribes to messages from AWS SQS queues. Queue URLs are
 // resolved by name on first use and cached for the lifetime of the
 // subscriber.
@@ -90,15 +95,15 @@ func (s *SQSSubscriber) Subscribe(ctx context.Context, subscription string, hand
 				Nack: func() {
 					ackCtx, cancel := context.WithTimeout(context.Background(), sqsAckDeadline)
 					defer cancel()
-					zero := int32(0)
+					backoff := sqsNackBackoffSeconds
 					_, _ = s.client.ChangeMessageVisibility(ackCtx, &sqs.ChangeMessageVisibilityInput{
 						QueueUrl:          &queueURL,
 						ReceiptHandle:     receiptHandle,
-						VisibilityTimeout: zero,
+						VisibilityTimeout: backoff,
 					})
 				},
 			}
-			if err := handler(ctx, msg); err != nil {
+			if err := safeHandle(ctx, handler, msg); err != nil {
 				msg.Nack()
 			} else {
 				msg.Ack()

@@ -226,6 +226,60 @@ func TestDelete_UserSpecific_ForcesOwnUserId(t *testing.T) {
 	}
 }
 
+// TestUpdate_PartnerSpecific_ScopesToPartner is the KR-001 regression for
+// Update: a non-global caller's UPDATE is pinned to their own partner_id, so a
+// forged item.PartnerId can't rewrite another tenant's row.
+func TestUpdate_PartnerSpecific_ScopesToPartner(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: nil}
+	s, qc := newService(t, partnerSpecificTable(), auth)
+
+	const sessionPartner = 42
+	item := map[string]any{"Id": int64(1), "Amount": int64(100), "PartnerId": int64(999)}
+	if err := s.Update(context.Background(), sessionPartner, 7, item); !errors.Is(err, errSentinel) {
+		t.Fatalf("Update returned %v, want sentinel", err)
+	}
+	if !strings.Contains(qc.sql, `"partner_id" = $`) {
+		t.Fatalf("update SQL missing partner scope: %s", qc.sql)
+	}
+	if last := qc.args[len(qc.args)-1]; last != int64(sessionPartner) {
+		t.Fatalf("partner predicate bound to %v, want session partner %d", last, sessionPartner)
+	}
+}
+
+// TestUpdate_PartnerSpecific_GlobalRoleBypassesScope confirms a global-role
+// caller keeps the cross-partner reach Get/Delete already grant.
+func TestUpdate_PartnerSpecific_GlobalRoleBypassesScope(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: [][]any{{1}}}
+	s, qc := newService(t, partnerSpecificTable(), auth)
+
+	item := map[string]any{"Id": int64(1), "Amount": int64(100)}
+	if err := s.Update(context.Background(), 42, 7, item); !errors.Is(err, errSentinel) {
+		t.Fatalf("Update returned %v, want sentinel", err)
+	}
+	if strings.Contains(qc.sql, `"partner_id" = $`) {
+		t.Fatalf("global role should not be partner-scoped: %s", qc.sql)
+	}
+}
+
+// TestUpdate_UserSpecific_ForcesOwnUserId is the owner-lock regression after
+// sqlUpdateByIDForUser was replaced with the dynamic predicate.
+func TestUpdate_UserSpecific_ForcesOwnUserId(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: nil}
+	s, qc := newService(t, userSpecificTable(), auth)
+
+	const sessionUser = 7
+	item := map[string]any{"Id": int64(1), "Label": "x"}
+	if err := s.Update(context.Background(), 0, sessionUser, item); !errors.Is(err, errSentinel) {
+		t.Fatalf("Update returned %v, want sentinel", err)
+	}
+	if !strings.Contains(qc.sql, `"user_id" = $`) {
+		t.Fatalf("update SQL missing user owner-lock: %s", qc.sql)
+	}
+	if last := qc.args[len(qc.args)-1]; last != sessionUser {
+		t.Fatalf("user predicate bound to %v, want %d", last, sessionUser)
+	}
+}
+
 // TestGet_PartnerAdmin_InjectsPartnerUserScope verifies that a Get
 // against the user_account table by a partner-scoped role appends the
 // `id IN (SELECT user_id FROM partner_user WHERE partner_id = $N)`

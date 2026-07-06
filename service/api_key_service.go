@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
@@ -36,6 +38,11 @@ type APIKeyService struct {
 	// QuotaCaption is the caption passed to QuotaService.LogUsage.
 	// Defaults to "public-api" when empty.
 	QuotaCaption string
+
+	// CacheTTL bounds how long a validated key stays trusted in memory, and
+	// therefore the worst-case lag before an is_active=FALSE revocation takes
+	// effect. Defaults to 1 minute when zero.
+	CacheTTL time.Duration
 
 	mu    sync.RWMutex
 	cache map[string]*APIKeyCacheEntry
@@ -89,6 +96,9 @@ func (m *APIKeyService) Init(ctx context.Context) {
 	if m.QuotaCaption == "" {
 		m.QuotaCaption = "public-api"
 	}
+	if m.CacheTTL == 0 {
+		m.CacheTTL = time.Minute
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cache == nil {
@@ -118,24 +128,25 @@ func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID i
 	} else {
 		res, err = m.qs.Query(ctx, insertUserAPIKey, partnerID, keyName, prefix, keyHash, scopes, userID)
 	}
-	if err != nil || len(res.Rows) == 0 {
+	if err != nil {
 		return "", "", err
+	}
+	if len(res.Rows) == 0 {
+		return "", "", fmt.Errorf("api key insert returned no row for partner %d", partnerID)
 	}
 	return plainKey, prefix, nil
 }
 
 // LookupKey resolves a hashed API key to its partner / key id / scopes,
-// caching positive matches for up to 5 minutes. A cache hit is also gated
-// on the row's expires_at — keys past their declared expiry are rejected
-// even when still in the cache so a freshly-revoked or end-of-life key
-// stops working immediately rather than after the TTL elapses. Cache
-// entries with a zero ExpiresAt indicate "no expiry set" and pass.
+// caching positive matches for CacheTTL. A cache hit is also gated on the row's
+// expires_at. Revocation via is_active=FALSE (the validateAPIKey filter) is not
+// visible to a cache hit, so it takes effect within CacheTTL, not instantly.
 func (m *APIKeyService) LookupKey(ctx context.Context, keyHash string) (*APIKeyCacheEntry, error) {
 	m.mu.RLock()
 	entry, ok := m.cache[keyHash]
 	m.mu.RUnlock()
 	now := time.Now()
-	if ok && now.Sub(entry.CachedAt) < 5*time.Minute {
+	if ok && now.Sub(entry.CachedAt) < m.CacheTTL {
 		if !entry.ExpiresAt.IsZero() && now.After(entry.ExpiresAt) {
 			// Expired key — drop from cache and refuse without a DB hit.
 			m.InvalidateKey(keyHash)
@@ -161,9 +172,9 @@ func (m *APIKeyService) LookupKey(ctx context.Context, keyHash string) (*APIKeyC
 		return nil, nil
 	}
 	entry = &APIKeyCacheEntry{
-		KeyID:     row[0].(int64),
-		PartnerID: row[1].(int64),
-		Scopes:    row[2].(string),
+		KeyID:     common.AsInt64(row[0]),
+		PartnerID: common.AsInt64(row[1]),
+		Scopes:    common.AsString(row[2]),
 		ExpiresAt: expires,
 		CachedAt:  now,
 	}

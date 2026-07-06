@@ -10,8 +10,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // hmacHex is the same wire format every provider's webhook signature
@@ -28,12 +30,12 @@ func hmacHex(secret string, parts ...[]byte) string {
 // captureRequest reads + parses the inbound request into a small struct
 // the assertion helpers can inspect. Used by the httptest handlers below.
 type captureRequest struct {
-	method      string
-	path        string
-	contentType string
+	method        string
+	path          string
+	contentType   string
 	authorization string
-	idempotency string
-	body        string
+	idempotency   string
+	body          string
 }
 
 func capture(r *http.Request) captureRequest {
@@ -134,9 +136,9 @@ func TestAirwallex_RequestInstantPayout_InsufficientBalanceTyped(t *testing.T) {
 	p.apiBase = ts.URL
 
 	_, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		UserID:            1, PartnerID: 1,
+		UserID: 1, PartnerID: 1,
 		ProviderAccountID: "acct_xxx", Amount: 100, Currency: "USD",
-		IdempotencyKey:    "k-1",
+		IdempotencyKey: "k-1",
 	})
 	if !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("err=%v, want ErrInsufficientBalance", err)
@@ -253,7 +255,7 @@ func TestStripeConnect_RequestInstantPayout_FormShape(t *testing.T) {
 	res, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
 		UserID: 1, PartnerID: 1,
 		ProviderAccountID: "acct_x", Amount: 2500, Currency: "USD",
-		IdempotencyKey:    "idem-1",
+		IdempotencyKey: "idem-1",
 	})
 	if err != nil {
 		t.Fatalf("RequestInstantPayout: %v", err)
@@ -278,7 +280,7 @@ func TestStripeConnect_RequestInstantPayout_FormShape(t *testing.T) {
 func TestStripeConnect_VerifyWebhook_FullyActivated(t *testing.T) {
 	p, _ := NewStripeConnectProvider("sk", "shh", nil)
 	body := []byte(`{"id":"evt_1","type":"account.updated","data":{"object":{"id":"acct_x","details_submitted":true,"payouts_enabled":true}}}`)
-	const ts = "100"
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	sig := hmacHex("shh", []byte(ts), []byte("."), body)
 	ev, err := p.VerifyAndParseWebhook(map[string][]string{
 		"Stripe-Signature": {"t=" + ts + ",v1=" + sig},
@@ -288,6 +290,18 @@ func TestStripeConnect_VerifyWebhook_FullyActivated(t *testing.T) {
 	}
 	if ev.Type != PayoutEventAccountActivated || !ev.Activated {
 		t.Errorf("event=%+v, want activated", ev)
+	}
+}
+
+func TestStripeConnect_VerifyWebhook_RejectsStaleTimestamp(t *testing.T) {
+	p, _ := NewStripeConnectProvider("sk", "shh", nil)
+	body := []byte(`{"id":"evt_1","type":"account.updated","data":{"object":{"id":"acct_x","details_submitted":true,"payouts_enabled":true}}}`)
+	ts := strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10) // replayed old delivery
+	sig := hmacHex("shh", []byte(ts), []byte("."), body)
+	if _, err := p.VerifyAndParseWebhook(map[string][]string{
+		"Stripe-Signature": {"t=" + ts + ",v1=" + sig},
+	}, body); err == nil {
+		t.Fatal("expected stale timestamp to be rejected")
 	}
 }
 

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nauticana/keel/common"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nauticana/keel/common"
 )
 
 // NATS configuration:

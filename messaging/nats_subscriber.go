@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nauticana/keel/port"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nauticana/keel/port"
 )
 
 // NATSSubscriber consumes a JetStream subject via a durable pull consumer.
@@ -86,7 +86,7 @@ func (s *NATSSubscriber) dispatch(ctx context.Context, m jetstream.Msg, handler 
 		Ack:        func() { _ = m.Ack() },
 		Nack:       func() { _ = m.NakWithDelay(natsBackoff) },
 	}
-	if err := handler(ctx, msg); err != nil {
+	if err := safeHandle(ctx, handler, msg); err != nil {
 		// NakWithDelay tells JetStream to wait `natsBackoff` before
 		// re-delivering — the default Nak() retries immediately and
 		// turns a sustained handler failure into a tight loop that

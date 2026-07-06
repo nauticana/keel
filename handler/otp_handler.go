@@ -67,8 +67,8 @@ const OTPTokenTTL = 5 * time.Minute
 // resend timer can match the code's actual lifetime instead of using
 // a client-side fallback.
 type otpSendResponse struct {
-	OtpToken            string `json:"otpToken"`
-	ResendCountdownSec  int    `json:"resendCountdownSec"`
+	OtpToken           string `json:"otpToken"`
+	ResendCountdownSec int    `json:"resendCountdownSec"`
 }
 
 func makeOtpSendResponse(token string) otpSendResponse {
@@ -88,7 +88,7 @@ const otpTokenPrefix = "otp_token:"
 // same channel SendOTP used. Older single-int values are still parsed
 // as legacy phone-OTP for backward compatibility with in-flight tokens
 // minted before the email-OTP feature shipped.
-func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel string) (string, error) {
+func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel, purpose string) (string, error) {
 	if h.Cache == nil {
 		return "", fmt.Errorf("OTPHandler: Cache must be set")
 	}
@@ -97,7 +97,7 @@ func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel string) (
 		return "", fmt.Errorf("otp: rng: %w", err)
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
-	value := strconv.Itoa(userID) + ":" + channel
+	value := strconv.Itoa(userID) + ":" + channel + ":" + purpose
 	if err := h.Cache.Set(r.Context(), otpTokenPrefix+token, value, OTPTokenTTL); err != nil {
 		return "", fmt.Errorf("otp: cache set: %w", err)
 	}
@@ -112,27 +112,32 @@ func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel string) (
 // Legacy values without a ":channel" suffix (minted before email-OTP
 // support) are interpreted as phone-channel so in-flight tokens
 // continue working through the rolling deploy window.
-func (h *OTPHandler) resolveOTPToken(r *http.Request, token string) (int, string) {
+func (h *OTPHandler) resolveOTPToken(r *http.Request, token string) (userID int, channel, purpose string) {
 	if h.Cache == nil || token == "" {
-		return 0, ""
+		return 0, "", ""
 	}
 	v, err := h.Cache.Get(r.Context(), otpTokenPrefix+token)
 	if err != nil || v == "" {
-		return 0, ""
+		return 0, "", ""
 	}
-	idStr, channel := v, otpChannelPhone
-	if idx := strings.Index(v, ":"); idx >= 0 {
-		idStr = v[:idx]
-		channel = v[idx+1:]
+	// Value is "userID:channel[:purpose]". A missing purpose (legacy in-flight
+	// token) resolves to "" — VerifyOTP treats that as "any purpose".
+	parts := strings.SplitN(v, ":", 3)
+	idStr, ch, pp := parts[0], otpChannelPhone, ""
+	if len(parts) >= 2 {
+		ch = parts[1]
+	}
+	if len(parts) >= 3 {
+		pp = parts[2]
 	}
 	id, err := strconv.Atoi(idStr)
 	if err != nil || id <= 0 {
-		return 0, ""
+		return 0, "", ""
 	}
-	if channel != otpChannelPhone && channel != otpChannelEmail {
-		channel = otpChannelPhone
+	if ch != otpChannelPhone && ch != otpChannelEmail {
+		ch = otpChannelPhone
 	}
-	return id, channel
+	return id, ch, pp
 }
 
 // consumeOTPToken deletes a token after a successful verify so the
@@ -154,10 +159,10 @@ func (h *OTPHandler) consumeOTPToken(r *http.Request, token string) {
 // (Contact is an email address, lowercased + trimmed). Older clients
 // that omit ContactType continue to hit the phone path.
 type otpSendRequest struct {
-	Contact        string          `json:"contact"`                 // phone number or email (raw user input)
-	ContactType    string          `json:"contactType,omitempty"`   // "phone" (default) | "email"
-	Purpose        string          `json:"purpose"`                 // login | register | verify
-	DefaultRegion  string          `json:"defaultRegion,omitempty"` // ISO region for E.164 parse (default "US"); ignored for email
+	Contact       string `json:"contact"`                 // phone number or email (raw user input)
+	ContactType   string `json:"contactType,omitempty"`   // "phone" (default) | "email"
+	Purpose       string `json:"purpose"`                 // login | register | verify
+	DefaultRegion string `json:"defaultRegion,omitempty"` // ISO region for E.164 parse (default "US"); ignored for email
 	// SecondaryContact is the user's claim for the OTHER channel:
 	// when ContactType=email, this is the phone the user typed at
 	// signup. Stored on the new user_account row so they have both
@@ -304,7 +309,7 @@ func (h *OTPHandler) sendOTPPhone(w http.ResponseWriter, r *http.Request, req *o
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate OTP")
 		return
 	}
-	token, err := h.mintOTPToken(r, session.Id, otpChannelPhone)
+	token, err := h.mintOTPToken(r, session.Id, otpChannelPhone, req.Purpose)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue OTP token")
 		return
@@ -370,7 +375,7 @@ func (h *OTPHandler) sendOTPEmail(w http.ResponseWriter, r *http.Request, req *o
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate OTP")
 		return
 	}
-	token, err := h.mintOTPToken(r, session.Id, otpChannelEmail)
+	token, err := h.mintOTPToken(r, session.Id, otpChannelEmail, req.Purpose)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue OTP token")
 		return
@@ -486,7 +491,7 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, _ := h.resolveOTPToken(r, req.OTPToken)
+	userID, _, purpose := h.resolveOTPToken(r, req.OTPToken)
 	if userID <= 0 {
 		// Either the token never existed, or it's a fake-token from
 		// the login fall-through (userID=0). Generic 401 — same shape
@@ -500,7 +505,7 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	// IncrementOTPAttempts / ClearOTP calls. We still keep the response
 	// detail generic to avoid distinguishing "wrong code" from "expired"
 	// from "max attempts exceeded".
-	if err := h.UserService.VerifyOTP(userID, req.Code); err != nil {
+	if err := h.UserService.VerifyOTP(userID, purpose, req.Code); err != nil {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired code")
 		return
 	}
@@ -552,7 +557,7 @@ func (h *OTPHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 		req.Purpose = "login"
 	}
 
-	userID, channel := h.resolveOTPToken(r, req.OTPToken)
+	userID, channel, purpose := h.resolveOTPToken(r, req.OTPToken)
 	if userID <= 0 {
 		// Same anti-enumeration shape as the login fall-through:
 		// pretend success without dispatching.
@@ -571,7 +576,7 @@ func (h *OTPHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 	// Refresh the token TTL (preserving the channel suffix) so the
 	// legitimate user has the full Verify window after a resend.
 	if h.Cache != nil {
-		_ = h.Cache.Set(r.Context(), otpTokenPrefix+req.OTPToken, strconv.Itoa(userID)+":"+channel, OTPTokenTTL)
+		_ = h.Cache.Set(r.Context(), otpTokenPrefix+req.OTPToken, strconv.Itoa(userID)+":"+channel+":"+purpose, OTPTokenTTL)
 	}
 
 	// Resend on the same channel SendOTP used. Channel was stored

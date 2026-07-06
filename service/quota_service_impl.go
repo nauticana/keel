@@ -20,6 +20,7 @@ const (
 	qGetPartnerQuota        = "get_partner_quota"
 	qGetPartnerAddon        = "get_partner_addon"
 	qAddUsage               = "add_usage"
+	qLockQuota              = "lock_quota"
 )
 
 var quotaQueries = map[string]string{
@@ -50,7 +51,16 @@ SELECT addon_id, COUNT(*) AS active_count
  GROUP BY addon_id
 `,
 
-	qAddUsage: "INSERT INTO usage_ledger (partner_id, resource_name, amount, notes) VALUES (?, ?, ?, ?)",
+	// ON CONFLICT merge: the PK (partner_id, usage_time) collides for
+	// same-microsecond writers; summing amounts preserves SUM(amount).
+	qAddUsage: `
+INSERT INTO usage_ledger (partner_id, resource_name, amount, notes) VALUES (?, ?, ?, ?)
+ON CONFLICT (partner_id, usage_time) DO UPDATE SET amount = usage_ledger.amount + EXCLUDED.amount
+`,
+
+	// Tx-scoped advisory lock keyed "partnerID:resource" — serializes
+	// ConsumeQuota per partner+resource without locking any table row.
+	qLockQuota: "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
 
 	qGetPartnerQuota: `
 SELECT MAX(a.max_value)
@@ -119,6 +129,9 @@ type QuotaServiceDb struct {
 	// Its keys are the routing table CheckQuota uses to choose live-count vs
 	// usage_ledger for a given resource.
 	resourceQueries map[string]string
+	// txQueries is the full query map handed to BeginTx — transactions carry
+	// their own named-SQL map, separate from the shared query service.
+	txQueries map[string]string
 
 	// quotaSF / addonSF collapse concurrent fresh-load fan-out: when N
 	// callers hit a cold partner cache for the same partner_id at once,
@@ -158,27 +171,18 @@ func (s *QuotaServiceDb) init(ctx context.Context) {
 			all[k] = v
 		}
 		s.qs = s.Repo.GetQueryService(ctx, all)
+		s.txQueries = all
 	})
 }
 
-// CheckQuota returns true when (partnerID, quotaName) has remaining
-// allowance for `amount` more units in the current period. Cache hits
-// short-circuit the DB; misses load all of the partner's quotas in a
-// single round-trip and populate the per-resource entries.
-//
-// Period boundaries are computed in UTC so cross-region replicas /
-// workers agree on "start of day" and "start of month" — the previous
-// implementation used the server's local time zone and would disagree
-// across regions.
-func (s *QuotaServiceDb) CheckQuota(ctx context.Context, partnerID int64, quotaName string, amount int64) (bool, error) {
-	s.init(ctx)
-
+// quotaItem returns the cached (partnerID, quotaName) entry, refreshing the
+// partner's quota set on miss/expiry. ok=false means not in plan.
+func (s *QuotaServiceDb) quotaItem(ctx context.Context, partnerID int64, quotaName string, now time.Time) (QuotaItem, bool, error) {
 	s.mu.RLock()
 	partnerMap := s.quotaCache[partnerID]
 	qItem, ok := partnerMap[quotaName]
 	s.mu.RUnlock()
 
-	now := time.Now().UTC()
 	if !ok || now.After(qItem.ExpiresAt) {
 		key := strconv.FormatInt(partnerID, 10)
 		_, err, _ := s.quotaSF.Do(key, func() (any, error) {
@@ -206,13 +210,56 @@ func (s *QuotaServiceDb) CheckQuota(ctx context.Context, partnerID int64, quotaN
 			return nil, nil
 		})
 		if err != nil {
-			return false, err
+			return QuotaItem{}, false, err
 		}
 		s.mu.RLock()
 		qItem, ok = s.quotaCache[partnerID][quotaName]
 		s.mu.RUnlock()
 	}
+	return qItem, ok, nil
+}
 
+// periodStart / nextReset are the UTC window boundaries for a quota period:
+// 'D' daily, 'M' monthly, anything else all-time (zero time).
+func periodStart(period string, now time.Time) time.Time {
+	switch period {
+	case "M":
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	case "D":
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	default:
+		return time.Time{}
+	}
+}
+
+func nextReset(period string, now time.Time) time.Time {
+	switch period {
+	case "M":
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
+	case "D":
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+	default:
+		return time.Time{}
+	}
+}
+
+// CheckQuota returns true when (partnerID, quotaName) has remaining
+// allowance for `amount` more units in the current period. Cache hits
+// short-circuit the DB; misses load all of the partner's quotas in a
+// single round-trip and populate the per-resource entries.
+//
+// Period boundaries are computed in UTC so cross-region replicas /
+// workers agree on "start of day" and "start of month" — the previous
+// implementation used the server's local time zone and would disagree
+// across regions.
+func (s *QuotaServiceDb) CheckQuota(ctx context.Context, partnerID int64, quotaName string, amount int64) (bool, error) {
+	s.init(ctx)
+
+	now := time.Now().UTC()
+	qItem, ok, err := s.quotaItem(ctx, partnerID, quotaName, now)
+	if err != nil {
+		return false, err
+	}
 	if !ok {
 		// Partner has no plan or the requested resource is not in the
 		// plan. Reject rather than allow — fail-closed.
@@ -234,16 +281,7 @@ func (s *QuotaServiceDb) CheckQuota(ctx context.Context, partnerID int64, quotaN
 			usage = common.AsInt64(res.Rows[0][0])
 		}
 	} else {
-		var startDate time.Time
-		switch qItem.Period {
-		case "M":
-			startDate = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-		case "D":
-			startDate = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-		default:
-			startDate = time.Time{}
-		}
-		res, err := s.qs.Query(ctx, qGetResourceUsage, partnerID, quotaName, startDate)
+		res, err := s.qs.Query(ctx, qGetResourceUsage, partnerID, quotaName, periodStart(qItem.Period, now))
 		if err != nil {
 			return false, fmt.Errorf("failed to get resource usage for partner: %d", partnerID)
 		}
@@ -256,6 +294,73 @@ func (s *QuotaServiceDb) CheckQuota(ctx context.Context, partnerID int64, quotaN
 		return false, nil
 	}
 	return true, nil
+}
+
+// ConsumeQuota atomically checks and records usage under a per-(partner,
+// resource) advisory lock: bursts cannot overshoot and a failed write denies.
+// Live-count resources insert their counted entity outside this tx, so
+// overshoot there is only narrowed, not eliminated.
+func (s *QuotaServiceDb) ConsumeQuota(ctx context.Context, partnerID int64, resource string, amount int64, description string) (bool, time.Time, error) {
+	s.init(ctx)
+
+	now := time.Now().UTC()
+	qItem, ok, err := s.quotaItem(ctx, partnerID, resource, now)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	if !ok {
+		return false, time.Time{}, nil // no plan / resource not in plan — fail closed
+	}
+	resetAt := nextReset(qItem.Period, now)
+
+	tx, err := s.Repo.BeginTx(ctx, s.txQueries)
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("consume quota %s for partner %d: begin: %w", resource, partnerID, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	lockKey := strconv.FormatInt(partnerID, 10) + ":" + resource
+	if _, err := tx.Query(ctx, qLockQuota, lockKey); err != nil {
+		return false, time.Time{}, fmt.Errorf("consume quota %s for partner %d: lock: %w", resource, partnerID, err)
+	}
+
+	if qItem.Limit >= 0 {
+		var usage int64
+		if _, hasCount := s.resourceQueries[resource]; hasCount {
+			res, err := tx.Query(ctx, resource, partnerID)
+			if err != nil {
+				return false, time.Time{}, fmt.Errorf("consume quota %s for partner %d: count: %w", resource, partnerID, err)
+			}
+			if len(res.Rows) > 0 {
+				usage = common.AsInt64(res.Rows[0][0])
+			}
+		} else {
+			res, err := tx.Query(ctx, qGetResourceUsage, partnerID, resource, periodStart(qItem.Period, now))
+			if err != nil {
+				return false, time.Time{}, fmt.Errorf("consume quota %s for partner %d: usage: %w", resource, partnerID, err)
+			}
+			if len(res.Rows) > 0 {
+				usage = common.AsInt64(res.Rows[0][0])
+			}
+		}
+		if usage+amount > qItem.Limit {
+			return false, resetAt, nil
+		}
+	}
+
+	if _, err := tx.Query(ctx, qAddUsage, partnerID, resource, amount, description); err != nil {
+		return false, time.Time{}, fmt.Errorf("consume quota %s for partner %d: record: %w", resource, partnerID, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, time.Time{}, fmt.Errorf("consume quota %s for partner %d: commit: %w", resource, partnerID, err)
+	}
+	committed = true
+	return true, resetAt, nil
 }
 
 // CheckAddon returns true when the partner has an active subscription

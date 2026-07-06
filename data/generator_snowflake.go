@@ -81,12 +81,9 @@ type SnowflakeGenerator struct {
 	stateErrFn   func(error)
 }
 
-// statePersistEveryMs throttles the state-file rewrite cadence.
-// Sized so a crashing node that's been minting ids steadily can
-// rewind by at most this many ms — the corresponding window of
-// potential id-tuple collision after a wall-clock rewind. 1s is
-// the smallest interval that meaningfully reduces I/O without
-// inflating the recovery risk surface.
+// statePersistEveryMs is the size of the future window each state-file write
+// reserves (persist-ahead). Larger = fewer writes but more id time "borrowed"
+// from the future after a restart; 1s balances both.
 const statePersistEveryMs int64 = 1000
 
 // NewSnowflakeGenerator returns a SnowflakeGenerator bound to nodeID (0..1023)
@@ -235,15 +232,14 @@ func (s *SnowflakeGenerator) NextID() int64 {
 	} else {
 		s.seq = 0
 	}
-	if s.statePath != "" && nowMs-s.lastPersistedMs >= statePersistEveryMs {
-		// Debounce state-file writes to once per statePersistEveryMs
-		// (v0.4.5 perf). The previous implementation rewrote on every
-		// millisecond advance — up to ~1000 atomic-rename pairs/sec
-		// at saturation. Per-second persistence gives us bounded
-		// cross-restart drift (≤ statePersistEveryMs) at ~1000× lower
-		// I/O.
-		s.writeSnowflakeState(s.statePath, nowMs)
-		s.lastPersistedMs = nowMs
+	if s.statePath != "" && nowMs >= s.lastPersistedMs {
+		// Persist-ahead: reserve a watermark statePersistEveryMs into the
+		// future so the on-disk value always exceeds every id minted since the
+		// last write. A crash + wall-clock rewind then resumes beyond all
+		// issued ids (no reuse), while we still write only ~once per window.
+		reserved := nowMs + statePersistEveryMs
+		s.writeSnowflakeState(s.statePath, reserved)
+		s.lastPersistedMs = reserved
 	}
 	s.lastMs = nowMs
 

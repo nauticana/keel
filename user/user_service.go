@@ -101,7 +101,7 @@ type UserService interface {
 	// OTP-based authentication
 	GetUserByPhone(phone string) (*model.UserSession, error)
 	GenerateOTP(userId int, purpose string) (string, error)
-	VerifyOTP(userId int, code string) error
+	VerifyOTP(userId int, purpose, code string) error
 	IncrementOTPAttempts(userId int) error
 	ClearOTP(userId int) error
 

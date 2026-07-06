@@ -76,7 +76,9 @@ func (h *RestHandler) castFilterValues(filter map[string]string) (map[string]any
 	for k, v := range filter {
 		matchedCol, ok := cols[k]
 		if !ok {
-			continue
+			// Reject, don't drop: a dropped key silently broadens Get/List or
+			// reduces a Delete WHERE to the bare partner scope (partition wipe).
+			return nil, fmt.Errorf("unknown filter field '%s'", k)
 		}
 		colName := matchedCol.ColumnName
 		switch matchedCol.DataType {

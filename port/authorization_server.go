@@ -11,9 +11,9 @@ import (
 // touching the AS. When --oauth_as_mode=external the AS is absent and keel acts
 // only as the resource server (see TokenValidator).
 type AuthorizationServer interface {
-	Metadata() AuthServerMetadata                                                            // RFC 8414
-	JWKS() JWKS                                                                               // token-signing public keys
-	Register(ctx context.Context, req ClientRegistration) (*OAuthClient, error)              // RFC 7591 DCR
+	Metadata() AuthServerMetadata                                               // RFC 8414
+	JWKS() JWKS                                                                 // token-signing public keys
+	Register(ctx context.Context, req ClientRegistration) (*OAuthClient, error) // RFC 7591 DCR
 	// ValidateAuthorizeRequest checks client_id + redirect_uri + PKCE before any
 	// user interaction (so the consent UI shows only for a legitimate client and
 	// errors never redirect to an unregistered URI), and returns the effective
@@ -21,7 +21,7 @@ type AuthorizationServer interface {
 	ValidateAuthorizeRequest(ctx context.Context, req AuthorizeRequest) (*OAuthClient, []string, error)
 	Authorize(ctx context.Context, req AuthorizeRequest) (*AuthorizeResult, error)           // issue code after auth+consent
 	Token(ctx context.Context, req TokenRequest) (*TokenResponse, error)                     // dispatched by grant_type
-	Revoke(ctx context.Context, token, hint string, client ClientAuth) error                // RFC 7009
+	Revoke(ctx context.Context, token, hint string, client ClientAuth) error                 // RFC 7009
 	Introspect(ctx context.Context, token string, client ClientAuth) (*Introspection, error) // RFC 7662
 }
 

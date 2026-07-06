@@ -35,6 +35,15 @@ func WriteJSONPaged(w http.ResponseWriter, status int, data interface{}, paginat
 	writeEnvelope(w, status, data, pagination)
 }
 
+// WriteJSONError emits the flat `{"error": msg}` body used by middleware
+// error paths (not the {data, meta} envelope).
+func WriteJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 func writeEnvelope(w http.ResponseWriter, status int, data interface{}, pagination interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

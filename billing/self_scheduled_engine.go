@@ -174,7 +174,7 @@ func (e *SelfScheduledEngine) billDuePartners(ctx context.Context) {
 			e.logErr(fmt.Sprintf("self-scheduled: create invoice for partner %d: %s", pid, err.Error()))
 			continue
 		}
-		e.chargeInvoice(ctx, pid, invID, draft.TotalMinor(), draft.Currency, 0, e.advanceRenewalFn(ctx, pid))
+		e.chargeInvoice(ctx, pid, invID, draft.TotalMinor(), draft.Currency, 0, strconv.FormatInt(invID, 10), e.advanceRenewalFn(ctx, pid))
 	}
 }
 
@@ -204,14 +204,17 @@ func (e *SelfScheduledEngine) retryOpenInvoices(ctx context.Context) {
 		totalMinor := common.AsInt64(row[2]) // authoritative integer minor units
 		currency := common.AsString(row[3])
 		attempts := common.AsInt64(row[4])
-		e.chargeInvoice(ctx, partnerID, invID, totalMinor, currency, attempts, e.advanceRenewalFn(ctx, partnerID))
+		e.chargeInvoice(ctx, partnerID, invID, totalMinor, currency, attempts, strconv.FormatInt(invID, 10), e.advanceRenewalFn(ctx, partnerID))
 	}
 }
 
 // chargeInvoice charges one invoice off-session and records the outcome.
 // priorAttempts (attempt_count before this charge) decides dunning exhaustion;
-// onSuccess runs after the invoice is marked paid (nil for none).
-func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invID, totalMinor int64, currency string, priorAttempts int64, onSuccess func()) {
+// onSuccess runs after the invoice is marked paid (nil for none). idempotencyKey
+// must be stable across retries of the SAME logical charge so a re-billed
+// installment (still-due sub, SCA-pending) reuses the provider's PaymentIntent
+// instead of creating a second charge.
+func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invID, totalMinor int64, currency string, priorAttempts int64, idempotencyKey string, onSuccess func()) {
 	customer, pm, err := e.Credentials(ctx, partnerID)
 	if err != nil {
 		e.markRetry(ctx, invID, "credentials: "+err.Error())
@@ -222,7 +225,7 @@ func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invI
 		PaymentMethodToken: pm,
 		AmountMinor:        totalMinor,
 		Currency:           currency,
-		IdempotencyKey:     strconv.FormatInt(invID, 10),
+		IdempotencyKey:     idempotencyKey,
 		Description:        fmt.Sprintf("Invoice %d", invID),
 	})
 	if err != nil {
@@ -345,7 +348,12 @@ func (e *SelfScheduledEngine) chargeDueSub(ctx context.Context, row []any) {
 		e.logErr(fmt.Sprintf("self-scheduled: create installment invoice for partner %d: %s", partnerID, err.Error()))
 		return
 	}
-	e.chargeInvoice(ctx, partnerID, invID, amount, currency, 0, func() {
+	// Stable per-installment idempotency key: while the sub stays due (SCA
+	// pending or a decline being retried) every cycle mints a fresh invoice,
+	// but keying the charge on the installment's due date makes the provider
+	// reuse the same PaymentIntent instead of charging again.
+	idemKey := fmt.Sprintf("sub:%d:%s:%d", partnerID, planID, nextCharge.Unix())
+	e.chargeInvoice(ctx, partnerID, invID, amount, currency, 0, idemKey, func() {
 		e.advanceSubscription(ctx, partnerID, planID, begda, terms, currency, n, renewal, nextCharge, isLast, autoRenew)
 	})
 }

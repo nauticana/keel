@@ -260,8 +260,16 @@ func rewritePlaceholders(sql string) string {
 					b.WriteByte(ch)
 				}
 			case ch == '?':
-				n++
-				fmt.Fprintf(&b, "$%d", n)
+				// `??` escapes to a literal `?` so jsonb operators (`?`, `?|`,
+				// `?&`) survive: write them as `??`, `??|`, `??&`. A lone `?`
+				// stays a bind placeholder.
+				if i+1 < len(sql) && sql[i+1] == '?' {
+					b.WriteByte('?')
+					i++
+				} else {
+					n++
+					fmt.Fprintf(&b, "$%d", n)
+				}
 			default:
 				b.WriteByte(ch)
 			}
@@ -421,7 +429,8 @@ func (r *RepositoryPgsql) LoadColumns(ctx context.Context) (map[string][]*model.
 		columnName := strings.ToLower(common.AsString(rec[1]))
 		dataType := strings.ToLower(common.AsString(rec[2]))
 		position := common.AsInt32(rec[3])
-		required := strings.ToLower(common.AsString(rec[4])) == "false"
+		// information_schema.is_nullable is 'YES'/'NO'; NOT NULL ⇒ required.
+		required := strings.ToLower(common.AsString(rec[4])) == "no"
 		size := common.AsInt32(rec[5])
 		precision := common.AsInt32(rec[6])
 		scale := common.AsInt32(rec[7])

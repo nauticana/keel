@@ -2,6 +2,7 @@ package authserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"net/url"
 	"slices"
@@ -327,7 +328,7 @@ func (a *Local) authenticateClient(ctx context.Context, auth port.ClientAuth) (*
 		if auth.Method != client.TokenAuthMethod {
 			return nil, ErrOAuthInvalidClient
 		}
-		if auth.ClientSecret == "" || hashToken(auth.ClientSecret) != client.SecretHash {
+		if auth.ClientSecret == "" || subtle.ConstantTimeCompare([]byte(hashToken(auth.ClientSecret)), []byte(client.SecretHash)) != 1 {
 			return nil, ErrOAuthInvalidClient
 		}
 	}

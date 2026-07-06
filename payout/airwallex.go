@@ -128,7 +128,7 @@ func (p *AirwallexProvider) StartOnboarding(ctx context.Context, in StartOnboard
 
 type airwallexWebhookEvent struct {
 	ID        string                 `json:"id"`
-	Name      string                 `json:"name"`       // e.g. "account.created", "account.activated"
+	Name      string                 `json:"name"` // e.g. "account.created", "account.activated"
 	AccountID string                 `json:"account_id"`
 	Data      map[string]interface{} `json:"data"`
 }

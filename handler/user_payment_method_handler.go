@@ -33,10 +33,9 @@ func (h *UserPaymentMethodHandler) Routes(prefix string) map[string]func(w http.
 		return map[string]func(w http.ResponseWriter, r *http.Request){}
 	}
 	return map[string]func(w http.ResponseWriter, r *http.Request){
-		TableActionPath(prefix, "user_payment_method", "set_default"):
-			WrapTableAction(h.DB, h.UserService,
-				"USER_PAYMENT_METHOD", "SET_DEFAULT", "user_payment_method",
-				h.setDefault),
+		TableActionPath(prefix, "user_payment_method", "set_default"): WrapTableAction(h.DB, h.UserService,
+			"USER_PAYMENT_METHOD", "SET_DEFAULT", "user_payment_method",
+			h.setDefault),
 	}
 }
 

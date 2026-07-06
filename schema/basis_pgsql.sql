@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS user_account (
     twofa_secret                         VARCHAR(128) ,
     twofa_backup_codes                   TEXT         ,
     twofa_enabled_at                     TIMESTAMP    ,
+    twofa_last_step                      BIGINT        NOT NULL DEFAULT 0,
     deleted_at                           TIMESTAMP    ,
     single_device_session                BOOLEAN       NOT NULL DEFAULT FALSE,
     CONSTRAINT user_account_pk PRIMARY KEY (id)
@@ -630,6 +631,7 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     notes                                VARCHAR(255) ,
     CONSTRAINT usage_ledger_pk PRIMARY KEY (partner_id, usage_time)
 );
+CREATE INDEX IF NOT EXISTS idx_usage_ledger_quota ON usage_ledger(partner_id, resource_name, usage_time);
 
 -- Raw inbound payment provider webhooks — idempotency + audit
 CREATE TABLE IF NOT EXISTS payment_webhook_log (

@@ -89,7 +89,11 @@ func (s *AbstractTableService) ExtractValue(item any, col *model.TableColumn) an
 		}
 		v = mv
 	} else {
-		v = val.FieldByName(col.PascalName).Interface()
+		f := val.FieldByName(col.PascalName)
+		if !f.IsValid() {
+			return nil // struct has no field for this column → SQL NULL, not a panic
+		}
+		v = f.Interface()
 	}
 	// A form sends "" for a cleared field; for a non-text column that maps to
 	// SQL NULL — Postgres can't cast '' to bigint/numeric/bool/timestamp.

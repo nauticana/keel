@@ -9,15 +9,23 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/smtp"
 	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/secret"
+)
+
+// SMTP dial/overall timeouts bound how long a stalled peer can hold the worker.
+const (
+	smtpDialTimeout = 10 * time.Second
+	smtpDeadline    = 30 * time.Second
 )
 
 type MailClient struct {
@@ -116,9 +124,18 @@ func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body strin
 // deployment; port 25 between MTAs sometimes doesn't. Keel is a
 // MUA-style sender, so we hold the strict line.
 func sendSMTPWithStartTLS(addr, host, user, pass, from string, recipients []string, msg []byte) error {
-	c, err := smtp.Dial(addr)
+	// Bounded dial + overall deadline so a peer that accepts the TCP connection
+	// but stalls on the greeting/STARTTLS/DATA can't block the worker tick
+	// indefinitely (a synchronous dispatch would otherwise wedge the loop).
+	conn, err := net.DialTimeout("tcp", addr, smtpDialTimeout)
 	if err != nil {
 		return fmt.Errorf("smtp: dial %s: %w", addr, err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(smtpDeadline))
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("smtp: new client %s: %w", addr, err)
 	}
 	defer c.Close()
 

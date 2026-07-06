@@ -21,6 +21,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/nyaruka/phonenumbers"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -95,6 +96,7 @@ const (
 
 	// 2FA queries
 	qGet2FASecret      = "get_2fa_secret"
+	qSet2FALastStep    = "set_2fa_last_step"
 	qSet2FAEnabled     = "set_2fa_enabled"
 	qDisable2FA        = "disable_2fa"
 	qConsumeBackupCode = "consume_backup_code"
@@ -143,7 +145,9 @@ const (
 	qGenerateOTP                   = "generate_otp"
 	qVerifyOTP                     = "verify_otp"
 	qIncrementOTP                  = "increment_otp_attempts"
+	qIncrementOTPByID              = "increment_otp_attempts_by_id"
 	qClearOTP                      = "clear_otp"
+	qClearOTPByID                  = "clear_otp_by_id"
 	qUpdateProfile                 = "update_profile"
 	qSetUserEmail                  = "set_user_email"
 	qSetUserPhone                  = "set_user_phone"
@@ -287,9 +291,13 @@ UPDATE user_account
 	//   6 last_login_attempt
 	qGet2FASecret: `
 SELECT twofa_secret, twofa_enabled, twofa_backup_codes, user_email,
-       status, login_attempts, last_login_attempt
+       status, login_attempts, last_login_attempt, twofa_last_step
   FROM user_account
  WHERE id = ?
+`,
+
+	qSet2FALastStep: `
+UPDATE user_account SET twofa_last_step = ? WHERE id = ? AND twofa_last_step < ? RETURNING id
 `,
 
 	qSet2FAEnabled: `
@@ -556,6 +564,7 @@ RETURNING id
 	qVerifyOTP: `
 SELECT id, code, attempts FROM user_otp
  WHERE user_id = ?
+   AND purpose = ?
    AND expires_at > CURRENT_TIMESTAMP
  ORDER BY id DESC LIMIT 1
 `,
@@ -566,8 +575,16 @@ UPDATE user_otp SET attempts = attempts + 1
    AND id = (SELECT MAX(id) FROM user_otp WHERE user_id = ?)
 `,
 
+	qIncrementOTPByID: `
+UPDATE user_otp SET attempts = attempts + 1 WHERE id = ?
+`,
+
 	qClearOTP: `
 DELETE FROM user_otp WHERE user_id = ?
+`,
+
+	qClearOTPByID: `
+DELETE FROM user_otp WHERE id = ?
 `,
 }
 
@@ -1296,11 +1313,13 @@ func (s *LocalUserService) Verify2FA(userID int, code string) (bool, error) {
 	uStatus := common.AsString(row[4])
 	attempts := int(common.AsInt32(row[5]))
 	lastAttempt, _ := row[6].(time.Time)
+	lastStep := common.AsInt64(row[7])
 	if err := s.checkAccountStatus(uStatus, lastAttempt); err != nil {
 		return false, err
 	}
 
-	if !totp.Validate(code, secret) {
+	step, ok := matchTOTPStep(code, secret, time.Now())
+	if !ok {
 		// Atomic increment via UPDATE … RETURNING (MAJOR 8) so two
 		// parallel failed verifies can't both observe `attempts == n`
 		// and both write `n+1`.
@@ -1311,11 +1330,43 @@ func (s *LocalUserService) Verify2FA(userID int, code string) (bool, error) {
 		}
 		return false, nil
 	}
+	// Replay guard: a code's timestep must advance past the last consumed one,
+	// so the same code can't be reused within its ~90s validity window. The
+	// conditional UPDATE (twofa_last_step < step) also makes two concurrent
+	// verifies of the same code race to a single winner.
+	if step <= lastStep {
+		return false, fmt.Errorf("2FA code already used")
+	}
+	upd, err := s.queryService.Query(ctx, qSet2FALastStep, step, userID, step)
+	if err != nil {
+		return false, err
+	}
+	if upd == nil || len(upd.Rows) == 0 {
+		return false, fmt.Errorf("2FA code already used")
+	}
 
 	// Success: clear the counter so a partially-failed sequence doesn't
 	// haunt later sign-ins.
 	_, _ = s.queryService.Query(ctx, qSetLastLogin, time.Now(), userID)
 	return true, nil
+}
+
+// matchTOTPStep validates code against secret allowing ±1 period skew and
+// returns the matched 30s timestep, used to prevent replay.
+func matchTOTPStep(code, secret string, now time.Time) (int64, bool) {
+	const period = 30
+	for _, delta := range []int64{0, -1, 1} {
+		t := now.Add(time.Duration(delta*period) * time.Second)
+		if valid, _ := totp.ValidateCustom(code, secret, t, totp.ValidateOpts{
+			Period:    period,
+			Skew:      0,
+			Digits:    otp.DigitsSix,
+			Algorithm: otp.AlgorithmSHA1,
+		}); valid {
+			return t.Unix() / period, true
+		}
+	}
+	return 0, false
 }
 
 func (s *LocalUserService) Disable2FA(userID int) error {
@@ -1622,12 +1673,14 @@ func (s *LocalUserService) GenerateOTP(userId int, purpose string) (string, erro
 //   - On match, the OTP row is consumed (DELETE) so a single code can
 //     never be reused. Callers that previously relied on a follow-up
 //     ClearOTP are unaffected — the second clear is a no-op.
-func (s *LocalUserService) VerifyOTP(userId int, code string) error {
+func (s *LocalUserService) VerifyOTP(userId int, purpose, code string) error {
 	ctx := s.ctx()
-	res, err := s.queryService.Query(ctx, qVerifyOTP, userId)
+	// purpose binds the code to the flow it was minted for.
+	res, err := s.queryService.Query(ctx, qVerifyOTP, userId, purpose)
 	if err != nil || len(res.Rows) == 0 {
 		return fmt.Errorf("no active OTP")
 	}
+	otpID := common.AsInt64(res.Rows[0][0])
 	storedCode := common.AsString(res.Rows[0][1])
 	attempts := int(common.AsInt32(res.Rows[0][2]))
 	cap := s.passwordPolicy.MaxAttempts
@@ -1638,11 +1691,11 @@ func (s *LocalUserService) VerifyOTP(userId int, code string) error {
 		return fmt.Errorf("max attempts exceeded")
 	}
 	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(code)) != 1 {
-		_, _ = s.queryService.Query(ctx, qIncrementOTP, userId, userId)
+		_, _ = s.queryService.Query(ctx, qIncrementOTPByID, otpID)
 		return fmt.Errorf("invalid OTP")
 	}
-	// Single-use: delete the OTP on success so it cannot be replayed.
-	_, _ = s.queryService.Query(ctx, qClearOTP, userId)
+	// Single-use: delete the verified row on success so it cannot be replayed.
+	_, _ = s.queryService.Query(ctx, qClearOTPByID, otpID)
 	return nil
 }
 
@@ -1676,6 +1729,11 @@ func (s *LocalUserService) CreateContactChange(userID int, channel, newValue str
 			return 0, fmt.Errorf("email already in use")
 		}
 	case "phone":
+		n, err := normalizePhone(newValue, "")
+		if err != nil {
+			return 0, fmt.Errorf("phone: %w", err)
+		}
+		newValue = n
 		if u, _ := s.GetUserByPhone(newValue); u != nil && u.Id != userID {
 			return 0, fmt.Errorf("phone already in use")
 		}
@@ -1697,8 +1755,15 @@ func (s *LocalUserService) CreateContactChange(userID int, channel, newValue str
 // registration/password-reset confirmation — then applies the change.
 func (s *LocalUserService) ConfirmContactChange(userID int, channel, newValue string, code int) error {
 	ctx := s.ctx()
-	if channel == "email" {
+	switch channel {
+	case "email":
 		newValue = normalizeEmail(newValue)
+	case "phone":
+		n, err := normalizePhone(newValue, "")
+		if err != nil {
+			return fmt.Errorf("phone: %w", err)
+		}
+		newValue = n
 	}
 	cutoff := time.Now().Add(-RegistrationConfirmationTTL)
 	res, err := s.queryService.Query(ctx, qGetContactChange, newValue, userID, cutoff)

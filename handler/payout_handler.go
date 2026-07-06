@@ -36,13 +36,13 @@ func (h *PayoutHandler) Routes(prefix string) map[string]func(w http.ResponseWri
 		return map[string]func(w http.ResponseWriter, r *http.Request){}
 	}
 	return map[string]func(w http.ResponseWriter, r *http.Request){
-		prefix + "/payout/onboard/start":   h.StartOnboarding,
-		prefix + "/payout/reusable":        h.ListReusable,
-		prefix + "/payout/reusable/link":   h.LinkReusable,
-		prefix + "/payout/status":          h.Status,
-		prefix + "/webhook/payout/AW":      h.Webhook,
-		prefix + "/webhook/payout/SC":      h.Webhook,
-		prefix + "/webhook/payout/WI":      h.Webhook,
+		prefix + "/payout/onboard/start": h.StartOnboarding,
+		prefix + "/payout/reusable":      h.ListReusable,
+		prefix + "/payout/reusable/link": h.LinkReusable,
+		prefix + "/payout/status":        h.Status,
+		prefix + "/webhook/payout/AW":    h.Webhook,
+		prefix + "/webhook/payout/SC":    h.Webhook,
+		prefix + "/webhook/payout/WI":    h.Webhook,
 	}
 }
 

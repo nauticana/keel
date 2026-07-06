@@ -32,8 +32,8 @@ func (s *RestAPI) Insert(ctx context.Context, partnerID int64, userID int, data 
 	return s.Relations.Insert(ctx, partnerID, userID, data)
 }
 
-func (s *RestAPI) Update(ctx context.Context, userID int, data any) error {
-	return s.Relations.Update(ctx, userID, data)
+func (s *RestAPI) Update(ctx context.Context, partnerID int64, userID int, data any) error {
+	return s.Relations.Update(ctx, partnerID, userID, data)
 }
 
 func (s *RestAPI) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {

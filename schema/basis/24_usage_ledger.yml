@@ -21,3 +21,6 @@ foreign_keys:
     references:
       table: business_partner
       columns: [id]
+indexes:
+  - name: idx_usage_ledger_quota
+    columns: [partner_id, resource_name, usage_time]

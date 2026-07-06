@@ -10,9 +10,9 @@ import (
 
 func TestCanonicalShopDomain(t *testing.T) {
 	ok := map[string]string{
-		"mystore.myshopify.com":         "mystore.myshopify.com",
-		"MyStore.myshopify.com":         "mystore.myshopify.com",
-		"https://mystore.myshopify.com": "mystore.myshopify.com",
+		"mystore.myshopify.com":               "mystore.myshopify.com",
+		"MyStore.myshopify.com":               "mystore.myshopify.com",
+		"https://mystore.myshopify.com":       "mystore.myshopify.com",
 		"https://mystore.myshopify.com/admin": "mystore.myshopify.com",
 	}
 	for in, want := range ok {

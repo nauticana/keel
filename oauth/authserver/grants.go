@@ -226,11 +226,22 @@ func (g *clientCredentialsGrant) Handle(ctx context.Context, req port.TokenReque
 	if client.TokenAuthMethod == "none" {
 		return nil, ErrOAuthInvalidClient // public clients can't use this grant
 	}
-	scopes, err := g.issuer.boundScopes(req.Scopes, client.Scopes)
-	if err != nil {
-		return nil, err
+	// A machine token carries no user consent, so — unlike the interactive
+	// grants — it must NOT fall back to the full AS-supported set when the
+	// client registered no scopes. Bound strictly to the client's registered
+	// scopes (∩ AS-supported); a scopeless client gets a scopeless token.
+	grantable := client.Scopes
+	if len(g.issuer.supportedScopes) > 0 {
+		grantable = intersect(client.Scopes, g.issuer.supportedScopes)
 	}
-	return g.issuer.issue(ctx, "client:"+client.ClientID, 0, 0, client.ClientID, scopes, req.Resource, "", "", false)
+	requested := req.Scopes
+	if len(requested) == 0 {
+		requested = grantable
+	}
+	if !isSubset(requested, grantable) {
+		return nil, ErrOAuthInvalidScope
+	}
+	return g.issuer.issue(ctx, "client:"+client.ClientID, 0, 0, client.ClientID, requested, req.Resource, "", "", false)
 }
 
 // tokenExchangeGrant — RFC 8693, restricted to exchanging an access token this

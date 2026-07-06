@@ -46,7 +46,12 @@ func ManualTokenExchange(ctx context.Context, tokenURL string, form url.Values, 
 	for _, opt := range opts {
 		opt(req)
 	}
-	resp, err := common.HTTPClient().Do(req)
+	// Never follow redirects on the token POST: it carries the client_secret in
+	// its body (and possibly a Basic-auth header), which Go would resend to the
+	// redirect target — a redirecting/hostile endpoint could capture it.
+	noRedirect := *common.HTTPClient()
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noRedirect.Do(req)
 	if err != nil {
 		return tr, fmt.Errorf("token exchange: %w", err)
 	}

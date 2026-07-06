@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/payment"
 )
 
 // StripeConnectProvider implements PayoutProvider against Stripe
@@ -317,6 +318,15 @@ func (p *StripeConnectProvider) VerifyAndParseWebhook(headers map[string][]strin
 	}
 	if !hmac.Equal([]byte(expected), []byte(sig)) {
 		return nil, fmt.Errorf("stripe connect: invalid signature")
+	}
+	// Reject stale/future timestamps so a captured delivery can't be replayed
+	// later — a valid signature alone doesn't bound freshness.
+	tsUnix, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("stripe connect: bad signature timestamp: %w", err)
+	}
+	if age := time.Since(time.Unix(tsUnix, 0)); age > payment.StripeTolerance || age < -payment.StripeTolerance {
+		return nil, fmt.Errorf("stripe connect: webhook timestamp outside tolerance")
 	}
 
 	var ev stripeWebhookEvent

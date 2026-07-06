@@ -89,7 +89,7 @@ type wiseRecipientResp struct {
 //   - Email          — the recipient's claim address
 //   - AccountHolder  — display name
 //   - Currency       — Wise rejects mismatch between recipient currency
-//                       and later transfer currency
+//     and later transfer currency
 func (p *WiseProvider) StartOnboarding(ctx context.Context, in StartOnboardingInput) (*PayoutOnboardingSession, error) {
 	if p.profileID == "" {
 		return nil, fmt.Errorf("wise: --wise_profile_id required")
@@ -136,9 +136,9 @@ type wiseQuoteResp struct {
 }
 
 type wiseTransferReq struct {
-	TargetAccount         int64  `json:"targetAccount"`
-	Quote                 string `json:"quote"`
-	CustomerTransactionID string `json:"customerTransactionId"` // idempotency key
+	TargetAccount         int64          `json:"targetAccount"`
+	Quote                 string         `json:"quote"`
+	CustomerTransactionID string         `json:"customerTransactionId"` // idempotency key
 	Details               map[string]any `json:"details,omitempty"`
 }
 

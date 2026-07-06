@@ -58,13 +58,6 @@ type TableServicePgsql struct {
 	sqlSelectByID string
 	sqlUpdateByID string
 	sqlDeleteByID string
-	// sqlUpdateByIDForUser is sqlUpdateByID with an extra
-	// `AND user_id = $N` clause appended. Built only when the table
-	// is UserSpecific. Update() picks this template when the caller
-	// is authenticated so a row's owner can't be silently changed by
-	// the row's own data, and a non-owner can't update the row even
-	// if they know its primary key.
-	sqlUpdateByIDForUser string
 }
 
 // WithTx returns a shallow copy of the receiver with Client replaced
@@ -200,11 +193,13 @@ func (s *TableServicePgsql) Init() error {
 		if isId {
 			continue
 		}
-		// user_id is the immutable owner column on UserSpecific tables —
-		// excluded from the UPDATE SET so the auto-detected ownership
-		// can never be rewritten via CRUD. Update() depends on this
-		// exclusion: its column-iteration loop applies the same skip.
+		// user_id / partner_id are immutable scope columns — excluded from the
+		// UPDATE SET so ownership/tenancy can't be reassigned via CRUD. Update()
+		// depends on these exclusions: its value loop applies the same skips.
 		if s.Table.UserSpecific && col.ColumnName == "user_id" {
+			continue
+		}
+		if s.Table.PartnerSpecific && col.ColumnName == "partner_id" {
 			continue
 		}
 		// R/H/I columns are not user-updatable (must stay in sync with the
@@ -235,14 +230,6 @@ func (s *TableServicePgsql) Init() error {
 			plcCnt++
 		}
 		s.sqlUpdateByID = "UPDATE " + s.quotedTable() + " SET " + strings.Join(updateSet, ", ") + " WHERE " + strings.Join(updateWherePlc, " AND ")
-		// UserSpecific tables get a second template that requires the
-		// row's user_id to also match the authenticated userID. The
-		// extra placeholder takes the next position after the existing
-		// id-key placeholders, so Update() must append userID as the
-		// last positional arg when it picks this template.
-		if s.Table.UserSpecific {
-			s.sqlUpdateByIDForUser = s.sqlUpdateByID + " AND " + quoteIdent("user_id") + " = " + s.Placeholder(plcCnt)
-		}
 	}
 	// INSERT SQL is built per row in InsertSingle so a cleared value on a
 	// column with a DB default can emit DEFAULT instead of binding NULL.
@@ -523,18 +510,19 @@ func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID 
 	return results, nil
 }
 
-func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) error {
+func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID int, item any) error {
 	allowed, _ := s.CheckPermission(ctx, userID, "UPDATE")
 	if !allowed {
 		return fmt.Errorf("permission denied: UPDATE on table %s", s.Table.TableName)
 	}
-	// UserSpecific UPDATE is owner-locked regardless of CheckPermission
-	// scope: an admin's explicit grant cannot rewrite another user's
-	// row through generic CRUD. The trailing `AND user_id = $N` clause
-	// in sqlUpdateByIDForUser quietly produces ROW_COUNT=0 when the
-	// caller targets a row they don't own. Cross-user admin writes
-	// belong in custom service-layer handlers.
-	useUserGuard := s.Table.UserSpecific && userID > 0 && s.sqlUpdateByIDForUser != ""
+	if s.sqlUpdateByID == "" {
+		return nil // no updatable columns
+	}
+	// Tenant/owner scoping mirrors Get/Delete: append partner_id / user_id
+	// predicates so a caller who knows a foreign PK gets ROW_COUNT=0. Global
+	// roles and trusted system callers (no user, no partner) bypass.
+	applyPartner := s.Table.PartnerSpecific && !(userID <= 0 && partnerID <= 0) && !s.IsGlobalRole(ctx, userID)
+	useUserGuard := s.Table.UserSpecific && userID > 0
 	vals := make([]any, 0, len(s.Table.Columns))
 	for _, col := range s.Table.Columns {
 		isId := false
@@ -547,10 +535,13 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 		if isId {
 			continue
 		}
-		// Init excluded user_id from sqlUpdateByID's SET when
-		// UserSpecific (the column is immutable). Skip it here too so
-		// the value list and the placeholder list stay in sync.
+		// Init excluded the immutable scope columns (user_id / partner_id)
+		// from the SET; skip them here too so the value list and the
+		// placeholder list stay in sync.
 		if s.Table.UserSpecific && col.ColumnName == "user_id" {
+			continue
+		}
+		if s.Table.PartnerSpecific && col.ColumnName == "partner_id" {
 			continue
 		}
 		if skipUpdateCol(col) {
@@ -575,8 +566,12 @@ func (s *TableServicePgsql) Update(ctx context.Context, userID int, item any) er
 		vals = append(vals, s.ExtractValue(item, tempCol))
 	}
 	sqlText := s.sqlUpdateByID
+	if applyPartner {
+		sqlText += " AND " + quoteIdent("partner_id") + " = " + s.Placeholder(len(vals)+1)
+		vals = append(vals, partnerID)
+	}
 	if useUserGuard {
-		sqlText = s.sqlUpdateByIDForUser
+		sqlText += " AND " + quoteIdent("user_id") + " = " + s.Placeholder(len(vals)+1)
 		vals = append(vals, userID)
 	}
 	_, err := s.Client.Exec(ctx, sqlText, vals...)
@@ -688,7 +683,7 @@ func (s *TableServicePgsql) Post(ctx context.Context, partnerID int64, userID in
 			return fmt.Errorf("failed to check record status: %w", err)
 		}
 		if len(existing) > 0 {
-			if err := s.Update(ctx, userID, item); err != nil {
+			if err := s.Update(ctx, partnerID, userID, item); err != nil {
 				return fmt.Errorf("failed to update record: %w", err)
 			}
 		} else {

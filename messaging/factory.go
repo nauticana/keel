@@ -3,8 +3,8 @@ package messaging
 import (
 	"fmt"
 
-	"github.com/nauticana/keel/port"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nauticana/keel/port"
 )
 
 // NewMessagePublisher returns the publisher implementation for the given

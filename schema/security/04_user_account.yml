@@ -52,6 +52,9 @@ columns:
   - name: twofa_enabled_at
     type: TIMESTAMP
     nullable: true
+  - name: twofa_last_step
+    type: BIGINT
+    default: "0"
   - name: deleted_at
     type: TIMESTAMP
     nullable: true
