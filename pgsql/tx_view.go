@@ -2,7 +2,7 @@ package pgsql
 
 import (
 	"github.com/jackc/pgx/v5"
-	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 )
 
 // pgsqlTxView yields tx-bound TableService copies. Lookups go via the
@@ -18,7 +18,7 @@ type pgsqlTxView struct {
 // when the repository has no service for that name. Callers handle
 // nil as "table not registered" — typically a programming error in
 // the caller.
-func (v *pgsqlTxView) Table(name string) data.TableService {
+func (v *pgsqlTxView) Table(name string) port.TableService {
 	base, ok := v.repo.TableServices[name].(*TableServicePgsql)
 	if !ok || base == nil {
 		return nil
@@ -26,4 +26,4 @@ func (v *pgsqlTxView) Table(name string) data.TableService {
 	return base.WithTx(v.tx)
 }
 
-var _ data.TxView = (*pgsqlTxView)(nil)
+var _ port.TxView = (*pgsqlTxView)(nil)

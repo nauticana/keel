@@ -8,7 +8,7 @@ package outbox
 import (
 	"context"
 
-	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 )
 
 // Status codes for outbox_event.status.
@@ -47,7 +47,7 @@ func WriteQueries() map[string]string {
 // EnqueueTx inserts one event using the caller's transaction — which must have
 // merged WriteQueries() into its query map. The insert commits or rolls back
 // atomically with the surrounding domain write: the outbox guarantee.
-func EnqueueTx(ctx context.Context, tx data.TxQueryService, e Event) error {
+func EnqueueTx(ctx context.Context, tx port.TxQueryService, e Event) error {
 	_, err := tx.Query(ctx, qInsert, tx.GenID(), nullIfZero(e.PartnerID),
 		e.AggregateType, e.AggregateID, e.EventType, nullIfEmpty(e.Payload))
 	return err

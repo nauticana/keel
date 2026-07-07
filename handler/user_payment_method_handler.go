@@ -4,8 +4,8 @@ import (
 	"net/http"
 
 	kcommon "github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 )
 
 // UserPaymentMethodHandler exposes the one custom endpoint for the
@@ -20,7 +20,7 @@ import (
 // auth gate flows through WrapTableAction.
 type UserPaymentMethodHandler struct {
 	AbstractHandler
-	DB      data.DatabaseRepository
+	DB      port.DatabaseRepository
 	Service *payment.UserPaymentMethodService
 }
 

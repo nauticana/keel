@@ -19,7 +19,7 @@ import (
 // (registration-token-not-registered) are deactivated automatically via
 // the injected UserService so the next Dispatch call skips them.
 //
-// Construct via New or via the factory (selected by --push_mode=fcm).
+// Construct via New or via the factory (selected by push_mode=fcm).
 // Authenticates via Application Default Credentials — preferred path is
 // Workload Identity (GCE/GKE/Cloud Run SA with
 // roles/firebasecloudmessaging.admin); falls back to

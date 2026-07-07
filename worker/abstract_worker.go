@@ -24,7 +24,12 @@ type AbstractWorker struct {
 	Interval int                   // poll interval, seconds
 	HCPort   int                   // /health port
 	Secret   secret.SecretProvider // set by Run before the loop; for AI/OAuth workers
-	Storage  storage.ObjectStorage // set by Run when --storage_mode is set; nil otherwise
+	Storage  storage.ObjectStorage // set by Run when storage_mode is set; nil otherwise
+	// LoadConfig loads the runtime configuration once the DB is up, before
+	// anything reads common.Config() (storage backend, HC port, tunables). Nil
+	// loads a plain common.BaseConfig into common.Config(); workers whose app
+	// embeds BaseConfig set this to load their own type.
+	LoadConfig func(ctx context.Context, db port.DatabaseRepository) error
 }
 
 func (a *AbstractWorker) GetHealthcheckPort() int { return a.HCPort }
@@ -50,6 +55,27 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 		return fmt.Errorf("worker %q: snowflake: %w", a.Caption, err)
 	}
 
+	// The DB comes up first: the runtime config lives in it, and everything
+	// below (storage backend, HC port, tunables) reads common.Config().
+	db, err := pgsql.NewPgSQLDatabase(ctx, secrets, gen)
+	if err != nil {
+		return fmt.Errorf("worker %q: database: %w", a.Caption, err)
+	}
+	loadConfig := a.LoadConfig
+	if loadConfig == nil {
+		loadConfig = func(ctx context.Context, db port.DatabaseRepository) error {
+			cfg := &common.BaseConfig{}
+			if err := cfg.Load(ctx, db); err != nil {
+				return err
+			}
+			common.SetConfig(cfg)
+			return nil
+		}
+	}
+	if err := loadConfig(ctx, db); err != nil {
+		return fmt.Errorf("worker %q: config: %w", a.Caption, err)
+	}
+
 	// Object storage is optional; the factory picks the backend + credential source.
 	objStore, err := storage.NewFromConfig(ctx, secrets)
 	if err != nil {
@@ -63,10 +89,8 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 		Journal:  journal,
 		Worker:   self,
 		Storage:  objStore,
-		NewDatabase: func(ctx context.Context, sp secret.SecretProvider) (data.DatabaseRepository, error) {
-			return pgsql.NewPgSQLDatabase(ctx, sp, gen)
-		},
-		NewQuota: func(db data.DatabaseRepository) port.QuotaService {
+		DB:       db,
+		NewQuota: func(db port.DatabaseRepository) port.QuotaService {
 			return &service.QuotaServiceDb{Repo: db}
 		},
 	}

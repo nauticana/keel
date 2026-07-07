@@ -10,19 +10,19 @@ import (
 	"github.com/nauticana/keel/user"
 )
 
-// NewPushProvider returns the push provider selected by --push_mode.
+// NewPushProvider returns the push provider selected by push_mode.
 // "fcm" wires the Firebase Cloud Messaging backend (credentials via
 // Application Default Credentials — Workload Identity on GCP,
 // GOOGLE_APPLICATION_CREDENTIALS elsewhere; see FCMPushProvider doc).
 // "noop" returns a provider that silently discards dispatches — the
 // default for non-mobile consumers.
 func NewPushProvider(ctx context.Context, users user.UserService, journal logger.ApplicationLogger) (port.MessageDispatcher, error) {
-	switch *common.PushMode {
+	switch common.Config().PushMode {
 	case "fcm":
 		return New(ctx, users, journal)
 	case "noop", "":
 		return NoOpPushProvider{}, nil
 	default:
-		return nil, fmt.Errorf("unknown push_mode: %s", *common.PushMode)
+		return nil, fmt.Errorf("unknown push_mode: %s", common.Config().PushMode)
 	}
 }

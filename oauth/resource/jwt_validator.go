@@ -4,15 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/crypto"
 	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
-
-const oauthJWKSCacheTTL = time.Hour
 
 // JWTValidator is a JWKS-backed OAuth 2.1 resource-server token validator:
 // it verifies RS256 access tokens against one authorization server's JWKS,
@@ -29,24 +26,24 @@ var _ port.TokenValidator = (*JWTValidator)(nil)
 // protected-resource identifier access tokens must target; both are required.
 func NewJWTValidator(jwksURL, issuer, audience string, httpc *http.Client) *JWTValidator {
 	return &JWTValidator{
-		jwks:     crypto.NewJWKSProvider(jwksURL, oauthJWKSCacheTTL, httpc),
+		jwks:     crypto.NewJWKSProvider(jwksURL, common.Config().OAuthJWKSCacheTTL, httpc),
 		issuer:   issuer,
 		audience: audience,
 	}
 }
 
-// NewJWTValidatorFromFlags builds a validator from the --oauth_* flags:
-// (nil, nil) when --oauth_issuer is unset; an error when it is set but
-// --oauth_jwks_url or --oauth_audience is empty (fail fast). Returns the
+// NewJWTValidatorFromConfig builds a validator from the --oauth_* flags:
+// (nil, nil) when oauth_issuer is unset; an error when it is set but
+// oauth_jwks_url or oauth_audience is empty (fail fast). Returns the
 // interface so the disabled case is a true nil a `!= nil` guard catches.
-func NewJWTValidatorFromFlags(httpc *http.Client) (port.TokenValidator, error) {
-	if *common.OAuthIssuer == "" {
+func NewJWTValidatorFromConfig(httpc *http.Client) (port.TokenValidator, error) {
+	if common.Config().OAuthIssuer == "" {
 		return nil, nil
 	}
-	if *common.OAuthJWKSURL == "" || *common.OAuthAudience == "" {
-		return nil, fmt.Errorf("oauth: --oauth_issuer is set but --oauth_jwks_url or --oauth_audience is empty")
+	if common.Config().OAuthJWKSURL == "" || common.Config().OAuthAudience == "" {
+		return nil, fmt.Errorf("oauth: oauth_issuer is set but oauth_jwks_url or oauth_audience is empty")
 	}
-	return NewJWTValidator(*common.OAuthJWKSURL, *common.OAuthIssuer, *common.OAuthAudience, httpc), nil
+	return NewJWTValidator(common.Config().OAuthJWKSURL, common.Config().OAuthIssuer, common.Config().OAuthAudience, httpc), nil
 }
 
 func (v *JWTValidator) Validate(ctx context.Context, bearer string) (*port.Principal, error) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/port"
 )
 
 const (
@@ -54,13 +54,13 @@ SELECT id FROM consent_policy
 // previous unsalted SHA-256 behavior to preserve hash-stability with
 // pre-v0.5 rows.
 type LocalConsentService struct {
-	database     data.DatabaseRepository
-	queryService data.QueryService
+	database     port.DatabaseRepository
+	queryService port.QueryService
 	journal      logger.ApplicationLogger
 	emailPepper  []byte
 }
 
-func NewLocalConsentService(ctx context.Context, database data.DatabaseRepository, journal logger.ApplicationLogger) (*LocalConsentService, error) {
+func NewLocalConsentService(ctx context.Context, database port.DatabaseRepository, journal logger.ApplicationLogger) (*LocalConsentService, error) {
 	s := &LocalConsentService{
 		database: database,
 		journal:  journal,

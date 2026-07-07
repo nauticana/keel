@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nauticana/keel/common"
+
 	"github.com/nauticana/keel/port"
 )
 
@@ -63,7 +65,7 @@ type SnowflakeGenerator struct {
 
 	// lastPersistedMs is the highest watermark the state file has
 	// observed. NextID writes the file only when the current
-	// millisecond watermark advances by ≥ statePersistEveryMs (per-
+	// millisecond watermark advances by ≥ snowflake_state_persist_ms (per-
 	// second debounce, v0.4.5 perf). At full clip the previous
 	// implementation issued ~1000 atomic-rename pairs/sec; this
 	// caps it at ~1/sec while still bounding cross-restart drift
@@ -80,11 +82,6 @@ type SnowflakeGenerator struct {
 	stateErrOnce sync.Once
 	stateErrFn   func(error)
 }
-
-// statePersistEveryMs is the size of the future window each state-file write
-// reserves (persist-ahead). Larger = fewer writes but more id time "borrowed"
-// from the future after a restart; 1s balances both.
-const statePersistEveryMs int64 = 1000
 
 // NewSnowflakeGenerator returns a SnowflakeGenerator bound to nodeID (0..1023)
 // and a custom epoch in Unix ms.
@@ -233,11 +230,11 @@ func (s *SnowflakeGenerator) NextID() int64 {
 		s.seq = 0
 	}
 	if s.statePath != "" && nowMs >= s.lastPersistedMs {
-		// Persist-ahead: reserve a watermark statePersistEveryMs into the
+		// Persist-ahead: reserve a watermark snowflake_state_persist_ms into the
 		// future so the on-disk value always exceeds every id minted since the
 		// last write. A crash + wall-clock rewind then resumes beyond all
 		// issued ids (no reuse), while we still write only ~once per window.
-		reserved := nowMs + statePersistEveryMs
+		reserved := nowMs + common.Config().SnowflakeStatePersistMs
 		s.writeSnowflakeState(s.statePath, reserved)
 		s.lastPersistedMs = reserved
 	}

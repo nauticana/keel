@@ -2,7 +2,6 @@ package common
 
 import (
 	"flag"
-	"time"
 )
 
 type ContextKey string
@@ -38,6 +37,10 @@ const (
 	AuthPrincipal ContextKey = "authPrincipal"
 )
 
+// Bootstrap flags only. Everything consumed before (or in order to get) the
+// DB connection stays a --flag: the log sink, the secret provider, the DB
+// itself, and --node_id. Every other runtime setting lives in the
+// application_config_* tables and is read via common.Config() (BaseConfig).
 var (
 	LogType = flag.String("log_type", "local", "Log type: local, gcp, aws, or azure")
 	LogRoot = flag.String("log_root", "/opt/app/log", "Log folder")
@@ -52,19 +55,6 @@ var (
 	AzureLogsEndpoint = flag.String("azure_logs_endpoint", "", "Azure Monitor Data Collection Endpoint URL (e.g. https://my-dce-xxxx.region.ingest.monitor.azure.com)")
 	AzureLogsRuleID   = flag.String("azure_logs_dcr", "", "Azure Monitor Data Collection Rule immutable ID (e.g. dcr-xxxxxxxx)")
 	AzureLogsStream   = flag.String("azure_logs_stream", "", "Azure Monitor DCR stream name (e.g. Custom-AppLogs_CL)")
-	HttpApiPort       = flag.Int("http_api_port", 8080, "HTTP server port")
-	HTTPSPort         = flag.Int("https_port", 443, "HTTPS server port")
-	TLSCert           = flag.String("tls_cert", "", "TLS certificate file path")
-	TLSKey            = flag.String("tls_key", "", "TLS private key file path")
-	// MaxTLSVersion controls the TLS policy applied by the HTTP backend.
-	//   "none"  — no TLS enforcement; plain HTTP is accepted on all paths
-	//             (dev / test / demo deployments).
-	//   "tls10" / "tls11" / "tls12" / "tls13" — TLS required; the TLS
-	//             listener is configured with MinVersion set to the given
-	//             value, and the plain-HTTP listener only accepts /health
-	//             and /ready requests (for in-VPC health checkers).
-	// When not "none", --tls_cert and --tls_key must be set.
-	MaxTLSVersion = flag.String("max_tls_version", "none", "TLS policy: none | tls10 | tls11 | tls12 | tls13")
 	// Keystore is the JSON file path consulted by the local secret
 	// provider. AWS-Secrets-Manager / GSM consumers ignore this flag.
 	// Previously this same flag was overloaded as the AWS region for
@@ -75,79 +65,22 @@ var (
 	// would silently pick "us-east-1" or whatever AWS_REGION sits in
 	// the environment, which is the wrong behavior for a multi-region
 	// deployment. Empty + secret_mode=aws is a configuration error.
-	AWSRegion      = flag.String("aws_region", "", "AWS region for Secrets Manager / SNS / SQS / S3 / CloudWatch")
-	SessionTimeout = flag.Int("session_timeout", 300, "Session timeout in seconds")
-	// OTPTTLSeconds caps how long an OTP code minted by GenerateOTP
-	// remains valid in the user_otp table. Default 300s (5 min) is the
-	// industry-standard sweet spot — long enough for SMS / email
-	// delivery latency + the user reading + typing, short enough that a
-	// stale leaked code is useless. Brute-force is gated by
-	// per-row attempt limits in user_service_local, not by the TTL.
-	// Token TTL (the opaque session id bound to the OTP) auto-tracks
-	// this value with a small buffer in OTPHandler — never set this
-	// higher than ~9 min without revisiting OTPHandler.OTPTokenTTL.
-	OTPTTLSeconds  = flag.Int("otp_ttl_seconds", 300, "OTP code time-to-live in seconds")
-	NodeId         = flag.Int("node_id", 0, "Node ID for bigint ID generator")
-	DBhost         = flag.String("db_host", "localhost", "Database hostname")
-	DBport         = flag.Int("db_port", 5432, "Database port number")
-	DBname         = flag.String("db_name", "app", "Database name")
-	DBuser         = flag.String("db_user", "app", "Database user")
-	DBschema       = flag.String("db_schema", "public", "Database schema name")
-	DBsslmode      = flag.String("db_sslmode", "disable", "Database SSL mode (disable, require, verify-ca, verify-full)")
-	DBPoolMax      = flag.Int("db_pool_max", 4, "Maximum database pool connections")
-	MailMode       = flag.String("mail_mode", "smtp", "Mail delivery mode: smtp or api")
-	SmtpHost       = flag.String("smtp_host", "smtp.gmail.com", "SMTP server host")
-	SmtpPort       = flag.Int("smtp_port", 587, "SMTP server port")
-	SmtpUser       = flag.String("smtp_user", "", "SMTP username")
-	SmtpFrom       = flag.String("smtp_from", "", "SMTP sender email address")
-	CORSOrigin     = flag.String("cors_origin", "", "Allowed CORS origin")
-	GoogleClientID = flag.String("google_client_id", "", "Google OAuth client ID (shared by login and any Google API integration). Required to verify ID tokens against Google's JWKs.")
-	// Apple Sign-In identifier — the `aud` claim that Apple-issued ID
-	// tokens MUST carry. For native iOS / iPadOS / macOS clients this is
-	// the app's bundle id (`com.example.app`); for web clients (Sign in
-	// with Apple JS) it is the Service ID configured in the Apple
-	// Developer portal. Required when handler/social_handler.go is
-	// mounted with provider="apple". Empty disables Apple sign-in.
-	AppleClientID = flag.String("apple_client_id", "", "Apple Sign-In client identifier (bundle id for native, Service ID for web)")
-	// OAuth 2.1 resource server (keel 1.2.0). keel can validate access
-	// tokens minted by an external authorization server (IdP) and advertise
-	// RFC 9728 protected-resource metadata — the path ChatGPT Apps SDK and
-	// other OAuth MCP clients expect. All non-secret (issuer/JWKS/audience
-	// are public). Empty --oauth_issuer disables it entirely; X-API-Key and
-	// JWT auth are unaffected. Wire via oauth/resource.Middleware.
-	OAuthIssuer          = flag.String("oauth_issuer", "", "OAuth 2.1 authorization-server issuer URL trusted by the resource-server validator. Empty disables OAuth token auth.")
-	OAuthJWKSURL         = flag.String("oauth_jwks_url", "", "JWKS URL used to verify access-token signatures (often <issuer>/.well-known/jwks.json). Required when --oauth_issuer is set.")
-	OAuthAudience        = flag.String("oauth_audience", "", "Expected access-token audience = this protected resource's identifier (RFC 8707). Required when --oauth_issuer is set.")
-	OAuthResource        = flag.String("oauth_resource", "", "Canonical resource URL advertised in /.well-known/oauth-protected-resource (single value). Empty falls back to --oauth_audience.")
-	OAuthResources       = flag.String("oauth_resources", "", "CSV of additional valid RFC 8707 resource indicators the local AS mints audience-bound tokens for, beyond --oauth_audience / --oauth_resource. Only needed when more than one endpoint is OAuth-protected.")
-	OAuthScopesSupported = flag.String("oauth_scopes_supported", "", "Comma-separated scopes advertised in protected-resource metadata. Optional.")
-	// OAuth 2.1 authorization server. When keel issues its own
-	// tokens (local AS) rather than delegating to an external IdP. --oauth_as_mode
-	// selects the provider: "local" (keel is the AS, default), "external" (delegate
-	// to the IdP at --oauth_issuer; keel stays resource-server only), or "disabled".
-	// In local mode --oauth_issuer is keel's own public base URL and the validator
-	// trusts the in-process signer; in external mode it is the IdP. The AS is only
-	// exposed when the consuming app mounts handler.OAuthASHandler, so existing
-	// services are unaffected regardless of mode.
-	OAuthASMode           = flag.String("oauth_as_mode", "local", "OAuth 2.1 authorization-server provider: local (keel issues tokens), external (delegate to --oauth_issuer IdP), or disabled.")
-	OAuthSigningKeySecret = flag.String("oauth_signing_key_secret", "", "Secret name (in the keystore/provider) holding the RS256 signing private key PEM for the local AS. Empty generates an ephemeral dev key (not for multi-node/production).")
-	OAuthAccessTokenTTL   = flag.Duration("oauth_access_token_ttl", time.Hour, "Lifetime of access tokens issued by the local AS.")
-	OAuthRefreshTokenTTL  = flag.Duration("oauth_refresh_token_ttl", 720*time.Hour, "Lifetime of refresh tokens issued by the local AS (default 30 days).")
-	OAuthCodeTTL          = flag.Duration("oauth_code_ttl", time.Minute, "Lifetime of authorization codes issued by the local AS (OAuth 2.1: short-lived, single-use).")
-	OAuthMaxAuthRedirects = flag.Int("oauth_max_auth_redirects", 2, "Max /authorize→login bounces before the AS returns 508 instead of redirecting again (loop guard against draining edge/CDN quota).")
-	// Outbound HTTP loop guards on the shared client (common.HTTPClient).
-	OutboundMaxRedirects = flag.Int("outbound_max_redirects", 10, "Max redirects the shared outbound HTTP client follows; it also fails fast on a same-URL redirect loop.")
-	OutboundMaxRPS       = flag.Float64("outbound_max_rps", 0, "Global rate cap (requests/sec, token bucket) on the shared outbound HTTP client. 0 = unlimited. A finite value is a backstop that throttles a runaway outbound loop instead of draining edge/CDN quota.")
-	// TrustedProxyCIDR limits which inbound socket addresses the
-	// X-Forwarded-For / X-Real-IP headers will be honored from. CSV of
-	// CIDRs — e.g. "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32". Empty (the
-	// default) disables proxy-header trust entirely; the connection
-	// RemoteAddr is used. Set this to your reverse proxy / load-balancer
-	// network range so client IPs surfaced to rate-limit and consent
-	// audit are authentic.
-	TrustedProxyCIDR = flag.String("trusted_proxy_cidr", "", "REQUIRED for production deployments behind a load balancer. CSV of CIDRs whose X-Forwarded-For / X-Real-IP headers are honored — typically your LB / reverse-proxy network range. Empty = trust nothing (peer RemoteAddr only); audit attribution and rate-limit keys then point at the LB. Production binaries should call handler.MustRequireTrustedProxyCIDR() after flag.Parse().")
-	SecretMode       = flag.String("secret_mode", "local", "Secret provider: local, gsm, aws, azure, or infisical")
-	ProjectID        = flag.String("gcp_project_id", "", "Google Cloud project ID")
+	AWSRegion = flag.String("aws_region", "", "AWS region for Secrets Manager")
+	// NodeId identifies this runtime node/process. It seeds the bigint ID
+	// generator and selects this node's application_config_value rows.
+	NodeId    = flag.Int("node_id", 0, "Node ID for the bigint ID generator and per-node config rows")
+	DBhost    = flag.String("db_host", "localhost", "Database hostname")
+	DBport    = flag.Int("db_port", 5432, "Database port number")
+	DBname    = flag.String("db_name", "app", "Database name")
+	DBuser    = flag.String("db_user", "app", "Database user")
+	DBschema  = flag.String("db_schema", "public", "Database schema name")
+	DBsslmode = flag.String("db_sslmode", "disable", "Database SSL mode (disable, require, verify-ca, verify-full)")
+	DBPoolMax = flag.Int("db_pool_max", 4, "Maximum database pool connections")
+
+	SecretMode = flag.String("secret_mode", "local", "Secret provider: local, gsm, aws, azure, or infisical")
+	// ProjectID is the GCP project consulted by the GSM secret provider
+	// (bootstrap) and GCP Pub/Sub messaging.
+	ProjectID = flag.String("gcp_project_id", "", "Google Cloud project ID")
 	// AzureKeyVaultURL is the vault endpoint consulted when
 	// --secret_mode=azure, e.g. "https://my-vault.vault.azure.net/".
 	// Authentication uses azidentity.DefaultAzureCredential (the same
@@ -168,100 +101,4 @@ var (
 	InfisicalProjectID   = flag.String("infisical_project_id", "", "Infisical project (workspace) ID. Required when --secret_mode=infisical.")
 	InfisicalEnvironment = flag.String("infisical_environment", "prod", "Infisical environment slug (dev, staging, prod). Used when --secret_mode=infisical.")
 	InfisicalHost        = flag.String("infisical_host", "https://app.infisical.com", "Infisical API host. Override for self-hosted instances.")
-	NatsURL              = flag.String("nats_url", "", "NATS server URL")
-	StorageMode          = flag.String("storage_mode", "", "Object storage: s3, gcs, or azure (R2 = s3 + --s3_endpoint). Empty disables storage.")
-	StorageBucket        = flag.String("storage_bucket", "", "Default object-storage bucket. Apps that store PII should set this per deployment site so blobs stay in the customer's data-residency region.")
-	// S3Endpoint overrides the S3 endpoint for non-AWS S3-compatible
-	// providers (Cloudflare R2, MinIO, Wasabi, Backblaze B2), e.g.
-	// https://<account>.r2.cloudflarestorage.com. When set, the client
-	// switches to path-style addressing. Empty uses AWS default endpoint
-	// resolution. Replaces the former S3_ENDPOINT env var so the endpoint
-	// is a flag knob like every other deployable switch; the AWS
-	// credentials themselves still resolve via the SDK's own chain.
-	S3Endpoint = flag.String("s3_endpoint", "", "S3-compatible endpoint override (e.g. https://<account>.r2.cloudflarestorage.com for Cloudflare R2). Empty = AWS default.")
-	// S3CredentialMode selects where the auto-built worker storage sources its
-	// S3/R2 credentials: "chain" (the AWS SDK's ambient chain / IAM role) or
-	// "secret" (keystore s3_access_key_id + s3_secret_access_key). The app's own
-	// API storage chooses directly via storage.WithSecretProvider.
-	S3CredentialMode = flag.String("s3_credential_mode", "chain", "Worker storage S3/R2 credential source: 'chain' (ambient AWS chain / IAM role) or 'secret' (keystore).")
-	// StoragePublicBaseURL is the public-read base for ObjectStorage.PublicURL
-	// on the s3/R2 backend — an R2 custom domain or *.r2.dev host, e.g.
-	// https://media.example.com. PublicURL returns <base>/<key>; the bucket
-	// is not in the path because the domain already maps to the bucket.
-	// Empty makes PublicURL return "" (no public URL configured). Unused by
-	// the gcs backend, which serves from storage.googleapis.com/<bucket>/<key>.
-	StoragePublicBaseURL = flag.String("storage_public_base_url", "", "Public base URL for ObjectStorage.PublicURL on s3/R2 (R2 custom domain or *.r2.dev host). Empty disables public URLs.")
-	// StorageAccountURL is the Azure Blob service endpoint, e.g.
-	// https://<account>.blob.core.windows.net/. Required when
-	// --storage_mode=azure. Auth uses azidentity.DefaultAzureCredential.
-	StorageAccountURL = flag.String("storage_account_url", "", "Azure Blob service endpoint (e.g. https://<account>.blob.core.windows.net/). Required when --storage_mode=azure.")
-	MessagingMode     = flag.String("messaging_mode", "", "Messaging: gcp or aws")
-	MaxRequestSize    = flag.Int64("max_request_size", 16777216, "Maximum request body size (16MB)")
-	HttpReadTimeout   = flag.Int("http_read_timeout", 15, "HTTP read timeout in seconds")
-	HttpWriteTimeout  = flag.Int("http_write_timeout", 30, "HTTP write timeout in seconds")
-	HttpIdleTimeout   = flag.Int("http_idle_timeout", 120, "HTTP idle timeout in seconds")
-	HCPort            = flag.Int("hc_port", 0, "Health check port override for workers")
-	PushMode          = flag.String("push_mode", "noop", "Push provider: fcm or noop")
-
-	// Cache backend selection. Set exactly one of --redis_url / --valkey_url.
-	// Both forms accept either `host:port` or `redis[s]://host:port/db` —
-	// passwords MUST NOT be embedded in the URL; they live in the secret
-	// provider under `redis_password` / `valkey_password`.
-	//
-	// --valkey_cluster makes the client speak Redis-Cluster protocol.
-	// Required for Memorystore for Valkey (cluster-mode-only) and ElastiCache
-	// for Valkey clusters; ignored when --redis_url is the active flag (the
-	// Redis path is single-node by construction).
-	RedisURL      = flag.String("redis_url", "", "Single-node Redis connection (host:port or redis[s]://host:port/db). Password lives in the `redis_password` secret. Mutually exclusive with --valkey_url.")
-	ValkeyURL     = flag.String("valkey_url", "", "Valkey connection (host:port or redis[s]://host:port/db). Password lives in the `valkey_password` secret. Mutually exclusive with --redis_url.")
-	ValkeyCluster = flag.Bool("valkey_cluster", false, "Use Redis-Cluster protocol (required for Memorystore for Valkey cluster-mode-only and ElastiCache for Valkey clusters). Applies only when --valkey_url is set.")
-
-	// TwilioMessagingServiceSID identifies the Twilio Messaging Service used by
-	// the SMS dispatcher. Not a credential — Twilio account SID + auth token
-	// live in the `twilio_account_sid` / `twilio_auth_token` secrets. One
-	// Messaging Service per environment; add senders (regional long codes,
-	// short codes, alphanumeric senders) inside the Twilio console. Empty
-	// value disables SMS dispatch (NewTwilioSMSDispatcher returns an error
-	// so callers can skip registering the channel).
-	TwilioMessagingServiceSID = flag.String("twilio_messaging_service_sid", "", "Twilio Messaging Service SID (MGxxxxxxxx...). Empty disables SMS.")
-
-	// Payout provider selection. Picks the active payout.PayoutProvider
-	// implementation for out-bound payouts. One impl is active per
-	// deployment; per-partner override is a future refinement on
-	// business_partner_config.payout_provider. Codes follow the basis
-	// constant_header `payout_provider` (CHAR(2)):
-	//   AW = Airwallex (default), SC = Stripe Connect, WI = Wise
-	PayoutProvider = flag.String("payout_provider", "AW", "Payout provider code: AW (Airwallex), SC (Stripe Connect), WI (Wise)")
-
-	// PayoutReturnURL is the deep-link the provider redirects the user
-	// back to after their hosted-KYC flow completes (e.g.
-	// "myapp://onboarding/return" for a mobile app, or
-	// "https://app.example.com/onboarding/return" for a web build).
-	PayoutReturnURL = flag.String("payout_return_url", "", "Deep-link the payout provider redirects back to after hosted KYC")
-
-	// PayoutWebhookURL is the public URL the provider POSTs webhook
-	// events to. The path suffix /api/v1/webhook/payout/<code> is
-	// appended by the calling application's router; the value here is
-	// the public-host portion only, e.g. "https://api.example.com".
-	PayoutWebhookURL = flag.String("payout_webhook_url", "", "Public host the payout provider sends webhook events to")
-
-	// AirwallexAPIBase is the Airwallex REST API root. Defaults to the
-	// demo host so a fresh install can't accidentally hit production.
-	// Set to "https://api.airwallex.com" once the integration is
-	// contract-live. The previous behaviour was a hardcoded constant
-	// inside payout/airwallex.go — replaced with this flag so production
-	// deployments can flip the value without a recompile.
-	AirwallexAPIBase = flag.String("airwallex_api_base", "https://api-demo.airwallex.com", "Airwallex REST API base URL")
-
-	// WiseAPIBase is the Wise Platform REST API root. Defaults to the
-	// sandbox. Production set this to "https://api.wise.com".
-	WiseAPIBase = flag.String("wise_api_base", "https://api.sandbox.transferwise.tech", "Wise Platform REST API base URL")
-
-	// WiseProfileID is the Wise platform profile id (numeric) the
-	// transfers + recipient creates are scoped to. Required when
-	// --payout_provider=WI; the Wise API rejects /v1/accounts and
-	// /v1/transfers requests with no profile id. Empty value is a
-	// configuration error — the Wise provider's StartOnboarding /
-	// RequestInstantPayout will reject calls at runtime.
-	WiseProfileID = flag.String("wise_profile_id", "", "Wise platform profile id (numeric)")
 )

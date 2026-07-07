@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 )
@@ -14,7 +13,7 @@ import (
 // connection until ctx is cancelled, panic-guarding each tick — for a light drain
 // run as a goroutine in another binary. Heavy or long-running work belongs in a
 // standalone binary via AbstractWorker.Run.
-func RunQueueInProcess(ctx context.Context, w QueueWorker, db data.DatabaseRepository, journal logger.ApplicationLogger, quota port.QuotaService, interval time.Duration) {
+func RunQueueInProcess(ctx context.Context, w QueueWorker, db port.DatabaseRepository, journal logger.ApplicationLogger, quota port.QuotaService, interval time.Duration) {
 	qs := db.GetQueryService(ctx, w.GetOLTPQueries())
 	pending, claim, reclaim, name := w.QueueQueries()
 	loop := &JobLoop{QS: qs, Journal: journal, GetPendingQuery: pending, ClaimQuery: claim, ReclaimQuery: reclaim, WorkerName: name, Leased: leasedClaim(w)}
@@ -30,7 +29,7 @@ func RunQueueInProcess(ctx context.Context, w QueueWorker, db data.DatabaseRepos
 	}
 }
 
-func runQueueTick(ctx context.Context, w QueueWorker, db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService, journal logger.ApplicationLogger, loop *JobLoop) {
+func runQueueTick(ctx context.Context, w QueueWorker, db port.DatabaseRepository, quota port.QuotaService, qs port.QueryService, journal logger.ApplicationLogger, loop *JobLoop) {
 	defer func() {
 		if r := recover(); r != nil {
 			journal.Error(fmt.Sprintf("in-process worker tick panic recovered: %v", r))

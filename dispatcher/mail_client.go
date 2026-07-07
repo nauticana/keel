@@ -22,18 +22,12 @@ import (
 	"github.com/nauticana/keel/secret"
 )
 
-// SMTP dial/overall timeouts bound how long a stalled peer can hold the worker.
-const (
-	smtpDialTimeout = 10 * time.Second
-	smtpDeadline    = 30 * time.Second
-)
-
 type MailClient struct {
 	Secrets secret.SecretProvider
 }
 
 func (m *MailClient) SendEmail(ctx context.Context, subject string, body string, recipients []string) error {
-	switch *common.MailMode {
+	switch common.Config().MailMode {
 	case "api":
 		return m.sendViaAPI(ctx, subject, body, recipients)
 	default:
@@ -42,7 +36,7 @@ func (m *MailClient) SendEmail(ctx context.Context, subject string, body string,
 }
 
 func (m *MailClient) SendEmailHTML(ctx context.Context, subject string, htmlBody string, recipients []string, attachmentName string, attachmentData []byte) error {
-	switch *common.MailMode {
+	switch common.Config().MailMode {
 	case "api":
 		return m.sendHTMLViaAPI(ctx, subject, htmlBody, recipients)
 	default:
@@ -92,9 +86,9 @@ func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body strin
 	if err != nil {
 		return fmt.Errorf("failed to get SMTP password: %w", err)
 	}
-	from := scrubMailHeader(*common.SmtpFrom)
-	host := *common.SmtpHost
-	port := *common.SmtpPort
+	from := scrubMailHeader(common.Config().SmtpFrom)
+	host := common.Config().SmtpHost
+	port := common.Config().SmtpPort
 	addr := host + ":" + strconv.Itoa(port)
 
 	cleanRcpts := scrubRecipients(recipients)
@@ -110,7 +104,7 @@ func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body strin
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s",
 		from, strings.Join(cleanRcpts, ", "), cleanSubject, body)
 	pass := strings.TrimSpace(smtpPass)
-	return sendSMTPWithStartTLS(addr, host, *common.SmtpUser, pass, from, cleanRcpts, []byte(msg))
+	return sendSMTPWithStartTLS(addr, host, common.Config().SmtpUser, pass, from, cleanRcpts, []byte(msg))
 }
 
 // sendSMTPWithStartTLS dials the server, opportunistically upgrades
@@ -127,11 +121,11 @@ func sendSMTPWithStartTLS(addr, host, user, pass, from string, recipients []stri
 	// Bounded dial + overall deadline so a peer that accepts the TCP connection
 	// but stalls on the greeting/STARTTLS/DATA can't block the worker tick
 	// indefinitely (a synchronous dispatch would otherwise wedge the loop).
-	conn, err := net.DialTimeout("tcp", addr, smtpDialTimeout)
+	conn, err := net.DialTimeout("tcp", addr, common.Config().SmtpDialTimeout)
 	if err != nil {
 		return fmt.Errorf("smtp: dial %s: %w", addr, err)
 	}
-	_ = conn.SetDeadline(time.Now().Add(smtpDeadline))
+	_ = conn.SetDeadline(time.Now().Add(common.Config().SmtpDeadline))
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		conn.Close()
@@ -181,9 +175,9 @@ func (m *MailClient) sendHTMLViaSMTP(ctx context.Context, subject string, htmlBo
 	if err != nil {
 		return fmt.Errorf("failed to get SMTP password: %w", err)
 	}
-	from := scrubMailHeader(*common.SmtpFrom)
-	host := *common.SmtpHost
-	port := *common.SmtpPort
+	from := scrubMailHeader(common.Config().SmtpFrom)
+	host := common.Config().SmtpHost
+	port := common.Config().SmtpPort
 	addr := host + ":" + strconv.Itoa(port)
 
 	cleanRcpts := scrubRecipients(recipients)
@@ -245,7 +239,7 @@ func (m *MailClient) sendHTMLViaSMTP(ctx context.Context, subject string, htmlBo
 
 	msg := append(headers.Bytes(), body.Bytes()...)
 	pass := strings.TrimSpace(smtpPass)
-	return sendSMTPWithStartTLS(addr, host, *common.SmtpUser, pass, from, cleanRcpts, msg)
+	return sendSMTPWithStartTLS(addr, host, common.Config().SmtpUser, pass, from, cleanRcpts, msg)
 }
 
 // --- API mode ---
@@ -259,7 +253,7 @@ func (m *MailClient) sendHTMLViaAPI(ctx context.Context, subject string, htmlBod
 }
 
 // postMailAPI delivers a message to keel's REST API.
-//   - Validates that --smtp_host is a bare host[:port] (no scheme,
+//   - Validates that smtp_host is a bare host[:port] (no scheme,
 //     no path), then constructs the URL via net/url so an operator
 //     copy-paste like `https://mail.example.com/api` doesn't
 //     produce `https://https://mail.example.com/api/api/send`.
@@ -274,17 +268,17 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 	if err != nil {
 		return fmt.Errorf("failed to get mail API key: %w", err)
 	}
-	host := strings.TrimSpace(*common.SmtpHost)
+	host := strings.TrimSpace(common.Config().SmtpHost)
 	if host == "" {
 		return fmt.Errorf("smtp_host not configured")
 	}
 	if strings.Contains(host, "/") {
-		return fmt.Errorf("mail api: --smtp_host must be a bare host[:port] (no scheme or path), got %q", host)
+		return fmt.Errorf("mail api: smtp_host must be a bare host[:port] (no scheme or path), got %q", host)
 	}
 	endpoint := (&url.URL{Scheme: "https", Host: host, Path: "/api/send"}).String()
 
 	payload, err := json.Marshal(map[string]interface{}{
-		"from":    *common.SmtpFrom,
+		"from":    common.Config().SmtpFrom,
 		"to":      recipients,
 		"subject": subject,
 		"body":    body,

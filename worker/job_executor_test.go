@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
@@ -21,7 +20,7 @@ func (w *fakeQueueWorker) GetOLTPQueries() map[string]string { return nil }
 func (w *fakeQueueWorker) QueueQueries() (string, string, string, string) {
 	return "pending", "claim", "reclaim", "fq"
 }
-func (w *fakeQueueWorker) HandleJob(_ context.Context, _ logger.ApplicationLogger, _ data.DatabaseRepository, _ port.QuotaService, _ data.QueryService, jobID int64, _ []any) error {
+func (w *fakeQueueWorker) HandleJob(_ context.Context, _ logger.ApplicationLogger, _ port.DatabaseRepository, _ port.QuotaService, _ port.QueryService, jobID int64, _ []any) error {
 	w.handled = append(w.handled, jobID)
 	return nil
 }
@@ -32,7 +31,7 @@ type fakeProcessWorker struct {
 
 func (w *fakeProcessWorker) GetHealthcheckPort() int           { return 0 }
 func (w *fakeProcessWorker) GetOLTPQueries() map[string]string { return nil }
-func (w *fakeProcessWorker) ProcessQueue(context.Context, logger.ApplicationLogger, data.DatabaseRepository, port.QuotaService, data.QueryService) {
+func (w *fakeProcessWorker) ProcessQueue(context.Context, logger.ApplicationLogger, port.DatabaseRepository, port.QuotaService, port.QueryService) {
 	w.processed++
 }
 

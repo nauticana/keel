@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
@@ -50,19 +49,25 @@ DELETE FROM service_registry
 }
 
 type JobExecutor struct {
-	Caption     string
-	Interval    int
-	Journal     logger.ApplicationLogger
-	Worker      Worker
-	NewDatabase func(ctx context.Context, sp secret.SecretProvider) (data.DatabaseRepository, error)
-	NewQuota    func(db data.DatabaseRepository) port.QuotaService
+	Caption  string
+	Interval int
+	Journal  logger.ApplicationLogger
+	Worker   Worker
+	// DB is the OLTP database. AbstractWorker.Run sets it (after loading
+	// common.Config from it via SetConfig); standalone constructions may leave it nil and
+	// supply NewDatabase instead — then the caller must load common.Config
+	// itself before Run, or DB-backed settings (hc_port, storage, tunables)
+	// read as zero.
+	DB          port.DatabaseRepository
+	NewDatabase func(ctx context.Context, sp secret.SecretProvider) (port.DatabaseRepository, error)
+	NewQuota    func(db port.DatabaseRepository) port.QuotaService
 
 	// Storage is the optional object-storage backend selected by
-	// --storage_mode, populated by AbstractWorker.Run when the flag is set (nil
+	// storage_mode, populated by AbstractWorker.Run when the flag is set (nil
 	// otherwise). ProcessQueue does not receive it as a parameter to keep
 	// the JobWorker interface stable; workers that need storage should hold
 	// a reference to their JobExecutor, or build their own via
-	// storage.New(ctx, *common.StorageMode).
+	// storage.New(ctx, common.Config().StorageMode).
 	Storage storage.ObjectStorage
 }
 
@@ -73,8 +78,8 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 	// errors are surfaced through the journal — previously they
 	// were silently dropped (P1-55).
 	hcPort := e.Worker.GetHealthcheckPort()
-	if *common.HCPort > 0 {
-		hcPort = *common.HCPort
+	if common.Config().HCPort > 0 {
+		hcPort = common.Config().HCPort
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -99,12 +104,16 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 	}()
 
 	e.Journal.Info("starting new service " + e.Caption)
-	dbOLTP, err := e.NewDatabase(ctx, secretProvider)
-	if err != nil {
-		return err
+	dbOLTP := e.DB
+	if dbOLTP == nil {
+		var err error
+		dbOLTP, err = e.NewDatabase(ctx, secretProvider)
+		if err != nil {
+			return err
+		}
 	}
 	quotaService := e.NewQuota(dbOLTP)
-	var qsOLTP data.QueryService
+	var qsOLTP port.QueryService
 	oltpQueries := e.Worker.GetOLTPQueries()
 	if len(oltpQueries) > 0 {
 		qsOLTP = dbOLTP.GetQueryService(ctx, oltpQueries)
@@ -134,7 +143,7 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 // runTick runs one pass in a panic barrier so a single bad job can't kill the
 // daemon. A QueueWorker is drained via its JobLoop; a JobWorker drives its own
 // ProcessQueue.
-func (e *JobExecutor) runTick(ctx context.Context, dbOLTP data.DatabaseRepository, quotaService port.QuotaService, qsOLTP data.QueryService, loop *JobLoop) {
+func (e *JobExecutor) runTick(ctx context.Context, dbOLTP port.DatabaseRepository, quotaService port.QuotaService, qsOLTP port.QueryService, loop *JobLoop) {
 	defer func() {
 		if r := recover(); r != nil {
 			e.Journal.Error(fmt.Sprintf("worker: tick panic recovered: %v", r))
@@ -153,7 +162,7 @@ func (e *JobExecutor) runTick(ctx context.Context, dbOLTP data.DatabaseRepositor
 	}
 }
 
-func (e *JobExecutor) registerService(ctx context.Context, qs data.QueryService, serviceName string) {
+func (e *JobExecutor) registerService(ctx context.Context, qs port.QueryService, serviceName string) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"

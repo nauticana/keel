@@ -43,14 +43,14 @@ type TwilioSMSDispatcher struct {
 var _ port.MessageDispatcher = (*TwilioSMSDispatcher)(nil)
 
 // NewTwilioSMSDispatcher pulls credentials from the secret provider and the
-// Messaging Service SID from the keel common flag --twilio_messaging_service_sid.
+// Messaging Service SID from the keel common flag twilio_messaging_service_sid.
 // Returns an error when any required value is missing so callers can skip
 // registering the SMS channel (matching the push-provider failure pattern).
 //
 // Required:
 //   - secret `twilio_account_sid`  — Twilio account SID
 //   - secret `twilio_auth_token`   — Twilio auth token
-//   - flag   `--twilio_messaging_service_sid` — MGxxxxxxxx...
+//   - flag   `twilio_messaging_service_sid` — MGxxxxxxxx...
 //
 // Pass the dispatcher's Users (a port.RecipientResolver) and Journal
 // so it can resolve a userID to an E.164 phone via PhoneFor and so
@@ -72,9 +72,9 @@ func NewTwilioSMSDispatcher(ctx context.Context, secrets secret.SecretProvider, 
 	if token == "" {
 		return nil, fmt.Errorf("twilio: twilio_auth_token is empty")
 	}
-	msgSvc := strings.TrimSpace(*common.TwilioMessagingServiceSID)
+	msgSvc := strings.TrimSpace(common.Config().TwilioMessagingServiceSID)
 	if msgSvc == "" {
-		return nil, fmt.Errorf("twilio: --twilio_messaging_service_sid not set")
+		return nil, fmt.Errorf("twilio: twilio_messaging_service_sid not set")
 	}
 	return &TwilioSMSDispatcher{
 		Users:               users,

@@ -96,10 +96,10 @@ SELECT 1
 }
 
 type AbstractRepository struct {
-	TableServices    map[string]TableService
+	TableServices    map[string]port.TableService
 	TableDefinitions map[string]*model.TableDefinition
 	ForeignKeys      map[string]*model.ForeignKey
-	QuerySvc         QueryService
+	QuerySvc         port.QueryService
 	// AuthQuery carries the QCheckAuthorization template. Populated by
 	// concrete repository Init (pgsql/repository.go) so CheckActionPermission
 	// can reuse it across calls. Equivalent to the AuthQuery each
@@ -107,11 +107,11 @@ type AbstractRepository struct {
 	// so middleware that operates outside any specific TableService
 	// (custom action handlers, report dispatchers) can run the same
 	// permission check.
-	AuthQuery        QueryService
+	AuthQuery        port.QueryService
 	IdGenerator      port.BigintGenerator
 	ConnectFn        func(ctx context.Context) error
 	LoadColumnsFn    func(ctx context.Context) (map[string][]*model.TableColumn, error)
-	CreateTableSvcFn func(ctx context.Context, table *model.TableDefinition) TableService
+	CreateTableSvcFn func(ctx context.Context, table *model.TableDefinition) port.TableService
 
 	// PartnerTableName is the table whose presence in a child's FK
 	// graph marks the child as PartnerSpecific (the partner_id column
@@ -213,7 +213,7 @@ func (r *AbstractRepository) Init(ctx context.Context) error {
 		return err
 	}
 	r.TableDefinitions = make(map[string]*model.TableDefinition)
-	r.TableServices = make(map[string]TableService)
+	r.TableServices = make(map[string]port.TableService)
 
 	columns, err := r.LoadColumnsFn(ctx)
 	if err != nil {
@@ -296,7 +296,7 @@ func (r *AbstractRepository) GetTableDefinition(tableName string) *model.TableDe
 	return r.TableDefinitions[tableName]
 }
 
-func (r *AbstractRepository) GetTableService(tableName string) TableService {
+func (r *AbstractRepository) GetTableService(tableName string) port.TableService {
 	return r.TableServices[tableName]
 }
 

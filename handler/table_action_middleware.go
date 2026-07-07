@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
 
@@ -38,7 +38,7 @@ func TableActionPath(prefix, table, action string) string {
 //	keel.TableActionPath(prefix, "user_payment_method", "set_default"):
 //	    keel.WrapTableAction(db, userSvc, "USER_PAYMENT_METHOD", "SET_DEFAULT",
 //	        "user_payment_method", h.SetDefault),
-func WrapTableAction(db data.DatabaseRepository, userSvc user.UserService, authObject, action, scope string, inner http.HandlerFunc) http.HandlerFunc {
+func WrapTableAction(db port.DatabaseRepository, userSvc user.UserService, authObject, action, scope string, inner http.HandlerFunc) http.HandlerFunc {
 	h := &AbstractHandler{UserService: userSvc}
 	return func(w http.ResponseWriter, r *http.Request) {
 		session, ok := h.RequireSession(w, r)

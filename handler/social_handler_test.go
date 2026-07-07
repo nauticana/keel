@@ -8,12 +8,12 @@ import (
 )
 
 // B6: TrustedClientIP must ignore X-Forwarded-For when the inbound
-// peer is not in --trusted_proxy_cidr. Trvoo's previous header-trusting
+// peer is not in trusted_proxy_cidr. Trvoo's previous header-trusting
 // clientIP would have returned the spoofed value.
 func TestTrustedClientIP_UntrustedPeer_IgnoresForwardedFor(t *testing.T) {
-	saved := *common.TrustedProxyCIDR
-	*common.TrustedProxyCIDR = "10.0.0.0/8"
-	defer func() { *common.TrustedProxyCIDR = saved }()
+	saved := common.Config().TrustedProxyCIDR
+	common.Config().TrustedProxyCIDR = "10.0.0.0/8"
+	defer func() { common.Config().TrustedProxyCIDR = saved }()
 
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "203.0.113.5:54321" // public IP, not in the trusted CIDR
@@ -26,13 +26,13 @@ func TestTrustedClientIP_UntrustedPeer_IgnoresForwardedFor(t *testing.T) {
 	}
 }
 
-// When the peer is in --trusted_proxy_cidr, X-Forwarded-For's leftmost
+// When the peer is in trusted_proxy_cidr, X-Forwarded-For's leftmost
 // entry is honored (the original client; the rest of the chain is the
 // proxy hop list).
 func TestTrustedClientIP_TrustedPeer_HonorsForwardedFor(t *testing.T) {
-	saved := *common.TrustedProxyCIDR
-	*common.TrustedProxyCIDR = "10.0.0.0/8"
-	defer func() { *common.TrustedProxyCIDR = saved }()
+	saved := common.Config().TrustedProxyCIDR
+	common.Config().TrustedProxyCIDR = "10.0.0.0/8"
+	defer func() { common.Config().TrustedProxyCIDR = saved }()
 
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.0.0.5:443"
@@ -44,12 +44,12 @@ func TestTrustedClientIP_TrustedPeer_HonorsForwardedFor(t *testing.T) {
 	}
 }
 
-// Empty --trusted_proxy_cidr means trust nothing — even private peers
+// Empty trusted_proxy_cidr means trust nothing — even private peers
 // don't get their headers honored.
 func TestTrustedClientIP_EmptyConfig_TrustsNothing(t *testing.T) {
-	saved := *common.TrustedProxyCIDR
-	*common.TrustedProxyCIDR = ""
-	defer func() { *common.TrustedProxyCIDR = saved }()
+	saved := common.Config().TrustedProxyCIDR
+	common.Config().TrustedProxyCIDR = ""
+	defer func() { common.Config().TrustedProxyCIDR = saved }()
 
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.0.0.5:443"
@@ -65,9 +65,9 @@ func TestTrustedClientIP_EmptyConfig_TrustsNothing(t *testing.T) {
 // production opt-in turns the library-safe default into a deploy-time
 // failure.
 func TestRequireTrustedProxyCIDR_EmptyConfig_Errors(t *testing.T) {
-	saved := *common.TrustedProxyCIDR
-	*common.TrustedProxyCIDR = ""
-	defer func() { *common.TrustedProxyCIDR = saved }()
+	saved := common.Config().TrustedProxyCIDR
+	common.Config().TrustedProxyCIDR = ""
+	defer func() { common.Config().TrustedProxyCIDR = saved }()
 
 	if err := RequireTrustedProxyCIDR(); err == nil {
 		t.Fatal("expected error for empty config, got nil")
@@ -78,9 +78,9 @@ func TestRequireTrustedProxyCIDR_EmptyConfig_Errors(t *testing.T) {
 // state as empty — getTrustedProxyNets silently drops bad entries, so
 // the validator must reject too.
 func TestRequireTrustedProxyCIDR_AllInvalid_Errors(t *testing.T) {
-	saved := *common.TrustedProxyCIDR
-	*common.TrustedProxyCIDR = "not-a-cidr,also-bad,"
-	defer func() { *common.TrustedProxyCIDR = saved }()
+	saved := common.Config().TrustedProxyCIDR
+	common.Config().TrustedProxyCIDR = "not-a-cidr,also-bad,"
+	defer func() { common.Config().TrustedProxyCIDR = saved }()
 
 	if err := RequireTrustedProxyCIDR(); err == nil {
 		t.Fatal("expected error for all-invalid config, got nil")
@@ -91,9 +91,9 @@ func TestRequireTrustedProxyCIDR_AllInvalid_Errors(t *testing.T) {
 // even when other entries are bogus (matches the runtime cache's
 // best-effort parsing).
 func TestRequireTrustedProxyCIDR_HasValidEntry_OK(t *testing.T) {
-	saved := *common.TrustedProxyCIDR
-	*common.TrustedProxyCIDR = "garbage, 10.0.0.0/8 ,  "
-	defer func() { *common.TrustedProxyCIDR = saved }()
+	saved := common.Config().TrustedProxyCIDR
+	common.Config().TrustedProxyCIDR = "garbage, 10.0.0.0/8 ,  "
+	defer func() { common.Config().TrustedProxyCIDR = saved }()
 
 	if err := RequireTrustedProxyCIDR(); err != nil {
 		t.Fatalf("expected nil for partially-valid config, got %v", err)

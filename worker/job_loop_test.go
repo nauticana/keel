@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
 // --- test doubles -----------------------------------------------------------
@@ -72,7 +72,7 @@ func (l *fakeLogger) Error(s string)               { l.errs = append(l.errs, s) 
 func (l *fakeLogger) Fatal(string)                 {}
 
 var (
-	_ data.QueryService        = (*fakeQS)(nil)
+	_ port.QueryService        = (*fakeQS)(nil)
 	_ logger.ApplicationLogger = (*fakeLogger)(nil)
 )
 

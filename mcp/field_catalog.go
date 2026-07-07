@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
@@ -27,11 +26,11 @@ type DescriptorProvider struct {
 // every provider, DescribeField routes a prefixed name to its provider's point
 // query and falls back to an exact-name scan for core/static fields.
 type BaseFieldCatalog struct {
-	qs        data.QueryService
+	qs        port.QueryService
 	providers []DescriptorProvider
 }
 
-func NewFieldCatalog(qs data.QueryService, providers ...DescriptorProvider) *BaseFieldCatalog {
+func NewFieldCatalog(qs port.QueryService, providers ...DescriptorProvider) *BaseFieldCatalog {
 	return &BaseFieldCatalog{qs: qs, providers: providers}
 }
 

@@ -120,7 +120,7 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		req.RedirectURI = "postmessage"
 	}
 
-	clientID := *common.GoogleClientID
+	clientID := common.Config().GoogleClientID
 	if clientID == "" {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "google_client_id flag is not configured")
 		return

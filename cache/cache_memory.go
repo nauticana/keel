@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/nauticana/keel/common"
 )
 
 // MemoryCacheService is a process-local CacheService implementation
@@ -14,7 +16,7 @@ import (
 // previously fell back to a NoOp here, which silently disabled the
 // caps and let attackers pump unbounded OTP SMS/email.
 //
-// Backend selection: when neither --valkey_url nor --redis_url is set,
+// Backend selection: when neither valkey_url nor redis_url is set,
 // NewCacheService returns this implementation by default.
 //
 // Constraints to know before deploying multi-instance:
@@ -48,7 +50,7 @@ type kvEntry struct {
 
 // NewMemoryCacheService allocates a memory cache and starts the
 // background TTL sweeper. The sweeper drops keys whose expiry has
-// passed every memorySweepInterval; expired keys are also dropped
+// passed every memory_cache_sweep_interval; expired keys are also dropped
 // lazily on Get/Increment so memory only grows between sweeps and the
 // caller never sees a stale value.
 func NewMemoryCacheService() *MemoryCacheService {
@@ -62,10 +64,8 @@ func NewMemoryCacheService() *MemoryCacheService {
 	return c
 }
 
-const memorySweepInterval = time.Minute
-
 func (c *MemoryCacheService) sweepLoop() {
-	t := time.NewTicker(memorySweepInterval)
+	t := time.NewTicker(common.Config().MemoryCacheSweepInterval)
 	defer t.Stop()
 	for {
 		select {

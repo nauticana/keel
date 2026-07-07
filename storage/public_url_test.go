@@ -46,11 +46,11 @@ func TestFactoryUnknownMode(t *testing.T) {
 }
 
 func TestFactoryAzureRequiresAccountURL(t *testing.T) {
-	orig := *common.StorageAccountURL
-	t.Cleanup(func() { *common.StorageAccountURL = orig })
-	*common.StorageAccountURL = ""
+	orig := common.Config().StorageAccountURL
+	t.Cleanup(func() { common.Config().StorageAccountURL = orig })
+	common.Config().StorageAccountURL = ""
 	_, err := New(context.Background(), "azure")
-	if err == nil || !strings.Contains(err.Error(), "--storage_account_url is required") {
-		t.Fatalf("expected --storage_account_url error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "storage_account_url is required") {
+		t.Fatalf("expected storage_account_url error, got %v", err)
 	}
 }

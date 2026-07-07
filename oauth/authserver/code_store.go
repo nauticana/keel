@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
@@ -31,8 +30,8 @@ RETURNING client_id, user_id, partner_id, scopes, redirect_uri, code_challenge, 
 // Code redemption is login-rate, not request-rate, so it does not pressure the
 // hot path; DELETE ... RETURNING gives atomic single-use the cache can't.
 type CodeStoreDB struct {
-	DB data.DatabaseRepository
-	qs data.QueryService
+	DB port.DatabaseRepository
+	qs port.QueryService
 }
 
 var _ port.AuthCodeStore = (*CodeStoreDB)(nil)

@@ -11,7 +11,7 @@ import (
 
 type AbstractTableService struct {
 	Table       *model.TableDefinition
-	AuthQuery   QueryService
+	AuthQuery   port.QueryService
 	IdGenerator port.BigintGenerator
 }
 

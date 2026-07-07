@@ -23,17 +23,17 @@ type ProtectedResourceMetadata struct {
 	ResourceDocumentation  string   `json:"resource_documentation,omitempty"`
 }
 
-// ProtectedResourceMetadataFromFlags builds the metadata from the --oauth_*
-// flags. Resource falls back to --oauth_audience when --oauth_resource is empty.
-func ProtectedResourceMetadataFromFlags() ProtectedResourceMetadata {
-	resource := *common.OAuthResource
+// ProtectedResourceMetadataFromConfig builds the metadata from the --oauth_*
+// flags. Resource falls back to oauth_audience when oauth_resource is empty.
+func ProtectedResourceMetadataFromConfig() ProtectedResourceMetadata {
+	resource := common.Config().OAuthResource
 	if resource == "" {
-		resource = *common.OAuthAudience
+		resource = common.Config().OAuthAudience
 	}
 	return ProtectedResourceMetadata{
 		Resource:             resource,
-		AuthorizationServers: []string{*common.OAuthIssuer},
-		ScopesSupported:      common.SplitCSV(*common.OAuthScopesSupported),
+		AuthorizationServers: []string{common.Config().OAuthIssuer},
+		ScopesSupported:      common.SplitCSV(common.Config().OAuthScopesSupported),
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 )
 
 // Webhook processing status values stored in payment_webhook_log.processing_status.
@@ -104,13 +104,13 @@ SELECT 1
 // QueryService holds only a pool reference, so a sync.Once-gated
 // build is both safe and free of the per-delivery rewrite cost.
 type SQLWebhookRepository struct {
-	DB data.DatabaseRepository
+	DB port.DatabaseRepository
 
 	qsOnce sync.Once
-	qs     data.QueryService
+	qs     port.QueryService
 }
 
-func NewSQLWebhookRepository(db data.DatabaseRepository) *SQLWebhookRepository {
+func NewSQLWebhookRepository(db port.DatabaseRepository) *SQLWebhookRepository {
 	return &SQLWebhookRepository{DB: db}
 }
 
@@ -120,7 +120,7 @@ func NewSQLWebhookRepository(db data.DatabaseRepository) *SQLWebhookRepository {
 // but pgxpool's GetQueryService doesn't actually do anything with
 // the ctx beyond pass-through, so subsequent calls' ctx is irrelevant
 // to the cached instance.
-func (r *SQLWebhookRepository) queryService(ctx context.Context) data.QueryService {
+func (r *SQLWebhookRepository) queryService(ctx context.Context) port.QueryService {
 	r.qsOnce.Do(func() {
 		r.qs = r.DB.GetQueryService(ctx, webhookQueries)
 	})

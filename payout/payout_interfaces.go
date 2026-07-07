@@ -23,7 +23,7 @@ import (
 // user_bank_info.provider and routed on by the webhook handler. Downstream
 // code MUST use these constants rather than literal "AW" / "SC" / "WI" so
 // a future rename touches one place. They also match what the
-// --payout_provider flag in common/variables.go accepts.
+// payout_provider flag in common/variables.go accepts.
 const (
 	ProviderCodeAirwallex     = "AW"
 	ProviderCodeStripeConnect = "SC"

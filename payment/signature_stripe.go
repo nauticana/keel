@@ -10,12 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/secret"
 )
-
-// StripeTolerance is the maximum age of a Stripe-Signature timestamp.
-// Stripe's recommended default; requests older than this are rejected.
-const StripeTolerance = 5 * time.Minute
 
 // MaxSigHeaderBytes caps the inbound signature header at a length that
 // is multiples larger than any legitimate provider header (Stripe and
@@ -104,7 +101,7 @@ func (v *StripeSignatureVerifier) Verify(ctx context.Context, sigHeader string, 
 
 	tolerance := v.Tolerance
 	if tolerance == 0 {
-		tolerance = StripeTolerance
+		tolerance = common.Config().StripeWebhookTolerance
 	}
 	now := time.Now
 	if v.Now != nil {

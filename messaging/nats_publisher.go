@@ -11,50 +11,44 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/secret"
 )
 
-// NATS configuration:
+// NATS configuration (all via the application_config catalog):
 //
-//	--nats_url    — NATS server URL flag (keel common). Comma-separated for clustered deployments. Falls back to nats.DefaultURL.
-//	NATS_CREDS    — env. Optional path to a credentials file (Synadia Cloud).
-//	NATS_NAME     — env. Optional client name surfaced in NATS observability.
-const (
-	natsDefaultFetch      = 16
-	natsFetchTimeout      = 2 * time.Second
-	natsDefaultAckWait    = 30 * time.Second
-	natsDefaultMaxDeliver = 3
-
-	// natsDefaultMaxAckPending bounds the number of in-flight (unacked) messages a single durable consumer can hold.
-	natsDefaultMaxAckPending = 256
-
-	// natsBackoff is the wait between Nak and redelivery on handler failure. JetStream's default of zero retries immediately,
-	// which in a sustained-failure scenario amounts to a tight loop that also blocks any other in-flight messages on the consumer.
-	natsBackoff = 5 * time.Second
-
-	// natsConnectTimeout caps the initial dial / handshake. Without nats.Connect will sit on a misconfigured URL
-	// until the OS connect timeout (~75s on Linux) — long enough that a stuck server defers startup readiness past
-	// most container schedulers' patience window (P2-14).
-	natsConnectTimeout = 10 * time.Second
-)
+//	nats_url          — server URL; comma-separated for clusters. Falls back to nats.DefaultURL.
+//	nats_name         — optional client name surfaced in NATS observability.
+//	nats_creds_secret — optional secret NAME whose value is the decorated
+//	                    .creds file content (Synadia Cloud). The material
+//	                    lives in the secret provider, never in config/env.
+const natsDefaultFetch = 16
 
 // NATSConnect opens a connection using the standard keel NATS configuration.
-// Connect attempt is bounded by natsConnectTimeout so a hung server can't stall startup indefinitely (P2-14).
+// Connect attempt is bounded by the nats_connect_timeout config so a hung server can't stall startup indefinitely (P2-14).
 // Once connected, the nats.MaxReconnects(-1) + nats.ReconnectWait(2s) options take over for runtime resilience.
-func NATSConnect() (*nats.Conn, error) {
-	url := strings.TrimSpace(*common.NatsURL)
+func NATSConnect(ctx context.Context, secrets secret.SecretProvider) (*nats.Conn, error) {
+	cfg := common.Config()
+	url := strings.TrimSpace(cfg.NatsURL)
 	if url == "" {
 		url = nats.DefaultURL
 	}
 	opts := []nats.Option{
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2 * time.Second),
-		nats.Timeout(natsConnectTimeout),
+		nats.Timeout(cfg.NatsConnectTimeout),
 	}
-	if name := strings.TrimSpace(os.Getenv("NATS_NAME")); name != "" {
+	if name := strings.TrimSpace(cfg.NatsName); name != "" {
 		opts = append(opts, nats.Name(name))
 	}
-	if creds := os.Getenv("NATS_CREDS"); creds != "" {
-		opts = append(opts, nats.UserCredentials(creds))
+	if credsSecret := strings.TrimSpace(cfg.NatsCredsSecret); credsSecret != "" {
+		if secrets == nil {
+			return nil, fmt.Errorf("nats: nats_creds_secret is set but no secret provider was supplied")
+		}
+		creds, err := secrets.GetSecret(ctx, credsSecret)
+		if err != nil {
+			return nil, fmt.Errorf("nats: read creds secret %q: %w", credsSecret, err)
+		}
+		opts = append(opts, nats.UserCredentialBytes([]byte(creds)))
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {

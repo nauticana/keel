@@ -6,8 +6,8 @@ import (
 	"sync"
 
 	kcommon "github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/port"
 )
 
 // Named keys for the SQL statements OnboardingService uses. Mirrors the
@@ -107,7 +107,7 @@ UPDATE user_bank_info
 // user_bank_info.partner_id FKs business_partner; the service uses
 // raw SQL for cross-actor flows where the auto-filter would block.
 type OnboardingService struct {
-	DB                  data.DatabaseRepository
+	DB                  port.DatabaseRepository
 	Provider            PayoutProvider // single active provider, picked at startup via PAYOUT_PROVIDER flag
 	OnboardingReturnURL string         // deep-link the provider redirects back to
 	WebhookCallbackURL  string         // public-facing URL the provider POSTs events to
@@ -118,13 +118,13 @@ type OnboardingService struct {
 	// per process. Same shape as payment.SQLWebhookRepository — eliminates
 	// the per-call rebuild that previously happened in every method.
 	qsOnce sync.Once
-	qs     data.QueryService
+	qs     port.QueryService
 }
 
 // queryService returns the cached data.QueryService, lazily constructing it
 // on first call. Safe for concurrent callers — sync.Once guarantees a
 // single underlying GetQueryService invocation.
-func (s *OnboardingService) queryService(ctx context.Context) data.QueryService {
+func (s *OnboardingService) queryService(ctx context.Context) port.QueryService {
 	s.qsOnce.Do(func() {
 		s.qs = s.DB.GetQueryService(ctx, onboardingQueries)
 	})

@@ -6,7 +6,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/secret"
 )
 
 // NATSSubscriber consumes a JetStream subject via a durable pull consumer.
@@ -18,8 +20,8 @@ type NATSSubscriber struct {
 	js jetstream.JetStream
 }
 
-func NewNATSSubscriber() (*NATSSubscriber, error) {
-	nc, err := NATSConnect()
+func NewNATSSubscriber(ctx context.Context, secrets secret.SecretProvider) (*NATSSubscriber, error) {
+	nc, err := NATSConnect(ctx, secrets)
 	if err != nil {
 		return nil, err
 	}
@@ -39,9 +41,9 @@ func (s *NATSSubscriber) Subscribe(ctx context.Context, subscription string, han
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:       subscription,
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       natsDefaultAckWait,
-		MaxDeliver:    natsDefaultMaxDeliver,
-		MaxAckPending: natsDefaultMaxAckPending,
+		AckWait:       common.Config().NatsAckWait,
+		MaxDeliver:    common.Config().NatsMaxDeliver,
+		MaxAckPending: common.Config().NatsMaxAckPending,
 	})
 	if err != nil {
 		return fmt.Errorf("nats: consumer %s: %w", subscription, err)
@@ -51,7 +53,7 @@ func (s *NATSSubscriber) Subscribe(ctx context.Context, subscription string, han
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		batch, err := cons.Fetch(natsDefaultFetch, jetstream.FetchMaxWait(natsFetchTimeout))
+		batch, err := cons.Fetch(natsDefaultFetch, jetstream.FetchMaxWait(common.Config().NatsFetchTimeout))
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -84,14 +86,14 @@ func (s *NATSSubscriber) dispatch(ctx context.Context, m jetstream.Msg, handler 
 		Data:       m.Data(),
 		Attributes: attrs,
 		Ack:        func() { _ = m.Ack() },
-		Nack:       func() { _ = m.NakWithDelay(natsBackoff) },
+		Nack:       func() { _ = m.NakWithDelay(common.Config().NatsBackoff) },
 	}
 	if err := safeHandle(ctx, handler, msg); err != nil {
-		// NakWithDelay tells JetStream to wait `natsBackoff` before
+		// NakWithDelay tells JetStream to wait `nats_backoff` before
 		// re-delivering — the default Nak() retries immediately and
 		// turns a sustained handler failure into a tight loop that
 		// blocks all other in-flight messages (P1-20).
-		_ = m.NakWithDelay(natsBackoff)
+		_ = m.NakWithDelay(common.Config().NatsBackoff)
 		return
 	}
 	_ = m.Ack()

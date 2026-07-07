@@ -2,21 +2,10 @@ package handler
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
-)
-
-// MaxVerify2FAPerIP caps the number of /public/2fa/verify attempts per
-// caller IP in MaxVerify2FAWindow. Layered on top of the per-token
-// 5-attempt cap on user_registration.attempts so an attacker who cycles
-// through fresh login tokens (each new token resets the per-token
-// counter) cannot keep guessing 2FA codes from the same IP unboundedly.
-const (
-	MaxVerify2FAPerIP  = 20
-	MaxVerify2FAWindow = 10 * time.Minute
 )
 
 // requireRecentAuth confirms the JWT-bearing caller can still produce a
@@ -75,8 +64,8 @@ func (h *SecurityHandler) rateLimitVerify2FA(r *http.Request) bool {
 		return false
 	}
 	key := "2fa_verify_ip:" + TrustedClientIP(r)
-	count, _ := h.Cache.IncrementWithTTL(r.Context(), key, MaxVerify2FAWindow)
-	return count > MaxVerify2FAPerIP
+	count, _ := h.Cache.IncrementWithTTL(r.Context(), key, common.Config().Verify2FAWindow)
+	return count > int64(common.Config().Verify2FAPerIP)
 }
 
 // GetPublicRoutes returns public (unauthenticated) security routes for login-time 2FA verification.

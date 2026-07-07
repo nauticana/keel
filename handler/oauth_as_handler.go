@@ -274,7 +274,7 @@ func (h *OAuthASHandler) resolveUser(r *http.Request) *port.UserRef {
 }
 
 // The /authorize → login → /authorize bounce is bounded by
-// --oauth_max_auth_redirects. Without it a misconfigured session (e.g. a
+// oauth_max_auth_redirects. Without it a misconfigured session (e.g. a
 // localStorage bearer the browser never sends to /authorize) loops forever and
 // can drain edge/CDN quota.
 func (h *OAuthASHandler) redirectToLogin(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +282,7 @@ func (h *OAuthASHandler) redirectToLogin(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
 		return
 	}
-	if n := authRetryCount(r); n >= *common.OAuthMaxAuthRedirects {
+	if n := authRetryCount(r); n >= common.Config().OAuthMaxAuthRedirects {
 		http.Error(w, "login did not establish a session at the authorization endpoint after "+strconv.Itoa(n)+
 			" attempts — the session must be a cookie sent on this domain, not a localStorage bearer", http.StatusLoopDetected)
 		return

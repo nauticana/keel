@@ -22,15 +22,15 @@ const (
 	secretS3SecretAccessKey = "s3_secret_access_key"
 )
 
-// S3-compatible endpoint overrides. Set --s3_endpoint to point the client at a
+// S3-compatible endpoint overrides. Set s3_endpoint to point the client at a
 // non-AWS provider (Cloudflare R2, MinIO, Wasabi, Backblaze B2):
 //
-//	--s3_endpoint=https://<account>.r2.cloudflarestorage.com   # Cloudflare R2
+//	s3_endpoint=https://<account>.r2.cloudflarestorage.com   # Cloudflare R2
 //	AWS_REGION=auto                                            # R2 doesn't use regions
 //	AWS_ACCESS_KEY_ID=<r2 access key>                          # via SDK credential chain
 //	AWS_SECRET_ACCESS_KEY=<r2 secret>
 //
-// Leave --s3_endpoint empty to use the AWS S3 default endpoint resolution.
+// Leave s3_endpoint empty to use the AWS S3 default endpoint resolution.
 // (Credentials still resolve via the AWS SDK's own chain — that is the SDK's
 // concern, not a keel knob; only keel's own switches go through flags.)
 
@@ -44,7 +44,7 @@ type StorageS3 struct {
 	uploader      *transfermanager.Client
 
 	// publicBaseURL is the public-read base for PublicURL, from
-	// --storage_public_base_url (an R2 custom domain or *.r2.dev host).
+	// storage_public_base_url (an R2 custom domain or *.r2.dev host).
 	// Empty disables PublicURL (returns ""). Trailing slash trimmed.
 	publicBaseURL string
 }
@@ -62,7 +62,7 @@ func newStorageS3(ctx context.Context, o *storageOptions) (*StorageS3, error) {
 		return nil, err
 	}
 	opts := []func(*s3.Options){}
-	if endpoint := strings.TrimSpace(*common.S3Endpoint); endpoint != "" {
+	if endpoint := strings.TrimSpace(common.Config().S3Endpoint); endpoint != "" {
 		opts = append(opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 			// R2 and most non-AWS providers require path-style addressing
@@ -78,7 +78,7 @@ func newStorageS3(ctx context.Context, o *storageOptions) (*StorageS3, error) {
 		client:        client,
 		presignClient: s3.NewPresignClient(client),
 		uploader:      uploader,
-		publicBaseURL: strings.TrimRight(strings.TrimSpace(*common.StoragePublicBaseURL), "/"),
+		publicBaseURL: strings.TrimRight(strings.TrimSpace(common.Config().StoragePublicBaseURL), "/"),
 	}, nil
 }
 
@@ -108,10 +108,10 @@ func loadS3Config(ctx context.Context, o *storageOptions) (aws.Config, error) {
 	return cfg, nil
 }
 
-// PublicURL returns <--storage_public_base_url>/<key>. The bucket arg is
+// PublicURL returns <storage_public_base_url>/<key>. The bucket arg is
 // ignored: the public base domain (R2 custom domain or *.r2.dev) already
 // maps to a single bucket, matching how downstream projects serve media.
-// Returns "" when --storage_public_base_url is unset, so callers can treat
+// Returns "" when storage_public_base_url is unset, so callers can treat
 // an empty result as "no public URL configured".
 func (s *StorageS3) PublicURL(bucket, key string) string {
 	if s.publicBaseURL == "" {

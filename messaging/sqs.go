@@ -4,24 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/port"
 )
-
-// ackDeadline bounds the time Ack/Nack get to complete. Detached
-// from the request ctx (P1-22) so a parent-cancellation during
-// graceful shutdown doesn't prevent us from finalizing in-flight
-// messages — that would leave them invisible-but-undelivered until
-// SQS's visibility timeout elapses, causing duplicate processing.
-const sqsAckDeadline = 10 * time.Second
-
-// sqsNackBackoffSeconds delays redelivery after a handler failure. A zero
-// visibility timeout would make a poison message reappear instantly and spin
-// the receive loop; a short backoff paces retries instead.
-const sqsNackBackoffSeconds int32 = 30
 
 // SQSSubscriber subscribes to messages from AWS SQS queues. Queue URLs are
 // resolved by name on first use and cached for the lifetime of the
@@ -72,6 +60,10 @@ func (s *SQSSubscriber) Subscribe(ctx context.Context, subscription string, hand
 			}
 			return fmt.Errorf("sqs: receive from %s: %w", subscription, err)
 		}
+		// Ack/Nack run on a detached ctx (P1-22) so parent cancellation during
+		// graceful shutdown can't leave in-flight messages unfinalized.
+		ackDeadline := common.Config().SqsAckDeadline
+		nackBackoff := int32(common.Config().SqsNackBackoffSeconds)
 		for _, m := range out.Messages {
 			attrs := make(map[string]string, len(m.MessageAttributes))
 			for k, v := range m.MessageAttributes {
@@ -85,7 +77,7 @@ func (s *SQSSubscriber) Subscribe(ctx context.Context, subscription string, hand
 				Data:       []byte(derefStr(m.Body)),
 				Attributes: attrs,
 				Ack: func() {
-					ackCtx, cancel := context.WithTimeout(context.Background(), sqsAckDeadline)
+					ackCtx, cancel := context.WithTimeout(context.Background(), ackDeadline)
 					defer cancel()
 					_, _ = s.client.DeleteMessage(ackCtx, &sqs.DeleteMessageInput{
 						QueueUrl:      &queueURL,
@@ -93,9 +85,9 @@ func (s *SQSSubscriber) Subscribe(ctx context.Context, subscription string, hand
 					})
 				},
 				Nack: func() {
-					ackCtx, cancel := context.WithTimeout(context.Background(), sqsAckDeadline)
+					ackCtx, cancel := context.WithTimeout(context.Background(), ackDeadline)
 					defer cancel()
-					backoff := sqsNackBackoffSeconds
+					backoff := nackBackoff
 					_, _ = s.client.ChangeMessageVisibility(ackCtx, &sqs.ChangeMessageVisibilityInput{
 						QueueUrl:          &queueURL,
 						ReceiptHandle:     receiptHandle,

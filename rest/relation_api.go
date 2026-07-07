@@ -6,12 +6,12 @@ import (
 	"reflect"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
 type RelationAPI struct {
-	DataService    data.TableService
+	DataService    port.TableService
 	ParentRelation *model.ForeignKey
 	ChildServices  map[string]RelationAPI
 
@@ -24,7 +24,7 @@ type RelationAPI struct {
 	// state on mid-batch failure. v0.4.2 closes that gap; consumers
 	// constructing RelationAPI by hand must wire Database before
 	// calling Post.
-	Database data.DatabaseRepository
+	Database port.DatabaseRepository
 }
 
 func (s *RelationAPI) Init() error {
@@ -310,7 +310,7 @@ func (s *RelationAPI) Post(ctx context.Context, partnerID int64, userID int, ite
 	if s.DataService.GetTable() == nil {
 		return fmt.Errorf("parent table not defined")
 	}
-	return s.Database.RunInTx(ctx, func(view data.TxView) error {
+	return s.Database.RunInTx(ctx, func(view port.TxView) error {
 		return s.postInTx(ctx, view, partnerID, userID, items...)
 	})
 }
@@ -319,7 +319,7 @@ func (s *RelationAPI) Post(ctx context.Context, partnerID int64, userID int, ite
 // every TableService call goes through view.Table(...) so it lands in
 // the surrounding transaction. Recursion into children also uses
 // view, ensuring the entire relation tree shares one tx.
-func (s *RelationAPI) postInTx(ctx context.Context, view data.TxView, partnerID int64, userID int, items ...any) error {
+func (s *RelationAPI) postInTx(ctx context.Context, view port.TxView, partnerID int64, userID int, items ...any) error {
 	parentTable := s.DataService.GetTable()
 	parentSvc := view.Table(parentTable.TableName)
 	if parentSvc == nil {
@@ -378,7 +378,7 @@ func (s *RelationAPI) postInTx(ctx context.Context, view data.TxView, partnerID 
 // postChildrenInTx walks the ChildServices map and recurses into
 // each child relation that has matching items in the parent payload.
 // The same view threads through so every level shares the tx.
-func (s *RelationAPI) postChildrenInTx(ctx context.Context, view data.TxView, partnerID int64, userID int, item any) error {
+func (s *RelationAPI) postChildrenInTx(ctx context.Context, view port.TxView, partnerID int64, userID int, item any) error {
 	for fieldName, childRel := range s.ChildServices {
 		childItems := s.getChildItems(item, fieldName)
 		if len(childItems) == 0 {

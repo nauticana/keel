@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	kcommon "github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/service"
 )
 
@@ -20,7 +20,7 @@ import (
 // WrapTableAction.
 type APIKeyActionHandler struct {
 	AbstractHandler
-	DB   data.DatabaseRepository
+	DB   port.DatabaseRepository
 	Keys *service.APIKeyService
 }
 

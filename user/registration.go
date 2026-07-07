@@ -11,9 +11,9 @@ import (
 
 	"github.com/nauticana/keel/billing"
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -64,21 +64,6 @@ const (
 	qActivateUserAccount      = "activate_user_account"
 	qListActivePlans          = "list_active_plans"
 )
-
-// MaxRegistrationAttempts caps brute-force attempts on a pending
-// registration / password-reset confirmation row. After this many
-// mismatches the row is marked expired and the user must request a
-// fresh confirmation. 5 mirrors MaxLoginTokenAttempts so a guessing
-// attacker has at most 5 tries per minted code regardless of code
-// length.
-const MaxRegistrationAttempts = 5
-
-// RegistrationConfirmationTTL is the lifetime of a pending registration
-// row. Past this window the qGetUserRegistration query no longer
-// returns the row, so a code that was minted but never used cannot be
-// brute-forced indefinitely. The previous implementation had no TTL
-// filter, leaving codes valid forever until consumed.
-const RegistrationConfirmationTTL = 15 * time.Minute
 
 var registerQueries = map[string]string{
 	qAddUserRegistration: `
@@ -304,7 +289,7 @@ func resolveSubscriptionOffer(rows [][]any, data *PartnerRegistration, currency 
 }
 
 type RegistrationService struct {
-	Repo data.DatabaseRepository
+	Repo port.DatabaseRepository
 	Mail MailSender
 }
 
@@ -345,7 +330,7 @@ func (r *RegistrationService) Register(ctx context.Context, email string, confir
 	// Validate confirmation code
 	email = normalizeEmail(email)
 	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	cutoff := time.Now().Add(-RegistrationConfirmationTTL)
+	cutoff := time.Now().Add(-common.Config().RegistrationConfirmationTTL)
 	res, err := qs.Query(ctx, qGetUserRegistration, email, cutoff)
 	if err != nil {
 		return nil, err
@@ -358,7 +343,7 @@ func (r *RegistrationService) Register(ctx context.Context, email string, confir
 	}
 	expected := int(common.AsInt32(res.Rows[0][0]))
 	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= MaxRegistrationAttempts {
+	if attempts >= common.Config().MaxRegistrationAttempts {
 		_, _ = qs.Query(ctx, qExpireRegistration, email)
 		return nil, fmt.Errorf("invalid or expired confirmation")
 	}
@@ -369,7 +354,7 @@ func (r *RegistrationService) Register(ctx context.Context, email string, confir
 		// against fresh `attempts` reads.
 		bumpRes, _ := qs.Query(ctx, qBumpRegistrationAttempts, email, expected)
 		if bumpRes != nil && len(bumpRes.Rows) > 0 {
-			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= MaxRegistrationAttempts {
+			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= common.Config().MaxRegistrationAttempts {
 				_, _ = qs.Query(ctx, qExpireRegistration, email)
 			}
 		}
@@ -644,7 +629,7 @@ func (r *RegistrationService) SendPasswordChangeConfirmation(ctx context.Context
 func (r *RegistrationService) ConfirmPasswordChange(ctx context.Context, email string, confirmation int) error {
 	email = normalizeEmail(email)
 	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	cutoff := time.Now().Add(-RegistrationConfirmationTTL)
+	cutoff := time.Now().Add(-common.Config().RegistrationConfirmationTTL)
 	res, err := qs.Query(ctx, qGetUserRegistration, email, cutoff)
 	if err != nil {
 		return err
@@ -654,14 +639,14 @@ func (r *RegistrationService) ConfirmPasswordChange(ctx context.Context, email s
 	}
 	expected := int(common.AsInt32(res.Rows[0][0]))
 	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= MaxRegistrationAttempts {
+	if attempts >= common.Config().MaxRegistrationAttempts {
 		_, _ = qs.Query(ctx, qExpireRegistration, email)
 		return fmt.Errorf("invalid or expired confirmation")
 	}
 	if confirmation != expected {
 		bumpRes, _ := qs.Query(ctx, qBumpRegistrationAttempts, email, expected)
 		if bumpRes != nil && len(bumpRes.Rows) > 0 {
-			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= MaxRegistrationAttempts {
+			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= common.Config().MaxRegistrationAttempts {
 				_, _ = qs.Query(ctx, qExpireRegistration, email)
 			}
 		}

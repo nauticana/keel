@@ -27,7 +27,7 @@ import (
 //   - POST /api/v1/payouts                       → instant payout
 //   - Webhook POST {NotifyURL} with x-signature  → account.* events
 //
-// apiBase comes from --airwallex_api_base. Default is the demo host so
+// apiBase comes from airwallex_api_base. Default is the demo host so
 // a fresh install can't accidentally hit production; flip to
 // "https://api.airwallex.com" once the integration is contract-live.
 //
@@ -45,7 +45,7 @@ type AirwallexProvider struct {
 // every 30min); webhookSecret is the HMAC-SHA256 shared secret
 // configured on the Airwallex dashboard for the webhook endpoint.
 //
-// apiBase is read from --airwallex_api_base; tests can override the
+// apiBase is read from airwallex_api_base; tests can override the
 // field directly on the returned struct after construction.
 func NewAirwallexProvider(apiKey, webhookSecret string, journal logger.ApplicationLogger) (*AirwallexProvider, error) {
 	if apiKey == "" {
@@ -57,7 +57,7 @@ func NewAirwallexProvider(apiKey, webhookSecret string, journal logger.Applicati
 			webhookSecret: webhookSecret,
 			journal:       journal,
 		},
-		apiBase:    *common.AirwallexAPIBase,
+		apiBase:    common.Config().AirwallexAPIBase,
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}, nil
 }

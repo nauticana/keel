@@ -11,6 +11,7 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
 // scopePartnerFilter pins a PartnerSpecific query to the caller's partner: a
@@ -695,4 +696,4 @@ func (s *TableServicePgsql) Post(ctx context.Context, partnerID int64, userID in
 	return nil
 }
 
-var _ data.TableService = (*TableServicePgsql)(nil)
+var _ port.TableService = (*TableServicePgsql)(nil)

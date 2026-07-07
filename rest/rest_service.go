@@ -9,8 +9,8 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
 const (
@@ -101,8 +101,8 @@ type RestReport struct {
 type RestService struct {
 	RestApis    map[string]*RestAPI
 	RestReports map[string]*RestReport
-	db          data.DatabaseRepository
-	qs          data.QueryService
+	db          port.DatabaseRepository
+	qs          port.QueryService
 
 	// cacheMu guards reads of the four lazily-populated caches below.
 	// Population goes through cacheLoad (singleflight): concurrent
@@ -141,7 +141,7 @@ func linkChildRelations(root map[string]RelationAPI, nodes []*childNode) {
 	}
 }
 
-func (s *RestService) Init(ctx context.Context, oltpDatabase data.DatabaseRepository) (map[string]*RestAPI, map[string]*RestReport, error) {
+func (s *RestService) Init(ctx context.Context, oltpDatabase port.DatabaseRepository) (map[string]*RestAPI, map[string]*RestReport, error) {
 	if oltpDatabase == nil {
 		return nil, nil, fmt.Errorf("database repository is required for REST services")
 	}

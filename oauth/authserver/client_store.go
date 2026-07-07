@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/port"
 )
 
@@ -31,8 +30,8 @@ UPDATE oauth_client SET secret_hash = ?, client_name = ?, redirect_uris = ?, gra
 
 // ClientStoreDB persists DCR clients in the oauth_client table.
 type ClientStoreDB struct {
-	DB data.DatabaseRepository
-	qs data.QueryService
+	DB port.DatabaseRepository
+	qs port.QueryService
 }
 
 var _ port.OAuthClientStore = (*ClientStoreDB)(nil)

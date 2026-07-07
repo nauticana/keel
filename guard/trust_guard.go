@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 )
 
 // GuardArgs builds a guard's positional query args from the request facts and
@@ -13,7 +13,7 @@ type GuardArgs func(in GuardInput, since time.Time) []any
 
 // GuardQuerier is the data dependency a guard needs — an alias of NamedQuerier
 // kept for read-site clarity at guard call sites.
-type GuardQuerier = data.QueryService
+type GuardQuerier = port.QueryService
 
 // GuardInput is the fact set a guard evaluates, populated once at the boundary.
 // Now is injected so guards are deterministic in tests.

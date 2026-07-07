@@ -10,7 +10,6 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/port"
 )
 
@@ -84,12 +83,6 @@ var defaultResourceCountQueries = map[string]string{
 	"MAX_DOMAINS": "SELECT COUNT(*) FROM partner_domain WHERE partner_id = ?",
 }
 
-// cacheTTL is the per-partner soft expiry on cached quota / addon rows.
-// Long enough that a busy request loop hits the cache; short enough
-// that a plan change becomes visible within an hour without manual
-// invalidation.
-var cacheTTL = 1 * time.Hour
-
 // QuotaItem is the cache entry for a single (partner, resource) pair.
 // Limit < 0 signals "unlimited" — a sentinel preserved across cache
 // hydrations to avoid a comparison branch on every check.
@@ -106,7 +99,7 @@ type QuotaMap = map[string]QuotaItem
 type AddonMap = map[string]bool
 
 type QuotaServiceDb struct {
-	Repo data.DatabaseRepository
+	Repo port.DatabaseRepository
 
 	// Queries injects per-resource live-count SQL keyed by RESOURCE ID (e.g.
 	// "MEDIA"). Each query is bound with a single partnerID param and must
@@ -124,7 +117,7 @@ type QuotaServiceDb struct {
 	mu         sync.RWMutex
 	quotaCache map[int64]QuotaMap
 	addonCache map[int64]AddonMap
-	qs         data.QueryService
+	qs         port.QueryService
 	// resourceQueries is the merged default+injected resource→count-SQL map.
 	// Its keys are the routing table CheckQuota uses to choose live-count vs
 	// usage_ledger for a given resource.
@@ -196,7 +189,7 @@ func (s *QuotaServiceDb) quotaItem(ctx context.Context, partnerID int64, quotaNa
 				fresh[resourceName] = QuotaItem{
 					Limit:     common.AsInt64(row[1]),
 					Period:    common.AsString(row[2]),
-					ExpiresAt: now.Add(cacheTTL),
+					ExpiresAt: now.Add(common.Config().QuotaCacheTTL),
 				}
 			}
 			s.mu.Lock()

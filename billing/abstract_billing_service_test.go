@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 )
 
 type fakeCall struct {
@@ -32,11 +32,11 @@ func (q *fakeQS) GenID() int64 { q.id++; return q.id }
 // fakeRepo satisfies data.DatabaseRepository by embedding it; only
 // GetQueryService is exercised (any other call would nil-panic, by design).
 type fakeRepo struct {
-	data.DatabaseRepository
-	qs data.QueryService
+	port.DatabaseRepository
+	qs port.QueryService
 }
 
-func (r fakeRepo) GetQueryService(context.Context, map[string]string) data.QueryService { return r.qs }
+func (r fakeRepo) GetQueryService(context.Context, map[string]string) port.QueryService { return r.qs }
 
 func newSvc(rows map[string][][]any) (*AbstractBillingService, *fakeQS) {
 	qs := &fakeQS{rows: rows}

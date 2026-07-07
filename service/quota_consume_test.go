@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
 type quotaCall struct {
@@ -53,17 +53,17 @@ func (f *quotaFakeTx) Commit(context.Context) error   { f.commits++; return nil 
 func (f *quotaFakeTx) Rollback(context.Context) error { f.rollbacks++; return nil }
 
 type quotaFakeRepo struct {
-	data.DatabaseRepository
+	port.DatabaseRepository
 	qs       *quotaFakeQS
 	tx       *quotaFakeTx
 	beginErr error
 	begins   int
 }
 
-func (r *quotaFakeRepo) GetQueryService(context.Context, map[string]string) data.QueryService {
+func (r *quotaFakeRepo) GetQueryService(context.Context, map[string]string) port.QueryService {
 	return r.qs
 }
-func (r *quotaFakeRepo) BeginTx(context.Context, map[string]string) (data.TxQueryService, error) {
+func (r *quotaFakeRepo) BeginTx(context.Context, map[string]string) (port.TxQueryService, error) {
 	r.begins++
 	if r.beginErr != nil {
 		return nil, r.beginErr
@@ -72,8 +72,8 @@ func (r *quotaFakeRepo) BeginTx(context.Context, map[string]string) (data.TxQuer
 }
 
 var (
-	_ data.QueryService   = (*quotaFakeQS)(nil)
-	_ data.TxQueryService = (*quotaFakeTx)(nil)
+	_ port.QueryService   = (*quotaFakeQS)(nil)
+	_ port.TxQueryService = (*quotaFakeTx)(nil)
 )
 
 // newQuotaSvc wires a QuotaServiceDb over fakes: qs serves the cache load,

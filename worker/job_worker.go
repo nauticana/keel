@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 )
@@ -19,7 +18,7 @@ type Worker interface {
 // multi-queue work; may run JobLoops itself).
 type JobWorker interface {
 	Worker
-	ProcessQueue(ctx context.Context, journal logger.ApplicationLogger, db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService)
+	ProcessQueue(ctx context.Context, journal logger.ApplicationLogger, db port.DatabaseRepository, quota port.QuotaService, qs port.QueryService)
 }
 
 // QueueWorker delegates the drain to the framework: it supplies the queue
@@ -32,7 +31,7 @@ type QueueWorker interface {
 	QueueQueries() (pending, claim, reclaim, name string)
 	// HandleJob processes one claimed job; row[0] is the id. A returned error is
 	// logged and the next tick re-polls.
-	HandleJob(ctx context.Context, journal logger.ApplicationLogger, db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService, jobID int64, row []any) error
+	HandleJob(ctx context.Context, journal logger.ApplicationLogger, db port.DatabaseRepository, quota port.QuotaService, qs port.QueryService, jobID int64, row []any) error
 }
 
 // LeasedQueueWorker is an optional QueueWorker extension for at-least-once queues

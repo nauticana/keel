@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
@@ -25,7 +24,7 @@ type APIKeyCacheEntry struct {
 }
 
 type APIKeyService struct {
-	DB           data.DatabaseRepository
+	DB           port.DatabaseRepository
 	QuotaService port.QuotaService
 	Journal      logger.ApplicationLogger
 
@@ -46,7 +45,7 @@ type APIKeyService struct {
 
 	mu    sync.RWMutex
 	cache map[string]*APIKeyCacheEntry
-	qs    data.QueryService
+	qs    port.QueryService
 }
 
 const (

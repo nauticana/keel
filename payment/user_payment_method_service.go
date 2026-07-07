@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/port"
 )
 
 // SetupIntentCardClient is the Stripe (or compatible) API hop used to
@@ -35,7 +35,7 @@ type SetupIntentCardClient interface {
 // CardClient is optional — when nil, RecordFromSetupIntent persists the
 // provider_token alone and the UI degrades to "Card on file".
 type UserPaymentMethodService struct {
-	DB         data.DatabaseRepository
+	DB         port.DatabaseRepository
 	CardClient SetupIntentCardClient
 	Journal    logger.ApplicationLogger
 }

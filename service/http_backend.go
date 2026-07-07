@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
@@ -44,13 +43,13 @@ var securityHeaderTemplate = func() http.Header {
 
 type HttpBackend struct {
 	Journal logger.ApplicationLogger
-	DB      data.DatabaseRepository
+	DB      port.DatabaseRepository
 	Secrets secret.SecretProvider
 
 	// Storage is the optional object-storage backend (s3/R2, gcs, azure)
-	// selected by --storage_mode. nil when storage is not configured;
+	// selected by storage_mode. nil when storage is not configured;
 	// handlers that serve uploads should nil-check before use. Build it
-	// with storage.New(ctx, *common.StorageMode). Call svc.Storage.Upload
+	// with storage.New(ctx, common.Config().StorageMode). Call svc.Storage.Upload
 	// to store a blob and svc.Storage.PublicURL to get its served URL.
 	Storage storage.ObjectStorage
 
@@ -118,7 +117,7 @@ func (h *HttpBackend) Handle(functions map[string]func(w http.ResponseWriter, r 
 		if h.Origin != "" {
 			h.handler = h.CORSMiddleware(h.handler)
 		}
-		// PlainHTTPGuard enforces --max_tls_version. When TLS is required,
+		// PlainHTTPGuard enforces max_tls_version. When TLS is required,
 		// plain-HTTP requests are rejected with 426 Upgrade Required except
 		// for /health and /ready (VPC-internal health checkers).
 		h.handler = h.PlainHTTPGuard(h.handler)
@@ -160,14 +159,14 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	// HTTPSPort (default 443). TLS is opt-in; consumers without cert
 	// files keep the existing single-listener behavior.
 	//
-	// When --max_tls_version != "none", the TLS listener enforces
+	// When max_tls_version != "none", the TLS listener enforces
 	// MinVersion via tls.Config and the plain-HTTP listener rejects
 	// non-health requests (see PlainHTTPGuard). If the policy requires
 	// TLS but no cert is configured, fail fast — a mis-provisioned prod
 	// deploy would otherwise accept zero traffic silently.
 	policy := resolveTLSPolicy()
-	if policy.enforce && (*common.TLSCert == "" || *common.TLSKey == "") {
-		h.Journal.Fatal(fmt.Sprintf("--max_tls_version=%s requires --tls_cert and --tls_key", *common.MaxTLSVersion))
+	if policy.enforce && (common.Config().TLSCert == "" || common.Config().TLSKey == "") {
+		h.Journal.Fatal(fmt.Sprintf("max_tls_version=%s requires tls_cert and tls_key", common.Config().MaxTLSVersion))
 		return
 	}
 
@@ -175,9 +174,9 @@ func (h *HttpBackend) Run(ctx context.Context) {
 		return &http.Server{
 			Addr:         fmt.Sprintf(":%d", port),
 			Handler:      h.handler,
-			ReadTimeout:  time.Duration(*common.HttpReadTimeout) * time.Second,
-			WriteTimeout: time.Duration(*common.HttpWriteTimeout) * time.Second,
-			IdleTimeout:  time.Duration(*common.HttpIdleTimeout) * time.Second,
+			ReadTimeout:  time.Duration(common.Config().HttpReadTimeout) * time.Second,
+			WriteTimeout: time.Duration(common.Config().HttpWriteTimeout) * time.Second,
+			IdleTimeout:  time.Duration(common.Config().HttpIdleTimeout) * time.Second,
 		}
 	}
 
@@ -187,8 +186,8 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	// permission for <1024) used to silently log + hang.
 	listenFail := make(chan error, 2)
 
-	plainServer := newServer(*common.HttpApiPort)
-	h.Journal.Info(fmt.Sprintf("starting http server on port %d (tls_policy=%s)", *common.HttpApiPort, *common.MaxTLSVersion))
+	plainServer := newServer(common.Config().HttpApiPort)
+	h.Journal.Info(fmt.Sprintf("starting http server on port %d (tls_policy=%s)", common.Config().HttpApiPort, common.Config().MaxTLSVersion))
 	go func() {
 		if err := plainServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			h.Journal.Error("http listener: " + err.Error())
@@ -197,14 +196,14 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	}()
 
 	var tlsServer *http.Server
-	if *common.TLSCert != "" && *common.TLSKey != "" {
-		tlsServer = newServer(*common.HTTPSPort)
+	if common.Config().TLSCert != "" && common.Config().TLSKey != "" {
+		tlsServer = newServer(common.Config().HTTPSPort)
 		if policy.enforce {
 			tlsServer.TLSConfig = &tls.Config{MinVersion: policy.minVersion}
 		}
-		h.Journal.Info(fmt.Sprintf("starting https server on port %d", *common.HTTPSPort))
+		h.Journal.Info(fmt.Sprintf("starting https server on port %d", common.Config().HTTPSPort))
 		go func() {
-			if err := tlsServer.ListenAndServeTLS(*common.TLSCert, *common.TLSKey); err != nil && err != http.ErrServerClosed {
+			if err := tlsServer.ListenAndServeTLS(common.Config().TLSCert, common.Config().TLSKey); err != nil && err != http.ErrServerClosed {
 				h.Journal.Error("tls listener: " + err.Error())
 				listenFail <- err
 			}
@@ -333,16 +332,16 @@ func containsString(xs []string, target string) bool {
 	return false
 }
 
-// tlsPolicy is the parsed view of --max_tls_version.
+// tlsPolicy is the parsed view of max_tls_version.
 type tlsPolicy struct {
 	enforce    bool   // true when TLS is required (flag != "none")
 	minVersion uint16 // tls.VersionTLS10 .. tls.VersionTLS13; zero when !enforce
 }
 
-// resolveTLSPolicy parses the --max_tls_version flag. Unknown values
+// resolveTLSPolicy parses the max_tls_version flag. Unknown values
 // fall back to "none" with a one-time warning logged by the caller.
 func resolveTLSPolicy() tlsPolicy {
-	switch strings.ToLower(*common.MaxTLSVersion) {
+	switch strings.ToLower(common.Config().MaxTLSVersion) {
 	case "tls10":
 		return tlsPolicy{enforce: true, minVersion: tls.VersionTLS10}
 	case "tls11":
@@ -356,7 +355,7 @@ func resolveTLSPolicy() tlsPolicy {
 	}
 }
 
-// PlainHTTPGuard enforces --max_tls_version on the plain-HTTP listener.
+// PlainHTTPGuard enforces max_tls_version on the plain-HTTP listener.
 // When TLS is required, non-TLS requests get 426 Upgrade Required unless
 // the path is /health or /ready (which are VPC-scoped health endpoints
 // intentionally left reachable without TLS). When TLS is not required

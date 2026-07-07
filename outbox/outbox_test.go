@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
 type qsCall struct {
@@ -64,8 +64,8 @@ func (*fakeLogger) Error(string)                    {}
 func (*fakeLogger) Fatal(string)                    {}
 
 var (
-	_ data.QueryService   = (*fakeQS)(nil)
-	_ data.TxQueryService = (*fakeTx)(nil)
+	_ port.QueryService   = (*fakeQS)(nil)
+	_ port.TxQueryService = (*fakeTx)(nil)
 )
 
 // claimRow is the claim's RETURNING row: id, partner_id, aggregate_type,

@@ -8,7 +8,7 @@ import (
 // AuthorizationServer is keel's local OAuth 2.1 authorization-server contract.
 // The HTTP layer drives it; storage, signing, and per-grant logic are injected
 // via the interfaces below, so a deployment can swap DB for cache/KMS without
-// touching the AS. When --oauth_as_mode=external the AS is absent and keel acts
+// touching the AS. When oauth_as_mode=external the AS is absent and keel acts
 // only as the resource server (see TokenValidator).
 type AuthorizationServer interface {
 	Metadata() AuthServerMetadata                                               // RFC 8414

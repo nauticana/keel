@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/worker"
@@ -96,7 +95,7 @@ func (w *Worker) GetOLTPQueries() map[string]string {
 // HandleJob dispatches one claimed event and records the outcome scoped to its
 // lease token. row is the claim's RETURNING row: id, partner_id, aggregate_type,
 // aggregate_id, event_type, payload, attempts, lease_token.
-func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger, db data.DatabaseRepository, quota port.QuotaService, qs data.QueryService, jobID int64, row []any) error {
+func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger, db port.DatabaseRepository, quota port.QuotaService, qs port.QueryService, jobID int64, row []any) error {
 	if w.Dispatcher == nil {
 		return fmt.Errorf("outbox: no Dispatcher configured")
 	}

@@ -28,12 +28,6 @@ const (
 	// (kilobytes); a malicious or compromised upstream returning a
 	// multi-GB body would otherwise OOM the process.
 	stripeMaxResponseBytes = 1 << 20 // 1 MiB
-
-	// stripeMaxRetries bounds the retry budget on idempotent POSTs
-	// against Stripe 5xx / 429 responses. Combined with exponential
-	// backoff this gives ~8s worst-case before the caller sees an
-	// error.
-	stripeMaxRetries = 3
 )
 
 // StripeCheckoutClient is the default port.CheckoutClient implementation
@@ -44,8 +38,8 @@ const (
 //     client with a 30s timeout. Tests override the field directly.
 //   - Every outbound POST carries a fresh Idempotency-Key so a network
 //     blip that triggers an SDK-level retry never doubles a charge.
-//   - Retries on 429 / 5xx with exponential backoff, bounded to
-//     stripeMaxRetries. Idempotency-Key is reused across retries so
+//   - Retries on 429 / 5xx with exponential backoff, bounded to the
+//     stripe_max_retries config. Idempotency-Key is reused across retries so
 //     Stripe's own dedupe converges.
 //   - The Stripe error response body is logged via the journal but
 //     never surfaced to clients — only the status code rides out.
@@ -249,7 +243,7 @@ func (c *StripeCheckoutClient) requestRaw(ctx context.Context, method, path, bod
 
 	var lastErr error
 	backoff := 200 * time.Millisecond
-	for attempt := 0; attempt <= stripeMaxRetries; attempt++ {
+	for attempt := 0; attempt <= common.Config().StripeMaxRetries; attempt++ {
 		var bodyReader io.Reader
 		if body != "" {
 			bodyReader = strings.NewReader(body)

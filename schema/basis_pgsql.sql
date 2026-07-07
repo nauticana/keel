@@ -847,6 +847,24 @@ CREATE INDEX IF NOT EXISTS idx_outbox_aggregate ON outbox_event(aggregate_type, 
 CREATE SEQUENCE IF NOT EXISTS outbox_event_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('outbox_event', 'id', 'outbox_event_seq') ON CONFLICT DO NOTHING;
 
+-- Catalog of runtime configuration flags loaded into common.BaseConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
+CREATE TABLE IF NOT EXISTS application_config_flag (
+    id                                   VARCHAR(80)   NOT NULL,
+    data_type                            VARCHAR(20)   NOT NULL DEFAULT 'string',
+    needs_restart                        BOOLEAN       NOT NULL DEFAULT FALSE,
+    default_value                        TEXT         ,
+    description                          TEXT         ,
+    CONSTRAINT application_config_flag_pk PRIMARY KEY (id)
+);
+
+-- Per-node assigned values for application_config_flag. node_id identifies the runtime node/process (matched against --node_id). Most single-node deployments use 0; multi-node deployments assign values per node. Missing rows fall back to application_config_flag.default_value.
+CREATE TABLE IF NOT EXISTS application_config_value (
+    node_id                              INTEGER       NOT NULL DEFAULT 0,
+    flag_id                              VARCHAR(80)   NOT NULL,
+    assigned_value                       TEXT         ,
+    CONSTRAINT application_config_value_pk PRIMARY KEY (node_id, flag_id)
+);
+
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
 BEGIN
@@ -1323,5 +1341,14 @@ BEGIN
      WHERE constraint_name = 'outbox_event_partner' AND table_name = 'outbox_event'
   ) THEN
     ALTER TABLE outbox_event ADD CONSTRAINT outbox_event_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'application_config_values' AND table_name = 'application_config_value'
+  ) THEN
+    ALTER TABLE application_config_value ADD CONSTRAINT application_config_values FOREIGN KEY (flag_id) REFERENCES application_config_flag(id);
   END IF;
 END $$;

@@ -65,7 +65,7 @@ func (h *AbstractPaymentHandler) HandleWebhook(providerName string, w http.Respo
 		return
 	}
 
-	// Webhook-specific 256 KiB cap (smaller than the global *common.MaxRequestSize
+	// Webhook-specific 256 KiB cap (smaller than the global common.Config().MaxRequestSize
 	// 16MB used by AbstractHandler.ReadRequest). Provider webhooks are tiny;
 	// a tighter cap protects against malicious large bodies before signature
 	// verification has a chance to fail. Stays bespoke for that reason.

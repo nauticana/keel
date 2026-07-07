@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
@@ -42,8 +41,8 @@ SELECT token_hash, family_id, client_id, user_id, partner_id, scopes, resource, 
 // TokenStoreDB persists refresh tokens (token_hash, never the raw token).
 // The caller hashes before storing/looking up.
 type TokenStoreDB struct {
-	DB data.DatabaseRepository
-	qs data.QueryService
+	DB port.DatabaseRepository
+	qs port.QueryService
 }
 
 var _ port.OAuthTokenStore = (*TokenStoreDB)(nil)

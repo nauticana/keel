@@ -25,46 +25,46 @@ func WithSecretProvider(sp secret.SecretProvider) Option {
 	return func(o *storageOptions) { o.secrets = sp }
 }
 
-// NewFromConfig builds the --storage_mode backend from the standard flags
+// NewFromConfig builds the storage_mode backend from the standard flags
 // ((nil, nil) when disabled), keeping callers provider-agnostic. s3/R2 honors
-// --s3_credential_mode (chain = ambient AWS chain/IAM, secret = keystore); gcs and
+// s3_credential_mode (chain = ambient AWS chain/IAM, secret = keystore); gcs and
 // azure use their own ambient auth.
 func NewFromConfig(ctx context.Context, secrets secret.SecretProvider) (ObjectStorage, error) {
-	mode := strings.TrimSpace(*common.StorageMode)
+	mode := strings.TrimSpace(common.Config().StorageMode)
 	if mode == "" {
 		return nil, nil
 	}
 	var opts []Option
 	if mode == "s3" { // credential mode is S3-only; gcs/azure use their own ambient auth
-		switch *common.S3CredentialMode {
+		switch common.Config().S3CredentialMode {
 		case "secret":
 			if secrets == nil {
-				return nil, fmt.Errorf("--s3_credential_mode=secret requires a secret provider, got nil")
+				return nil, fmt.Errorf("s3_credential_mode=secret requires a secret provider, got nil")
 			}
 			opts = append(opts, WithSecretProvider(secrets))
 		case "chain":
 			// ambient AWS credential chain / IAM role
 		default:
-			return nil, fmt.Errorf("invalid --s3_credential_mode %q (want chain or secret)", *common.S3CredentialMode)
+			return nil, fmt.Errorf("invalid s3_credential_mode %q (want chain or secret)", common.Config().S3CredentialMode)
 		}
 	}
 	return New(ctx, mode, opts...)
 }
 
 // New constructs the ObjectStorage backend named by mode, mirroring the
-// secret.NewSecretProvider factory pattern. Pass *common.StorageMode (the
-// --storage_mode flag) as mode.
+// secret.NewSecretProvider factory pattern. Pass common.Config().StorageMode (the
+// storage_mode flag) as mode.
 //
-//	s3    — AWS S3, or any S3-compatible provider via --s3_endpoint
-//	        (Cloudflare R2 = s3 + --s3_endpoint + path-style). Credentials
+//	s3    — AWS S3, or any S3-compatible provider via s3_endpoint
+//	        (Cloudflare R2 = s3 + s3_endpoint + path-style). Credentials
 //	        resolve through the AWS SDK's own chain, or from the keystore when
 //	        WithSecretProvider is passed.
 //	gcs   — Google Cloud Storage; auth via Application Default Credentials.
-//	azure — Azure Blob Storage; requires --storage_account_url; auth via
+//	azure — Azure Blob Storage; requires storage_account_url; auth via
 //	        azidentity.DefaultAzureCredential.
 //
 // An empty mode is treated as a configuration error: callers that want
-// storage to be optional should check *common.StorageMode == "" themselves
+// storage to be optional should check common.Config().StorageMode == "" themselves
 // and skip wiring (AbstractWorker.Run does exactly this) rather than relying on
 // a nil backend.
 func New(ctx context.Context, mode string, opts ...Option) (ObjectStorage, error) {
@@ -78,9 +78,9 @@ func New(ctx context.Context, mode string, opts ...Option) (ObjectStorage, error
 	case "gcs":
 		return NewStorageGCS(ctx)
 	case "azure":
-		accountURL := strings.TrimSpace(*common.StorageAccountURL)
+		accountURL := strings.TrimSpace(common.Config().StorageAccountURL)
 		if accountURL == "" {
-			return nil, fmt.Errorf("storage: --storage_account_url is required when --storage_mode=azure")
+			return nil, fmt.Errorf("storage: storage_account_url is required when storage_mode=azure")
 		}
 		return NewStorageAzure(accountURL)
 	default:

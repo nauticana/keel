@@ -1,0 +1,19 @@
+table: application_config_value
+comment: Per-node assigned values for application_config_flag. node_id identifies the runtime node/process (matched against --node_id). Most single-node deployments use 0; multi-node deployments assign values per node. Missing rows fall back to application_config_flag.default_value.
+order: 62
+columns:
+  - name: node_id
+    type: INTEGER
+    default: "0"
+  - name: flag_id
+    type: VARCHAR(80)
+  - name: assigned_value
+    type: TEXT
+    nullable: true
+primary_key: [node_id, flag_id]
+foreign_keys:
+  - name: application_config_values
+    columns: [flag_id]
+    references:
+      table: application_config_flag
+      columns: [id]

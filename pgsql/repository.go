@@ -168,7 +168,7 @@ func pgxKV(v string) string {
 	return b.String()
 }
 
-func (r *RepositoryPgsql) GetQueryService(ctx context.Context, queries map[string]string) data.QueryService {
+func (r *RepositoryPgsql) GetQueryService(ctx context.Context, queries map[string]string) port.QueryService {
 	return &QueryServicePgsql{
 		Client:      r.Client,
 		Queries:     rewriteQueries(queries),
@@ -176,7 +176,7 @@ func (r *RepositoryPgsql) GetQueryService(ctx context.Context, queries map[strin
 	}
 }
 
-func (r *RepositoryPgsql) BeginTx(ctx context.Context, queries map[string]string) (data.TxQueryService, error) {
+func (r *RepositoryPgsql) BeginTx(ctx context.Context, queries map[string]string) (port.TxQueryService, error) {
 	tx, err := r.Client.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -357,7 +357,7 @@ func readDollarTag(sql string, i int) (string, bool) {
 	return "", false
 }
 
-func (r *RepositoryPgsql) CreateTableService(ctx context.Context, table *model.TableDefinition) data.TableService {
+func (r *RepositoryPgsql) CreateTableService(ctx context.Context, table *model.TableDefinition) port.TableService {
 	if r.TableServices[table.TableName] != nil {
 		return r.TableServices[table.TableName]
 	}
@@ -380,7 +380,7 @@ func (r *RepositoryPgsql) CreateTableService(ctx context.Context, table *model.T
 // Commits on a nil return; rolls back on any error or panic. The
 // rollback path uses a fresh background context so a parent-context
 // cancellation during fn doesn't also block the rollback itself.
-func (r *RepositoryPgsql) RunInTx(ctx context.Context, fn func(view data.TxView) error) (err error) {
+func (r *RepositoryPgsql) RunInTx(ctx context.Context, fn func(view port.TxView) error) (err error) {
 	tx, err := r.Client.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("pgsql: begin tx: %w", err)
@@ -524,7 +524,7 @@ func (r *RepositoryPgsql) LoadColumns(ctx context.Context) (map[string][]*model.
 	return result, nil
 }
 
-func NewPgSQLDatabase(ctx context.Context, secretProvider secret.SecretProvider, idGenerator port.BigintGenerator) (data.DatabaseRepository, error) {
+func NewPgSQLDatabase(ctx context.Context, secretProvider secret.SecretProvider, idGenerator port.BigintGenerator) (port.DatabaseRepository, error) {
 	repoOLTP := &RepositoryPgsql{
 		Secrets: secretProvider,
 	}
@@ -536,7 +536,7 @@ func NewPgSQLDatabase(ctx context.Context, secretProvider secret.SecretProvider,
 		LoadColumnsFn: func(ctx context.Context) (map[string][]*model.TableColumn, error) {
 			return repoOLTP.LoadColumns(ctx)
 		},
-		CreateTableSvcFn: func(ctx context.Context, table *model.TableDefinition) data.TableService {
+		CreateTableSvcFn: func(ctx context.Context, table *model.TableDefinition) port.TableService {
 			return repoOLTP.CreateTableService(ctx, table)
 		},
 	}
@@ -546,4 +546,4 @@ func NewPgSQLDatabase(ctx context.Context, secretProvider secret.SecretProvider,
 	return repoOLTP, nil
 }
 
-var _ data.DatabaseRepository = (*RepositoryPgsql)(nil)
+var _ port.DatabaseRepository = (*RepositoryPgsql)(nil)

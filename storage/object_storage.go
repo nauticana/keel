@@ -17,10 +17,10 @@ type ObjectStorage interface {
 	// construction, safe to call on hot paths and to persist in a DB row.
 	//
 	//   - GCS  → https://storage.googleapis.com/<bucket>/<key>
-	//   - S3/R2→ <--storage_public_base_url>/<key> (the public base domain —
+	//   - S3/R2→ <storage_public_base_url>/<key> (the public base domain —
 	//            an R2 custom domain or *.r2.dev host — already maps to the
 	//            bucket, so the bucket arg is not part of the path). Returns
-	//            "" when --storage_public_base_url is unset.
+	//            "" when storage_public_base_url is unset.
 	//   - Azure→ <account-url>/<bucket>/<key>
 	//
 	// The returned URL is only reachable if the bucket/object is actually

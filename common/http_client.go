@@ -4,17 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"golang.org/x/time/rate"
 )
-
-// DefaultOutboundTimeout caps a single outbound request lifecycle —
-// dial + TLS + send + receive headers + receive body. 30s is generous
-// for nearly any third-party API keel talks to (Stripe, Twilio,
-// Google JWKs, FCM, GCS / S3 / Azure metadata) while still preventing
-// a hung peer from holding a goroutine indefinitely.
-const DefaultOutboundTimeout = 30 * time.Second
 
 // outboundClient is a process-wide *http.Client used for every keel
 // outbound HTTP call that doesn't have a more specific reason to
@@ -42,14 +34,17 @@ var (
 func HTTPClient() *http.Client {
 	outboundOnce.Do(func() {
 		transport := http.DefaultTransport
-		if *OutboundMaxRPS > 0 {
+		if Config().OutboundMaxRPS > 0 {
 			transport = &rateLimitedTransport{
 				base:    http.DefaultTransport,
-				limiter: rate.NewLimiter(rate.Limit(*OutboundMaxRPS), burstFor(*OutboundMaxRPS)),
+				limiter: rate.NewLimiter(rate.Limit(Config().OutboundMaxRPS), burstFor(Config().OutboundMaxRPS)),
 			}
 		}
 		outboundClient = &http.Client{
-			Timeout:       DefaultOutboundTimeout,
+			// Read at construction (first outbound call, after config Load). The
+			// client is a cached singleton, so a later RELOAD won't rebuild it —
+			// changing the outbound timeout or RPS cap takes a restart.
+			Timeout:       Config().DefaultOutboundTimeout,
 			Transport:     transport,
 			CheckRedirect: checkRedirect,
 		}
@@ -60,8 +55,8 @@ func HTTPClient() *http.Client {
 // checkRedirect caps redirect following and fails fast on a same-URL loop, so a
 // misbehaving peer can't bounce the client around forever.
 func checkRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= *OutboundMaxRedirects {
-		return fmt.Errorf("outbound: stopped after %d redirects (loop guard)", *OutboundMaxRedirects)
+	if len(via) >= Config().OutboundMaxRedirects {
+		return fmt.Errorf("outbound: stopped after %d redirects (loop guard)", Config().OutboundMaxRedirects)
 	}
 	for _, prev := range via {
 		if prev.URL.String() == req.URL.String() {
@@ -71,7 +66,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// rateLimitedTransport throttles the shared client to --outbound_max_rps so a
+// rateLimitedTransport throttles the shared client to outbound_max_rps so a
 // runaway outbound loop is capped instead of draining edge/CDN quota. Wait
 // respects the request context (and thus the client timeout).
 type rateLimitedTransport struct {

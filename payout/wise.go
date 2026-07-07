@@ -36,8 +36,8 @@ import (
 // (NOT HMAC) per the Wise Platform spec, so AbstractProvider's
 // hmacSHA256Hex helper is not used here.
 //
-// apiBase comes from --wise_api_base (default sandbox host).
-// profileID comes from --wise_profile_id (required at boot).
+// apiBase comes from wise_api_base (default sandbox host).
+// profileID comes from wise_profile_id (required at boot).
 type WiseProvider struct {
 	AbstractProvider
 	apiBase    string
@@ -55,8 +55,8 @@ func NewWiseProvider(apiKey, webhookSecret string, journal logger.ApplicationLog
 			webhookSecret: webhookSecret,
 			journal:       journal,
 		},
-		apiBase:    *common.WiseAPIBase,
-		profileID:  *common.WiseProfileID,
+		apiBase:    common.Config().WiseAPIBase,
+		profileID:  common.Config().WiseProfileID,
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}, nil
 }
@@ -92,7 +92,7 @@ type wiseRecipientResp struct {
 //     and later transfer currency
 func (p *WiseProvider) StartOnboarding(ctx context.Context, in StartOnboardingInput) (*PayoutOnboardingSession, error) {
 	if p.profileID == "" {
-		return nil, fmt.Errorf("wise: --wise_profile_id required")
+		return nil, fmt.Errorf("wise: wise_profile_id required")
 	}
 	if in.Email == "" {
 		return nil, fmt.Errorf("wise: Email required for email-type recipient")
@@ -165,7 +165,7 @@ type wiseTransferResp struct {
 // dedupes on this within the platform profile.
 func (p *WiseProvider) RequestInstantPayout(ctx context.Context, in InstantPayoutInput) (*InstantPayoutResult, error) {
 	if p.profileID == "" {
-		return nil, fmt.Errorf("wise payout: --wise_profile_id required")
+		return nil, fmt.Errorf("wise payout: wise_profile_id required")
 	}
 	if in.ProviderAccountID == "" {
 		return nil, fmt.Errorf("wise payout: ProviderAccountID required")

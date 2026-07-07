@@ -15,9 +15,6 @@ import (
 	"github.com/nauticana/keel/rest"
 )
 
-// postWriteTimeout bounds a PostWrite hook so a hung one can't hold back the 201.
-const postWriteTimeout = 10 * time.Second
-
 type RestHandler struct {
 	AbstractHandler
 	Api rest.RestAPI
@@ -116,20 +113,11 @@ func (h *RestHandler) castFilterValues(filter map[string]string) (map[string]any
 	return typedFilter, nil
 }
 
-// MaxListPageSize is the absolute upper bound on rows a single List
-// response can carry — even if the caller asks for more, we cap.
-// Closes the un-bounded list DoS surface flagged by P0-30 / P1-36.
-const MaxListPageSize = 1000
-
-// DefaultListPageSize applies when the caller omits ?limit=. Chosen
-// to match what most UI grids actually render in one page.
-const DefaultListPageSize = 100
-
 // extractPagination reads ?limit= and ?offset= from the URL,
 // applying defaults and the hard cap. Removes both keys from the
 // filter map so they don't leak into the SQL WHERE clause downstream.
 func extractPagination(filter map[string]string) (limit, offset int) {
-	limit = DefaultListPageSize
+	limit = common.Config().DefaultListPageSize
 	offset = 0
 	if v, ok := filter["limit"]; ok {
 		delete(filter, "limit")
@@ -143,8 +131,8 @@ func extractPagination(filter map[string]string) (limit, offset int) {
 			offset = n
 		}
 	}
-	if limit > MaxListPageSize {
-		limit = MaxListPageSize
+	if m := common.Config().MaxListPageSize; limit > m {
+		limit = m
 	}
 	return limit, offset
 }
@@ -210,8 +198,8 @@ func (h *RestHandler) Get(w http.ResponseWriter, r *http.Request) {
 // ?offset=. Optional ?order= takes column names with ASC / DESC
 // keywords; the data layer rejects anything outside the table's
 // declared columns, so the value is safe to surface from query
-// parameters (P2-22). The default limit is DefaultListPageSize and
-// is hard-capped at MaxListPageSize to prevent unbounded DB scans
+// parameters (P2-22). The default limit is the default_list_page_size
+// config and is hard-capped at max_list_page_size to prevent unbounded DB scans
 // driving memory / network DoS.
 func (h *RestHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodGet) {
@@ -308,7 +296,7 @@ func (h *RestHandler) Post(w http.ResponseWriter, r *http.Request) {
 		// The write already committed, so detach from request cancellation (a client
 		// disconnect must not skip cache invalidation) but bound it with a deadline so
 		// a hung hook can't hold back the 201 indefinitely.
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), postWriteTimeout)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), common.Config().PostWriteTimeout)
 		defer cancel()
 		if err := h.PostWrite(ctx, session.PartnerId, h.Api.GetTable().TableName, items); err != nil && h.Journal != nil {
 			h.Journal.Error(fmt.Sprintf("post-write hook for %s failed: %v", h.Api.GetTable().TableName, err))

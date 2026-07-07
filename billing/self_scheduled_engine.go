@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 )
 
 const (
@@ -88,7 +88,7 @@ UPDATE partner_plan_subscription SET next_charge_date = NULL, endda = ?, auto_re
 // charge it off-session, handle the outcome (paid / SCA / dunning). Inert until
 // its closures are wired. Test in provider test mode before enabling.
 type SelfScheduledEngine struct {
-	Repo        data.DatabaseRepository
+	Repo        port.DatabaseRepository
 	Charge      payment.ChargeClient
 	Journal     logger.ApplicationLogger
 	MaxAttempts int // suspend after this many failed attempts (default 3)
@@ -115,7 +115,7 @@ type SelfScheduledEngine struct {
 	OnFailed         func(ctx context.Context, partnerID, invoiceID int64, res payment.ChargeResult)
 
 	initOnce sync.Once
-	qs       data.QueryService
+	qs       port.QueryService
 }
 
 func (e *SelfScheduledEngine) init(ctx context.Context) {

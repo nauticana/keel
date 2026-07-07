@@ -138,10 +138,10 @@ func TestMemoryCache_IncrementPreservesTTL(t *testing.T) {
 	defer c.Close()
 	ctx := context.Background()
 
-	_, _ = c.Increment(ctx, "rl")            // creates "1", no expiry
+	_, _ = c.Increment(ctx, "rl")                  // creates "1", no expiry
 	_ = c.Set(ctx, "rl", "1", 60*time.Millisecond) // caller pins TTL
-	_, _ = c.Increment(ctx, "rl")            // bumps to "2", expiry preserved
-	_, _ = c.Increment(ctx, "rl")            // bumps to "3"
+	_, _ = c.Increment(ctx, "rl")                  // bumps to "2", expiry preserved
+	_, _ = c.Increment(ctx, "rl")                  // bumps to "3"
 
 	time.Sleep(80 * time.Millisecond)
 	if _, err := c.Get(ctx, "rl"); !errors.Is(err, ErrCacheMiss) {

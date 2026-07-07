@@ -1,0 +1,19 @@
+table: application_config_flag
+comment: Catalog of runtime configuration flags loaded into common.BaseConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
+order: 61
+columns:
+  - name: id
+    type: VARCHAR(80)
+  - name: data_type
+    type: VARCHAR(20)
+    default: string
+  - name: needs_restart
+    type: BOOLEAN
+    default: "FALSE"
+  - name: default_value
+    type: TEXT
+    nullable: true
+  - name: description
+    type: TEXT
+    nullable: true
+primary_key: [id]

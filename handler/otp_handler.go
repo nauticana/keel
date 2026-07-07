@@ -26,7 +26,7 @@ import (
 // only field that resolves to a userID on Verify/Resend; brute-forcing
 // a userID alone gets nowhere because the cache lookup fails. Tokens
 // are 32-byte base64-URL-encoded strings (~256 bits) keyed in the cache
-// for OTPTokenTTL.
+// for the otp_token_ttl config window.
 type OTPHandler struct {
 	AbstractHandler
 	NotificationSvc port.NotificationService
@@ -54,16 +54,8 @@ const (
 	otpChannelEmail = "email"
 )
 
-// OTPTokenTTL caps how long a SendOTP-issued token may be presented for
-// Verify or Resend. Sized to match the OTP code's own lifetime
-// (--otp_ttl_seconds, default 300s) so a legitimate user can use the
-// token for the full window the code is valid. Raising the flag above
-// this constant would let the code outlive its token — see the warning
-// on common.OTPTTLSeconds.
-const OTPTokenTTL = 5 * time.Minute
-
 // otpSendResponse mirrors what clients deserialize. resendCountdownSec
-// echoes the server's --otp_ttl_seconds so the OTP-input keypad's
+// echoes the server's otp_ttl_seconds so the OTP-input keypad's
 // resend timer can match the code's actual lifetime instead of using
 // a client-side fallback.
 type otpSendResponse struct {
@@ -72,7 +64,7 @@ type otpSendResponse struct {
 }
 
 func makeOtpSendResponse(token string) otpSendResponse {
-	return otpSendResponse{OtpToken: token, ResendCountdownSec: *common.OTPTTLSeconds}
+	return otpSendResponse{OtpToken: token, ResendCountdownSec: common.Config().OTPTTLSeconds}
 }
 
 // otpTokenPrefix is the cache-key namespace for SendOTP-issued tokens.
@@ -98,7 +90,7 @@ func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel, purpose 
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	value := strconv.Itoa(userID) + ":" + channel + ":" + purpose
-	if err := h.Cache.Set(r.Context(), otpTokenPrefix+token, value, OTPTokenTTL); err != nil {
+	if err := h.Cache.Set(r.Context(), otpTokenPrefix+token, value, common.Config().OTPTokenTTL); err != nil {
 		return "", fmt.Errorf("otp: cache set: %w", err)
 	}
 	return token, nil
@@ -462,7 +454,7 @@ func (h *OTPHandler) mintFakeOTPToken(r *http.Request, channel string) (string, 
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	if h.Cache != nil {
 		// userID=0 is intentional: VerifyOTP rejects it.
-		_ = h.Cache.Set(r.Context(), otpTokenPrefix+token, "0:"+channel, OTPTokenTTL)
+		_ = h.Cache.Set(r.Context(), otpTokenPrefix+token, "0:"+channel, common.Config().OTPTokenTTL)
 	}
 	return token, nil
 }
@@ -576,7 +568,7 @@ func (h *OTPHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 	// Refresh the token TTL (preserving the channel suffix) so the
 	// legitimate user has the full Verify window after a resend.
 	if h.Cache != nil {
-		_ = h.Cache.Set(r.Context(), otpTokenPrefix+req.OTPToken, strconv.Itoa(userID)+":"+channel+":"+purpose, OTPTokenTTL)
+		_ = h.Cache.Set(r.Context(), otpTokenPrefix+req.OTPToken, strconv.Itoa(userID)+":"+channel+":"+purpose, common.Config().OTPTokenTTL)
 	}
 
 	// Resend on the same channel SendOTP used. Channel was stored

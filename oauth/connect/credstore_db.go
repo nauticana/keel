@@ -19,14 +19,13 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/crypto"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/oauth/client"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
 )
 
 const (
-	oauthStateTTL = 600 // authorize→callback round-trip window, seconds
 	// DefaultEncKeySecret is the keystore key holding the 32-byte AES-256 KEK that
 	// seals credentials at rest, used when CredentialStoreDB.EncKeySecret is unset.
 	DefaultEncKeySecret = "credential_enc_key"
@@ -61,10 +60,6 @@ const (
 	qListActive       = "cred_list_active"
 )
 
-// leaseSeconds bounds how long a claimed credential stays exclusive to one worker
-// before another may reclaim it (crash recovery).
-const leaseSeconds = 300
-
 var credentialQueries = map[string]string{
 	// rev bumps on every credential-material change (optimistic concurrency); a
 	// reauth also clears any stale lease and stamps last_checked.
@@ -80,7 +75,7 @@ DO UPDATE SET cred_ref = EXCLUDED.cred_ref, connection_type = EXCLUDED.connectio
 `,
 	// Atomic claim: exactly one worker wins (CAS on the worklist rev + an unheld
 	// lease) and gets cred_ref to refresh; losers get no row. The lease makes a
-	// crash recoverable after leaseSeconds.
+	// crash recoverable after the oauth_connect_lease_seconds config window.
 	qClaim: `
 UPDATE partner_credential
    SET rev = rev + 1, lease_until = CURRENT_TIMESTAMP + (? * INTERVAL '1 second')
@@ -155,14 +150,14 @@ SELECT partner_id, entity_id, provider, connection_type, rev
 // partner_credential + auth_nonce, sealing cred_ref at rest with an AES-256-GCM
 // KEK from the secret provider.
 type CredentialStoreDB struct {
-	DB           data.DatabaseRepository
+	DB           port.DatabaseRepository
 	Secrets      secret.SecretProvider
 	Nonce        *NonceService
 	EncKeySecret string                   // keystore key of the 32-byte KEK; default DefaultEncKeySecret
 	Refresh      Refresher                // provider-aware refresh; nil = tokens used as-is
 	Journal      logger.ApplicationLogger // optional; logs best-effort write failures instead of dropping them
 
-	qs  data.QueryService
+	qs  port.QueryService
 	kek []byte
 }
 
@@ -241,7 +236,7 @@ func (s *CredentialStoreDB) ConsumeOAuthState(ctx context.Context, state, provid
 	if s.Nonce == nil {
 		return 0, nil, fmt.Errorf("connect: nonce store not configured")
 	}
-	raw, ok, err := s.Nonce.Consume(ctx, state, "oauth_state", oauthStateTTL)
+	raw, ok, err := s.Nonce.Consume(ctx, state, "oauth_state", common.Config().OAuthStateTTLSeconds)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -359,7 +354,7 @@ func (s *CredentialStoreDB) exchange(ctx context.Context, partnerID int64, provi
 // claim atomically leases the credential to this worker if it is still at
 // expectRev and unheld; returns the raw sealed cred_ref, or claimed=false.
 func (s *CredentialStoreDB) claim(ctx context.Context, partnerID int64, provider string, expectRev int) (string, bool, error) {
-	res, err := s.qs.Query(ctx, qClaim, leaseSeconds, partnerID, client.EntityFromContext(ctx), provider, expectRev)
+	res, err := s.qs.Query(ctx, qClaim, common.Config().OAuthConnectLeaseSeconds, partnerID, client.EntityFromContext(ctx), provider, expectRev)
 	if err != nil {
 		return "", false, err
 	}

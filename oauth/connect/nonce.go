@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/port"
 )
 
 const (
@@ -31,8 +31,8 @@ RETURNING payload
 // NonceService owns auth_nonce: single-use, expiring tokens for OAuth connect
 // state and any other short-lived handoff (e.g. registration JWT).
 type NonceService struct {
-	DB data.DatabaseRepository
-	qs data.QueryService
+	DB port.DatabaseRepository
+	qs port.QueryService
 }
 
 // Init caches the QueryService. Call once at wiring time.

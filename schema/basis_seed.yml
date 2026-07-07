@@ -98,6 +98,7 @@ seeds:
       - [partner_payment_methods, S, "*"]
       - [partner_payment_records, S, "*"]
       - [payment_record_plans, D, caption]
+      - [application_config_values, S, "*"]
 
   - table: authorization_object
     columns: [id, caption]
@@ -135,11 +136,13 @@ seeds:
       - [user_bank_info, user_bank_info]
       - [user_payment_method, user_payment_method]
       - [table_action, table_action]
+      - [application_config_flag, application_config_flag]
 
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
     rows:
       - [application_menu, 1, 0, application_menu_items]
+      - [application_config_flag, 1, 0, application_config_values]
       - [constant_header, 1, 0, constant_values]
       - [constant_header, 2, 0, constant_lookups]
       - [rest_api_header, 1, 0, rest_api_children]
@@ -154,6 +157,7 @@ seeds:
       - [USER_PAYMENT_METHOD, "User Payment Method Actions"]
       - [API_KEY, "API Key to access the system"]
       - [PARTNER_CREDENTIAL, "Partner Connection Actions"]
+      - [APPLICATION_CONFIG_FLAG, "Application Config Actions"]
 
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
@@ -162,6 +166,7 @@ seeds:
       - [API_KEY, GENERATE, "Generate"]
       - [API_KEY, ROLL, "Roll"]
       - [PARTNER_CREDENTIAL, MANAGE, "Manage Connections"]
+      - [APPLICATION_CONFIG_FLAG, RELOAD, "Reload"]
 
   - table: table_action
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
@@ -169,6 +174,7 @@ seeds:
       - [user_payment_method, set_default, "Set Default", star, P, true, 10]
       - [api_key, generate, "Generate", plus, V, false, 10]
       - [api_key, roll, "Roll", edit, V, true, 20]
+      - [application_config_flag, reload, "Reload Config", refresh, P, false, 10]
 
   - table: application_menu
     columns: [display_order, id, caption]
@@ -193,6 +199,7 @@ seeds:
       - [100, false, setup, countries, country, "Countries"]
       - [110, false, setup, service_registries, service_registry, "Service Registries"]
       - [120, false, setup, table_actions, table_action, "Table Actions"]
+      - [130, false, setup, application_config_flags, application_config_flag, "Application Config"]
       - [10,  false, payments, payment_records, payment_record, "Payment Records"]
       - [20,  false, payments, payment_methods, payment_method, "Payment Methods"]
       - [30,  false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]
@@ -225,3 +232,122 @@ seeds:
       - [user_account,        twofa_backup_codes, S]
       - [partner_credential,  created_at,         R]
       - [partner_credential,  cred_ref,           S]
+      # application_config_flag is seed-managed: the catalog's needs_restart and
+      # default_value are display-only in the UI (id is the PK, read-only anyway);
+      # admins assign per-node values via application_config_value instead.
+      - [application_config_flag, needs_restart,   R]
+      - [application_config_flag, default_value,   R]
+
+  # Application config flag catalog — one row per common.BaseConfig field.
+  # Bootstrap settings (log sink, secret provider, DB coordinates, node_id)
+  # are --flags in common/variables.go and intentionally absent here.
+  # data_type: string | int | int64 | float | duration (seconds) | bool.
+  # needs_restart defaults FALSE (runtime-changeable via RELOAD — the point of
+  # this table). Per-node assignments go in application_config_value (not seeded —
+  # deployment-specific). NON-SECRET only: oauth_signing_key_secret holds a secret NAME.
+
+  # Startup-bound flags: consumed to bind the socket / TLS / worker health port,
+  # so a live change can't take effect — needs_restart = true.
+  - table: application_config_flag
+    columns: [id, data_type, needs_restart, default_value, description]
+    rows:
+      - [http_api_port,   int,    true, "8080", "HTTP server port"]
+      - [https_port,      int,    true, "443",  "HTTPS server port"]
+      - [tls_cert,        string, true, "",     "TLS certificate file path"]
+      - [tls_key,         string, true, "",     "TLS private key file path"]
+      - [max_tls_version, string, true, "none", "TLS policy: none | tls10 | tls11 | tls12 | tls13"]
+      - [hc_port,         int,    true, "0",    "Health check port override for workers (0 = worker default)"]
+
+  # needs_restart=true marks construction-captured settings (server wiring,
+  # provider/client selection, connection URLs, singleton clients) — RELOAD
+  # cannot re-apply them. false = read per request/call, RELOAD applies live.
+  - table: application_config_flag
+    columns: [id, data_type, needs_restart, default_value, description]
+    rows:
+      - [session_timeout,              int,      false, "300",                                 "Session timeout in seconds"]
+      - [otp_ttl_seconds,              int,      false, "300",                                 "OTP code time-to-live in seconds"]
+      - [mail_mode,                    string,   false, "smtp",                                "Mail delivery mode: smtp or api"]
+      - [smtp_host,                    string,   false, "smtp.gmail.com",                      "SMTP server host"]
+      - [smtp_port,                    int,      false, "587",                                 "SMTP server port"]
+      - [smtp_user,                    string,   false, "",                                    "SMTP username"]
+      - [smtp_from,                    string,   false, "",                                    "SMTP sender email address"]
+      - [cors_origin,                  string,   true,  "",                                    "Allowed CORS origin"]
+      - [google_client_id,             string,   false, "",                                    "Google OAuth client ID (verifies ID tokens)"]
+      - [apple_client_id,              string,   false, "",                                    "Apple Sign-In client identifier"]
+      - [oauth_issuer,                 string,   true,  "",                                    "OAuth 2.1 AS issuer URL trusted by the validator"]
+      - [oauth_jwks_url,               string,   true,  "",                                    "JWKS URL used to verify access-token signatures"]
+      - [oauth_audience,               string,   true,  "",                                    "Expected access-token audience (RFC 8707)"]
+      - [oauth_resource,               string,   true,  "",                                    "Canonical resource URL in protected-resource metadata"]
+      - [oauth_resources,              string,   true,  "",                                    "CSV of additional RFC 8707 resource indicators"]
+      - [oauth_scopes_supported,       string,   true,  "",                                    "Comma-separated scopes advertised in metadata"]
+      - [oauth_as_mode,                string,   true,  "local",                               "OAuth 2.1 AS provider: local | external | disabled"]
+      - [oauth_signing_key_secret,     string,   true,  "",                                    "Secret NAME holding the RS256 signing key PEM"]
+      - [oauth_access_token_ttl,       duration, true,  "3600",                                "Access-token lifetime (seconds)"]
+      - [oauth_refresh_token_ttl,      duration, true,  "2592000",                             "Refresh-token lifetime (seconds)"]
+      - [oauth_code_ttl,               duration, true,  "60",                                  "Authorization-code lifetime (seconds)"]
+      - [oauth_max_auth_redirects,     int,      false, "2",                                   "Max authorize->login bounces before 508"]
+      - [outbound_max_redirects,       int,      false, "10",                                  "Max redirects the outbound HTTP client follows"]
+      - [outbound_max_rps,             float,    true,  "0",                                   "Global outbound HTTP rate cap (0 = unlimited)"]
+      - [trusted_proxy_cidr,           string,   false, "",                                    "CSV of CIDRs whose forwarded-for headers are honored"]
+      - [nats_url,                     string,   true,  "",                                    "NATS server URL"]
+      - [nats_name,                    string,   true,  "",                                    "NATS client name surfaced in observability"]
+      - [nats_creds_secret,            string,   true,  "",                                    "Secret NAME holding the NATS .creds file content (empty = no creds)"]
+      - [storage_mode,                 string,   true,  "",                                    "Object storage: s3, gcs, or azure"]
+      - [storage_bucket,               string,   false, "",                                    "Default object-storage bucket"]
+      - [s3_endpoint,                  string,   true,  "",                                    "S3-compatible endpoint override"]
+      - [s3_credential_mode,           string,   true,  "chain",                               "Worker storage S3/R2 credential source: chain | secret"]
+      - [storage_public_base_url,      string,   true,  "",                                    "Public base URL for ObjectStorage.PublicURL"]
+      - [storage_account_url,          string,   true,  "",                                    "Azure Blob service endpoint"]
+      - [messaging_mode,               string,   true,  "",                                    "Messaging: gcp or aws"]
+      - [max_request_size,             int64,    false, "16777216",                            "Maximum request body size (bytes)"]
+      - [http_read_timeout,            int,      true,  "15",                                  "HTTP read timeout in seconds"]
+      - [http_write_timeout,           int,      true,  "30",                                  "HTTP write timeout in seconds"]
+      - [http_idle_timeout,            int,      true,  "120",                                 "HTTP idle timeout in seconds"]
+      - [push_mode,                    string,   true,  "noop",                                "Push provider: fcm or noop"]
+      - [redis_url,                    string,   true,  "",                                    "Single-node Redis connection (password in secret)"]
+      - [valkey_url,                   string,   true,  "",                                    "Valkey connection (password in secret)"]
+      - [valkey_cluster,               bool,     true,  "false",                               "Use Redis-Cluster protocol"]
+      - [twilio_messaging_service_sid, string,   false, "",                                    "Twilio Messaging Service SID (empty disables SMS)"]
+      - [payout_provider,              string,   true,  "AW",                                  "Payout provider code: AW | SC | WI"]
+      - [payout_return_url,            string,   false, "",                                    "Deep-link the payout provider redirects back to"]
+      - [payout_webhook_url,           string,   false, "",                                    "Public host for payout provider webhooks"]
+      - [airwallex_api_base,           string,   true,  "https://api-demo.airwallex.com",      "Airwallex REST API base URL"]
+      - [wise_api_base,                string,   true,  "https://api.sandbox.transferwise.tech", "Wise Platform REST API base URL"]
+      - [wise_profile_id,              string,   true,  "",                                    "Wise platform profile id (numeric)"]
+
+  # Operational tunables. needs_restart=false ones are read per-request from
+  # common.Config() so RELOAD applies them live; true ones are captured at
+  # construction (connections, singleton clients, cache tickers). Durations
+  # are in seconds.
+  - table: application_config_flag
+    columns: [id, data_type, needs_restart, default_value, description]
+    rows:
+      - [sqs_ack_deadline,             duration, false, "10",   "SQS ack/visibility window per message"]
+      - [sqs_nack_backoff_seconds,     int,      false, "30",   "SQS redelivery delay after Nak (seconds)"]
+      - [nats_backoff,                 duration, false, "5",    "NATS wait between Nak and redelivery"]
+      - [nats_connect_timeout,         duration, true, "10",   "NATS initial dial/handshake cap"]
+      - [nats_fetch_timeout,           duration, false, "2",    "JetStream fetch wait"]
+      - [nats_ack_wait,                duration, true, "30",   "NATS consumer ack-wait before redelivery"]
+      - [nats_max_deliver,             int,      true, "3",    "NATS max redelivery attempts"]
+      - [nats_max_ack_pending,         int,      true, "256",  "NATS in-flight unacked message cap"]
+      - [smtp_dial_timeout,            duration, false, "10",   "SMTP connect timeout"]
+      - [smtp_deadline,                duration, false, "30",   "Overall SMTP send deadline"]
+      - [quota_cache_ttl,              duration, false, "3600", "Quota lookup cache expiry"]
+      - [oauth_jwks_cache_ttl,         duration, true, "3600", "OAuth JWKS cache expiry"]
+      - [social_jwks_cache_ttl,        duration, true, "3600", "Google/Apple JWKS cache expiry"]
+      - [oauth_state_ttl_seconds,      int,      false, "600",  "OAuth authorize->callback window (seconds)"]
+      - [oauth_connect_lease_seconds,  int,      false, "300",  "OAuth credential refresh lease (seconds)"]
+      - [otp_token_ttl,                duration, false, "300",  "OTP token validity window"]
+      - [social_nonce_ttl,             duration, false, "600",  "Social-login nonce validity"]
+      - [registration_confirmation_ttl, duration, false, "900", "Registration confirmation-code validity"]
+      - [max_registration_attempts,    int,      false, "5",    "Confirmation-code guess cap"]
+      - [verify_2fa_window,            duration, false, "600",  "2FA verify rate-limit window"]
+      - [verify_2fa_per_ip,            int,      false, "20",   "2FA verify attempts per IP"]
+      - [max_list_page_size,           int,      false, "1000", "List page-size clamp"]
+      - [default_list_page_size,       int,      false, "100",  "Default list page size"]
+      - [post_write_timeout,           duration, false, "10",   "Post-response write timeout"]
+      - [stripe_webhook_tolerance,     duration, false, "300",  "Stripe webhook timestamp tolerance"]
+      - [stripe_max_retries,           int,      false, "3",    "Stripe API retry count (429/5xx)"]
+      - [default_outbound_timeout,     duration, true, "30",   "Default outbound HTTP client timeout"]
+      - [snowflake_state_persist_ms,   int64,    false, "1000", "Snowflake state-persist cadence (ms)"]
+      - [memory_cache_sweep_interval,  duration, true, "60",   "In-memory cache expiry sweep interval"]

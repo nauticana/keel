@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 )
 
 // Billing read/write layer over the basis tables (subscription_plan,
@@ -176,7 +176,7 @@ SELECT id, provider, method_type, is_default FROM payment_method
 
 // AbstractBillingService is the default BillingService over the basis tables.
 type AbstractBillingService struct {
-	Repo data.DatabaseRepository
+	Repo port.DatabaseRepository
 
 	// Queries overrides/extends defaultBillingQueries (consumer entries win).
 	Queries map[string]string
@@ -188,7 +188,7 @@ type AbstractBillingService struct {
 	Now func() time.Time
 
 	initOnce   sync.Once
-	qs         data.QueryService
+	qs         port.QueryService
 	allQueries map[string]string // merged default+lifecycle+override, reused by BeginTx
 }
 

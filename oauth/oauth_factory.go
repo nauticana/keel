@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/oauth/authserver"
 	"github.com/nauticana/keel/oauth/resource"
@@ -14,7 +13,7 @@ import (
 	"github.com/nauticana/keel/secret"
 )
 
-// Setup is the wired OAuth result selected by --oauth_as_mode. AS is nil in
+// Setup is the wired OAuth result selected by oauth_as_mode. AS is nil in
 // external/disabled modes; Validator is nil only when disabled. Mount AS with
 // handler.OAuthASHandler and wrap protected routes with the Validator via
 // resource.Middleware.
@@ -25,44 +24,44 @@ type Setup struct {
 	Signer    *authserver.RS256Signer
 }
 
-// NewOAuthFromFlags wires OAuth from the --oauth_* flags:
+// NewOAuthFromConfig wires OAuth from the --oauth_* flags:
 //   - disabled: nothing.
-//   - external: keel is resource-server only; validates the --oauth_issuer IdP.
+//   - external: keel is resource-server only; validates the oauth_issuer IdP.
 //   - local (default): keel is its own AS, issuing + validating RS256 tokens.
-func NewOAuthFromFlags(ctx context.Context, db data.DatabaseRepository, secrets secret.SecretProvider, httpc *http.Client, journal logger.ApplicationLogger) (*Setup, error) {
-	mode := *common.OAuthASMode
+func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets secret.SecretProvider, httpc *http.Client, journal logger.ApplicationLogger) (*Setup, error) {
+	mode := common.Config().OAuthASMode
 	switch mode {
 	case "disabled":
 		return &Setup{Mode: mode}, nil
 
 	case "external":
-		v, err := resource.NewJWTValidatorFromFlags(httpc)
+		v, err := resource.NewJWTValidatorFromConfig(httpc)
 		if err != nil {
 			return nil, err
 		}
-		// NewJWTValidatorFromFlags returns nil when --oauth_issuer is empty; in
+		// NewJWTValidatorFromConfig returns nil when oauth_issuer is empty; in
 		// external mode that leaves nothing to validate against, so fail fast here
 		// rather than panic later in resource.Middleware (which rejects a nil validator).
 		if v == nil {
-			return nil, fmt.Errorf("oauth: --oauth_as_mode=external requires --oauth_issuer (the external IdP to validate tokens against)")
+			return nil, fmt.Errorf("oauth: oauth_as_mode=external requires oauth_issuer (the external IdP to validate tokens against)")
 		}
 		return &Setup{Mode: mode, Validator: v}, nil
 
 	case "local":
-		issuer := *common.OAuthIssuer
+		issuer := common.Config().OAuthIssuer
 		if issuer == "" {
-			return nil, fmt.Errorf("oauth: --oauth_as_mode=local requires --oauth_issuer (this AS's public base URL)")
+			return nil, fmt.Errorf("oauth: oauth_as_mode=local requires oauth_issuer (this AS's public base URL)")
 		}
 		// An empty scope allowlist would let open DCR register + mint any scope
 		// (e.g. admin). Require an explicit list so the clamp has teeth.
-		if len(common.SplitCSV(*common.OAuthScopesSupported)) == 0 {
-			return nil, fmt.Errorf("oauth: --oauth_as_mode=local requires a non-empty --oauth_scopes_supported (the scope allowlist)")
+		if len(common.SplitCSV(common.Config().OAuthScopesSupported)) == 0 {
+			return nil, fmt.Errorf("oauth: oauth_as_mode=local requires a non-empty oauth_scopes_supported (the scope allowlist)")
 		}
 		signer, err := loadOrGenSigner(ctx, secrets, journal)
 		if err != nil {
 			return nil, err
 		}
-		aud := *common.OAuthAudience
+		aud := common.Config().OAuthAudience
 		if aud == "" {
 			aud = issuer
 		}
@@ -75,18 +74,18 @@ func NewOAuthFromFlags(ctx context.Context, db data.DatabaseRepository, secrets 
 		validator := authserver.NewLocalValidator(signer, issuer, aud)
 		// Valid token audiences = the multi-resource CSV plus the single PRM
 		// resource; DefaultAudience is always added in authserver.NewLocal.
-		resources := common.SplitCSV(*common.OAuthResources)
-		if *common.OAuthResource != "" {
-			resources = append(resources, *common.OAuthResource)
+		resources := common.SplitCSV(common.Config().OAuthResources)
+		if common.Config().OAuthResource != "" {
+			resources = append(resources, common.Config().OAuthResource)
 		}
 		cfg := authserver.Config{
 			Issuer:          issuer,
 			DefaultAudience: aud,
-			Scopes:          common.SplitCSV(*common.OAuthScopesSupported),
+			Scopes:          common.SplitCSV(common.Config().OAuthScopesSupported),
 			Resources:       resources,
-			AccessTTL:       *common.OAuthAccessTokenTTL,
-			RefreshTTL:      *common.OAuthRefreshTokenTTL,
-			CodeTTL:         *common.OAuthCodeTTL,
+			AccessTTL:       common.Config().OAuthAccessTokenTTL,
+			RefreshTTL:      common.Config().OAuthRefreshTokenTTL,
+			CodeTTL:         common.Config().OAuthCodeTTL,
 		}
 		as := authserver.NewLocal(signer, clients, codes, tokens, cfg)
 		// validator is the single-audience resource-server validator for the
@@ -95,15 +94,15 @@ func NewOAuthFromFlags(ctx context.Context, db data.DatabaseRepository, secrets 
 		return &Setup{Mode: mode, AS: as, Validator: validator, Signer: signer}, nil
 
 	default:
-		return nil, fmt.Errorf("oauth: unknown --oauth_as_mode %q (want local|external|disabled)", mode)
+		return nil, fmt.Errorf("oauth: unknown oauth_as_mode %q (want local|external|disabled)", mode)
 	}
 }
 
 func loadOrGenSigner(ctx context.Context, secrets secret.SecretProvider, journal logger.ApplicationLogger) (*authserver.RS256Signer, error) {
-	name := *common.OAuthSigningKeySecret
+	name := common.Config().OAuthSigningKeySecret
 	if name == "" {
 		if journal != nil {
-			journal.Error("oauth: --oauth_signing_key_secret empty — using an EPHEMERAL signing key; tokens die on restart and differ per node (dev only)")
+			journal.Error("oauth: oauth_signing_key_secret empty — using an EPHEMERAL signing key; tokens die on restart and differ per node (dev only)")
 		}
 		return authserver.NewEphemeralRS256Signer()
 	}

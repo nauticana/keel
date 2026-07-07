@@ -845,3 +845,22 @@ CREATE TABLE IF NOT EXISTS outbox_event (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_outbox_drain ON outbox_event(status, available_at);
 CREATE INDEX idx_outbox_aggregate ON outbox_event(aggregate_type, aggregate_id);
+
+-- Catalog of runtime configuration flags loaded into common.BaseConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
+CREATE TABLE IF NOT EXISTS application_config_flag (
+    id                                   VARCHAR(80)   NOT NULL,
+    data_type                            VARCHAR(20)   NOT NULL DEFAULT 'string',
+    needs_restart                        TINYINT(1)    NOT NULL DEFAULT 0,
+    default_value                        TEXT         ,
+    description                          TEXT         ,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Per-node assigned values for application_config_flag. node_id identifies the runtime node/process (matched against --node_id). Most single-node deployments use 0; multi-node deployments assign values per node. Missing rows fall back to application_config_flag.default_value.
+CREATE TABLE IF NOT EXISTS application_config_value (
+    node_id                              INT           NOT NULL DEFAULT 0,
+    flag_id                              VARCHAR(80)   NOT NULL,
+    assigned_value                       TEXT         ,
+    PRIMARY KEY (node_id, flag_id),
+    CONSTRAINT application_config_values FOREIGN KEY (flag_id) REFERENCES application_config_flag(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

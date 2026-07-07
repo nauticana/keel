@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
@@ -25,13 +24,11 @@ import (
 const (
 	googleJWKsURL = "https://www.googleapis.com/oauth2/v3/certs"
 	appleJWKsURL  = "https://appleid.apple.com/auth/keys"
-	jwksCacheTTL  = time.Hour
 	googleIssuer1 = "https://accounts.google.com"
 	googleIssuer2 = "accounts.google.com"
 	appleIssuer   = "https://appleid.apple.com"
 
 	socialNonceKey = "social_nonce:"
-	socialNonceTTL = 10 * time.Minute
 )
 
 // Lazy package-scoped JWKs providers. Constructed on first use so the
@@ -46,14 +43,14 @@ var (
 
 func getGoogleJWKs() *jwksProvider {
 	googleJWKsOnce.Do(func() {
-		googleJWKs = newJWKsProvider(googleJWKsURL, jwksCacheTTL, common.HTTPClient())
+		googleJWKs = newJWKsProvider(googleJWKsURL, common.Config().SocialJWKSCacheTTL, common.HTTPClient())
 	})
 	return googleJWKs
 }
 
 func getAppleJWKs() *jwksProvider {
 	appleJWKsOnce.Do(func() {
-		appleJWKs = newJWKsProvider(appleJWKsURL, jwksCacheTTL, common.HTTPClient())
+		appleJWKs = newJWKsProvider(appleJWKsURL, common.Config().SocialJWKSCacheTTL, common.HTTPClient())
 	})
 	return appleJWKs
 }
@@ -148,14 +145,14 @@ func (h *SocialLoginHandler) issueSocialNonce(w http.ResponseWriter, r *http.Req
 	nonce := hex.EncodeToString(b)
 	// Store -1 so the first consume's INCR yields exactly 0; a never-issued nonce
 	// starts absent (INCR → 1) and can never reach 0, closing the replay/guess gap.
-	if err := h.NonceCache.Set(r.Context(), socialNonceKey+nonce, "-1", socialNonceTTL); err != nil {
+	if err := h.NonceCache.Set(r.Context(), socialNonceKey+nonce, "-1", common.Config().SocialNonceTTL); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to store nonce")
 		return
 	}
 	// Google echoes the raw nonce in the id_token, Apple its SHA-256 — store
 	// both keys so LoginSocial matches whichever the provider returns.
 	sum := sha256.Sum256([]byte(nonce))
-	if err := h.NonceCache.Set(r.Context(), socialNonceKey+hex.EncodeToString(sum[:]), "-1", socialNonceTTL); err != nil {
+	if err := h.NonceCache.Set(r.Context(), socialNonceKey+hex.EncodeToString(sum[:]), "-1", common.Config().SocialNonceTTL); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to store nonce")
 		return
 	}
@@ -171,7 +168,7 @@ func (h *SocialLoginHandler) consumeSocialNonce(ctx context.Context, nonce strin
 	if nonce == "" {
 		return false
 	}
-	n, err := h.NonceCache.IncrementWithTTL(ctx, socialNonceKey+nonce, socialNonceTTL)
+	n, err := h.NonceCache.IncrementWithTTL(ctx, socialNonceKey+nonce, common.Config().SocialNonceTTL)
 	return err == nil && n == 0
 }
 
@@ -212,7 +209,7 @@ func buildSignupConsent(r *http.Request, req *socialLoginRequest) *user.SignupCo
 
 // TrustedClientIP returns the caller's source IP, honoring
 // X-Forwarded-For and X-Real-IP only when the inbound socket address
-// is in the configured trusted-proxy CIDR set (--trusted_proxy_cidr).
+// is in the configured trusted-proxy CIDR set (trusted_proxy_cidr).
 // Without that gate, any client could spoof its own IP for rate-
 // limiting and consent-audit purposes by setting either header. Empty
 // CIDR config = trust nothing = always return RemoteAddr's host part.
@@ -244,9 +241,9 @@ func TrustedClientIP(r *http.Request) string {
 	return remote
 }
 
-// RequireTrustedProxyCIDR returns nil when --trusted_proxy_cidr is set
+// RequireTrustedProxyCIDR returns nil when trusted_proxy_cidr is set
 // to a CSV containing at least one parseable CIDR entry, and an error
-// otherwise. Call it from main() after flag.Parse() in any deployment
+// otherwise. Call it from main() after the config Load in any deployment
 // that mounts public, IP-attributing endpoints (keel's social-login,
 // OTP, and register paths all write client_ip into consent_event).
 //
@@ -263,19 +260,19 @@ func TrustedClientIP(r *http.Request) string {
 // zero nets (typo'd entries, empty fields after splitting), since
 // that's behaviorally identical to "empty" at runtime.
 func RequireTrustedProxyCIDR() error {
-	cfg := strings.TrimSpace(*common.TrustedProxyCIDR)
+	cfg := strings.TrimSpace(common.Config().TrustedProxyCIDR)
 	if cfg == "" {
-		return fmt.Errorf("--trusted_proxy_cidr must be set when mounting public IP-attributing endpoints; received empty value")
+		return fmt.Errorf("trusted_proxy_cidr must be set when mounting public IP-attributing endpoints; received empty value")
 	}
 	if len(getTrustedProxyNets(cfg)) == 0 {
-		return fmt.Errorf("--trusted_proxy_cidr=%q parsed to zero valid CIDR entries", cfg)
+		return fmt.Errorf("trusted_proxy_cidr=%q parsed to zero valid CIDR entries", cfg)
 	}
 	return nil
 }
 
 // MustRequireTrustedProxyCIDR is the log.Fatalf-on-error wrapper
 // around RequireTrustedProxyCIDR. Intended for direct use in main()
-// right after flag.Parse() so a misconfigured production binary
+// right after the config Load so a misconfigured production binary
 // fails to start instead of silently mis-attributing every audit row.
 func MustRequireTrustedProxyCIDR() {
 	if err := RequireTrustedProxyCIDR(); err != nil {
@@ -298,8 +295,8 @@ func remoteHost(remoteAddr string) string {
 }
 
 // trustedProxyState is a process-scoped cache of the parsed CIDR list.
-// Re-parsed lazily when --trusted_proxy_cidr changes (rare; usually
-// only at startup, but tests do swap flag values).
+// Re-parsed lazily when trusted_proxy_cidr changes (rare; usually
+// only at startup or a config RELOAD, but tests swap values too).
 var (
 	trustedProxyMu   sync.Mutex
 	trustedProxyKey  string
@@ -312,7 +309,7 @@ func isTrustedProxy(ipStr string) bool {
 	if ipStr == "" {
 		return false
 	}
-	cfg := *common.TrustedProxyCIDR
+	cfg := common.Config().TrustedProxyCIDR
 	if cfg == "" {
 		return false
 	}
@@ -385,7 +382,7 @@ func verifySocialToken(ctx context.Context, provider, token string) (email, firs
 // Google's email_verified claim arrives as either a JSON bool or a
 // JSON string; both shapes are accepted.
 func verifyGoogleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
-	aud := *common.GoogleClientID
+	aud := common.Config().GoogleClientID
 	if aud == "" {
 		return "", "", "", false, "", "", fmt.Errorf("google_client_id is not configured")
 	}
@@ -425,7 +422,7 @@ func verifyGoogleToken(ctx context.Context, token string) (email, firstName, las
 // used to link to existing password-account emails. That policy lives
 // in GetOrCreateUserFromSocial.
 func verifyAppleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
-	aud := *common.AppleClientID
+	aud := common.Config().AppleClientID
 	if aud == "" {
 		return "", "", "", false, "", "", fmt.Errorf("apple_client_id is not configured")
 	}

@@ -82,7 +82,17 @@ seeds:
 
       # APP_ADMIN — read-only on most keel tables, CRUD on framework config
       - [APP_ADMIN, PAGE, ACCESS, api_keys]
+      - [APP_ADMIN, PAGE, ACCESS, application_config_flags]
       - [APP_ADMIN, PAGE, ACCESS, application_menus]
+      # Flag catalog is seed-managed: SELECT + UPDATE only (no INSERT/DELETE), so
+      # it can never be added to or removed at runtime. Values are admin-maintained.
+      - [APP_ADMIN, TABLE, SELECT, application_config_flag]
+      - [APP_ADMIN, TABLE, UPDATE, application_config_flag]
+      - [APP_ADMIN, APPLICATION_CONFIG_FLAG, RELOAD, application_config_flag]
+      - [APP_ADMIN, TABLE, SELECT, application_config_value]
+      - [APP_ADMIN, TABLE, INSERT, application_config_value]
+      - [APP_ADMIN, TABLE, UPDATE, application_config_value]
+      - [APP_ADMIN, TABLE, DELETE, application_config_value]
       - [APP_ADMIN, PAGE, ACCESS, authorization_objects]
       - [APP_ADMIN, PAGE, ACCESS, authorization_roles]
       - [APP_ADMIN, PAGE, ACCESS, business_partners]

@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/port"
 )
 
 // JobLoop polls a queue table for pending jobs, atomically claims each one,
@@ -24,7 +24,7 @@ import (
 // directly. Retry/backoff is a handler concern: route retryable failures to a
 // 'R' status with a scheduled_time and have GetPendingQuery select it.
 type JobLoop struct {
-	QS              data.QueryService
+	QS              port.QueryService
 	Journal         logger.ApplicationLogger
 	GetPendingQuery string // returns rows of claimable jobs; id is row[0]
 	ClaimQuery      string // UPDATE ... SET status='A' WHERE id=? AND status IN ('P','R') RETURNING id

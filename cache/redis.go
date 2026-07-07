@@ -24,16 +24,16 @@ type CacheServiceImpl struct {
 // and the secret provider. It chooses the implementation by inspecting the
 // flag values, in this precedence:
 //
-//  1. --valkey_url set → Valkey path. Honors --valkey_cluster. Reads the
+//  1. valkey_url set → Valkey path. Honors valkey_cluster. Reads the
 //     `valkey_password` secret (empty if missing).
-//  2. --redis_url  set → Redis single-node path. Reads the
+//  2. redis_url  set → Redis single-node path. Reads the
 //     `redis_password` secret (empty if missing).
 //  3. neither set      → MemoryCacheService. Process-local map with TTLs
 //     and pub/sub fan-out within the same process. Multi-instance deploys
 //     should use Valkey/Redis instead — see MemoryCacheService docs for
 //     the OTP-token and pub/sub constraints.
 //
-// Setting both --valkey_url and --redis_url is a configuration error and
+// Setting both valkey_url and redis_url is a configuration error and
 // returns nil + err so callers fail fast at startup instead of silently
 // picking one.
 //
@@ -45,16 +45,16 @@ type CacheServiceImpl struct {
 // Passwords MUST NOT be embedded in the URL. They are pulled from the
 // secret provider so they can be rotated without redeploying.
 func NewCacheService(ctx context.Context, secrets secret.SecretProvider) (CacheService, error) {
-	valkeyAddr := strings.TrimSpace(*common.ValkeyURL)
-	redisAddr := strings.TrimSpace(*common.RedisURL)
+	valkeyAddr := strings.TrimSpace(common.Config().ValkeyURL)
+	redisAddr := strings.TrimSpace(common.Config().RedisURL)
 
 	if valkeyAddr != "" && redisAddr != "" {
-		return nil, fmt.Errorf("cache: --valkey_url and --redis_url are mutually exclusive — set exactly one")
+		return nil, fmt.Errorf("cache: valkey_url and redis_url are mutually exclusive — set exactly one")
 	}
 
 	if valkeyAddr != "" {
 		password, _ := secrets.GetSecret(ctx, "valkey_password")
-		return newValkeyClient(valkeyAddr, strings.TrimSpace(password), *common.ValkeyCluster), nil
+		return newValkeyClient(valkeyAddr, strings.TrimSpace(password), common.Config().ValkeyCluster), nil
 	}
 	if redisAddr != "" {
 		password, _ := secrets.GetSecret(ctx, "redis_password")

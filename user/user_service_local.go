@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 
@@ -552,7 +551,7 @@ UPDATE device_token
  WHERE user_id = ?
 `,
 
-	// expires_at is bound from --otp_ttl_seconds (the last placeholder),
+	// expires_at is bound from otp_ttl_seconds (the last placeholder),
 	// not hard-coded, so the DB row lifetime matches the value echoed to
 	// the client and OTPHandler's token TTL. (KR-005.)
 	qGenerateOTP: `
@@ -588,13 +587,18 @@ DELETE FROM user_otp WHERE id = ?
 `,
 }
 
+// sessionTimeout reads session_timeout per call so a config RELOAD applies
+// to the next session without a restart.
+func sessionTimeout() time.Duration {
+	return time.Duration(common.Config().SessionTimeout) * time.Second
+}
+
 type LocalUserService struct {
-	database        data.DatabaseRepository
-	queryService    data.QueryService
-	jwtSecret       []byte
-	sSessionTimeout int64
-	passwordPolicy  model.PasswordPolicy
-	Issuer          string
+	database       port.DatabaseRepository
+	queryService   port.QueryService
+	jwtSecret      []byte
+	passwordPolicy model.PasswordPolicy
+	Issuer         string
 	// ConsentService is optional. When set, signup flows that create a new
 	// user_account (social, phone OTP) record consent inside the account
 	// creation transaction. When nil, consent recording is skipped.
@@ -658,7 +662,7 @@ func (s *LocalUserService) PhoneFor(userID int) (string, error) {
 	return session.PhoneNumber, nil
 }
 
-func NewLocalUserService(ctx context.Context, database data.DatabaseRepository, jwtSecret string, issuer string) (*LocalUserService, error) {
+func NewLocalUserService(ctx context.Context, database port.DatabaseRepository, jwtSecret string, issuer string) (*LocalUserService, error) {
 	svc := &LocalUserService{
 		Issuer: issuer,
 	}
@@ -668,11 +672,10 @@ func NewLocalUserService(ctx context.Context, database data.DatabaseRepository, 
 	return svc, nil
 }
 
-func (r *LocalUserService) Init(ctx context.Context, database data.DatabaseRepository, jwtSecret string) error {
+func (r *LocalUserService) Init(ctx context.Context, database port.DatabaseRepository, jwtSecret string) error {
 	r.database = database
 	r.Ctx = ctx
 	r.queryService = database.GetQueryService(ctx, LocalUserQueries)
-	r.sSessionTimeout = int64(*common.SessionTimeout) * int64(time.Second)
 	r.jwtSecret = []byte(jwtSecret)
 	if r.Issuer == "" {
 		r.Issuer = "keel"
@@ -875,7 +878,7 @@ func (s *LocalUserService) GetUserById(userId int) (*model.UserSession, error) {
 		Email:     common.AsString(row[4]),
 		Status:    uStatus,
 		Provider:  "local",
-		ExpiresAt: time.Now().Add(time.Duration(s.sSessionTimeout)).Unix(),
+		ExpiresAt: time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:  time.Now().Unix(),
 	}
 
@@ -933,7 +936,7 @@ func (s *LocalUserService) GetUserByLogin(username string, password string) (*mo
 		Email:     common.AsString(row[4]),
 		Status:    uStatus,
 		Provider:  "local",
-		ExpiresAt: time.Now().Add(time.Duration(s.sSessionTimeout)).Unix(),
+		ExpiresAt: time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:  time.Now().Unix(),
 	}
 	if passdate.AddDate(0, 0, s.passwordPolicy.PasswordExpire).Before(time.Now()) {
@@ -1008,7 +1011,7 @@ func (s *LocalUserService) GetUserByEmail(email string) (*model.UserSession, err
 		Email:     common.AsString(row[3]),
 		PartnerId: common.AsInt64(row[10]),
 		Provider:  "local",
-		ExpiresAt: time.Now().Add(time.Duration(s.sSessionTimeout)).Unix(),
+		ExpiresAt: time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:  time.Now().Unix(),
 	}
 	return session, nil
@@ -1657,7 +1660,7 @@ func (s *LocalUserService) GenerateOTP(userId int, purpose string) (string, erro
 		return "", fmt.Errorf("generate otp: %w", err)
 	}
 	otp := fmt.Sprintf("%06d", code.Int64()+100000)
-	_, err = s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose, *common.OTPTTLSeconds)
+	_, err = s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose, common.Config().OTPTTLSeconds)
 	if err != nil {
 		return "", err
 	}
@@ -1765,7 +1768,7 @@ func (s *LocalUserService) ConfirmContactChange(userID int, channel, newValue st
 		}
 		newValue = n
 	}
-	cutoff := time.Now().Add(-RegistrationConfirmationTTL)
+	cutoff := time.Now().Add(-common.Config().RegistrationConfirmationTTL)
 	res, err := s.queryService.Query(ctx, qGetContactChange, newValue, userID, cutoff)
 	if err != nil {
 		return err
@@ -1776,7 +1779,7 @@ func (s *LocalUserService) ConfirmContactChange(userID int, channel, newValue st
 	expected := int(common.AsInt32(res.Rows[0][0]))
 	payload := common.AsString(res.Rows[0][1])
 	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= MaxRegistrationAttempts {
+	if attempts >= common.Config().MaxRegistrationAttempts {
 		_, _ = s.queryService.Query(ctx, qExpireContactChange, newValue, userID)
 		return fmt.Errorf("invalid or expired confirmation")
 	}
@@ -1809,7 +1812,7 @@ func (s *LocalUserService) newSession(id int, firstName, lastName, email, status
 		Status:    status,
 		Provider:  provider,
 		IssuedAt:  now.Unix(),
-		ExpiresAt: now.Add(time.Duration(s.sSessionTimeout)).Unix(),
+		ExpiresAt: now.Add(sessionTimeout()).Unix(),
 	}
 }
 
@@ -1873,7 +1876,7 @@ func (s *LocalUserService) createUserFromSocial(email, firstName, lastName, phon
 // index on those columns will not collide on the second account that
 // happens to lack the value. Email is lowercased defensively in case a
 // caller bypasses GetOrCreateUserFromSocial's entry-point normalization.
-func (s *LocalUserService) insertUserAccount(ctx context.Context, tx data.TxQueryService, firstName, lastName, email, phone, username string) (int, error) {
+func (s *LocalUserService) insertUserAccount(ctx context.Context, tx port.TxQueryService, firstName, lastName, email, phone, username string) (int, error) {
 	id := tx.GenID()
 	var emailArg, phoneArg any = normalizeEmail(email), phone
 	if emailArg == "" {
