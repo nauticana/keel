@@ -7,7 +7,7 @@ import "context"
 // dispatcher resolves userID -> email and sends via SMTP/API; a push
 // dispatcher fans out to active device_token rows and sends via
 // FCM/APNs; an SMS dispatcher resolves userID -> phone and sends via
-// Twilio.
+// Twilio or Telnyx.
 //
 // Returning nil when the user has no usable address for this channel
 // ("no email on file", "no active devices") is correct — that is the

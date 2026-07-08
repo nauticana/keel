@@ -380,7 +380,7 @@ func (h *OTPHandler) sendOTPEmail(w http.ResponseWriter, r *http.Request, req *o
 // dispatchOTPSMS pushes the SMS code through the consumer's notification
 // service. The error doesn't propagate to the client — the OTP row
 // already exists in user_otp so the user can resend — but it IS logged
-// so a silently-failing Twilio config surfaces in the journal.
+// so a silently-failing SMS config surfaces in the journal.
 func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, otp string) {
 	if h.NotificationSvc == nil {
 		return

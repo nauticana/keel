@@ -57,7 +57,7 @@ graph TD
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected; no mcp-go dependency. |
 | `mcp` | MCP server layer over `mark3labs/mcp-go`: `BaseServer` (stdio/SSE/Streamable HTTP), name-keyed `ToolProvider`/`ResourceProvider` registry, `{data, _meta}` `Envelopes`, `ResourceFunc` adapter, `TextBundle`. Subpackage `mcp/mcptest` ships manifest/text conformance assertions. See **MCP Server Layer** below. |
-| `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `TwilioSMSDispatcher` (`port.MessageDispatcher` adapters) |
+| `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `redis_url` / `valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
@@ -83,11 +83,15 @@ everywhere as `common.Config`:
 - **`application_config_value`** — per-node assignments: `(node_id, flag_id) ->
   assigned_value`. `node_id` identifies the runtime node/process (matched
   against `--node_id`). Most single-node deployments use 0; multi-node
-  deployments assign values per node. Missing rows fall back to
-  `application_config_flag.default_value`.
+  deployments assign values per node. The reserved **`node_id = -1`** is a
+  shared fallback bucket: a flag with no row for the running node inherits its
+  `-1` row, so a value identical across every node is written once instead of
+  per node. Absent both, `application_config_flag.default_value` applies.
 
-`Load` LEFT-JOINs the two so every catalogued flag resolves, falling back to
-`default_value` when a node has no assignment. **Only bootstrap settings stay as
+`Load` resolves each flag **node row → `-1` shared row → `default_value`** (two
+LEFT JOINs, `COALESCE` picking the precedence) so every catalogued flag
+resolves. `-1` is a config-only sentinel — it never seeds the id generator, so
+`--node_id` itself always stays a real writer id in `[0, 1023]`. **Only bootstrap settings stay as
 `--flags`** — how to reach the DB, the secret provider, the log sink, and
 `--node_id`. Everything else moves to the tables. **Store only non-secret values
 here**; a flag like `oauth_signing_key_secret` holds a secret *name*, resolved
@@ -1167,7 +1171,7 @@ Default keel implementation of `port.NotificationService`. Holds a channel name 
 notif := dispatcher.NewLocalNotificationService()
 notif.Register("email", &dispatcher.EmailDispatcher{Mail: mailClient, Users: userSvc})
 notif.Register("push",  fcmProvider)             // FCMPushProvider satisfies MessageDispatcher
-notif.Register("sms",   twilioSMS)               // TwilioSMSDispatcher (keel-shipped)
+notif.Register("sms",   smsDispatcher)           // dispatcher.NewSMSDispatcher (Twilio / Telnyx)
 
 // Resolve the recipient from a userID:
 err := notif.Send(ctx, port.NotificationRequest{
@@ -1198,13 +1202,15 @@ Wraps the existing `MailClient` so SMTP/API email plugs into the dispatcher regi
 
 `Users` is a `port.RecipientResolver` (just `EmailFor` and `PhoneFor`) — the keel-shipped `LocalUserService` satisfies it directly, and consumers can wire a thinner address-only resolver (e.g. one backed by a recipient cache) if they don't want dispatcher to import the user package. Returns `nil` (no-op) when the user has no email on file — correct for deleted accounts and social-only signups that never set one.
 
-### `dispatcher.TwilioSMSDispatcher` — Twilio Messaging Service adapter
+### `dispatcher.NewSMSDispatcher` — provider-agnostic SMS (Twilio / Telnyx)
 
-Sends SMS via Twilio's Messages API. Implements `port.MessageDispatcher` so it plugs into `LocalNotificationService` on the `"sms"` channel:
+Sends SMS through the provider selected by config `sms_provider`. Both providers implement `port.MessageDispatcher` behind one factory, so they plug into `LocalNotificationService` on the `"sms"` channel and share the same sender-pool model — switching providers is a config + secret change, no code edits:
 
 ```go
-sms, err := dispatcher.NewTwilioSMSDispatcher(ctx, secrets, userSvc, journal)
-if err == nil {
+sms, err := dispatcher.NewSMSDispatcher(ctx, secrets, userSvc, journal)
+if err != nil {
+    journal.Error("SMS disabled: " + err.Error()) // run cleanly with SMS off
+} else {
     notif.Register("sms", sms)
 }
 ```
@@ -1213,24 +1219,14 @@ Configuration:
 
 | Source | Key | Purpose |
 |---|---|---|
-| Secret provider | `twilio_account_sid` | Twilio account SID (basic-auth username) |
-| Secret provider | `twilio_auth_token` | Twilio auth token (basic-auth password) |
-| Flag | `twilio_messaging_service_sid` | `MGxxxxxxxx...` — the Messaging Service that owns the sender pool |
+| Config | `sms_provider` | `twilio` (default) or `telnyx`; empty disables SMS |
+| Config | `sms_service_sid` | Sender pool: Twilio Messaging Service SID (`MG…`) or Telnyx Messaging Profile ID |
+| Secret provider | `sms_auth_token` | Twilio auth token, **or** Telnyx API key (Bearer) |
+| Secret provider | `sms_account_sid` | Twilio account SID (basic-auth username). Unused by Telnyx. |
 
-The dispatcher holds a single Messaging Service SID. Twilio routes each outbound message to the right sender (Canadian long code, US 10DLC, UK/EU alphanumeric, etc.) based on the senders attached inside the Twilio console — adding regional coverage is a console-only change, no code edits or redeploy.
+The sender pool (`sms_service_sid`) routes each outbound message to the right sender (CA long code, US 10DLC, UK/EU alphanumeric, …) from the senders/numbers attached in the provider console — adding regional coverage is a console-only change. **Telnyx** is the cost-effective alternative to Twilio and uses the same interface here (Bearer-auth JSON to the Messages v2 API vs Twilio's basic-auth form POST — the difference is entirely inside the provider adapter).
 
-The constructor fails fast when any of the three values is missing, so callers can `Register` only on success and cleanly run with SMS disabled when the deployment hasn't provisioned Twilio yet:
-
-```go
-sms, err := dispatcher.NewTwilioSMSDispatcher(ctx, secrets, userSvc, journal)
-if err != nil {
-    journal.Error("SMS disabled: " + err.Error())
-} else {
-    notif.Register("sms", sms)
-}
-```
-
-`Dispatch` resolves `userID` to the E.164 phone via `UserService.GetUserById` (reads `session.PhoneNumber`). Returns `nil` when the user has no phone on file — the documented "nobody to notify" channel-level no-op. Non-2xx responses and transport failures are wrapped as errors so the worker logs and skips marking the notification sent (the notification row stays pending for retry).
+The factory fails fast when the provider is unset/unknown or a required credential/id is missing, so callers `Register` only on success. `Dispatch` resolves `userID` to an E.164 phone via the `RecipientResolver`, returning `nil` when there's no phone on file (the "nobody to notify" no-op); `Send` targets an explicit recipient. Non-2xx and transport failures are wrapped as errors so the worker logs and leaves the notification pending for retry.
 
 ## Payments (Stripe & LemonSqueezy)
 
@@ -2449,7 +2445,7 @@ through `common.Config` (see **Runtime Configuration** above).
 | `--db_schema` | `public` | Database schema |
 | `--db_sslmode` | `disable` | SSL mode |
 | `--db_pool_max` | `4` | Maximum database pool connections |
-| `--node_id` | `0` | Identifies this runtime node/process: seeds the bigint ID generator (assign distinct values per writer in federated deployments) and selects this node's `application_config_value` rows |
+| `--node_id` | `0` | Identifies this runtime node/process: seeds the bigint ID generator (assign distinct values per writer in federated deployments) and selects this node's `application_config_value` rows, which fall back to the shared `node_id = -1` bucket then the catalog default. Must stay in `[0, 1023]` for the id generator — `-1` is a config-only sentinel, never a valid `--node_id` |
 
 ## Cache Service
 

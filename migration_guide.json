@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.20",
+   "title": "Provider-agnostic SMS (Twilio/Telnyx) + shared node_id=-1 config fallback",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "Two independent changes: SMS dispatch is now provider-agnostic (Twilio or Telnyx) via a factory + `sms_provider` flag — a breaking rename of the Twilio-specific config/secret/type names; and `application_config_value` gains a shared `node_id = -1` fallback bucket so config identical across every node is written once instead of per node (additive).",
+   "body_markdown": "Two independent changes.\n\n**1. SMS is now provider-agnostic — Twilio or Telnyx (breaking rename).** The Twilio-specific names were generalized: config `twilio_messaging_service_sid` -> `sms_service_sid` (field `TwilioMessagingServiceSID` -> `SMSServiceSID`), new config `sms_provider` (`twilio` default | `telnyx`, empty disables SMS), and secrets `twilio_account_sid` / `twilio_auth_token` -> `sms_account_sid` / `sms_auth_token`. Construct via the factory `dispatcher.NewSMSDispatcher(ctx, secrets, users, journal)` (picks the provider from `sms_provider`); `NewTwilioSMSDispatcher` and the exported `TwilioSMSDispatcher` type are gone — both providers share one internal `port.MessageDispatcher` flow.\n\n| Was | Now |\n|---|---|\n| config `twilio_messaging_service_sid` | `sms_service_sid` |\n| field `TwilioMessagingServiceSID` | `SMSServiceSID` |\n| secret `twilio_account_sid` | `sms_account_sid` |\n| secret `twilio_auth_token` | `sms_auth_token` |\n| `NewTwilioSMSDispatcher(...)` / `TwilioSMSDispatcher{}` | `dispatcher.NewSMSDispatcher(ctx, secrets, users, journal)` |\n\n**Telnyx** (cheaper, same sender-pool model) uses `sms_auth_token` as its Bearer API key (`sms_account_sid` unused) and `sms_service_sid` as the Messaging Profile ID — the documented number-pool send variant (`messaging_profile_id` + `to` + `text`), matching Twilio's Messaging-Service sender-pool semantics. Migration: add the `sms_provider` flag row, rename `twilio_messaging_service_sid` -> `sms_service_sid`, and rename the two keystore secrets; existing Twilio deployments keep working on `sms_provider=twilio`. The shared SMS HTTP client no longer follows redirects — a 3xx from a provider Messages endpoint surfaces as an error instead of replaying a credentialed POST to another host.\n\n**2. Shared config fallback bucket `node_id = -1` (additive).** `application_config_value` now resolves each flag **this node's row → the shared `node_id = -1` row → the catalog `default_value`** (two LEFT JOINs, `COALESCE` picking the precedence). A value identical across every node is written once in the `-1` bucket instead of duplicated per `node_id`; a node overrides it by inserting its own row. Purely additive — existing per-node rows resolve exactly as before, and no `-1` rows need to exist. `-1` is a config-only sentinel and never reaches the bigint id generator, so `--node_id` itself stays a real writer id in `[0, 1023]` (default remains `0`)."
+  },
+  {
    "version": "v1.2.19",
    "title": "Database interfaces moved to port; DB-backed runtime configuration (BaseConfig)",
    "tags": [

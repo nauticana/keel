@@ -17,7 +17,7 @@ import (
 //	notif := service.NewLocalNotificationService()
 //	notif.Register("email", &service.EmailDispatcher{Mail: mailClient, Users: userSvc})
 //	notif.Register("push",  fcmProvider)            // FCMPushProvider satisfies MessageDispatcher
-//	notif.Register("sms",   twilioDispatcher)       // consumer-supplied
+//	notif.Register("sms",   smsDispatcher)          // dispatcher.NewSMSDispatcher(...)
 //
 // Send returns a typed error when the channel is not registered so the
 // caller can distinguish "no dispatcher configured" from "dispatcher
