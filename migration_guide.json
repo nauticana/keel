@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.23",
+   "title": "OAuth-connect: JSON token exchange + JSON refresh (application/json token endpoints)",
+   "tags": [
+    "additive"
+   ],
+   "summary": "OAuth-connect providers can now speak to token/refresh endpoints that require an `application/json` request body and 415 on form-encoded requests. Set `BaseProvider.JSONTokenExchange = true` for the code exchange, and `connect.RefreshJSON` as the `RefreshSpec.Style` for the refresh. New helper `client.ManualTokenExchangeJSON`. Purely additive — existing form-encoded providers are unchanged.",
+   "body_markdown": "**Why:** Go's `golang.org/x/oauth2` library always sends the token request as `application/x-www-form-urlencoded`, and its `TokenSource` refresh does the same. Some OAuth2 v2 token endpoints require a JSON body and reject form-encoded requests with `HTTP 415 Unsupported Media Type`, so both the initial code exchange and the token refresh failed with `token exchange: oauth2: \"Unsupported Media Type\"`.\n\n**Change (additive):**\n- New `client.ManualTokenExchangeJSON(ctx, endpointURL, params map[string]string, opts...)` — POSTs a JSON body, parses the JSON reply, same 2xx-only / 1 MiB cap / no-redirect secret-leak guard as `ManualTokenExchange`.\n- `BaseProvider.JSONTokenExchange bool` — when set, `Callback` exchanges the code via a JSON POST `{client_id, client_secret, code}` to `Endpoint.TokenURL` instead of `cfg.Exchange`. (Not combined with PKCE.)\n- `connect.RefreshJSON` refresh style — POSTs JSON `{client_id, refresh_token}` to `RefreshSpec.TokenURL`. A rotated `refresh_token` in the reply is surfaced on `RefreshResult.RefreshToken` for persistence, exactly like the other styles.\n\n```go\np := client.NewOAuth2Provider(store, name, callback, clientID, secretName, endpoint, nil, apiBase, true)\np.JSONTokenExchange = true // token endpoint speaks JSON\n\nspecs[name] = connect.RefreshSpec{\n    ClientID: clientID, SecretName: secretName,\n    TokenURL: apiBase + \"/oauth/v2/refresh\", Style: connect.RefreshJSON,\n}\n```\nNo action for existing consumers — form-encoded exchange/refresh remain the default."
+  },
+  {
    "version": "v1.2.22",
    "title": "OAuth-connect: callback query exposed to DeriveAPIEndpoint (provider account context)",
    "tags": [

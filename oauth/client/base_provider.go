@@ -30,9 +30,10 @@ type BaseProvider struct {
 	SecretName      string
 	Endpoint        oauth2.Endpoint
 	Scopes          []string
-	AuthCodeOptions []oauth2.AuthCodeOption
-	RequireRefresh  bool // fail Callback when the exchange returns no refresh token
-	UsePKCE         bool // RFC 7636: engine handles the verifier/challenge (Twitter/X and any PKCE-required provider)
+	AuthCodeOptions   []oauth2.AuthCodeOption
+	RequireRefresh    bool // fail Callback when the exchange returns no refresh token
+	UsePKCE           bool // RFC 7636: engine handles the verifier/challenge (Twitter/X and any PKCE-required provider)
+	JSONTokenExchange bool // token endpoint needs a JSON body {client_id, client_secret, code} (Clover v2 et al.); form-encoded exchange 415s. Not combined with PKCE.
 
 	APIEndpoint       string
 	DeriveAPIEndpoint func(ctx context.Context, accessToken string) string
@@ -127,9 +128,22 @@ func (b *BaseProvider) Callback(ctx context.Context, code, state string) error {
 		}
 		exchangeOpts = append(exchangeOpts, oauth2.SetAuthURLParam("code_verifier", verifier))
 	}
-	token, err := cfg.Exchange(ctx, code, exchangeOpts...)
-	if err != nil {
-		return fmt.Errorf("token exchange: %w", err)
+	var token *oauth2.Token
+	if b.JSONTokenExchange {
+		tr, xerr := ManualTokenExchangeJSON(ctx, b.Endpoint.TokenURL, map[string]string{
+			"client_id":     cfg.ClientID,
+			"client_secret": cfg.ClientSecret,
+			"code":          code,
+		})
+		if xerr != nil {
+			return fmt.Errorf("token exchange: %w", xerr)
+		}
+		token = &oauth2.Token{AccessToken: tr.AccessToken, RefreshToken: tr.RefreshToken}
+	} else {
+		token, err = cfg.Exchange(ctx, code, exchangeOpts...)
+		if err != nil {
+			return fmt.Errorf("token exchange: %w", err)
+		}
 	}
 	if b.RequireRefresh && token.RefreshToken == "" {
 		return fmt.Errorf("%s: no refresh token; re-authorize with prompt=consent", b.ProviderName)

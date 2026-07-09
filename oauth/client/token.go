@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,19 +37,40 @@ func WithBasicAuth(username, password string) ExchangeOption {
 // PKCE flows). Only 2xx is accepted; the body is capped at 1 MiB. Pass opts
 // (e.g. WithBasicAuth) for header-based client auth.
 func ManualTokenExchange(ctx context.Context, tokenURL string, form url.Values, opts ...ExchangeOption) (TokenResponse, error) {
-	var tr TokenResponse
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return tr, err
+		return TokenResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return sendTokenRequest(req, opts...)
+}
+
+// ManualTokenExchangeJSON POSTs a JSON-encoded token request and parses the JSON
+// reply — for OAuth2 token/refresh endpoints that require an application/json body
+// and reject form-encoded requests with HTTP 415 (e.g. Clover v2). Same 2xx-only,
+// 1 MiB cap, and no-redirect secret-leak guard as ManualTokenExchange.
+func ManualTokenExchangeJSON(ctx context.Context, endpointURL string, params map[string]string, opts ...ExchangeOption) (TokenResponse, error) {
+	body, err := json.Marshal(params)
+	if err != nil {
+		return TokenResponse{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(body))
+	if err != nil {
+		return TokenResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return sendTokenRequest(req, opts...)
+}
+
+// sendTokenRequest sends a prepared token/refresh request and parses the JSON
+// reply. Callers set the Content-Type; this adds Accept, applies opts, and blocks
+// redirects so the client_secret in the body is never resent to another host.
+func sendTokenRequest(req *http.Request, opts ...ExchangeOption) (TokenResponse, error) {
+	var tr TokenResponse
 	req.Header.Set("Accept", "application/json")
 	for _, opt := range opts {
 		opt(req)
 	}
-	// Never follow redirects on the token POST: it carries the client_secret in
-	// its body (and possibly a Basic-auth header), which Go would resend to the
-	// redirect target — a redirecting/hostile endpoint could capture it.
 	noRedirect := *common.HTTPClient()
 	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := noRedirect.Do(req)

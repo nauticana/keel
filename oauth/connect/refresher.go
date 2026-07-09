@@ -15,8 +15,9 @@ type RefreshStyle int
 
 const (
 	RefreshOAuth2Lib   RefreshStyle = iota // oauth2 library against Endpoint (Google et al.)
-	RefreshForm                            // POST a refresh_token grant to TokenURL
+	RefreshForm                            // POST a form-encoded refresh_token grant to TokenURL
 	RefreshPassthrough                     // stored token used as-is (long-lived: Meta, Shopify)
+	RefreshJSON                            // POST a JSON {client_id, refresh_token} grant to TokenURL (Clover v2 et al.)
 )
 
 // RefreshSpec describes how to refresh one provider's token.
@@ -24,7 +25,7 @@ type RefreshSpec struct {
 	ClientID      string          // OAuth client id (or client key)
 	SecretName    string          // keystore key holding the client secret
 	Endpoint      oauth2.Endpoint // RefreshOAuth2Lib
-	TokenURL      string          // RefreshForm
+	TokenURL      string          // RefreshForm / RefreshJSON: the refresh POST target
 	Style         RefreshStyle
 	ClientIDParam string // RefreshForm client-id field; "" defaults to "client_id" (TikTok: "client_key")
 }
@@ -65,6 +66,28 @@ func NewRefresher(secrets secret.SecretProvider, specs map[string]RefreshSpec) R
 				"refresh_token": {refreshToken},
 				idParam:         {spec.ClientID},
 				"client_secret": {clientSecret},
+			})
+			if err != nil {
+				return RefreshResult{}, err
+			}
+			if tr.AccessToken == "" {
+				return RefreshResult{}, fmt.Errorf("%s: empty access token", provider)
+			}
+			res := RefreshResult{AccessToken: tr.AccessToken}
+			if tr.RefreshToken != "" && tr.RefreshToken != refreshToken {
+				res.RefreshToken = tr.RefreshToken // server rotated the refresh token; persist it
+			}
+			return res, nil
+		case RefreshJSON:
+			idParam := spec.ClientIDParam
+			if idParam == "" {
+				idParam = "client_id"
+			}
+			// Clover v2 authenticates the refresh by client_id + refresh_token; the
+			// client_secret is not part of the JSON refresh body.
+			tr, err := client.ManualTokenExchangeJSON(ctx, spec.TokenURL, map[string]string{
+				idParam:         spec.ClientID,
+				"refresh_token": refreshToken,
 			})
 			if err != nil {
 				return RefreshResult{}, err

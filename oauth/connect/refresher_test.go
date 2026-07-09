@@ -2,9 +2,11 @@ package connect
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"golang.org/x/oauth2"
@@ -96,6 +98,36 @@ func TestNewRefresher_LibNoRotation(t *testing.T) {
 	}
 	if res.RefreshToken != "" {
 		t.Errorf("RefreshToken = %q, want empty (no rotation → keep existing)", res.RefreshToken)
+	}
+}
+
+func TestNewRefresher_JSON(t *testing.T) {
+	var gotCT, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"AT","refresh_token":"RT2"}`))
+	}))
+	defer srv.Close()
+
+	r := NewRefresher(fakeSecrets{"clover_secret": "shh"}, map[string]RefreshSpec{
+		"clover": {ClientID: "APP", SecretName: "clover_secret", TokenURL: srv.URL, Style: RefreshJSON},
+	})
+	res, err := r(context.Background(), "clover", "RT1")
+	if err != nil || res.AccessToken != "AT" || res.RefreshToken != "RT2" {
+		t.Fatalf("got %+v err=%v, want AT/RT2 (rotated)", res, err)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotCT)
+	}
+	// client_id + refresh_token only; never the client_secret.
+	if !strings.Contains(gotBody, `"client_id":"APP"`) || !strings.Contains(gotBody, `"refresh_token":"RT1"`) {
+		t.Errorf("body = %q, want client_id + refresh_token", gotBody)
+	}
+	if strings.Contains(gotBody, "shh") {
+		t.Errorf("body leaked client_secret: %q", gotBody)
 	}
 }
 

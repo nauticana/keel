@@ -2,6 +2,9 @@ package client
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,8 +14,10 @@ import (
 
 // fakeStore is a minimal in-memory CredentialStore for the pure-logic tests.
 type fakeStore struct {
-	secrets map[string]string
-	state   string
+	secrets     map[string]string
+	state       string
+	gotCred     string // captured by UpsertConnection
+	gotEndpoint string
 }
 
 func (s *fakeStore) CreateOAuthState(_ context.Context, _ int64, _ string, _ map[string]string) (string, error) {
@@ -21,7 +26,10 @@ func (s *fakeStore) CreateOAuthState(_ context.Context, _ int64, _ string, _ map
 func (s *fakeStore) ConsumeOAuthState(_ context.Context, _, _ string) (int64, map[string]string, error) {
 	return 1, nil, nil
 }
-func (s *fakeStore) UpsertConnection(_ context.Context, _ int64, _, _, _, _ string) error { return nil }
+func (s *fakeStore) UpsertConnection(_ context.Context, _ int64, _, _, credRef, apiEndpoint string) error {
+	s.gotCred, s.gotEndpoint = credRef, apiEndpoint
+	return nil
+}
 func (s *fakeStore) UpdateConnectionStatus(_ context.Context, _ int64, _, _, _ string) error {
 	return nil
 }
@@ -91,6 +99,45 @@ func TestBaseProvider_connType(t *testing.T) {
 	}
 	if (&BaseProvider{ConnType: "X"}).connType() != "X" {
 		t.Error("explicit ConnType must be preserved")
+	}
+}
+
+// A JSONTokenExchange provider (Clover v2) must POST a JSON body to the token
+// endpoint and persist the returned refresh token as the credential.
+func TestBaseProvider_Callback_JSONExchange(t *testing.T) {
+	var gotCT, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"AT","refresh_token":"clvroar-NEW"}`))
+	}))
+	defer srv.Close()
+
+	store := &fakeStore{secrets: map[string]string{"clover_secret": "shh"}, state: "S"}
+	b := &BaseProvider{
+		Service:           store,
+		ProviderName:      "clover",
+		CallbackURL:       "https://api.example.com/cb",
+		ClientID:          "APP",
+		SecretName:        "clover_secret",
+		Endpoint:          oauth2.Endpoint{TokenURL: srv.URL},
+		APIEndpoint:       "https://api.example.com",
+		RequireRefresh:    true,
+		JSONTokenExchange: true,
+	}
+	if err := b.Callback(context.Background(), "CODE", "S"); err != nil {
+		t.Fatalf("Callback: %v", err)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotCT)
+	}
+	if !strings.Contains(gotBody, `"code":"CODE"`) || !strings.Contains(gotBody, `"client_id":"APP"`) {
+		t.Errorf("body = %q, want code + client_id", gotBody)
+	}
+	if store.gotCred != "clvroar-NEW" {
+		t.Errorf("stored credential = %q, want the returned refresh token", store.gotCred)
 	}
 }
 
