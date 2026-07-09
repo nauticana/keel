@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.21",
+   "title": "REST list accepts underscore-prefixed pagination aliases (_limit/_offset/_order)",
+   "tags": [
+    "additive"
+   ],
+   "summary": "The generic REST `List`/`Get` handler now recognizes the underscore-prefixed control params `_limit` / `_offset` / `_order` as reserved, in addition to the canonical `limit` / `offset` / `order`. Both are stripped before the column-filter check, so a client that sends the underscore convention paginates correctly instead of hitting the v1.2.18 unknown-filter-key 400. Purely additive: canonical params are unchanged, and genuinely unknown keys are still rejected — the mass-delete guard is intact.",
+   "body_markdown": "**Why:** v1.2.18 changed the generic handler to reject unknown filter keys with 400 (the mass-delete guard — an unknown key on a `DELETE` used to collapse the WHERE clause to the bare partner scope and wipe the partition). That correctly-strict validation surfaced a long-latent mismatch: keel has reserved `limit`/`offset`/`order` (no underscore) since v0.5, but some clients send the `_limit`/`_offset`/`_order` (json-server) convention. Those were silently dropped before v1.2.18 (so pagination was inert — every list returned page 1) and hard-400'd after it.\n\n**Fix:** `extractPagination` and `extractOrder` now read the first present alias among `{limit, _limit}`, `{offset, _offset}`, `{order, _order}` and strip every alias from the filter map. Truly-unknown keys still fall through to `castFilterValues` and are rejected, so the guard is unchanged.\n\nNo action for consumers — this is a compatibility fix. Clients may send either convention. `default_list_page_size` / `max_list_page_size` clamping is unchanged."
+  },
+  {
    "version": "v1.2.20",
    "title": "Provider-agnostic SMS (Twilio/Telnyx) + shared node_id=-1 config fallback",
    "tags": [

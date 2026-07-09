@@ -113,20 +113,37 @@ func (h *RestHandler) castFilterValues(filter map[string]string) (map[string]any
 	return typedFilter, nil
 }
 
-// extractPagination reads ?limit= and ?offset= from the URL,
-// applying defaults and the hard cap. Removes both keys from the
-// filter map so they don't leak into the SQL WHERE clause downstream.
+// takeReserved returns the value of the first present alias and deletes every
+// alias from the filter map, so a reserved control param never reaches the
+// column filter (where an unknown key is a 400). Accepts both the canonical
+// name and the underscore-prefixed alias some clients send (e.g. "limit" and
+// "_limit").
+func takeReserved(filter map[string]string, aliases ...string) (string, bool) {
+	value, found := "", false
+	for _, a := range aliases {
+		if v, ok := filter[a]; ok {
+			if !found {
+				value, found = v, true
+			}
+			delete(filter, a)
+		}
+	}
+	return value, found
+}
+
+// extractPagination reads the limit/offset control params (canonical or the
+// underscore-prefixed _limit/_offset alias), applies the default + hard cap,
+// and removes the keys from the filter map so they don't leak into the SQL
+// WHERE clause downstream.
 func extractPagination(filter map[string]string) (limit, offset int) {
 	limit = common.Config().DefaultListPageSize
 	offset = 0
-	if v, ok := filter["limit"]; ok {
-		delete(filter, "limit")
+	if v, ok := takeReserved(filter, "limit", "_limit"); ok {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	if v, ok := filter["offset"]; ok {
-		delete(filter, "offset")
+	if v, ok := takeReserved(filter, "offset", "_offset"); ok {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			offset = n
 		}
@@ -137,15 +154,14 @@ func extractPagination(filter map[string]string) (limit, offset int) {
 	return limit, offset
 }
 
-// extractOrder reads ?order= from the URL and removes the key from
-// the filter map so it doesn't leak into the SQL WHERE clause. The
-// underlying TableService validates the resulting string against its
-// column whitelist (ASC / DESC / column-name only) and rejects
-// anything else as a 400, so passing untrusted query input here is
-// safe — the data layer is the gatekeeper. (P2-22.)
+// extractOrder reads the order control param (canonical or the _order alias)
+// and removes the key from the filter map so it doesn't leak into the SQL WHERE
+// clause. The underlying TableService validates the resulting string against its
+// column whitelist (ASC / DESC / column-name only) and rejects anything else as
+// a 400, so passing untrusted query input here is safe — the data layer is the
+// gatekeeper. (P2-22.)
 func extractOrder(filter map[string]string) string {
-	v := filter["order"]
-	delete(filter, "order")
+	v, _ := takeReserved(filter, "order", "_order")
 	return strings.TrimSpace(v)
 }
 
