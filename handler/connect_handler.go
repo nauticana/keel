@@ -177,7 +177,10 @@ func (h *OAuthConnectHandler) callback(name string, p client.Provider) http.Hand
 				return
 			}
 		}
-		if err := p.Callback(r.Context(), code, state); err != nil {
+		// Carry the callback query into the persist flow so a provider's
+		// DeriveAPIEndpoint can read redirect-only params (e.g. Clover's merchant_id).
+		ctx := client.WithCallbackQuery(r.Context(), r.URL.Query())
+		if err := p.Callback(ctx, code, state); err != nil {
 			if h.Journal != nil {
 				h.Journal.Error("oauth callback failed for " + name + ": " + err.Error())
 			}

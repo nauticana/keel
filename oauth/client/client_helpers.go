@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"net/url"
 	"strconv"
 )
 
@@ -29,6 +30,27 @@ func EntityFromContext(ctx context.Context) int64 {
 		return v
 	}
 	return 0
+}
+
+// callbackQueryCtxKey carries the raw OAuth callback query into the persist flow
+// so a provider's DeriveAPIEndpoint can read provider-specific params returned in
+// the redirect (e.g. Clover's merchant_id) that are absent from the token response.
+type callbackQueryCtxKey struct{}
+
+// WithCallbackQuery tags ctx with the OAuth callback query. The connect handler
+// sets it before Provider.Callback so DeriveAPIEndpoint can read the redirect's
+// provider-specific params.
+func WithCallbackQuery(ctx context.Context, q url.Values) context.Context {
+	return context.WithValue(ctx, callbackQueryCtxKey{}, q)
+}
+
+// CallbackQueryFromContext returns the OAuth callback query tagged on ctx, or nil
+// when unset (Values.Get on a nil map is safe and returns "").
+func CallbackQueryFromContext(ctx context.Context) url.Values {
+	if v, ok := ctx.Value(callbackQueryCtxKey{}).(url.Values); ok {
+		return v
+	}
+	return nil
 }
 
 // entityFromExtra reads the entity scope an AuthURL stashed in the OAuth-state

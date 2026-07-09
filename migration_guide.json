@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.22",
+   "title": "OAuth-connect: callback query exposed to DeriveAPIEndpoint (provider account context)",
+   "tags": [
+    "additive"
+   ],
+   "summary": "The OAuth-connect callback now tags the request context with the raw redirect query via `client.WithCallbackQuery`, and `client.CallbackQueryFromContext(ctx)` reads it. A provider's `DeriveAPIEndpoint(ctx, accessToken)` hook can now use redirect-only params — e.g. Clover's `merchant_id`, which is absent from the token response — to derive a per-connection `api_endpoint`. Purely additive: providers that don't read it are unaffected.",
+   "body_markdown": "**Why:** some providers return the account/merchant identifier only in the OAuth *redirect* query (Clover's `merchant_id`), not in the token-exchange response, so it was unreachable from `DeriveAPIEndpoint` (which sees only the access token) — meaning you couldn't persist a merchant-scoped `api_endpoint` at connect time.\n\n**Change:** `handler.OAuthConnectHandler`'s callback now calls `p.Callback(ctx, code, state)` with `ctx = client.WithCallbackQuery(r.Context(), r.URL.Query())`. Since `BaseProvider.Callback` already threads that ctx into `DeriveAPIEndpoint`, a provider can read the redirect params:\n```go\np.DeriveAPIEndpoint = func(ctx context.Context, accessToken string) string {\n    mid := client.CallbackQueryFromContext(ctx).Get(\"merchant_id\")\n    if mid == \"\" { return apiBase }\n    return apiBase + \"/v3/merchants/\" + mid\n}\n```\n`CallbackQueryFromContext` returns nil when unset; `url.Values.Get` on nil is safe. No signature changes, no action for existing consumers."
+  },
+  {
    "version": "v1.2.21",
    "title": "REST list accepts underscore-prefixed pagination aliases (_limit/_offset/_order)",
    "tags": [
