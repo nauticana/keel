@@ -201,7 +201,7 @@ func (h *RestHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := h.Api.Get(r.Context(), session.PartnerId, session.Id, filter, order)
 	if err != nil {
-		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	if results == nil {
@@ -235,7 +235,7 @@ func (h *RestHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := h.Api.List(r.Context(), session.PartnerId, session.Id, filter, order)
 	if err != nil {
-		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	if results == nil {
@@ -269,7 +269,7 @@ func (h *RestHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Api.Delete(r.Context(), session.PartnerId, session.Id, filter); err != nil {
-		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
@@ -305,7 +305,7 @@ func (h *RestHandler) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Api.Post(r.Context(), session.PartnerId, session.Id, items...); err != nil {
-		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	if h.PostWrite != nil {

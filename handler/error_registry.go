@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+
+	"github.com/nauticana/keel/model"
 )
 
 // Typed-error → HTTP status registry: services return sentinel errors, the handler
@@ -44,7 +46,13 @@ func (h *AbstractHandler) WriteServiceError(w http.ResponseWriter, r *http.Reque
 	if err == nil {
 		return
 	}
+	// A typed *model.AppError carries its own status (e.g. a FORBIDDEN
+	// authorization failure); honor it before the sentinel registry.
 	status := statusForError(err)
+	var appErr *model.AppError
+	if status == 0 && errors.As(err, &appErr) {
+		status = appErr.Status
+	}
 	if status == 0 {
 		status = http.StatusInternalServerError
 	}

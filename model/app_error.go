@@ -24,3 +24,10 @@ func (e *AppError) Error() string {
 func NewAppError(code string, status int, message string) *AppError {
 	return &AppError{Code: code, Status: status, Message: message}
 }
+
+// NewForbidden is an authorization failure (403) — a caller lacking a required
+// permission, not a server fault. Handlers surface its message and status
+// directly instead of a sanitised 500.
+func NewForbidden(message string) *AppError {
+	return &AppError{Code: ErrForbidden, Status: 403, Message: message}
+}

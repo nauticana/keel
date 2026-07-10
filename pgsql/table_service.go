@@ -253,7 +253,7 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 	if userID > 0 {
 		allowed, ownScope = s.CheckPermission(ctx, userID, "SELECT")
 		if !allowed {
-			return nil, fmt.Errorf("permission denied: SELECT on table %s", s.Table.TableName)
+			return nil, model.NewForbidden(fmt.Sprintf("No authorization for SELECT on %s", s.Table.TableName))
 		}
 	}
 	var sqlText string
@@ -471,7 +471,7 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID int, item any) ([]int64, error) {
 	allowed, _ := s.CheckPermission(ctx, userID, "INSERT")
 	if !allowed {
-		return nil, fmt.Errorf("permission denied: INSERT on table %s", s.Table.TableName)
+		return nil, model.NewForbidden(fmt.Sprintf("No authorization for INSERT on %s", s.Table.TableName))
 	}
 	val := reflect.ValueOf(item)
 	// UserSpecific writes are STRICT: the user_id column is force-set
@@ -514,7 +514,7 @@ func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID 
 func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID int, item any) error {
 	allowed, _ := s.CheckPermission(ctx, userID, "UPDATE")
 	if !allowed {
-		return fmt.Errorf("permission denied: UPDATE on table %s", s.Table.TableName)
+		return model.NewForbidden(fmt.Sprintf("No authorization for UPDATE on %s", s.Table.TableName))
 	}
 	if s.sqlUpdateByID == "" {
 		return nil // no updatable columns
@@ -582,7 +582,7 @@ func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID 
 func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {
 	allowed, _ := s.CheckPermission(ctx, userID, "DELETE")
 	if !allowed {
-		return fmt.Errorf("permission denied: DELETE on table %s", s.Table.TableName)
+		return model.NewForbidden(fmt.Sprintf("No authorization for DELETE on %s", s.Table.TableName))
 	}
 	// PartnerUserScoped DELETE defense-in-depth: bar a PARTNER_ADMIN
 	// from deleting a user_account belonging to another partner via a
