@@ -1039,7 +1039,7 @@ Keel exposes an optional `port.ConsentService` that signup flows (social login, 
 | Table | Purpose |
 |-------|---------|
 | `consent_policy` | Versioned policy text registry. Unique on `(policy_type, region, version, language)`. |
-| `consent_event` | One row per (user × consent_type × policy version) decision. Stores `email_hash` fallback when the row predates user_account creation, plus `client_ip` / `client_user_agent` for the audit trail. |
+| `consent_event` | One row per (user × consent_type × policy version) decision. Stores `email_hash` / `phone_hash` fallbacks when the row predates (or isn't tied to) user_account creation — the `phone_hash` links an SMS/10DLC opt-in to its number — plus `client_ip` / `client_user_agent` for the audit trail. `ConsentService.Withdraw` records opt-outs (STOP); `History(subject)` returns the full opt-in/opt-out trail for a user/email/phone (carrier + DSAR export). |
 
 ### Wiring
 
@@ -2095,9 +2095,11 @@ erDiagram
         BIGINT id PK
         BIGINT user_id FK
         VARCHAR email_hash
+        VARCHAR phone_hash
         VARCHAR consent_type
         BOOLEAN consented
         BIGINT policy_id FK
+        VARCHAR event_ref
         VARCHAR region
         VARCHAR client_ip
         VARCHAR client_user_agent

@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.26",
+   "title": "Consent service: phone-linked consent + Withdraw + History (10DLC/DSAR audit)",
+   "tags": [
+    "additive"
+   ],
+   "summary": "The `user.ConsentService` gains carrier-audit-grade capabilities for SMS/10DLC and privacy (DSAR) review: consent can now be tied to a phone number (`consent_event.phone_hash`, hashed like email), a first-class `Withdraw` records opt-outs (STOP), and `History` returns the full opt-in/opt-out trail for a subject (user/email/phone). `ConsentRequest`/`SignupConsent` gain a `Phone` field, wired through the OTP signup path. Purely additive — existing calls are unchanged; the one schema delta is a new nullable column.",
+   "body_markdown": "**Why:** proving to a carrier (10DLC campaign review) or a regulator (DSAR) that a *specific phone number* opted in — with the exact wording, version, timestamp, IP/UA — and later opted out, was not directly answerable: `consent_event` was keyed only by `user_id`/`email_hash`, and revocation was implicit (a `Record` with `Consented=false`).\n\n**Changes (all additive):**\n- **`consent_event.phone_hash VARCHAR(64)` (nullable)** + `idx_consent_event_phone (phone_hash, consent_type)`; the identity check now allows a phone-only row. `ConsentRequest.Phone` / `SignupConsent.Phone` are hashed via the same peppered `hashIdentifier` as email. The OTP signup path stamps the phone automatically (contact on the phone path, secondary on the email path).\n- **`ConsentService.Withdraw(ctx, ConsentRequest) error`** — records a first-class opt-out (`Consented=false`); history preserved.\n- **`ConsentService.History(ctx, ConsentSubject) ([]ConsentEvent, error)`** — every event for a user/email/phone, newest first, joined to its policy (type/version/region/language + region/IP/UA/timestamp) — the exportable audit trail.\n\n**Interface note:** `ConsentService` gains two methods. The only implementer is keel's `LocalConsentService`; consumers *call* the interface (they don't implement it), so this is safe unless a downstream has its own mock/impl — add the two methods there.\n\n**Schema migration (existing DBs):**\n```sql\nALTER TABLE consent_event ADD COLUMN phone_hash VARCHAR(64);\nCREATE INDEX idx_consent_event_phone ON consent_event (phone_hash, consent_type);\n```\nFresh DBs get it from the regenerated `basis_pgsql.sql`/`basis_mysql.sql`. No backfill (new column)."
+  },
+  {
    "version": "v1.2.23",
    "title": "OAuth-connect: JSON token exchange + JSON refresh (application/json token endpoints)",
    "tags": [

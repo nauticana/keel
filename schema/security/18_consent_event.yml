@@ -10,6 +10,9 @@ columns:
   - name: email_hash
     type: VARCHAR(64)
     nullable: true
+  - name: phone_hash
+    type: VARCHAR(64)
+    nullable: true
   - name: consent_type
     type: VARCHAR(30)
   - name: consented
@@ -47,9 +50,11 @@ foreign_keys:
       columns: [id]
 checks:
   - name: consent_event_identity
-    expression: user_id IS NOT NULL OR email_hash IS NOT NULL
+    expression: user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL
 indexes:
   - name: idx_consent_event_user
     columns: [user_id, consent_type]
   - name: idx_consent_event_email
     columns: [email_hash, consent_type]
+  - name: idx_consent_event_phone
+    columns: [phone_hash, consent_type]

@@ -391,6 +391,7 @@ CREATE TABLE IF NOT EXISTS consent_event (
     id                                   BIGINT        NOT NULL,
     user_id                              BIGINT       ,
     email_hash                           VARCHAR(64)  ,
+    phone_hash                           VARCHAR(64)  ,
     consent_type                         VARCHAR(30)   NOT NULL,
     consented                            BOOLEAN       NOT NULL,
     policy_id                            BIGINT        NOT NULL,
@@ -400,10 +401,11 @@ CREATE TABLE IF NOT EXISTS consent_event (
     client_user_agent                    VARCHAR(500) ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT consent_event_pk PRIMARY KEY (id),
-    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL)
+    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_consent_event_user ON consent_event(user_id, consent_type);
 CREATE INDEX IF NOT EXISTS idx_consent_event_email ON consent_event(email_hash, consent_type);
+CREATE INDEX IF NOT EXISTS idx_consent_event_phone ON consent_event(phone_hash, consent_type);
 
 CREATE SEQUENCE IF NOT EXISTS consent_event_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('consent_event', 'id', 'consent_event_seq') ON CONFLICT DO NOTHING;

@@ -176,6 +176,12 @@ func buildOTPSignupConsent(r *http.Request, req *otpSendRequest) *user.SignupCon
 	if len(req.Consents) == 0 && req.PolicyVersion == "" {
 		return nil
 	}
+	// The phone is the OTP contact on the phone path, the secondary on the email
+	// path — either way, stamp it so an SMS consent is provably tied to the number.
+	phone := req.SecondaryContact
+	if req.ContactType == otpChannelPhone {
+		phone = req.Contact
+	}
 	return &user.SignupConsent{
 		PolicyType:      req.PolicyType,
 		PolicyVersion:   req.PolicyVersion,
@@ -184,6 +190,7 @@ func buildOTPSignupConsent(r *http.Request, req *otpSendRequest) *user.SignupCon
 		Region:          req.Region,
 		ClientIP:        TrustedClientIP(r),
 		ClientUserAgent: r.UserAgent(),
+		Phone:           phone,
 		Consents:        req.Consents,
 	}
 }

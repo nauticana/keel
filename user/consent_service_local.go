@@ -15,6 +15,7 @@ import (
 
 const (
 	qInsertConsentEvent = "insert_consent_event"
+	qConsentHistory     = "consent_history"
 	qLatestConsent      = "latest_consent"
 	qLookupPolicyID     = "lookup_policy_id"
 )
@@ -22,12 +23,22 @@ const (
 var ConsentQueries = map[string]string{
 	qInsertConsentEvent: `
 INSERT INTO consent_event
- (id, user_id, email_hash, consent_type, consented, policy_id,
+ (id, user_id, email_hash, phone_hash, consent_type, consented, policy_id,
   event_ref, region, client_ip, client_user_agent, created_at)
 VALUES
- (nextval('consent_event_seq'), ?, ?, ?, ?, ?,
+ (nextval('consent_event_seq'), ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?, CURRENT_TIMESTAMP)
 RETURNING id`,
+
+	qConsentHistory: `
+SELECT ce.consent_type, ce.consented, cp.policy_type, cp.version, cp.region,
+       cp.language, ce.region, ce.event_ref, ce.client_ip, ce.client_user_agent, ce.created_at
+  FROM consent_event ce
+  JOIN consent_policy cp ON cp.id = ce.policy_id
+ WHERE (ce.user_id = ?    AND ? IS NOT NULL)
+    OR (ce.email_hash = ? AND ? IS NOT NULL)
+    OR (ce.phone_hash = ? AND ? IS NOT NULL)
+ ORDER BY ce.created_at DESC`,
 
 	qLatestConsent: `
 SELECT consented, policy_id, created_at
@@ -98,8 +109,8 @@ func (s *LocalConsentService) Record(ctx context.Context, req ConsentRequest) er
 	if req.ConsentType == "" {
 		return fmt.Errorf("consent: consent_type is required")
 	}
-	if req.UserID <= 0 && req.Email == "" {
-		return fmt.Errorf("consent: either user_id or email is required")
+	if req.UserID <= 0 && req.Email == "" && req.Phone == "" {
+		return fmt.Errorf("consent: user_id, email, or phone is required")
 	}
 
 	policyID, err := s.resolvePolicyID(ctx, req)
@@ -115,10 +126,15 @@ func (s *LocalConsentService) Record(ctx context.Context, req ConsentRequest) er
 	if req.Email != "" {
 		emailHash = s.hashIdentifier(req.Email)
 	}
+	var phoneHash any
+	if req.Phone != "" {
+		phoneHash = s.hashIdentifier(req.Phone)
+	}
 
 	_, err = s.queryService.Query(ctx, qInsertConsentEvent,
 		userID,
 		emailHash,
+		phoneHash,
 		req.ConsentType,
 		req.Consented,
 		policyID,
@@ -176,6 +192,55 @@ func (s *LocalConsentService) LatestConsent(ctx context.Context, userID int, ema
 		return false, false, nil
 	}
 	return common.AsBool(res.Rows[0][0]), true, nil
+}
+
+// Withdraw records a first-class opt-out (Consented=false) for a consent type —
+// the STOP/revocation half of the lifecycle. History is preserved.
+func (s *LocalConsentService) Withdraw(ctx context.Context, req ConsentRequest) error {
+	req.Consented = false
+	return s.Record(ctx, req)
+}
+
+// History returns every consent event for the subject (user/email/phone),
+// newest first — the exportable audit trail for carrier (10DLC) opt-in/opt-out
+// proof and DSAR requests.
+func (s *LocalConsentService) History(ctx context.Context, subject ConsentSubject) ([]ConsentEvent, error) {
+	if subject.UserID <= 0 && subject.Email == "" && subject.Phone == "" {
+		return nil, fmt.Errorf("consent: subject requires user_id, email, or phone")
+	}
+	var userArg, emailArg, phoneArg any
+	if subject.UserID > 0 {
+		userArg = subject.UserID
+	}
+	if subject.Email != "" {
+		emailArg = s.hashIdentifier(subject.Email)
+	}
+	if subject.Phone != "" {
+		phoneArg = s.hashIdentifier(subject.Phone)
+	}
+	res, err := s.queryService.Query(ctx, qConsentHistory,
+		userArg, userArg, emailArg, emailArg, phoneArg, phoneArg,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("consent: history: %w", err)
+	}
+	out := make([]ConsentEvent, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		out = append(out, ConsentEvent{
+			ConsentType:     common.AsString(r[0]),
+			Consented:       common.AsBool(r[1]),
+			PolicyType:      common.AsString(r[2]),
+			PolicyVersion:   common.AsString(r[3]),
+			PolicyRegion:    common.AsString(r[4]),
+			PolicyLanguage:  common.AsString(r[5]),
+			Region:          common.AsString(r[6]),
+			EventRef:        common.AsString(r[7]),
+			ClientIP:        common.AsString(r[8]),
+			ClientUserAgent: common.AsString(r[9]),
+			CreatedAt:       common.AsTime(r[10]),
+		})
+	}
+	return out, nil
 }
 
 func (s *LocalConsentService) resolvePolicyID(ctx context.Context, req ConsentRequest) (int64, error) {

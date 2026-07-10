@@ -400,6 +400,7 @@ CREATE TABLE IF NOT EXISTS consent_event (
     id                                   BIGINT        NOT NULL,
     user_id                              BIGINT       ,
     email_hash                           VARCHAR(64)  ,
+    phone_hash                           VARCHAR(64)  ,
     consent_type                         VARCHAR(30)   NOT NULL,
     consented                            TINYINT(1)    NOT NULL,
     policy_id                            BIGINT        NOT NULL,
@@ -411,10 +412,11 @@ CREATE TABLE IF NOT EXISTS consent_event (
     PRIMARY KEY (id),
     CONSTRAINT consent_event_policies FOREIGN KEY (policy_id) REFERENCES consent_policy(id),
     CONSTRAINT consent_event_users FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL)
+    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_consent_event_user ON consent_event(user_id, consent_type);
 CREATE INDEX idx_consent_event_email ON consent_event(email_hash, consent_type);
+CREATE INDEX idx_consent_event_phone ON consent_event(phone_hash, consent_type);
 
 -- Mobile device push-notification tokens (FCM / APNs via FCM)
 CREATE TABLE IF NOT EXISTS device_token (

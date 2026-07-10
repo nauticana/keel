@@ -2144,6 +2144,7 @@ func (s *LocalUserService) recordSignupConsent(userID int, email string, sc *Sig
 		ClientIP:        sc.ClientIP,
 		ClientUserAgent: sc.ClientUserAgent,
 		EventRef:        sc.EventRef,
+		Phone:           sc.Phone, // links SMS/10DLC consent to the number
 	}
 	return s.ConsentService.RecordSignupConsents(s.ctx(), userID, email, sc.Consents, meta)
 }
