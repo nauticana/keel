@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.28",
+   "title": "Fix: ConsentService.History / LatestConsent 500 when the subject has no phone (or no user/email)",
+   "tags": [
+    "additive"
+   ],
+   "summary": "`History` and `LatestConsent` built their WHERE with `(col = ? AND ? IS NOT NULL)` guards, passing the same identifier value twice. When a subject field was absent (e.g. a user with no phone number), the guard bound an untyped SQL NULL in `$n IS NOT NULL`, which Postgres rejects with \"could not determine data type of parameter\" — surfacing as a 500 on the consent-history export. The guard now references the column (`(col = ? AND col IS NOT NULL)`), so each identifier is a single parameter and a missing one disables its clause without an untyped NULL. No API or schema change.",
+   "body_markdown": "**Symptom:** `GET` consent history (or any `LatestConsent`/`History` call) returned **500** whenever the subject was missing a field — most commonly a signup user with a verified email but no phone. The equality clause got column-type context, but the sibling `? IS NOT NULL` guard bound a bare `nil` with no type, and Postgres cannot infer a parameter type from `$n IS NOT NULL` alone.\n\n**Fix (internal only):** the per-identity guards changed from `(user_id = ? AND ? IS NOT NULL)` to `(user_id = ? AND user_id IS NOT NULL)` — the guard now tests the *column*, so each identifier is bound only once and there is no bare parameter to type-infer. A missing identifier passes `nil`, and `col = $n` takes its type from the column (`nil` simply matches no rows). Applies to `qConsentHistory` and `qLatestConsent`; both call sites drop the doubled argument.\n\n**Migration steps:** bump to `v1.2.28`; no code or schema changes. Anyone who worked around the bug by always passing a non-empty phone can stop.\n\n**Breaking-change risk:** none — pure bugfix; the result set is unchanged for subjects that previously worked."
+  },
+  {
    "version": "v1.2.27",
    "title": "ConsentHandler: authenticated HTTP front door for consent record + history export",
    "tags": [

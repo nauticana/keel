@@ -35,16 +35,16 @@ SELECT ce.consent_type, ce.consented, cp.policy_type, cp.version, cp.region,
        cp.language, ce.region, ce.event_ref, ce.client_ip, ce.client_user_agent, ce.created_at
   FROM consent_event ce
   JOIN consent_policy cp ON cp.id = ce.policy_id
- WHERE (ce.user_id = ?    AND ? IS NOT NULL)
-    OR (ce.email_hash = ? AND ? IS NOT NULL)
-    OR (ce.phone_hash = ? AND ? IS NOT NULL)
+ WHERE (ce.user_id = ?    AND ce.user_id IS NOT NULL)
+    OR (ce.email_hash = ? AND ce.email_hash IS NOT NULL)
+    OR (ce.phone_hash = ? AND ce.phone_hash IS NOT NULL)
  ORDER BY ce.created_at DESC`,
 
 	qLatestConsent: `
 SELECT consented, policy_id, created_at
   FROM consent_event
  WHERE consent_type = ?
-   AND ((user_id = ? AND ? IS NOT NULL) OR (email_hash = ? AND ? IS NOT NULL))
+   AND ((user_id = ? AND user_id IS NOT NULL) OR (email_hash = ? AND email_hash IS NOT NULL))
  ORDER BY created_at DESC
  LIMIT 1`,
 
@@ -183,7 +183,7 @@ func (s *LocalConsentService) LatestConsent(ctx context.Context, userID int, ema
 		return false, false, fmt.Errorf("consent: either user_id or email is required")
 	}
 	res, err := s.queryService.Query(ctx, qLatestConsent,
-		consentType, userArg, userArg, emailArg, emailArg,
+		consentType, userArg, emailArg,
 	)
 	if err != nil {
 		return false, false, fmt.Errorf("consent: query latest: %w", err)
@@ -219,7 +219,7 @@ func (s *LocalConsentService) History(ctx context.Context, subject ConsentSubjec
 		phoneArg = s.hashIdentifier(subject.Phone)
 	}
 	res, err := s.queryService.Query(ctx, qConsentHistory,
-		userArg, userArg, emailArg, emailArg, phoneArg, phoneArg,
+		userArg, emailArg, phoneArg,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("consent: history: %w", err)
