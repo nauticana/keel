@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.27",
+   "title": "ConsentHandler: authenticated HTTP front door for consent record + history export",
+   "tags": [
+    "additive"
+   ],
+   "summary": "New `handler.ConsentHandler` exposes the existing `user.ConsentService` over HTTP for logged-in users: `POST /api/user/consent` records one consent decision (opt-in or opt-out) against a versioned policy, and `GET /api/user/consent` exports that user's full audit trail. This complements the signup-time recording inside `SendOTP`/social login — those bundle several consents under one signup policy, whereas this records any single consent (e.g. terms acceptance) under its own policy, and gives the user their 10DLC/DSAR history. Purely additive; mount it or don't.",
+   "body_markdown": "**Why:** consent was only recordable as a side effect of `SendOTP` / social login, which bundle every consent in the call under a single policy version (`resolvePolicyID` uses one `PolicyType`/`PolicyVersion` per request). Recording a *second* consent under its *own* policy (terms vs SMS), or letting a user export their consent history, had no HTTP surface.\n\n**What's new — `handler.ConsentHandler`:**\n```go\ntype ConsentHandler struct {\n    AbstractHandler\n    Consent user.ConsentService // inject the same instance used by UserService\n}\n// GetAuthRoutes() → \"/api/user/consent\"\n```\n- **`POST /api/user/consent`** — body `{consentType, consented, policyType, policyVersion, policyRegion?, policyLanguage?, region?, eventRef?}`. Identity (user id + email + phone) comes from the session; IP/UA are stamped server-side. `consented=false` is a first-class opt-out. Requires a matching `consent_policy` row — returns **424** if the policy is not registered (same fail-closed contract as `SendOTP`).\n- **`GET /api/user/consent`** — returns `{items: [...]}`, the session user's audit trail newest-first (via `ConsentService.History`).\n- **Nil-safe:** when `Consent` is unset the routes return **503**, so an app can mount it before wiring a `ConsentService`.\n\n**Migration steps for downstream consumers:**\n1. Bump to `v1.2.27`.\n2. Construct `handler.ConsentHandler{AbstractHandler: ..., Consent: consentSvc}` (the same `ConsentService` you set on `LocalUserService.ConsentService`) and merge `GetAuthRoutes()` into your authenticated route table.\n3. Seed the `consent_policy` rows your app records against (e.g. a `terms` policy) — a missing policy row makes the POST 424.\n\n**Breaking-change risk:** none. New type, new optional route; nothing existing changes."
+  },
+  {
    "version": "v1.2.26",
    "title": "Consent service: phone-linked consent + Withdraw + History (10DLC/DSAR audit)",
    "tags": [
