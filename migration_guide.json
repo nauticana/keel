@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.29",
+   "title": "OTP message copy is brand-aware + 10DLC-ready (no hardcoded brand)",
+   "tags": [
+    "additive"
+   ],
+   "summary": "`OTPHandler` no longer hardcodes a brand: the email body embedded a fixed product name and the SMS body carried no brand or opt-out language. New `Brand`, `OTPSMSTemplate`, `OTPEmailTemplate`, and `OTPEmailSubject` fields let each consumer set exactly what it sends. The brand-aware SMS default now carries STOP/HELP opt-out language, so the string a 10DLC campaign registers can match what actually goes out. Additive; the only behavioral change is that the email brand now comes from `Brand` instead of a baked-in literal.",
+   "body_markdown": "**Why:** the SMS body was `\"Your verification code is: <code>\"` (no brand, no opt-out) and the email hardcoded a fixed product name. A 10DLC campaign sample must match the message the number actually receives, and the opt-out language (STOP/HELP) is expected — neither was controllable.\n\n**What's new — `OTPHandler` fields (all optional):**\n```go\ntype OTPHandler struct {\n    // …existing…\n    Brand            string // product name in messages; empty = brand-less\n    OTPSMSTemplate   string // override SMS body; \"{code}\" → the OTP\n    OTPEmailTemplate string // override email body; \"{code}\" → the OTP\n    OTPEmailSubject  string // override email subject (default \"Verification Code\")\n}\n```\n- **SMS default** (when `OTPSMSTemplate` empty): `Your <Brand> verification code is <code>. Reply STOP to opt out, HELP for help.` — set `Brand` and register this exact string with your carrier campaign.\n- **Email default** (when `OTPEmailTemplate` empty): `Your <Brand> verification code is: <code>` + the standard expiry line.\n- Empty `Brand` yields a brand-less \"Your verification code…\".\n\n**Migration steps:**\n1. Bump to `v1.2.29`.\n2. Set `Brand: \"<YourProduct>\"` on your `OTPHandler` construction — the email brand is now taken from this field rather than a baked-in literal, so set it to keep a brand in the message.\n3. If your carrier campaign needs an exact string, set `OTPSMSTemplate` to it (with `{code}` where the code goes) and register the same text.\n\n**Breaking-change risk:** cosmetic only — the email brand now comes from `Brand` (or is brand-less if unset). No API/signature change."
+  },
+  {
    "version": "v1.2.28",
    "title": "Fix: ConsentService.History / LatestConsent 500 when the subject has no phone (or no user/email)",
    "tags": [

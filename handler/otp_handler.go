@@ -44,6 +44,45 @@ type OTPHandler struct {
 	// is fine — failures fall through to log.Println so they always
 	// reach stdout/journald.
 	Journal logger.ApplicationLogger
+	// Brand is the product name shown in OTP messages; empty = brand-less.
+	// A 10DLC campaign must register the exact SMS body this sends.
+	Brand string
+	// Optional body overrides ("{code}" → the OTP). Empty uses brand-aware
+	// defaults; the SMS default carries STOP/HELP opt-out language for 10DLC.
+	OTPSMSTemplate   string
+	OTPEmailTemplate string
+	OTPEmailSubject  string
+}
+
+// otpSMSBody: OTPSMSTemplate with {code} filled, else the brand-aware default.
+func (h *OTPHandler) otpSMSBody(otp string) string {
+	if h.OTPSMSTemplate != "" {
+		return strings.ReplaceAll(h.OTPSMSTemplate, "{code}", otp)
+	}
+	brand := h.Brand
+	if brand != "" {
+		brand += " "
+	}
+	return fmt.Sprintf("Your %sverification code is %s. Reply STOP to opt out, HELP for help.", brand, otp)
+}
+
+// otpEmailBody: OTPEmailTemplate with {code} filled, else the brand-aware default.
+func (h *OTPHandler) otpEmailBody(otp string) string {
+	if h.OTPEmailTemplate != "" {
+		return strings.ReplaceAll(h.OTPEmailTemplate, "{code}", otp)
+	}
+	brand := h.Brand
+	if brand != "" {
+		brand += " "
+	}
+	return fmt.Sprintf("Your %sverification code is: %s\n\nThe code expires in a few minutes. If you didn't request it, you can ignore this message.", brand, otp)
+}
+
+func (h *OTPHandler) otpEmailSubject() string {
+	if h.OTPEmailSubject != "" {
+		return h.OTPEmailSubject
+	}
+	return "Verification Code"
 }
 
 // otpChannelPhone / otpChannelEmail are the two contactType values the
@@ -397,7 +436,7 @@ func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, otp string) {
 		Type:    "S",
 		Channel: "S", // SMS
 		Title:   "Verification Code",
-		Body:    "Your verification code is: " + otp,
+		Body:    h.otpSMSBody(otp),
 	}); err != nil {
 		h.logDispatchFailure("otp-sms", userID, err)
 	}
@@ -413,9 +452,10 @@ func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, otp string) {
 // AbstractHandler.Journal (when wired by the consumer) so a "200 OK
 // but nothing arrived" mystery surfaces in the logs instead of silence.
 func (h *OTPHandler) dispatchOTPEmail(r *http.Request, userID int, email, otp string) {
-	body := "Your Trvoo verification code is: " + otp + "\n\nThe code expires in a few minutes. If you didn't request it, you can ignore this message."
+	body := h.otpEmailBody(otp)
+	subject := h.otpEmailSubject()
 	if h.Mail != nil {
-		if err := h.Mail.SendEmail(r.Context(), "Verification Code", body, []string{email}); err != nil {
+		if err := h.Mail.SendEmail(r.Context(), subject, body, []string{email}); err != nil {
 			h.logDispatchFailure("otp-email", userID, err)
 		}
 		return
@@ -425,7 +465,7 @@ func (h *OTPHandler) dispatchOTPEmail(r *http.Request, userID int, email, otp st
 			UserID:  userID,
 			Type:    "S",
 			Channel: "E", // Email
-			Title:   "Verification Code",
+			Title:   subject,
 			Body:    body,
 		}); err != nil {
 			h.logDispatchFailure("otp-email-async", userID, err)

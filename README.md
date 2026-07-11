@@ -914,6 +914,11 @@ otpHandler := handler.OTPHandler{
     AbstractHandler: handler.AbstractHandler{UserService: userSvc},
     NotificationSvc: notificationSvc,
     Cache:           cacheService,
+    Brand:           "Acme", // shown in the OTP SMS/email; empty = brand-less
+    // Optional overrides ("{code}" → the OTP). The SMS default already carries
+    // "Reply STOP to opt out, HELP for help." for 10DLC; register that exact
+    // string with your campaign, or pin it explicitly:
+    // OTPSMSTemplate: "Your Acme code is {code}. Reply STOP to opt out, HELP for help.",
 }
 srv.Handle(map[string]func(w, r){
     "/public/otp/send":   otpHandler.SendOTP,
