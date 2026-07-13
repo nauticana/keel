@@ -35,6 +35,10 @@ var _ port.MessageDispatcher = (*EmailDispatcher)(nil)
 // Dispatch sends a single notification email to the user. The body
 // argument is treated as plain text; callers that need HTML should send
 // directly via MailClient.SendEmailHTML and skip the dispatcher.
+// The MessageDispatcher `data` map is a generic per-dispatcher bag (the SMS
+// dispatcher reads data["country"]), NOT RFC 5322 headers — so it is not
+// forwarded to SendEmail's headers param. Callers needing custom headers (e.g.
+// List-Unsubscribe) use MailClient.SendEmail directly.
 func (d *EmailDispatcher) Dispatch(ctx context.Context, userID int, title, body string, _ map[string]string) error {
 	if d.Mail == nil || d.Users == nil {
 		return fmt.Errorf("EmailDispatcher: Mail and Users must be set")
@@ -47,7 +51,7 @@ func (d *EmailDispatcher) Dispatch(ctx context.Context, userID int, title, body 
 	if to == "" {
 		return nil
 	}
-	if err := d.Mail.SendEmail(ctx, title, body, []string{to}); err != nil {
+	if err := d.Mail.SendEmail(ctx, title, body, []string{to}, nil); err != nil {
 		return fmt.Errorf("email: send to user %d: %w", userID, err)
 	}
 	return nil
@@ -64,7 +68,7 @@ func (d *EmailDispatcher) Send(ctx context.Context, to, title, body string, _ ma
 	if to == "" {
 		return nil
 	}
-	if err := d.Mail.SendEmail(ctx, title, body, []string{to}); err != nil {
+	if err := d.Mail.SendEmail(ctx, title, body, []string{to}, nil); err != nil {
 		return fmt.Errorf("email: send to %q: %w", to, err)
 	}
 	return nil

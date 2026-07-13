@@ -23,7 +23,7 @@ import (
 // package — dispatcher imports user (UserService) for SMS/email
 // recipient resolution, and that direction must stay one-way.
 type MailSender interface {
-	SendEmail(ctx context.Context, subject string, body string, recipients []string) error
+	SendEmail(ctx context.Context, subject string, body string, recipients []string, headers map[string]string) error
 }
 
 // confirmationRange is the count of distinct 8-digit confirmation
@@ -319,7 +319,7 @@ func (r *RegistrationService) SendConfirmation(ctx context.Context, data *Partne
 
 	subject := "Confirm your registration"
 	body := fmt.Sprintf("Hello %s,\n\nPlease use the following confirmation code to complete your registration:\n\n%d\n", data.FirstName, confirmation)
-	if err := r.Mail.SendEmail(ctx, subject, body, []string{data.Email}); err != nil {
+	if err := r.Mail.SendEmail(ctx, subject, body, []string{data.Email}, nil); err != nil {
 		return fmt.Errorf("failed to send confirmation email: %w", err)
 	}
 
@@ -619,7 +619,7 @@ func (r *RegistrationService) SendPasswordChangeConfirmation(ctx context.Context
 
 	subject := "Confirm your password change"
 	body := fmt.Sprintf("Hello,\n\nPlease use the following confirmation code to complete your password change:\n\n%d\n\nIf you did not request this change, please ignore this email.\n", confirmation)
-	if err := r.Mail.SendEmail(ctx, subject, body, []string{email}); err != nil {
+	if err := r.Mail.SendEmail(ctx, subject, body, []string{email}, nil); err != nil {
 		return fmt.Errorf("failed to send confirmation email: %w", err)
 	}
 

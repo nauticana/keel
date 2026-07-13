@@ -8,7 +8,7 @@ import (
 )
 
 // B6: TrustedClientIP must ignore X-Forwarded-For when the inbound
-// peer is not in trusted_proxy_cidr. Trvoo's previous header-trusting
+// peer is not in trusted_proxy_cidr. A naive header-trusting
 // clientIP would have returned the spoofed value.
 func TestTrustedClientIP_UntrustedPeer_IgnoresForwardedFor(t *testing.T) {
 	saved := common.Config().TrustedProxyCIDR

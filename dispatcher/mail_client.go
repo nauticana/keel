@@ -26,13 +26,63 @@ type MailClient struct {
 	Secrets secret.SecretProvider
 }
 
-func (m *MailClient) SendEmail(ctx context.Context, subject string, body string, recipients []string) error {
+// SendEmail sends a plain-text message. headers carries optional extra RFC 5322
+// headers (e.g. List-Unsubscribe / List-Unsubscribe-Post for RFC 8058); pass
+// nil for none. Header names are validated against RFC 5322 field-name syntax,
+// keel-controlled/structural names are rejected, and any header whose full
+// `Name: value` line would exceed the 998-octet limit is rejected — SendEmail
+// fails loudly rather than emitting a malformed or truncated header.
+func (m *MailClient) SendEmail(ctx context.Context, subject string, body string, recipients []string, headers map[string]string) error {
+	if err := validateHeaders(headers); err != nil {
+		return err
+	}
 	switch common.Config().MailMode {
 	case "api":
-		return m.sendViaAPI(ctx, subject, body, recipients)
+		return m.sendViaAPI(ctx, subject, body, recipients, headers)
 	default:
-		return m.sendViaSMTP(ctx, subject, body, recipients)
+		return m.sendViaSMTP(ctx, subject, body, recipients, headers)
 	}
+}
+
+// protectedHeaders are names keel sets itself or that are structurally/security
+// sensitive; a caller cannot override them via the headers map (would produce
+// duplicate/spoofed headers). Compared case-insensitively.
+var protectedHeaders = map[string]struct{}{
+	"from": {}, "sender": {}, "to": {}, "cc": {}, "bcc": {}, "subject": {},
+	"date": {}, "message-id": {}, "mime-version": {}, "content-type": {},
+	"content-transfer-encoding": {}, "dkim-signature": {}, "received": {},
+	"return-path": {},
+	"resent-from": {}, "resent-sender": {}, "resent-to": {}, "resent-cc": {},
+	"resent-bcc": {}, "resent-date": {}, "resent-message-id": {},
+}
+
+// validateHeaders enforces RFC 5322 field-name syntax (ftext: printable ASCII
+// 33–126 except ':'), rejects protected names, forbids C0 control bytes and DEL
+// in values (tab allowed), and bounds each line to 998 octets (name + ": " +
+// value). Returns an error on the first violation.
+func validateHeaders(headers map[string]string) error {
+	for name, value := range headers {
+		if name == "" {
+			return fmt.Errorf("mail: empty header name")
+		}
+		for i := 0; i < len(name); i++ {
+			if c := name[i]; c < 33 || c > 126 || c == ':' {
+				return fmt.Errorf("mail: invalid header name %q (bad byte at %d)", name, i)
+			}
+		}
+		if _, bad := protectedHeaders[strings.ToLower(name)]; bad {
+			return fmt.Errorf("mail: header %q is reserved and cannot be set by a caller", name)
+		}
+		for i := 0; i < len(value); i++ {
+			if c := value[i]; (c < 0x20 && c != '\t') || c == 0x7f {
+				return fmt.Errorf("mail: header %q value contains a control byte at %d", name, i)
+			}
+		}
+		if len(name)+2+len(value) > 998 {
+			return fmt.Errorf("mail: header %q line exceeds the 998-octet limit", name)
+		}
+	}
+	return nil
 }
 
 func (m *MailClient) SendEmailHTML(ctx context.Context, subject string, htmlBody string, recipients []string, attachmentName string, attachmentData []byte) error {
@@ -78,7 +128,7 @@ func scrubRecipients(in []string) []string {
 	return out
 }
 
-func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body string, recipients []string) error {
+func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body string, recipients []string, headers map[string]string) error {
 	if len(recipients) == 0 {
 		return fmt.Errorf("smtp: no recipients")
 	}
@@ -96,13 +146,19 @@ func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body strin
 		return fmt.Errorf("smtp: no valid recipients")
 	}
 	cleanSubject := scrubMailHeader(subject)
-	// Header values are scrubbed; the body is left intact (CRLF inside
+	// Header names + values are scrubbed; the body is left intact (CRLF inside
 	// the body is part of the RFC 5322 wire format and must NOT be
 	// stripped) but separated from the headers by an explicit blank
 	// line. SMTP envelope recipients use cleanRcpts so spoofed RCPT TO
 	// values are rejected before the server accepts the message.
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s",
-		from, strings.Join(cleanRcpts, ", "), cleanSubject, body)
+	var hdr strings.Builder
+	fmt.Fprintf(&hdr, "From: %s\r\nTo: %s\r\nSubject: %s\r\n", from, strings.Join(cleanRcpts, ", "), cleanSubject)
+	for k, v := range headers {
+		if k = scrubMailHeader(k); k != "" {
+			fmt.Fprintf(&hdr, "%s: %s\r\n", k, scrubMailHeader(v))
+		}
+	}
+	msg := hdr.String() + "\r\n" + body
 	pass := strings.TrimSpace(smtpPass)
 	return sendSMTPWithStartTLS(addr, host, common.Config().SmtpUser, pass, from, cleanRcpts, []byte(msg))
 }
@@ -244,12 +300,12 @@ func (m *MailClient) sendHTMLViaSMTP(ctx context.Context, subject string, htmlBo
 
 // --- API mode ---
 
-func (m *MailClient) sendViaAPI(ctx context.Context, subject string, body string, recipients []string) error {
-	return m.postMailAPI(ctx, subject, body, recipients, false)
+func (m *MailClient) sendViaAPI(ctx context.Context, subject string, body string, recipients []string, headers map[string]string) error {
+	return m.postMailAPI(ctx, subject, body, recipients, false, headers)
 }
 
 func (m *MailClient) sendHTMLViaAPI(ctx context.Context, subject string, htmlBody string, recipients []string) error {
-	return m.postMailAPI(ctx, subject, htmlBody, recipients, true)
+	return m.postMailAPI(ctx, subject, htmlBody, recipients, true, nil)
 }
 
 // postMailAPI delivers a message to keel's REST API.
@@ -258,12 +314,12 @@ func (m *MailClient) sendHTMLViaAPI(ctx context.Context, subject string, htmlBod
 //     copy-paste like `https://mail.example.com/api` doesn't
 //     produce `https://https://mail.example.com/api/api/send`.
 //     A port is allowed (e.g. `mail.example.com:9443`) for backends
-//     that don't run on :443 — e.g. when bdsmail shares a host with
-//     another service that owns :443.
+//     that don't run on :443 — e.g. when the mail backend shares a
+//     host with another service that owns :443.
 //   - Drains the response body on non-2xx so the connection is released to the keep-alive pool.
 //   - Routes through common.HTTPClient() — the process-wide client
 //     with a 30s timeout — instead of constructing a one-shot.
-func (m *MailClient) postMailAPI(ctx context.Context, subject string, body string, recipients []string, htmlMode bool) error {
+func (m *MailClient) postMailAPI(ctx context.Context, subject string, body string, recipients []string, htmlMode bool, headers map[string]string) error {
 	apiKey, err := m.Secrets.GetSecret(ctx, "smtp_pass")
 	if err != nil {
 		return fmt.Errorf("failed to get mail API key: %w", err)
@@ -277,13 +333,29 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 	}
 	endpoint := (&url.URL{Scheme: "https", Host: host, Path: "/api/send"}).String()
 
-	payload, err := json.Marshal(map[string]interface{}{
+	// Optional extra headers (e.g. List-Unsubscribe) are scrubbed and forwarded
+	// as a "headers" object; the mail backend places them on the outbound
+	// message. Omitted from the payload when empty for backward compatibility.
+	var hdrOut map[string]string
+	if len(headers) > 0 {
+		hdrOut = make(map[string]string, len(headers))
+		for k, v := range headers {
+			if k = scrubMailHeader(k); k != "" {
+				hdrOut[k] = scrubMailHeader(v)
+			}
+		}
+	}
+	payloadMap := map[string]interface{}{
 		"from":    common.Config().SmtpFrom,
 		"to":      recipients,
 		"subject": subject,
 		"body":    body,
 		"html":    htmlMode,
-	})
+	}
+	if hdrOut != nil {
+		payloadMap["headers"] = hdrOut
+	}
+	payload, err := json.Marshal(payloadMap)
 	if err != nil {
 		return fmt.Errorf("failed to marshal email payload: %w", err)
 	}
@@ -304,7 +376,7 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 		_ = resp.Body.Close()
 	}()
 
-	// bdsmail (and any RFC 7807 backend) returns errors as 200 OK +
+	// An RFC 7807 mail backend returns errors as 200 OK +
 	// `application/problem+json` body — checking only StatusCode would
 	// let "Invalid API key" and "Token not authorized to send from X"
 	// pass as success. Inspect the content-type before declaring victory.

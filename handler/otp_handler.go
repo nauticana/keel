@@ -455,7 +455,7 @@ func (h *OTPHandler) dispatchOTPEmail(r *http.Request, userID int, email, otp st
 	body := h.otpEmailBody(otp)
 	subject := h.otpEmailSubject()
 	if h.Mail != nil {
-		if err := h.Mail.SendEmail(r.Context(), subject, body, []string{email}); err != nil {
+		if err := h.Mail.SendEmail(r.Context(), subject, body, []string{email}, nil); err != nil {
 			h.logDispatchFailure("otp-email", userID, err)
 		}
 		return
