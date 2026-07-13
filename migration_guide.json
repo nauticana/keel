@@ -9,7 +9,7 @@
  },
  "migrations": [
   {
-   "version": "v1.2.30",
+   "version": "v1.2.31",
    "title": "MailClient.SendEmail gains a headers parameter (RFC 8058 / custom headers)",
    "tags": [
     "breaking"
