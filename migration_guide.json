@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.32",
+   "title": "Public password-policy endpoint; UserService.GetPasswordPolicy()",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "`user.UserService` gains `GetPasswordPolicy() model.PasswordPolicy`, and `PublicHandler.GetPasswordPolicy` exposes the client-safe subset (`model.PasswordPolicyView`) at a public route. The bundled `LocalUserService` implements the getter from the policy it already loads at construction; custom `UserService` implementations must add the method.",
+   "body_markdown": "**Why:** the password policy (min length / upper / lower / digit, loaded once from `user_account_policy`) lived only server-side, so clients duplicated or guessed the rules to validate before submit. Exposing the already-cached, process-global policy over a public route lets pre-login screens (signup, password reset) and in-session change-password all validate against the real policy, while the server stays the authoritative gate.\n\n### What changed\n\n1. **`user.UserService`** gains `GetPasswordPolicy() model.PasswordPolicy` (read-only snapshot).\n2. **`LocalUserService`** implements it from the policy it already initializes in its constructor — no new query, no per-request cost.\n3. **`model.PasswordPolicyView`** + `PasswordPolicy.ClientView()` expose only the composition rules (`minLength/minUpper/minLower/minDigit`); lockout/expiry stay server-only.\n4. **`PublicHandler.GetPasswordPolicy`** serves that view as JSON. Public (non-secret, identical for every caller). Mount it in your public routes.\n\n### Migration steps for downstream consumers\n\n1. **Bump to `github.com/nauticana/keel v1.2.32`**, `go mod tidy`, rebuild.\n2. **If you ship a custom `user.UserService`** (not the bundled `LocalUserService`), implement `GetPasswordPolicy()` — return your loaded `model.PasswordPolicy`, or a zero value for no policy. Consumers using `LocalUserService` need no change.\n3. **Mount the route:** map `PublicHandler.GetPasswordPolicy` under your public prefix, then read it on the client to validate new-password inputs before submit.\n\n### Breaking-change risk\n\n- **Interface-only break.** Adding a method to `UserService` breaks compilation for custom implementations that don't embed `LocalUserService`; the fix is one method. No behavioural change to existing endpoints, no schema change, no wire-format removal."
+  },
+  {
    "version": "v1.2.31",
    "title": "MailClient.SendEmail gains a headers parameter (RFC 8058 / custom headers)",
    "tags": [

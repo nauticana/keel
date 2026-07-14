@@ -30,6 +30,15 @@ func (h *PublicHandler) GetRoot(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("root is working"))
 }
 
+// GetPasswordPolicy exposes the global password rules for pre-submit validation.
+// Public and non-secret; the server stays the authoritative gate.
+func (h *PublicHandler) GetPasswordPolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, h.UserService.GetPasswordPolicy().ClientView())
+}
+
 func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return

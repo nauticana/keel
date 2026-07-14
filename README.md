@@ -3008,6 +3008,10 @@ sail with no compile-time signal, so the following are HARD constraints:
   metadata table for sail to consume = add a slot to `GetClientCache` and
   invalidate the cache (`RestService.InvalidateCache`) after admin tooling
   edits the source table.
+- **`PublicHandler.GetPasswordPolicy`** exposes the global password rules
+  (`UserService.GetPasswordPolicy().ClientView()`) at a public route, so
+  pre-login screens (signup, reset) and in-session change-password all validate
+  input before submit. The server stays the authoritative gate.
 
 ### 8. Security defaults are non-negotiable
 

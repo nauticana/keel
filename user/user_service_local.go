@@ -725,6 +725,10 @@ func (r *LocalUserService) Init(ctx context.Context, database port.DatabaseRepos
 	return nil
 }
 
+func (r *LocalUserService) GetPasswordPolicy() model.PasswordPolicy {
+	return r.passwordPolicy
+}
+
 // checkAccountStatus returns nil when the account can proceed to a session
 // issue, or an error describing why it cannot. Centralizes the expiry/
 // lock/auto-unlock logic so GetUserById, GetUserByLogin, and GetUserByEmail

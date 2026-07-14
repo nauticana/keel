@@ -14,6 +14,24 @@ type PasswordPolicy struct {
 	AutoLogout         int64
 }
 
+// PasswordPolicyView is the client-safe subset (composition rules only;
+// lockout/expiry stay server-only).
+type PasswordPolicyView struct {
+	MinLength int `json:"minLength"`
+	MinUpper  int `json:"minUpper"`
+	MinLower  int `json:"minLower"`
+	MinDigit  int `json:"minDigit"`
+}
+
+func (p PasswordPolicy) ClientView() PasswordPolicyView {
+	return PasswordPolicyView{
+		MinLength: p.MinPasswordLength,
+		MinUpper:  p.MinPasswordUpper,
+		MinLower:  p.MinPasswordLower,
+		MinDigit:  p.MinPasswordDigit,
+	}
+}
+
 func (p *PasswordPolicy) Check(password string) error {
 	if len(password) < p.MinPasswordLength {
 		return fmt.Errorf("password must be at least %d characters long", p.MinPasswordLength)
