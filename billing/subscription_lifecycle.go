@@ -7,6 +7,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 )
 
 // SubscriptionLifecycle is the verb set over partner_plan_subscription.
@@ -253,11 +254,6 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 
 func (s *AbstractBillingService) ChangePlan(ctx context.Context, partnerID int64, newPlanID string, terms BillingTerms) error {
 	s.init(ctx)
-	now := s.now()
-	pc, err := s.loadPlanCharge(ctx, newPlanID, terms, now)
-	if err != nil {
-		return err
-	}
 	tx, err := s.Repo.BeginTx(ctx, s.allQueries)
 	if err != nil {
 		return err
@@ -268,12 +264,7 @@ func (s *AbstractBillingService) ChangePlan(ctx context.Context, partnerID int64
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	if _, err := tx.Query(ctx, qLcChangePlanClose, partnerID); err != nil {
-		return err
-	}
-	if _, err := tx.Query(ctx, qLcInsertActive,
-		partnerID, newPlanID, pc.perChargeMajor, pc.currency, pc.billingCycle,
-		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now, "", nil); err != nil {
+	if err := s.ChangePlanTx(ctx, tx, partnerID, newPlanID, terms); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -281,6 +272,33 @@ func (s *AbstractBillingService) ChangePlan(ctx context.Context, partnerID int64
 	}
 	committed = true
 	return nil
+}
+
+// ChangePlanTx is ChangePlan on a caller-owned transaction, so an app can
+// commit its own writes atomically with the plan change. The caller owns
+// commit/rollback and must build the tx with a query map that includes
+// TxQueries() entries.
+func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQueryService, partnerID int64, newPlanID string, terms BillingTerms) error {
+	s.init(ctx)
+	now := s.now()
+	pc, err := s.loadPlanCharge(ctx, newPlanID, terms, now)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Query(ctx, qLcChangePlanClose, partnerID); err != nil {
+		return err
+	}
+	_, err = tx.Query(ctx, qLcInsertActive,
+		partnerID, newPlanID, pc.perChargeMajor, pc.currency, pc.billingCycle,
+		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now, "", nil)
+	return err
+}
+
+// TxQueries returns the merged billing query map for callers that BeginTx
+// themselves and run ChangePlanTx inside it.
+func (s *AbstractBillingService) TxQueries(ctx context.Context) map[string]string {
+	s.init(ctx)
+	return s.allQueries
 }
 
 func (s *AbstractBillingService) Reactivate(ctx context.Context, partnerID int64, planID string) error {
