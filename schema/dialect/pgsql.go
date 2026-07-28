@@ -233,7 +233,11 @@ func (d *PgSQL) formatIndex(tableName string, idx *schema.Index) string {
 	if idx.Using != "" {
 		sb.WriteString(fmt.Sprintf(" USING %s", idx.Using))
 	}
-	sb.WriteString(fmt.Sprintf("(%s);\n", strings.Join(idx.Columns, ", ")))
+	sb.WriteString(fmt.Sprintf("(%s)", strings.Join(idx.Columns, ", ")))
+	if idx.Where != "" {
+		sb.WriteString(" WHERE " + idx.Where)
+	}
+	sb.WriteString(";\n")
 	return sb.String()
 }
 

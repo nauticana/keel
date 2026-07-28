@@ -152,6 +152,8 @@ type BaseConfig struct {
 	PayoutReturnURL       string        // payout_return_url             ""                 Deep-link the payout provider redirects back to after KYC
 	PayoutWebhookURL      string        // payout_webhook_url            ""                 Public host the payout provider sends webhook events to
 	AirwallexAPIBase      string        // airwallex_api_base            https://api-demo.airwallex.com  Airwallex REST API base URL
+	AirwallexXferMethod   string        // airwallex_transfer_method     LOCAL              Airwallex payout rail: LOCAL | SWIFT
+	AirwallexXferReason   string        // airwallex_transfer_reason     professional_business_services  Airwallex documented transfer reason code
 	WiseAPIBase           string        // wise_api_base                 https://api.sandbox.transferwise.tech  Wise Platform REST API base URL
 	WiseProfileID         string        // wise_profile_id               ""                 Wise platform profile id (numeric)
 
@@ -270,6 +272,8 @@ const (
 	payout_return_url             = "payout_return_url"
 	payout_webhook_url            = "payout_webhook_url"
 	airwallex_api_base            = "airwallex_api_base"
+	airwallex_transfer_method     = "airwallex_transfer_method"
+	airwallex_transfer_reason     = "airwallex_transfer_reason"
 	wise_api_base                 = "wise_api_base"
 	wise_profile_id               = "wise_profile_id"
 	sqs_ack_deadline              = "sqs_ack_deadline"
@@ -354,7 +358,8 @@ var baseFlagIDs = []string{
 	max_request_size, http_read_timeout, http_write_timeout,
 	http_idle_timeout, hc_port, push_mode, redis_url, valkey_url,
 	valkey_cluster, sms_provider, sms_service_sid, payout_provider,
-	payout_return_url, payout_webhook_url, airwallex_api_base, wise_api_base,
+	payout_return_url, payout_webhook_url, airwallex_api_base,
+	airwallex_transfer_method, airwallex_transfer_reason, wise_api_base,
 	wise_profile_id,
 
 	sqs_ack_deadline, sqs_nack_backoff_seconds, nats_backoff,
@@ -501,6 +506,10 @@ func (c *BaseConfig) ApplyBase(m map[string]ConfigRow) error {
 			c.PayoutWebhookURL = c.ParseValueS(r.Value, r.Default)
 		case airwallex_api_base:
 			c.AirwallexAPIBase = c.ParseValueS(r.Value, r.Default)
+		case airwallex_transfer_method:
+			c.AirwallexXferMethod = c.ParseValueS(r.Value, r.Default)
+		case airwallex_transfer_reason:
+			c.AirwallexXferReason = c.ParseValueS(r.Value, r.Default)
 		case wise_api_base:
 			c.WiseAPIBase = c.ParseValueS(r.Value, r.Default)
 		case wise_profile_id:

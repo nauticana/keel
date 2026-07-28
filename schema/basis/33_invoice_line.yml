@@ -1,5 +1,12 @@
 table: invoice_line
-comment: Line items for an invoice
+comment: |
+  Line items for an invoice — domain-neutral finance data only.
+  amount_minor is the authoritative integer minor-unit amount (amount
+  stays for display) and has NO default: writers must supply it.
+  service_from / service_to (inclusive / exclusive) bound the
+  covered-service period for period-scoped consumers (proration,
+  partial refunds). What a line sells lives in domain extension tables
+  (e.g. subscription_invoice_line), never here.
 order: 54
 columns:
   - name: invoice_id
@@ -15,6 +22,14 @@ columns:
     type: NUMERIC(18,2)
   - name: amount
     type: NUMERIC(18,2)
+  - name: amount_minor
+    type: BIGINT
+  - name: service_from
+    type: TIMESTAMP
+    nullable: true
+  - name: service_to
+    type: TIMESTAMP
+    nullable: true
 primary_key: [invoice_id, seq]
 foreign_keys:
   - name: invoice_lines

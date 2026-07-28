@@ -20,7 +20,7 @@ columns:
     type: NUMERIC(18,2)
   - name: total_minor
     type: BIGINT
-    default: "0"
+    comment: authoritative charge amount, no default — writers must supply it
   - name: currency
     type: CHAR(3)
     default: USD
@@ -67,3 +67,10 @@ indexes:
     unique: true
   - name: idx_invoice_partner
     columns: [partner_id]
+  # FK targets for partner- and currency-consistent payment references.
+  - name: invoice_id_partner_uq
+    columns: [id, partner_id]
+    unique: true
+  - name: invoice_id_currency_uq
+    columns: [id, currency]
+    unique: true

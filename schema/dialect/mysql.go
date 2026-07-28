@@ -163,6 +163,23 @@ func (d *MySQL) GenerateTable(table *schema.Table) string {
 
 	// Indexes
 	for _, idx := range table.Indexes {
+		if idx.Where != "" {
+			// MySQL has no filtered indexes. A predicate that only excludes
+			// NULLs of an indexed column is equivalent to a plain UNIQUE
+			// index on MySQL (multiple NULLs are allowed there), so emit
+			// one — financial uniqueness must not silently degrade. Any
+			// other predicate degrades to a plain index, service-enforced.
+			if idx.Unique && isNotNullPredicate(idx.Where, idx.Columns) {
+				sb.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s(%s);\n",
+					idx.Name, table.Name, strings.Join(idx.Columns, ", ")))
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("-- %s is a partial index on PostgreSQL (WHERE %s); MySQL cannot enforce it — service-enforced\n",
+				idx.Name, idx.Where))
+			sb.WriteString(fmt.Sprintf("CREATE INDEX %s ON %s(%s);\n",
+				idx.Name, table.Name, strings.Join(idx.Columns, ", ")))
+			continue
+		}
 		if idx.Unique {
 			sb.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s(%s);\n",
 				idx.Name, table.Name, strings.Join(idx.Columns, ", ")))
@@ -177,6 +194,19 @@ func (d *MySQL) GenerateTable(table *schema.Table) string {
 	}
 
 	return sb.String()
+}
+
+// isNotNullPredicate reports whether expr is exactly "<col> IS NOT NULL"
+// for one of the index's own columns — the only partial-index predicate a
+// plain MySQL unique index reproduces faithfully.
+func isNotNullPredicate(expr string, columns []string) bool {
+	e := strings.TrimSpace(expr)
+	for _, c := range columns {
+		if strings.EqualFold(e, c+" IS NOT NULL") {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *MySQL) GenerateSchema(s *schema.Schema) string {

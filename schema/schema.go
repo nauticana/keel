@@ -60,12 +60,16 @@ type RefTarget struct {
 	Columns []string `yaml:"columns"`
 }
 
-// Index represents a database index.
+// Index represents a database index. Where makes it a partial index —
+// PostgreSQL emits the predicate verbatim; MySQL cannot express filtered
+// indexes, so the mysql dialect degrades a partial index to a plain
+// non-unique index and the invariant must be service-enforced there.
 type Index struct {
 	Name    string   `yaml:"name"`
 	Columns []string `yaml:"columns"`
 	Unique  bool     `yaml:"unique,omitempty"`
 	Using   string   `yaml:"using,omitempty"`
+	Where   string   `yaml:"where,omitempty"`
 }
 
 // Check represents a CHECK constraint.

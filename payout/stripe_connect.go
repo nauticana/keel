@@ -134,13 +134,21 @@ func (p *StripeConnectProvider) StartOnboarding(ctx context.Context, in StartOnb
 }
 
 // stripeConnectTransferResp is the relevant subset of POST /v1/transfers
-// response.
+// response. Transfers settle to the connected account's Stripe balance;
+// they carry no delivery status of their own.
 type stripeConnectTransferResp struct {
-	ID                   string `json:"id"`
-	BalanceTransaction   string `json:"balance_transaction"`
-	Created              int64  `json:"created"`
-	Status               string `json:"status"`
-	EstimatedArrivalTime int64  `json:"estimated_arrival_date"`
+	ID                 string `json:"id"`
+	BalanceTransaction string `json:"balance_transaction"`
+	Created            int64  `json:"created"`
+}
+
+// stripeConnectPayoutResp is the relevant subset of the connected-account
+// POST /v1/payouts response — the leg that actually moves money to the
+// user's bank.
+type stripeConnectPayoutResp struct {
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	ArrivalDate int64  `json:"arrival_date"`
 }
 
 // stripeAPIError is the typed error returned by postForm when Stripe
@@ -163,14 +171,23 @@ func (e *stripeAPIError) Error() string {
 		e.Path, e.StatusCode, e.RawBody)
 }
 
-// RequestInstantPayout creates a /v1/transfers row from the platform
-// balance to the user's connected-account balance. method="instant"
-// requests instant transfer where supported (US/EU only at present);
-// Stripe falls back to a standard transfer if instant isn't available.
+// RequestInstantPayout disburses in two legs, because a Stripe Transfer
+// alone only funds the connected account's Stripe balance — it never
+// confirms delivery to a bank:
 //
-// IdempotencyKey rides in the Idempotency-Key header — Stripe dedupes
-// on it within a 24h window so network-retry of the same key returns
-// the same transfer id rather than creating a second one.
+//  1. POST /v1/transfers — platform balance → connected-account balance.
+//  2. POST /v1/payouts on the connected account (Stripe-Account header)
+//     — connected balance → the user's bank. This payout's id + status
+//     are what keel reports.
+//
+// ProviderPayoutID is "{connectedAccountID}:{payoutID}" so GetPayoutStatus
+// and payout.* webhooks can address the payout in its account context;
+// ProviderFundingID is the first-leg transfer id (tr_…) — persist both,
+// because transfer.reversed events reference the funding leg.
+//
+// IdempotencyKey rides in the Idempotency-Key header of both calls (the
+// payout leg suffixes "-po") — Stripe dedupes within a 24h window so
+// network-retry of the same key returns the same objects.
 //
 // Insufficient-balance failures bubble up as ErrInsufficientBalance
 // (Stripe's code is "balance_insufficient" — checked on the typed error).
@@ -189,29 +206,187 @@ func (p *StripeConnectProvider) RequestInstantPayout(ctx context.Context, in Ins
 	form.Set("amount", strconv.FormatInt(in.Amount, 10))
 	form.Set("currency", strings.ToLower(in.Currency))
 	form.Set("destination", in.ProviderAccountID)
-	form.Set("method", "instant")
 	form.Set("metadata[user_id]", strconv.FormatInt(in.UserID, 10))
 	form.Set("metadata[partner_id]", strconv.FormatInt(in.PartnerID, 10))
 
-	var resp stripeConnectTransferResp
-	if err := p.postFormWithIdempotency(ctx, "/v1/transfers", form, in.IdempotencyKey, &resp); err != nil {
+	var transfer stripeConnectTransferResp
+	if err := p.doForm(ctx, "/v1/transfers", form, in.IdempotencyKey, "", &transfer); err != nil {
 		if isStripeInsufficientBalance(err) {
 			return nil, ErrInsufficientBalance
 		}
-		return nil, fmt.Errorf("stripe connect payout: %w", err)
+		return nil, fmt.Errorf("stripe connect payout transfer: %w", err)
+	}
+
+	payoutForm := url.Values{}
+	payoutForm.Set("amount", strconv.FormatInt(in.Amount, 10))
+	payoutForm.Set("currency", strings.ToLower(in.Currency))
+	payoutForm.Set("method", "instant")
+	payoutForm.Set("metadata[transfer_id]", transfer.ID)
+
+	var payout stripeConnectPayoutResp
+	if err := p.doForm(ctx, "/v1/payouts", payoutForm, in.IdempotencyKey+"-po", in.ProviderAccountID, &payout); err != nil {
+		// The transfer leg already funded the connected balance — return
+		// its identity WITH the error so the caller can persist it and
+		// recover via ResumePayout (payout leg only, can never re-fund),
+		// or retry with the SAME key while Stripe's retention holds.
+		partial := &InstantPayoutResult{ProviderFundingID: transfer.ID, Status: "pending"}
+		if isStripeInsufficientBalance(err) {
+			return partial, ErrInsufficientBalance
+		}
+		if isStripeInstantUnavailable(err) {
+			return partial, ErrInstantPayoutUnavailable
+		}
+		return partial, fmt.Errorf("stripe connect payout leg (transfer %s created): %w", transfer.ID, err)
 	}
 	var arrival string
-	if resp.EstimatedArrivalTime > 0 {
-		arrival = time.Unix(resp.EstimatedArrivalTime, 0).UTC().Format(time.RFC3339)
+	if payout.ArrivalDate > 0 {
+		arrival = time.Unix(payout.ArrivalDate, 0).UTC().Format(time.RFC3339)
 	}
 	return &InstantPayoutResult{
-		ProviderPayoutID: resp.ID,
-		Status:           mapStripeTransferStatus(resp.Status),
-		EstimatedArrival: arrival,
+		ProviderPayoutID:  stripePayoutRef(in.ProviderAccountID, payout.ID),
+		ProviderFundingID: transfer.ID,
+		Status:            mapStripePayoutStatus(payout.Status),
+		EstimatedArrival:  arrival,
 	}, nil
 }
 
-func mapStripeTransferStatus(s string) string {
+// isStripeInstantUnavailable detects Stripe's instant-ineligibility
+// error class so callers get the typed ErrInstantPayoutUnavailable.
+func isStripeInstantUnavailable(err error) bool {
+	var apiErr *stripeAPIError
+	if errors.As(err, &apiErr) && apiErr.Code != "" {
+		return strings.EqualFold(apiErr.Code, "instant_payouts_unsupported") ||
+			strings.EqualFold(apiErr.Code, "instant_payouts_limit_exceeded")
+	}
+	return false
+}
+
+// ResumePayout runs ONLY the payout leg for a payout whose funding
+// transfer already succeeded — the recovery operation after
+// RequestInstantPayout returned a partial result (ProviderFundingID set,
+// no ProviderPayoutID). It never touches /v1/transfers, so it cannot
+// re-fund the connected account even after Stripe's ~24h idempotency
+// retention has expired; it reuses the derived payout-leg key so an
+// in-retention retry returns the same payout. The caller supplies the
+// ORIGINAL InstantPayoutInput (same key, amount, currency, destination)
+// and the persisted funding transfer id.
+//
+// PayoutResumer is the optional capability interface downstream workers
+// type-assert for two-leg recovery.
+func (p *StripeConnectProvider) ResumePayout(ctx context.Context, in InstantPayoutInput, fundingID string) (*InstantPayoutResult, error) {
+	if in.ProviderAccountID == "" || fundingID == "" {
+		return nil, fmt.Errorf("stripe connect resume payout: ProviderAccountID and fundingID required")
+	}
+	if in.IdempotencyKey == "" {
+		return nil, fmt.Errorf("stripe connect resume payout: IdempotencyKey required")
+	}
+	// Validate the persisted funding transfer against the caller's input
+	// before touching that account's balance.
+	var transfer struct {
+		ID             string `json:"id"`
+		Amount         int64  `json:"amount"`
+		AmountReversed int64  `json:"amount_reversed"`
+		Reversed       bool   `json:"reversed"`
+		Currency       string `json:"currency"`
+		Destination    string `json:"destination"`
+	}
+	if err := p.doGet(ctx, "/v1/transfers/"+fundingID, "", &transfer); err != nil {
+		return nil, fmt.Errorf("stripe connect resume payout: funding transfer lookup: %w", err)
+	}
+	if transfer.Destination != in.ProviderAccountID || transfer.Amount != in.Amount ||
+		!strings.EqualFold(transfer.Currency, in.Currency) {
+		return nil, fmt.Errorf("stripe connect resume payout: funding transfer %s (dest=%s amount=%d %s) does not match input (dest=%s amount=%d %s)",
+			fundingID, transfer.Destination, transfer.Amount, transfer.Currency,
+			in.ProviderAccountID, in.Amount, in.Currency)
+	}
+	// Reconcile first — a payout that already exists is returned even if
+	// the funding was later reversed (reversal subtracts from the balance;
+	// it does not un-create the payout, and the ledger must learn its id).
+	if res, found, err := p.findPayoutByTransfer(ctx, in.ProviderAccountID, fundingID); err != nil {
+		return nil, err
+	} else if found {
+		return res, nil
+	}
+	// Clawed-back funding must not fund a NEW payout from unrelated funds.
+	if transfer.Reversed || transfer.AmountReversed != 0 {
+		return nil, fmt.Errorf("stripe connect resume payout: funding transfer %s was reversed (%d of %d) — refusing to create a payout", fundingID, transfer.AmountReversed, transfer.Amount)
+	}
+	payoutForm := url.Values{}
+	payoutForm.Set("amount", strconv.FormatInt(in.Amount, 10))
+	payoutForm.Set("currency", strings.ToLower(in.Currency))
+	payoutForm.Set("method", "instant")
+	payoutForm.Set("metadata[transfer_id]", fundingID)
+
+	var payout stripeConnectPayoutResp
+	if err := p.doForm(ctx, "/v1/payouts", payoutForm, in.IdempotencyKey+"-po", in.ProviderAccountID, &payout); err != nil {
+		partial := &InstantPayoutResult{ProviderFundingID: fundingID, Status: "pending"}
+		if isStripeInsufficientBalance(err) {
+			return partial, ErrInsufficientBalance
+		}
+		if isStripeInstantUnavailable(err) {
+			return partial, ErrInstantPayoutUnavailable
+		}
+		return partial, fmt.Errorf("stripe connect resume payout: %w", err)
+	}
+	return &InstantPayoutResult{
+		ProviderPayoutID:  stripePayoutRef(in.ProviderAccountID, payout.ID),
+		ProviderFundingID: fundingID,
+		Status:            mapStripePayoutStatus(payout.Status),
+	}, nil
+}
+
+// findPayoutByTransfer pages GET /v1/payouts (cursor: starting_after
+// while has_more) looking for metadata transfer_id — a payout older
+// than the newest page must still be found, never recreated.
+func (p *StripeConnectProvider) findPayoutByTransfer(ctx context.Context, accountID, fundingID string) (*InstantPayoutResult, bool, error) {
+	after := ""
+	for {
+		path := "/v1/payouts?limit=100"
+		if after != "" {
+			path += "&starting_after=" + after
+		}
+		var page struct {
+			HasMore bool `json:"has_more"`
+			Data    []struct {
+				ID       string            `json:"id"`
+				Status   string            `json:"status"`
+				Metadata map[string]string `json:"metadata"`
+			} `json:"data"`
+		}
+		if err := p.doGet(ctx, path, accountID, &page); err != nil {
+			return nil, false, fmt.Errorf("stripe connect resume payout: payout lookup: %w", err)
+		}
+		for _, po := range page.Data {
+			if po.Metadata["transfer_id"] == fundingID {
+				return &InstantPayoutResult{
+					ProviderPayoutID:  stripePayoutRef(accountID, po.ID),
+					ProviderFundingID: fundingID,
+					Status:            mapStripePayoutStatus(po.Status),
+				}, true, nil
+			}
+		}
+		if !page.HasMore || len(page.Data) == 0 {
+			return nil, false, nil
+		}
+		after = page.Data[len(page.Data)-1].ID
+	}
+}
+
+// stripePayoutRef packs the connected-account context into the payout id
+// — Stripe payout objects only exist in their account's context.
+func stripePayoutRef(accountID, payoutID string) string {
+	return accountID + ":" + payoutID
+}
+
+func splitStripePayoutRef(ref string) (accountID, payoutID string, ok bool) {
+	i := strings.IndexByte(ref, ':')
+	if i <= 0 || i == len(ref)-1 {
+		return "", "", false
+	}
+	return ref[:i], ref[i+1:], true
+}
+
+func mapStripePayoutStatus(s string) string {
 	switch strings.ToLower(s) {
 	case "pending", "in_transit":
 		return "pending"
@@ -237,24 +412,75 @@ func isStripeInsufficientBalance(err error) bool {
 		strings.Contains(msg, "insufficient")
 }
 
+// GetPayoutStatus fetches the connected-account payout named by a
+// "{account}:{payout}" reference (see stripePayoutRef) — the
+// reconciliation path when payout.* webhooks are missed. A bare legacy
+// transfer id (tr_…) reports "reversed" when the transfer was reversed
+// and "pending" otherwise: a transfer object alone can never prove bank
+// delivery.
+func (p *StripeConnectProvider) GetPayoutStatus(ctx context.Context, providerPayoutID string) (*InstantPayoutResult, error) {
+	if providerPayoutID == "" {
+		return nil, fmt.Errorf("stripe connect payout status: id required")
+	}
+	if accountID, payoutID, ok := splitStripePayoutRef(providerPayoutID); ok {
+		var resp stripeConnectPayoutResp
+		if err := p.doGet(ctx, "/v1/payouts/"+payoutID, accountID, &resp); err != nil {
+			return nil, fmt.Errorf("stripe connect payout status: %w", err)
+		}
+		return &InstantPayoutResult{
+			ProviderPayoutID: providerPayoutID,
+			Status:           mapStripePayoutStatus(resp.Status),
+		}, nil
+	}
+	var resp struct {
+		ID       string `json:"id"`
+		Reversed bool   `json:"reversed"`
+	}
+	if err := p.doGet(ctx, "/v1/transfers/"+providerPayoutID, "", &resp); err != nil {
+		return nil, fmt.Errorf("stripe connect payout status: %w", err)
+	}
+	status := "pending"
+	if resp.Reversed {
+		status = "reversed"
+	}
+	return &InstantPayoutResult{ProviderPayoutID: resp.ID, Status: status}, nil
+}
+
 // postForm issues a Stripe form-encoded POST and decodes the 2xx body
 // into out. Non-2xx responses parse Stripe's error envelope
 // ({"error":{"code":"...","message":"..."}}) into a typed
 // *stripeAPIError; callers identify error classes via errors.As.
 func (p *StripeConnectProvider) postForm(ctx context.Context, path string, form url.Values, out any) error {
-	return p.postFormWithIdempotency(ctx, path, form, "", out)
+	return p.doForm(ctx, path, form, "", "", out)
 }
 
-func (p *StripeConnectProvider) postFormWithIdempotency(ctx context.Context, path string, form url.Values, idempotencyKey string, out any) error {
-	body := form.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiBase+path, strings.NewReader(body))
+// doForm / doGet share Stripe request plumbing. stripeAccount, when
+// non-empty, rides in the Stripe-Account header to act on a connected
+// account's behalf (payout leg, payout status).
+func (p *StripeConnectProvider) doForm(ctx context.Context, path string, form url.Values, idempotencyKey, stripeAccount string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiBase+path, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
-	req.SetBasicAuth(p.apiKey, "")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	return p.doStripe(req, path, stripeAccount, out)
+}
+
+func (p *StripeConnectProvider) doGet(ctx context.Context, path, stripeAccount string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.apiBase+path, nil)
+	if err != nil {
+		return err
+	}
+	return p.doStripe(req, path, stripeAccount, out)
+}
+
+func (p *StripeConnectProvider) doStripe(req *http.Request, path, stripeAccount string, out any) error {
+	req.SetBasicAuth(p.apiKey, "")
+	if stripeAccount != "" {
+		req.Header.Set("Stripe-Account", stripeAccount)
 	}
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -291,14 +517,18 @@ func (p *StripeConnectProvider) postFormWithIdempotency(ctx context.Context, pat
 }
 
 type stripeWebhookEvent struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Data struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Account string `json:"account"` // connected-account context on Connect events
+	Created int64  `json:"created"`
+	Data    struct {
 		Object struct {
 			ID               string `json:"id"`
 			DetailsSubmitted bool   `json:"details_submitted"`
 			ChargesEnabled   bool   `json:"charges_enabled"`
 			PayoutsEnabled   bool   `json:"payouts_enabled"`
+			Amount           int64  `json:"amount"`
+			AmountReversed   int64  `json:"amount_reversed"`
 		} `json:"object"`
 	} `json:"data"`
 }
@@ -308,7 +538,7 @@ func (p *StripeConnectProvider) VerifyAndParseWebhook(headers map[string][]strin
 	if header == "" {
 		return nil, fmt.Errorf("stripe connect: missing Stripe-Signature header")
 	}
-	ts, sig, err := parseStripeSignature(header)
+	ts, sigs, err := parseStripeSignature(header)
 	if err != nil {
 		return nil, fmt.Errorf("stripe connect: %w", err)
 	}
@@ -316,7 +546,16 @@ func (p *StripeConnectProvider) VerifyAndParseWebhook(headers map[string][]strin
 	if expected == "" {
 		return nil, fmt.Errorf("stripe connect: webhook secret not configured")
 	}
-	if !hmac.Equal([]byte(expected), []byte(sig)) {
+	// Stripe sends one v1 signature per active endpoint secret during
+	// secret rotation — accept the delivery when ANY of them matches.
+	matched := false
+	for _, sig := range sigs {
+		if hmac.Equal([]byte(expected), []byte(sig)) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
 		return nil, fmt.Errorf("stripe connect: invalid signature")
 	}
 	// Reject stale/future timestamps so a captured delivery can't be replayed
@@ -334,6 +573,47 @@ func (p *StripeConnectProvider) VerifyAndParseWebhook(headers map[string][]strin
 	if err := json.Unmarshal(rawBody, &ev); err != nil {
 		return nil, fmt.Errorf("stripe connect: parse: %w", err)
 	}
+	occurred := ""
+	if ev.Created > 0 {
+		occurred = time.Unix(ev.Created, 0).UTC().Format(time.RFC3339)
+	}
+	// Bank-delivery lifecycle rides on the connected account's payout.*
+	// events (delivered with the connected-account context in `account`);
+	// the id is packed as "{account}:{payout}" to match ProviderPayoutID.
+	// transfer.reversed is a balance-leg clawback keyed by the FUNDING
+	// leg's tr_… id — downstream ledgers correlate it via the persisted
+	// ProviderFundingID, not ProviderPayoutID — and can be PARTIAL:
+	// amounts are forwarded so sinks reverse only what Stripe reversed.
+	// transfer.created/updated carry no new state — Ignored/ACKed.
+	switch ev.Type {
+	case "payout.paid", "payout.failed", "payout.canceled":
+		typ := PayoutEventTransferPaid
+		if ev.Type != "payout.paid" {
+			typ = PayoutEventTransferFailed
+		}
+		return &PayoutWebhookEvent{
+			Type:               typ,
+			ProviderTransferID: stripePayoutRef(ev.Account, ev.Data.Object.ID),
+			RawEventID:         ev.ID,
+			OccurredAt:         occurred,
+			AmountMinor:        ev.Data.Object.Amount,
+		}, nil
+	case "transfer.reversed":
+		return &PayoutWebhookEvent{
+			Type:                PayoutEventTransferReversed,
+			ProviderTransferID:  ev.Data.Object.ID,
+			RawEventID:          ev.ID,
+			OccurredAt:          occurred,
+			AmountMinor:         ev.Data.Object.Amount,
+			AmountReversedMinor: ev.Data.Object.AmountReversed,
+		}, nil
+	case "transfer.created", "transfer.updated", "payout.created", "payout.updated":
+		return &PayoutWebhookEvent{
+			Type:               PayoutEventIgnored,
+			ProviderTransferID: ev.Data.Object.ID,
+			RawEventID:         ev.ID,
+		}, nil
+	}
 	mapped, ok := mapStripeEvent(ev.Type, ev.Data.Object.DetailsSubmitted && ev.Data.Object.PayoutsEnabled)
 	if !ok {
 		return nil, fmt.Errorf("stripe connect: unhandled event %q", ev.Type)
@@ -346,7 +626,7 @@ func (p *StripeConnectProvider) VerifyAndParseWebhook(headers map[string][]strin
 	}, nil
 }
 
-func parseStripeSignature(header string) (ts, sig string, err error) {
+func parseStripeSignature(header string) (ts string, sigs []string, err error) {
 	for _, part := range strings.Split(header, ",") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
@@ -356,13 +636,13 @@ func parseStripeSignature(header string) (ts, sig string, err error) {
 		case "t":
 			ts = kv[1]
 		case "v1":
-			sig = kv[1]
+			sigs = append(sigs, kv[1])
 		}
 	}
-	if ts == "" || sig == "" {
-		return "", "", fmt.Errorf("malformed Stripe-Signature header")
+	if ts == "" || len(sigs) == 0 {
+		return "", nil, fmt.Errorf("malformed Stripe-Signature header")
 	}
-	return ts, sig, nil
+	return ts, sigs, nil
 }
 
 func mapStripeEvent(name string, fullyActivated bool) (PayoutWebhookEventType, bool) {

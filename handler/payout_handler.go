@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"path"
@@ -24,6 +25,10 @@ import (
 type PayoutHandler struct {
 	AbstractHandler
 	PayoutService *payout.OnboardingService
+
+	// SealTaxID encrypts the tax id before persistence (wire crypto.Seal
+	// with the app's KEK). Nil stores the raw bytes — pilot only.
+	SealTaxID func(string) ([]byte, error)
 }
 
 // Routes returns the path → handler map for both onboarding and
@@ -36,13 +41,15 @@ func (h *PayoutHandler) Routes(prefix string) map[string]func(w http.ResponseWri
 		return map[string]func(w http.ResponseWriter, r *http.Request){}
 	}
 	return map[string]func(w http.ResponseWriter, r *http.Request){
-		prefix + "/payout/onboard/start": h.StartOnboarding,
-		prefix + "/payout/reusable":      h.ListReusable,
-		prefix + "/payout/reusable/link": h.LinkReusable,
-		prefix + "/payout/status":        h.Status,
-		prefix + "/webhook/payout/AW":    h.Webhook,
-		prefix + "/webhook/payout/SC":    h.Webhook,
-		prefix + "/webhook/payout/WI":    h.Webhook,
+		prefix + "/payout/onboard/start":        h.StartOnboarding,
+		prefix + "/payout/reusable":             h.ListReusable,
+		prefix + "/payout/reusable/link":        h.LinkReusable,
+		prefix + "/payout/status":               h.Status,
+		prefix + "/payout/bank/replace":         h.ReplaceBank,
+		prefix + "/payout/beneficiary/register": h.RegisterBeneficiary,
+		prefix + "/webhook/payout/AW":           h.Webhook,
+		prefix + "/webhook/payout/SC":           h.Webhook,
+		prefix + "/webhook/payout/WI":           h.Webhook,
 	}
 }
 
@@ -114,6 +121,73 @@ func (h *PayoutHandler) Status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]any{"complete": complete})
+}
+
+type replaceBankRequest struct {
+	CountryCode       string `json:"countryCode"`
+	Currency          string `json:"currency"`
+	AccountHolderName string `json:"accountHolderName"`
+	BillingAddress    string `json:"billingAddress"`
+	TaxIDType         string `json:"taxIdType"`
+	TaxID             string `json:"taxId"`
+}
+
+// ReplaceBank runs the atomic supersede+insert for an identity-bearing
+// bank-info change. Provider comes from the configured service, never
+// the client.
+func (h *PayoutHandler) ReplaceBank(w http.ResponseWriter, r *http.Request) {
+	var req replaceBankRequest
+	session, ok := h.ReadAuthRequest(w, r, &req)
+	if !ok {
+		return
+	}
+	if h.PayoutService.Provider == nil {
+		h.WriteError(w, http.StatusConflict, "Conflict", "payout provider not configured")
+		return
+	}
+	sealed := []byte(req.TaxID)
+	if h.SealTaxID != nil && req.TaxID != "" {
+		var err error
+		if sealed, err = h.SealTaxID(req.TaxID); err != nil {
+			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "seal tax id: "+err.Error())
+			return
+		}
+	}
+	err := h.PayoutService.ReplaceBankInfo(r.Context(), session.Id, session.PartnerId, payout.NewBankInfo{
+		CountryCode:       req.CountryCode,
+		Currency:          req.Currency,
+		AccountHolderName: req.AccountHolderName,
+		BillingAddress:    req.BillingAddress,
+		TaxIDType:         req.TaxIDType,
+		TaxIDEncrypted:    sealed,
+		Provider:          h.PayoutService.Provider.Code(),
+	})
+	if err != nil {
+		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
+		return
+	}
+	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"message": "bank info replaced"})
+}
+
+type registerBeneficiaryRequest struct {
+	Beneficiary json.RawMessage `json:"beneficiary"`
+}
+
+// RegisterBeneficiary passes application-collected beneficiary details
+// through to the provider and links the returned id as the payout
+// destination.
+func (h *PayoutHandler) RegisterBeneficiary(w http.ResponseWriter, r *http.Request) {
+	var req registerBeneficiaryRequest
+	session, ok := h.ReadAuthRequest(w, r, &req)
+	if !ok {
+		return
+	}
+	id, err := h.PayoutService.RegisterBeneficiary(r.Context(), session.Id, session.PartnerId, req.Beneficiary)
+	if err != nil {
+		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
+		return
+	}
+	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"beneficiaryId": id})
 }
 
 // Webhook is the provider-facing endpoint. NOT authenticated — caller

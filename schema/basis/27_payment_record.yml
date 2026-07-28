@@ -1,6 +1,11 @@
 table: payment_record
-comment: Completed/failed/refunded payment transactions per partner
-order: 49
+comment: |
+  Completed/failed/refunded payment transactions per partner —
+  domain-neutral finance data: a payment settles an invoice, whatever
+  the invoice sells. What was bought resolves through the invoice's
+  lines and their domain extension tables, never through columns here.
+# order 56: must follow invoice (53) — the invoice_id FK is inline on MySQL
+order: 56
 columns:
   - name: id
     type: BIGINT
@@ -17,11 +22,11 @@ columns:
     nullable: true
   - name: amount
     type: NUMERIC(18,2)
+  - name: amount_minor
+    type: BIGINT
+    comment: authoritative integer minor-unit amount, no default — writers must supply it; amount stays for display
   - name: currency
     type: CHAR(3)
-  - name: plan_id
-    type: VARCHAR(20)
-    nullable: true
   - name: invoice_id
     type: BIGINT
     nullable: true
@@ -46,11 +51,35 @@ foreign_keys:
     references:
       table: business_partner
       columns: [id]
-  - name: payment_record_plans
-    columns: [plan_id]
+  - name: invoice_payment_records
+    columns: [invoice_id]
     references:
-      table: subscription_plan
+      table: invoice
       columns: [id]
+  # Partner-consistent invoice reference: enforced only when both columns
+  # are non-null (MATCH SIMPLE); the plain FK above still guards a payment
+  # with no partner. Together they stop a payment referencing another
+  # partner's invoice.
+  - name: payment_record_invoice_partner
+    columns: [invoice_id, partner_id]
+    references:
+      table: invoice
+      columns: [id, partner_id]
+  # Keeps payment and invoice currency equal whenever they are linked,
+  # so allocation currency is unambiguous.
+  - name: payment_record_invoice_currency
+    columns: [invoice_id, currency]
+    references:
+      table: invoice
+      columns: [id, currency]
 indexes:
   - name: idx_payment_record_partner
     columns: [partner_id, paid_at]
+  - name: payment_record_provider_uq
+    columns: [provider, provider_payment_id]
+    unique: true
+    where: "provider_payment_id IS NOT NULL"
+  # FK target for invoice-consistent allocations.
+  - name: payment_record_id_invoice_uq
+    columns: [id, invoice_id]
+    unique: true

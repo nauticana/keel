@@ -79,3 +79,20 @@ func TestParseErr_DownstreamAccumulateAndClear(t *testing.T) {
 		t.Fatalf("ParseErr should clear after reporting, got: %v", err)
 	}
 }
+
+func TestApplyBase_AirwallexTransferFlags(t *testing.T) {
+	m := baseRows()
+	m[airwallex_transfer_method] = ConfigRow{Value: "SWIFT", Default: "LOCAL"}
+	m[airwallex_transfer_reason] = ConfigRow{Default: "professional_business_services"}
+
+	c := &BaseConfig{}
+	if err := c.ApplyBase(m); err != nil {
+		t.Fatalf("ApplyBase: %v", err)
+	}
+	if c.AirwallexXferMethod != "SWIFT" {
+		t.Errorf("AirwallexXferMethod = %q, want SWIFT", c.AirwallexXferMethod)
+	}
+	if c.AirwallexXferReason != "professional_business_services" {
+		t.Errorf("AirwallexXferReason = %q, want default", c.AirwallexXferReason)
+	}
+}

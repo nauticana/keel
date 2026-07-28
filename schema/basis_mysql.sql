@@ -671,32 +671,18 @@ CREATE TABLE IF NOT EXISTS payment_method (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_payment_method_default ON payment_method(partner_id, is_default);
 
--- Completed/failed/refunded payment transactions per partner
-CREATE TABLE IF NOT EXISTS payment_record (
-    id                                   BIGINT        NOT NULL,
-    partner_id                           BIGINT       ,
-    provider                             VARCHAR(30)   NOT NULL,
-    provider_payment_id                  VARCHAR(255) ,
-    provider_event_type                  VARCHAR(100) ,
-    amount                               DECIMAL(18,2) NOT NULL,
-    currency                             CHAR(3)       NOT NULL,
-    plan_id                              VARCHAR(20)  ,
-    invoice_id                           BIGINT       ,
-    payment_status                       CHAR(1)       NOT NULL,
-    paid_at                              DATETIME     ,
-    raw_payload                          TEXT         ,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT partner_payment_records FOREIGN KEY (partner_id) REFERENCES business_partner(id),
-    CONSTRAINT payment_record_plans FOREIGN KEY (plan_id) REFERENCES subscription_plan(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_payment_record_partner ON payment_record(partner_id, paid_at);
-
--- Per (user, partner) bank account details for out-bound payouts.
+-- Versioned (user, partner) bank account details for out-bound payouts.
 -- Owned by keel/payout. Raw routing details live with the provider
 -- (Airwallex / Stripe Connect / Wise); this row carries only the
 -- provider handle plus tax/correspondence metadata.
+-- Rows are versions: identity-bearing changes (provider, account,
+-- tax id, holder, country, currency, address) close the active row
+-- (status='S', superseded_at) and insert a new one; onboarding
+-- lifecycle fields mutate the active row in place. At most one
+-- active row per (user_id, partner_id) — partial unique index on
+-- PostgreSQL, service-enforced on MySQL.
 CREATE TABLE IF NOT EXISTS user_bank_info (
+    id                                   BIGINT        NOT NULL,
     user_id                              BIGINT        NOT NULL,
     partner_id                           BIGINT        NOT NULL,
     country_code                         CHAR(2)       NOT NULL,
@@ -709,12 +695,18 @@ CREATE TABLE IF NOT EXISTS user_bank_info (
     provider_account_id                  VARCHAR(100) ,
     provider_agreement                   TINYINT(1)    NOT NULL DEFAULT 0,
     provider_onboarded_at                DATETIME     ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    superseded_at                        DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, partner_id),
+    PRIMARY KEY (id),
     CONSTRAINT user_bank_info_users FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT user_bank_info_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+    CONSTRAINT user_bank_info_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT chk_user_bank_info_lifecycle CHECK ((status = 'A' AND superseded_at IS NULL) OR (status = 'S' AND superseded_at IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- user_bank_info_active_uq is a partial index on PostgreSQL (WHERE status = 'A'); MySQL cannot enforce it — service-enforced
+CREATE INDEX user_bank_info_active_uq ON user_bank_info(user_id, partner_id);
+CREATE UNIQUE INDEX user_bank_info_id_partner_uq ON user_bank_info(id, partner_id);
 CREATE INDEX idx_user_bank_info_partner ON user_bank_info(partner_id);
 
 -- Saved payment methods for end users (cards, wallets, bank accounts).
@@ -783,7 +775,7 @@ CREATE TABLE IF NOT EXISTS invoice (
     subtotal                             DECIMAL(18,2) NOT NULL,
     tax                                  DECIMAL(18,2) NOT NULL DEFAULT 0.00,
     total                                DECIMAL(18,2) NOT NULL,
-    total_minor                          BIGINT        NOT NULL DEFAULT 0,
+    total_minor                          BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     issued_at                            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     due_at                               DATETIME     ,
@@ -799,8 +791,16 @@ CREATE TABLE IF NOT EXISTS invoice (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_invoice_number ON invoice(invoice_number);
 CREATE INDEX idx_invoice_partner ON invoice(partner_id);
+CREATE UNIQUE INDEX invoice_id_partner_uq ON invoice(id, partner_id);
+CREATE UNIQUE INDEX invoice_id_currency_uq ON invoice(id, currency);
 
--- Line items for an invoice
+-- Line items for an invoice — domain-neutral finance data only.
+-- amount_minor is the authoritative integer minor-unit amount (amount
+-- stays for display) and has NO default: writers must supply it.
+-- service_from / service_to (inclusive / exclusive) bound the
+-- covered-service period for period-scoped consumers (proration,
+-- partial refunds). What a line sells lives in domain extension tables
+-- (e.g. subscription_invoice_line), never here.
 CREATE TABLE IF NOT EXISTS invoice_line (
     invoice_id                           BIGINT        NOT NULL,
     seq                                  INT           NOT NULL,
@@ -808,6 +808,9 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     quantity                             INT           NOT NULL DEFAULT 1,
     unit_price                           DECIMAL(18,2) NOT NULL,
     amount                               DECIMAL(18,2) NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    service_from                         DATETIME     ,
+    service_to                           DATETIME     ,
     PRIMARY KEY (invoice_id, seq),
     CONSTRAINT invoice_lines FOREIGN KEY (invoice_id) REFERENCES invoice(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -825,6 +828,95 @@ CREATE TABLE IF NOT EXISTS partner_billing_customer (
     CONSTRAINT partner_billing_customers FOREIGN KEY (partner_id) REFERENCES business_partner(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_partner_billing_customer_token ON partner_billing_customer(provider, customer_token);
+
+-- Subscription-domain extension of a generic invoice line: names the
+-- plan or add-on the line bills. Exactly one of plan_id / addon_id is
+-- set (check-enforced). Lines with no row here are non-subscription
+-- charges (fees, adjustments). Keeps invoice / invoice_line
+-- domain-neutral for finance purposes.
+CREATE TABLE IF NOT EXISTS subscription_invoice_line (
+    invoice_id                           BIGINT        NOT NULL,
+    invoice_line_seq                     INT           NOT NULL,
+    plan_id                              VARCHAR(20)  ,
+    addon_id                             VARCHAR(20)  ,
+    PRIMARY KEY (invoice_id, invoice_line_seq),
+    CONSTRAINT subscription_invoice_lines FOREIGN KEY (invoice_id, invoice_line_seq) REFERENCES invoice_line(invoice_id, seq),
+    CONSTRAINT subscription_invoice_line_plans FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
+    CONSTRAINT subscription_invoice_line_addons FOREIGN KEY (addon_id) REFERENCES subscription_addon(id),
+    CONSTRAINT chk_sub_invoice_line_one_of CHECK ((plan_id IS NOT NULL AND addon_id IS NULL) OR (plan_id IS NULL AND addon_id IS NOT NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Completed/failed/refunded payment transactions per partner —
+-- domain-neutral finance data: a payment settles an invoice, whatever
+-- the invoice sells. What was bought resolves through the invoice's
+-- lines and their domain extension tables, never through columns here.
+CREATE TABLE IF NOT EXISTS payment_record (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    provider                             VARCHAR(30)   NOT NULL,
+    provider_payment_id                  VARCHAR(255) ,
+    provider_event_type                  VARCHAR(100) ,
+    amount                               DECIMAL(18,2) NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    invoice_id                           BIGINT       ,
+    payment_status                       CHAR(1)       NOT NULL,
+    paid_at                              DATETIME     ,
+    raw_payload                          TEXT         ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_payment_records FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT invoice_payment_records FOREIGN KEY (invoice_id) REFERENCES invoice(id),
+    CONSTRAINT payment_record_invoice_partner FOREIGN KEY (invoice_id, partner_id) REFERENCES invoice(id, partner_id),
+    CONSTRAINT payment_record_invoice_currency FOREIGN KEY (invoice_id, currency) REFERENCES invoice(id, currency)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_payment_record_partner ON payment_record(partner_id, paid_at);
+CREATE UNIQUE INDEX payment_record_provider_uq ON payment_record(provider, provider_payment_id);
+CREATE UNIQUE INDEX payment_record_id_invoice_uq ON payment_record(id, invoice_id);
+
+-- Durable allocation of one payment (or refund) to one invoice line in
+-- integer minor units. entry_type P allocates a collected payment
+-- (positive), R a refund (negative) — check-enforced. Currency is not
+-- repeated here: it is authoritative on the referenced payment/invoice.
+-- Consumers that recognize value per line (commission ledgers, revenue
+-- reporting, partial-refund processing) key on this row rather than
+-- reconstructing identity from payment + invoice + line columns.
+CREATE TABLE IF NOT EXISTS payment_invoice_line_allocation (
+    id                                   BIGINT        NOT NULL,
+    payment_record_id                    BIGINT        NOT NULL,
+    invoice_id                           BIGINT        NOT NULL,
+    invoice_line_seq                     INT           NOT NULL,
+    entry_type                           CHAR(1)       NOT NULL DEFAULT 'P',
+    amount_minor                         BIGINT        NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT payment_allocations FOREIGN KEY (payment_record_id, invoice_id) REFERENCES payment_record(id, invoice_id),
+    CONSTRAINT invoice_line_allocations FOREIGN KEY (invoice_id, invoice_line_seq) REFERENCES invoice_line(invoice_id, seq),
+    CONSTRAINT chk_pmt_line_alloc_sign CHECK ((entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_pmt_line_alloc_payment ON payment_invoice_line_allocation(payment_record_id);
+CREATE INDEX idx_pmt_line_alloc_line ON payment_invoice_line_allocation(invoice_id, invoice_line_seq);
+
+-- Raw inbound payout-provider webhooks — durable event-id idempotency +
+-- audit for account-lifecycle and transfer-lifecycle events. Financial
+-- events must never rely on a process-local or expiring cache; the
+-- UNIQUE (provider, event_id) index is the authoritative race guard.
+CREATE TABLE IF NOT EXISTS payout_webhook_log (
+    id                                   BIGINT        NOT NULL,
+    provider                             CHAR(2)       NOT NULL,
+    event_id                             VARCHAR(255)  NOT NULL,
+    event_type                           VARCHAR(100)  NOT NULL,
+    provider_account_id                  VARCHAR(100) ,
+    provider_transfer_id                 VARCHAR(255) ,
+    processing_status                    CHAR(1)       NOT NULL DEFAULT 'R',
+    error_message                        TEXT         ,
+    raw_payload                          TEXT         ,
+    received_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    processed_at                         DATETIME     ,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX payout_webhook_log_uq ON payout_webhook_log(provider, event_id);
+CREATE INDEX idx_payout_webhook_transfer ON payout_webhook_log(provider_transfer_id);
 
 -- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
 CREATE TABLE IF NOT EXISTS outbox_event (

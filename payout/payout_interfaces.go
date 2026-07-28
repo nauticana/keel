@@ -14,6 +14,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 
 	"github.com/nauticana/keel/logger"
@@ -107,15 +108,87 @@ const (
 	PayoutEventAccountActivated PayoutWebhookEventType = "account.activated"
 	PayoutEventAccountUpdated   PayoutWebhookEventType = "account.updated"
 	PayoutEventAccountRejected  PayoutWebhookEventType = "account.rejected"
+
+	// Transfer lifecycle — asynchronous outcomes of a previously
+	// dispatched payout, keyed by ProviderTransferID. Downstream ledgers
+	// consume these via OnboardingService.TransferSink.
+	PayoutEventTransferPaid     PayoutWebhookEventType = "transfer.paid"
+	PayoutEventTransferFailed   PayoutWebhookEventType = "transfer.failed"
+	PayoutEventTransferReturned PayoutWebhookEventType = "transfer.returned"
+	PayoutEventTransferReversed PayoutWebhookEventType = "transfer.reversed"
+
+	// PayoutEventIgnored marks a verified, well-formed event the
+	// integration recognizes but has nothing to apply for (e.g. a
+	// non-terminal transfer state). The webhook is ACKed so the provider
+	// stops retrying; nothing is dispatched.
+	PayoutEventIgnored PayoutWebhookEventType = "ignored"
 )
 
 // PayoutWebhookEvent is the normalized webhook payload after the
 // provider's own envelope/signature/version handling has been stripped.
+// Account events populate ExternalAccountID; transfer events populate
+// ProviderTransferID.
 type PayoutWebhookEvent struct {
-	Type              PayoutWebhookEventType
-	ExternalAccountID string
-	Activated         bool   // true when the provider's KYC is fully cleared and payouts can run
-	RawEventID        string // provider's event id, for idempotency / dedupe
+	Type               PayoutWebhookEventType
+	ExternalAccountID  string
+	ProviderTransferID string // provider transfer/payout id for transfer.* events
+	Activated          bool   // true when the provider's KYC is fully cleared and payouts can run
+	RawEventID         string // provider's event id (or a deterministic synthesis), for idempotency / dedupe
+	OccurredAt         string // provider's event timestamp when supplied — sinks use it for out-of-order delivery
+
+	// Reversal amounts (minor units), populated when the provider reports
+	// them. A transfer.reversed with AmountReversedMinor < AmountMinor is
+	// a PARTIAL reversal — sinks must claw back only the reversed amount,
+	// never assume the whole payout reversed.
+	AmountMinor         int64
+	AmountReversedMinor int64
+}
+
+// AccountStatusChecker is the optional provider capability to fetch the
+// live activation state of a destination account, for providers whose
+// webhooks carry no activation flag (Wise recipients#state-change).
+type AccountStatusChecker interface {
+	IsAccountActive(ctx context.Context, accountID string) (bool, error)
+}
+
+// BeneficiaryCreator is the optional provider capability to register a
+// payout destination from application-collected details (Airwallex
+// embedded beneficiary component). Details pass through to the provider;
+// keel stores only the returned id.
+type BeneficiaryCreator interface {
+	CreateBeneficiary(ctx context.Context, beneficiary json.RawMessage) (string, error)
+}
+
+// PayoutResumer is the optional provider capability for recovering a
+// multi-leg payout whose funding leg succeeded but whose payout leg
+// failed or was lost: it runs ONLY the missing leg against the persisted
+// funding id, so recovery can never re-fund. Downstream workers
+// type-assert it on their PayoutProvider.
+type PayoutResumer interface {
+	ResumePayout(ctx context.Context, in InstantPayoutInput, fundingID string) (*InstantPayoutResult, error)
+}
+
+// TransferEventSink receives normalized transfer-lifecycle events so the
+// downstream payout ledger can move its state machine on authoritative
+// provider outcomes. Implementations must be idempotent — the webhook
+// log deduplicates event ids, but reconciliation polling may re-apply
+// the same terminal state.
+type TransferEventSink interface {
+	ApplyTransferEvent(ctx context.Context, ev *PayoutWebhookEvent) error
+}
+
+// WebhookLog is the durable event-id idempotency record for payout
+// webhooks, backed by the basis payout_webhook_log table. Financial
+// events must never rely on a process-local or expiring cache.
+//
+// Claim atomically records the event for processing: duplicate=true
+// when the event was already processed or is currently in flight.
+// A previously FAILED delivery (and an abandoned in-flight claim) is
+// re-claimed instead — a transient sink outage must never permanently
+// swallow a financial event.
+type WebhookLog interface {
+	Claim(ctx context.Context, provider string, ev *PayoutWebhookEvent, rawBody []byte) (logID int64, duplicate bool, err error)
+	UpdateStatus(ctx context.Context, logID int64, status, message string) error
 }
 
 // StartOnboardingInput is the per-user context the provider needs to
@@ -160,13 +233,34 @@ type InstantPayoutInput struct {
 	IdempotencyKey    string
 }
 
-// InstantPayoutResult echoes the provider's view of the in-flight
-// payout. Status is the normalized lifecycle code; downstream apps
-// switch on it for their own status columns.
+// InstantPayoutResult echoes the provider's view of the payout. Status
+// is the normalized lifecycle code; downstream apps switch on it for
+// their own status columns. "paid" means the provider explicitly
+// returned a paid state — never infer completion from creation alone.
+// "paid" is NOT guaranteed final on every provider: Airwallex documents
+// that a PAID transfer can later become FAILED, so sinks and ledgers
+// must accept a paid → failed/returned/reversed transition.
+//
+// ProviderFundingID names the funding leg when disbursement is
+// multi-step (Stripe: the platform transfer tr_…; Wise: same as the
+// payout id). Persist BOTH ids BEFORE dispatch completes: reversal
+// webhooks reference the funding leg, and a multi-step provider may
+// return a non-nil result ALONGSIDE an error when a later leg failed —
+// the ids are what reconciliation needs to resume or reverse.
+//
+// Retry semantics are bounded by provider idempotency retention
+// (Stripe documents ~24h): within retention, retrying with the SAME
+// key is safe (both legs dedupe); a cached terminal error keeps
+// returning that error. Beyond retention — or to escape a cached
+// error — do NOT re-run the full operation with any key: when a
+// funding id is persisted but no payout id, use the provider's
+// PayoutResumer capability (Stripe implements it) to run only the
+// missing leg; minting a new key for the full operation double-funds.
 type InstantPayoutResult struct {
-	ProviderPayoutID string
-	Status           string // "pending" / "paid" / "failed"
-	EstimatedArrival string
+	ProviderPayoutID  string
+	ProviderFundingID string
+	Status            string // "pending" / "paid" / "failed" / "returned" / "reversed"
+	EstimatedArrival  string
 }
 
 // ErrInsufficientBalance is the typed error every provider returns
@@ -179,6 +273,12 @@ var ErrInsufficientBalance = errors.New("payout: insufficient balance")
 // wired a given method (typically RequestInstantPayout on a provider
 // whose integration is still pending).
 var ErrNotImplemented = errors.New("payout: provider method not implemented")
+
+// ErrInstantPayoutUnavailable is the typed error for destinations that
+// cannot receive the instant rail (e.g. Stripe accounts without an
+// instant-eligible external account). Callers fall back to a standard
+// schedule or surface a precise message.
+var ErrInstantPayoutUnavailable = errors.New("payout: instant payout not available for this destination")
 
 // PayoutProvider is the pluggable contract for any third-party that
 // holds bank routing details and runs out-bound payouts. The downstream
@@ -209,4 +309,11 @@ type PayoutProvider interface {
 	// when the source-of-funds balance is below Amount, ErrNotImplemented
 	// when the provider does not yet support instant payouts.
 	RequestInstantPayout(ctx context.Context, in InstantPayoutInput) (*InstantPayoutResult, error)
+
+	// GetPayoutStatus fetches the provider's current view of a
+	// previously created transfer/payout by its provider id — the
+	// reconciliation path when webhooks are missed. Provider
+	// idempotency-key retention is finite; look up before blindly
+	// reissuing an expired key.
+	GetPayoutStatus(ctx context.Context, providerPayoutID string) (*InstantPayoutResult, error)
 }

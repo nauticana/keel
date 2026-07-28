@@ -274,6 +274,8 @@ func main() {
 
 `Run` builds the standard logger, secret provider, snowflake id generator, pgsql database, and `QuotaServiceDb`, loads the DB-backed runtime config into `common.Config` right after the database is up (set `LoadConfig` when the app embeds `BaseConfig` in its own config type; a load failure aborts startup), publishes the secret provider on `.Secret` before the loop, wires everything into a `JobExecutor`, and runs. The embedder implements only `GetOLTPQueries` plus **one processing contract** — `worker.JobWorker` (`ProcessQueue`, shown above) or `worker.QueueWorker` (`QueueQueries` + `HandleJob`, see the next section); `GetHealthcheckPort` comes from `AbstractWorker`. The `, w` is the concrete instance ("self") — Go has no virtual dispatch, so the embedded base can't reach the embedder's processing methods without it.
 
+For infrequent jobs driven by an external cron / systemd timer (weekly or monthly payouts), use `worker.RunOnce(ctx, loadConfig, pick)` instead of a daemon: it composes the same runtime pieces minus the healthcheck listener, registry heartbeat, and ticker loop, runs one `ProcessQueue` pass, and exits. `loadConfig` nil loads a plain `common.BaseConfig`; `pick` runs after config load so job selection can read config flags and returns the `JobWorker` plus the journal caption.
+
 Use `JobExecutor` directly when you need to inject extra services or a non-default database flavor:
 
 ```go
@@ -1425,7 +1427,8 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 |-------|---------|
 | `payment_webhook_log` | Raw inbound webhooks — idempotency key on `(provider, event_id)` + audit |
 | `payment_method` | Partner-owned provider customer tokens (`stripe cus_...`) |
-| `payment_record` | Completed / failed / refunded transactions |
+| `payment_record` | Completed / failed / refunded transactions — `amount_minor` is authoritative; provider-scoped unique payment id; `invoice_id` FK |
+| `payment_invoice_line_allocation` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units |
 
 ### Checkout modes
 
@@ -1454,11 +1457,13 @@ Setup mode returns the same `{ "checkoutUrl": "..." }` shape; Stripe persists a 
 
 ### Provider feature matrix
 
-| Provider | Code | Onboarding | Webhook | Instant payout | Notes |
-|---|---|:--:|:--:|:--:|---|
-| Airwallex      | `AW` | ✅ | ✅ | ✅ | Hosted KYC + connected-account model. Production-shaped. |
-| Stripe Connect | `SC` | ✅ | ✅ | ✅ | Express accounts via `/v1/account_links`. Requires email at onboarding. |
-| Wise           | `WI` | ✅ | ✅ | ⚠️ unfunded | Email-recipient model — no hosted KYC; **transfer is created but not funded** (see below). |
+| Provider | Code | Onboarding | Webhook | Instant payout | Status lookup | Notes |
+|---|---|:--:|:--:|:--:|:--:|---|
+| Airwallex      | `AW` | ✅ via beneficiary | ✅ | ✅ | ✅ | Payout destination is a **Beneficiary**: app collects details with Airwallex's embedded component, then `OnboardingService.RegisterBeneficiary` creates it and persists the id. Hosted-KYC `StartOnboarding` is connected-account KYC only — `acct_…` ids are rejected at dispatch. Rail/reason via `airwallex_transfer_method`/`airwallex_transfer_reason` flags. |
+| Stripe Connect | `SC` | ✅ | ✅ | ✅ two-leg | ✅ | Express accounts via `/v1/account_links`. Disbursement = platform transfer + connected-account **instant payout**; `ErrInstantPayoutUnavailable` on ineligible destinations. |
+| Wise           | `WI` | ✅ | ✅ | ✅ | ✅ | Email-recipient model — no hosted KYC; transfer is created **and balance-funded** (see below). |
+
+The payout SQL surface is **PostgreSQL-only** — call `OnboardingService.VerifySchema` and `SQLWebhookLog.VerifySchema` once at boot; they fail fast on MySQL (or a missing unique index) before any money moves.
 
 ### `PayoutProvider` interface
 
@@ -1468,16 +1473,19 @@ type PayoutProvider interface {
     StartOnboarding(ctx, StartOnboardingInput) (*PayoutOnboardingSession, error)
     VerifyAndParseWebhook(headers, rawBody) (*PayoutWebhookEvent, error)
     RequestInstantPayout(ctx, InstantPayoutInput) (*InstantPayoutResult, error)
+    GetPayoutStatus(ctx, providerPayoutID) (*InstantPayoutResult, error)
 }
 ```
 
-Events are normalized into a small taxonomy (`account.created` / `activated` / `updated` / `rejected`) — service layer never reads provider-native event names. Webhook signature verification is per-provider HMAC; failures surface as the typed error and the handler replies 401 to trigger provider retry with backoff.
+`RequestInstantPayout` takes integer minor units (`599` = $5.99 USD); each provider converts to its native wire representation with exact integer math — Wise and Airwallex send ordinary currency decimals (`5.99`), Stripe sends minor units unchanged. `GetPayoutStatus` is the reconciliation path when a transfer webhook was missed; provider idempotency-key retention is finite, so look up before reissuing an old key.
+
+Events are normalized into a small taxonomy — account lifecycle (`account.created` / `activated` / `updated` / `rejected`), transfer lifecycle (`transfer.paid` / `failed` / `returned` / `reversed`), and `ignored` for verified events with nothing to apply — the service layer never reads provider-native event names. Webhook signature verification is per-provider HMAC; failures surface as the typed error and the handler replies 401 to trigger provider retry with backoff. `OnboardingService` dedupes events durably on the provider's raw event id via the basis `payout_webhook_log` table (`payout.SQLWebhookLog`) and dispatches transfer events to the application's `TransferEventSink`.
 
 ### `user_bank_info` table (basis)
 
-Ships with basis.sql. Keyed on `(user_id, partner_id)` — one bank account per (user, partner). Multi-partner users get one row per partner, with the option to **share one `provider_account_id` across rows** via `OnboardingService.LinkReusableAccount` (no provider call — the account already cleared KYC on the provider's side).
+Ships with basis.sql. **Versioned**: surrogate `id` PK, at most one **active** row per `(user_id, partner_id)` (`status='A'`, partial unique index; MySQL degrades to service-enforced). Identity-bearing changes (provider, account, tax id, holder, country, currency, address) close the active row via `OnboardingService.SupersedeBankInfo` (`status='S'`, `superseded_at`) and insert a fresh one — destination history is never overwritten; onboarding lifecycle fields mutate the active row in place. A `(id, partner_id)` unique index lets downstream tables pin an exact destination version with a declared composite FK. Multi-partner users get one active row per partner, with the option to **share one `provider_account_id` across rows** via `OnboardingService.LinkReusableAccount` (no provider call — the account already cleared KYC on the provider's side; the link copies the source row's real activation state, never manufactures it).
 
-Columns: `country_code`, `currency`, `account_holder_name`, `billing_address`, `tax_id_type`, `tax_id_encrypted`, `provider`, `provider_account_id`, `provider_agreement`, `provider_onboarded_at`. PartnerSpecific auto-filter applies via the `partner_id` FK.
+Columns: `country_code`, `currency`, `account_holder_name`, `billing_address`, `tax_id_type`, `tax_id_encrypted` (secret display mode — never ordinary CRUD input), `provider`, `provider_account_id`, `provider_agreement`, `provider_onboarded_at`, `status`, `superseded_at`. PartnerSpecific auto-filter applies via the `partner_id` FK.
 
 ### Downstream wiring
 
@@ -1488,6 +1496,8 @@ svc := &payout.OnboardingService{
     Provider:            provider,
     OnboardingReturnURL: *kcommon.PayoutReturnURL,
     WebhookCallbackURL:  *kcommon.PayoutWebhookURL,
+    WebhookLog:          payout.NewSQLWebhookLog(db), // durable event-id dedup — required in production
+    TransferSink:        appPayoutLedger,             // your TransferEventSink; nil = log-only until the ledger lands
     Journal:             journal,
 }
 h := &handler.PayoutHandler{
@@ -1505,6 +1515,8 @@ Routes registered:
 | POST | `/api/v1/payout/reusable`      | session | List user's other-partner accounts |
 | POST | `/api/v1/payout/reusable/link` | session | Reuse an account on the current partner |
 | POST | `/api/v1/payout/status`        | session | "Onboarding complete?" boolean |
+| POST | `/api/v1/payout/bank/replace`  | session | Atomic bank-info version replacement (wire `SealTaxID` on the handler) |
+| POST | `/api/v1/payout/beneficiary/register` | session | Create provider Beneficiary from app-collected details, link as destination |
 | POST | `/api/v1/webhook/payout/{AW\|SC\|WI}` | signature | Provider webhook intake |
 
 ### Flags
@@ -1518,34 +1530,26 @@ Routes registered:
 | `wise_api_base` | `https://api.sandbox.transferwise.tech` | Wise Platform REST API base — flip to `https://api.wise.com` for production |
 | `wise_profile_id` | (empty) | Wise platform profile id (numeric). **Required** when `payout_provider=WI` |
 
-### Wise specifics — recipient model + funding gap
+### Wise specifics — recipient model + balance funding
 
 Wise's Platform API does not have a hosted KYC flow for platform-paid recipients. Bank details flow through the platform's own UI, then the platform creates the recipient via API. To stay within `user_bank_info`'s schema (no IBAN/sort_code/BIC columns), the keel implementation uses **`type=email` recipients** — Wise sends the recipient an email claim link and they enter their own bank details on Wise's side. `StartOnboarding` returns an empty `URL` and a numeric recipient id in `ExternalAccountID`; sail's frontend should render "linked, awaiting recipient email confirmation" when `URL` is empty.
 
-**Funding is not wired.** `RequestInstantPayout` creates the Wise transfer via `POST /v3/profiles/{profile}/quotes` + `POST /v1/transfers`, but it does NOT call `POST /v3/profiles/{profile}/transfers/{id}/payments` to fund it. Wise's funding endpoint requires SCA challenge handling (browser-based 2FA / approval) that keel does not surface today. After `RequestInstantPayout` returns successfully, the transfer sits in `status="incoming_payment_waiting"` indefinitely until something funds it.
-
-Three options for downstream apps:
-
-1. **Manual funding from the Wise dashboard.** Cheapest path. An operator logs into Wise and clicks "Pay" on the transfer. Fine for low-volume / B2B use cases.
-2. **Bridge to a downstream funding worker.** The app polls or listens for Wise webhook `transfers#updated → status=incoming_payment_waiting`, then calls `/v3/profiles/.../payments` from a context that can handle SCA (typically a browser-bridge flow).
-3. **Skip Wise.** Stripe Connect's `transfers` API funds atomically; Airwallex's `payouts` API does the same. Wise is the odd one out — its split-quote-then-fund model is by design.
-
-If you intend to ship Wise-backed payouts to production, choice 2 is the realistic path. Track the Wise transfer state alongside your payout ledger and surface the unfunded state to operators / the recipient until the payment leg lands.
+`RequestInstantPayout` creates the Wise transfer via `POST /v3/profiles/{profile}/quotes` + `POST /v1/transfers`, then **funds it from the profile's Wise balance** (`POST /v3/profiles/{profile}/transfers/{id}/payments`, `type=BALANCE`) — creation alone was never disbursement. A funding rejection is a loud error; the idempotency key stays valid, so a retry re-creates nothing and re-attempts funding. Profiles with Strong Customer Authentication enabled reject the balance payment with an approval challenge — resolve SCA at the profile level before shipping Wise-backed payouts. Track transfer state through `transfers#state-change` webhooks (normalized to `transfer.*` events) or `GetPayoutStatus` polling.
 
 ### Secrets
 
 | Secret | Required | Source |
 |---|---|---|
 | `payout_provider_key` | yes (when payouts enabled) | Provider dashboard — API key / bearer token |
-| `payout_webhook_secret` | yes (when payouts enabled) | Same dashboard — HMAC signing key |
+| `payout_webhook_secret` | yes (when payouts enabled) | Airwallex / Stripe: HMAC signing key. Wise: the PEM **public** key Wise publishes for RSA-SHA256 webhook signatures |
 
 ### What the application owns
 
 `OnboardingService` deliberately stops at the bank-info table. The calling application is responsible for:
 
 - **Fee / minimum / cooldown** policy on `RequestInstantPayout`. Keel runs the transfer; the application gates whether it should.
-- **Payout ledger** — recording the returned `ProviderPayoutID` against the application's domain table.
-- **Idempotency cache** — Valkey dedupe keyed on `RawEventID` is recommended for high-volume webhooks.
+- **Payout ledger + state machine** — recording the returned `ProviderPayoutID` against the application's domain table and consuming `transfer.*` events via a `TransferEventSink`. A payout is paid only on provider-confirmed completion, never on creation.
+- **Reconciliation cadence** — polling `GetPayoutStatus` for payouts stuck in a non-terminal state past a threshold. (Event dedup itself is keel's job now — `payout_webhook_log` — not an application cache.)
 
 ## Table Actions
 
@@ -2242,20 +2246,38 @@ erDiagram
         TIMESTAMP received_at
         TIMESTAMP processed_at
     }
+    payout_webhook_log {
+        BIGINT id PK
+        CHAR provider
+        VARCHAR event_id
+        VARCHAR event_type
+        VARCHAR provider_account_id
+        VARCHAR provider_transfer_id
+        CHAR processing_status
+        TEXT error_message
+        TEXT raw_payload
+        TIMESTAMP received_at
+        TIMESTAMP processed_at
+    }
 ```
 
-Psyment, billing and invoice
+Payment, billing and invoice
 
 ```mermaid
 erDiagram
-    payment_record }o--|| subscription_plan : for
     business_partner ||--o{ payment_record : pays
+    invoice ||--o{ payment_record : settles
     payment_method }o--|| business_partner : stores
     partner_billing_customer }o--|| business_partner : "billing customer"
     business_partner ||--o{ invoice : billed
     invoice ||--o{ invoice_line : contains
+    invoice_line ||--o| subscription_invoice_line : "sold as"
+    subscription_invoice_line }o--|| subscription_plan : bills
+    subscription_invoice_line }o--|| subscription_addon : bills
+    payment_record ||--o{ payment_invoice_line_allocation : allocates
+    invoice_line ||--o{ payment_invoice_line_allocation : receives
     business_partner ||--o{ user_bank_info : "scopes payouts"
-    user_bank_info }o--|| user_account : "owns (1 per partner)"
+    user_bank_info }o--|| user_account : "owns (1 active per partner)"
     user_account ||--o{ user_payment_method : saves
 
     payment_method {
@@ -2271,20 +2293,30 @@ erDiagram
         BIGINT id PK
         BIGINT partner_id FK
         VARCHAR provider
-        VARCHAR provider_payment_id
+        VARCHAR provider_payment_id UK
         VARCHAR provider_event_type
         NUMERIC amount
+        BIGINT amount_minor
         CHAR currency
-        VARCHAR plan_id FK
-        BIGINT invoice_id
+        BIGINT invoice_id FK
         CHAR payment_status
         TIMESTAMP paid_at
         TEXT raw_payload
         TIMESTAMP created_at
     }
+    payment_invoice_line_allocation {
+        BIGINT id PK
+        BIGINT payment_record_id FK
+        BIGINT invoice_id FK
+        INTEGER invoice_line_seq FK
+        CHAR entry_type
+        BIGINT amount_minor
+        TIMESTAMP created_at
+    }
     user_bank_info {
-        BIGINT user_id PK,FK
-        BIGINT partner_id PK,FK
+        BIGINT id PK
+        BIGINT user_id FK
+        BIGINT partner_id FK
         CHAR country_code
         CHAR currency
         VARCHAR account_holder_name
@@ -2295,6 +2327,8 @@ erDiagram
         VARCHAR provider_account_id
         BOOLEAN provider_agreement
         TIMESTAMP provider_onboarded_at
+        CHAR status
+        TIMESTAMP superseded_at
         TIMESTAMP created_at
         TIMESTAMP updated_at
     }
@@ -2331,6 +2365,15 @@ erDiagram
         INTEGER quantity
         NUMERIC unit_price
         NUMERIC amount
+        BIGINT amount_minor
+        TIMESTAMP service_from
+        TIMESTAMP service_to
+    }
+    subscription_invoice_line {
+        BIGINT invoice_id PK,FK
+        INTEGER invoice_line_seq PK,FK
+        VARCHAR plan_id FK
+        VARCHAR addon_id FK
     }
     user_payment_method {
         BIGINT id PK
@@ -2428,9 +2471,14 @@ erDiagram
 | `subscription_addon` | Optional add-on features |
 | `partner_plan_subscription` / `partner_addon_subscription` | Active subscriptions per partner |
 | `usage_ledger` | Resource usage tracking for quota enforcement |
-| `payment_webhook_log` | Raw inbound provider webhooks with idempotency + audit |
+| `payment_webhook_log` | Raw inbound payment-provider webhooks with idempotency + audit |
+| `payout_webhook_log` | Raw inbound payout-provider webhooks (account + transfer lifecycle) with idempotency + audit |
 | `payment_method` | Stored payment methods per partner (provider customer tokens) |
-| `payment_record` | Completed/failed/refunded payment transactions |
+| `payment_record` | Completed/failed/refunded payment transactions (minor-unit amount, provider-scoped unique payment id, invoice FK) |
+| `payment_invoice_line_allocation` | Durable payment/refund → invoice-line allocation in minor units, invoice-consistent by composite FK |
+| `invoice` / `invoice_line` | Invoices; lines are domain-neutral finance data with minor units + covered-service period |
+| `subscription_invoice_line` | Subscription-domain extension naming the plan/add-on an invoice line bills |
+| `user_bank_info` | Versioned payout destinations — one active row per (user, partner), history preserved |
 | `country` / `state` / `county` | Geographic hierarchy |
 | `service_registry` | Background worker registration and heartbeat |
 

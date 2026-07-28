@@ -35,6 +35,7 @@ type captureRequest struct {
 	contentType   string
 	authorization string
 	idempotency   string
+	stripeAccount string
 	body          string
 }
 
@@ -46,6 +47,7 @@ func capture(r *http.Request) captureRequest {
 		contentType:   r.Header.Get("Content-Type"),
 		authorization: r.Header.Get("Authorization"),
 		idempotency:   r.Header.Get("Idempotency-Key"),
+		stripeAccount: r.Header.Get("Stripe-Account"),
 		body:          string(b),
 	}
 }
@@ -137,7 +139,7 @@ func TestAirwallex_RequestInstantPayout_InsufficientBalanceTyped(t *testing.T) {
 
 	_, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
 		UserID: 1, PartnerID: 1,
-		ProviderAccountID: "acct_xxx", Amount: 100, Currency: "USD",
+		ProviderAccountID: "ben_xxx", Amount: 100, Currency: "USD",
 		IdempotencyKey: "k-1",
 	})
 	if !errors.Is(err, ErrInsufficientBalance) {
@@ -148,8 +150,9 @@ func TestAirwallex_RequestInstantPayout_InsufficientBalanceTyped(t *testing.T) {
 func TestAirwallex_VerifyWebhook_Signature(t *testing.T) {
 	p, _ := NewAirwallexProvider("key", "shh", nil)
 	body := []byte(`{"id":"ev_1","name":"account.activated","account_id":"acct_aw_123"}`)
-	const ts = "1234567890"
-	sig := hmacHex("shh", []byte(ts), []byte("."), body)
+	// Airwallex signs timestamp||body — no separator.
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	sig := hmacHex("shh", []byte(ts), body)
 	ev, err := p.VerifyAndParseWebhook(map[string][]string{
 		"X-Signature": {sig}, "X-Timestamp": {ts},
 	}, body)
@@ -241,11 +244,19 @@ func TestStripeConnect_StartOnboarding_RequiresEmail(t *testing.T) {
 	}
 }
 
-func TestStripeConnect_RequestInstantPayout_FormShape(t *testing.T) {
-	var req captureRequest
+func TestStripeConnect_RequestInstantPayout_TwoLegs(t *testing.T) {
+	var transferReq, payoutReq captureRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		req = capture(r)
-		_, _ = w.Write([]byte(`{"id":"tr_1","status":"pending"}`))
+		switch r.URL.Path {
+		case "/v1/transfers":
+			transferReq = capture(r)
+			_, _ = w.Write([]byte(`{"id":"tr_1"}`))
+		case "/v1/payouts":
+			payoutReq = capture(r)
+			_, _ = w.Write([]byte(`{"id":"po_1","status":"in_transit","arrival_date":1700000000}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
 	}))
 	defer ts.Close()
 
@@ -260,20 +271,33 @@ func TestStripeConnect_RequestInstantPayout_FormShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestInstantPayout: %v", err)
 	}
-	if res.ProviderPayoutID != "tr_1" || res.Status != "pending" {
-		t.Errorf("result=%+v", res)
+	if res.ProviderPayoutID != "acct_x:po_1" || res.Status != "pending" {
+		t.Errorf("result=%+v, want acct_x:po_1 pending", res)
 	}
-	if req.idempotency != "idem-1" {
-		t.Errorf("Idempotency-Key=%q", req.idempotency)
+	if res.ProviderFundingID != "tr_1" {
+		t.Errorf("ProviderFundingID=%q, want tr_1 (reversals correlate on the funding leg)", res.ProviderFundingID)
 	}
-	if !strings.Contains(req.body, "method=instant") {
-		t.Errorf("body missing method=instant: %s", req.body)
+	if !strings.Contains(payoutReq.body, "method=instant") {
+		t.Errorf("payout leg must request the instant rail: %s", payoutReq.body)
 	}
-	if !strings.Contains(req.body, "destination=acct_x") {
-		t.Errorf("body missing destination: %s", req.body)
+	if transferReq.idempotency != "idem-1" {
+		t.Errorf("transfer Idempotency-Key=%q", transferReq.idempotency)
 	}
-	if !strings.Contains(req.body, "amount=2500") {
-		t.Errorf("body missing amount: %s", req.body)
+	if strings.Contains(transferReq.body, "method=instant") {
+		t.Errorf("transfer must not send unsupported method=instant: %s", transferReq.body)
+	}
+	if !strings.Contains(transferReq.body, "destination=acct_x") || !strings.Contains(transferReq.body, "amount=2500") {
+		t.Errorf("transfer body=%s", transferReq.body)
+	}
+	// The bank leg is a payout on the connected account.
+	if payoutReq.stripeAccount != "acct_x" {
+		t.Errorf("payout Stripe-Account=%q, want acct_x", payoutReq.stripeAccount)
+	}
+	if payoutReq.idempotency != "idem-1-po" {
+		t.Errorf("payout Idempotency-Key=%q, want idem-1-po", payoutReq.idempotency)
+	}
+	if !strings.Contains(payoutReq.body, "amount=2500") {
+		t.Errorf("payout body=%s", payoutReq.body)
 	}
 }
 
@@ -331,6 +355,7 @@ func TestWise_StartOnboarding_EmailRecipient(t *testing.T) {
 	p, _ := NewWiseProvider("k", "s", nil)
 	p.apiBase = ts.URL
 	p.profileID = "1234"
+	p.profileNum = 1234
 
 	sess, err := p.StartOnboarding(context.Background(), StartOnboardingInput{
 		Email: "rcpt@example.com", AccountHolder: "Recipient", Currency: "EUR",
@@ -348,14 +373,14 @@ func TestWise_StartOnboarding_EmailRecipient(t *testing.T) {
 	var payload struct {
 		Currency          string         `json:"currency"`
 		Type              string         `json:"type"`
-		Profile           string         `json:"profile"`
+		Profile           int64          `json:"profile"`
 		AccountHolderName string         `json:"accountHolderName"`
 		Details           map[string]any `json:"details"`
 	}
 	if err := json.Unmarshal([]byte(req.body), &payload); err != nil {
 		t.Fatalf("body decode: %v\n%s", err, req.body)
 	}
-	if payload.Type != "email" || payload.Profile != "1234" || payload.Currency != "EUR" {
+	if payload.Type != "email" || payload.Profile != 1234 || payload.Currency != "EUR" {
 		t.Errorf("payload=%+v", payload)
 	}
 	if payload.Details["email"] != "rcpt@example.com" {
@@ -363,20 +388,32 @@ func TestWise_StartOnboarding_EmailRecipient(t *testing.T) {
 	}
 }
 
-func TestWise_VerifyWebhook_PlainSHA256(t *testing.T) {
-	p, _ := NewWiseProvider("k", "shh", nil)
+func TestWise_VerifyWebhook_RSASignature(t *testing.T) {
+	// Wise signs the raw body with RSA-SHA256; the header carries the
+	// Base64 signature and keel verifies with Wise's PUBLIC key.
+	key, pubPEM := genWiseTestKey(t)
+	p, _ := NewWiseProvider("k", pubPEM, nil)
 	body := []byte(`{"event_id":"e1","event_type":"recipients#updated","data":{"resource":{"id":"r1","status":"ACTIVE"}}}`)
-	// Wise's signature is plain SHA-256 of (secret || body), NOT HMAC.
-	h := sha256.Sum256(append([]byte("shh"), body...))
-	sig := hex.EncodeToString(h[:])
 	ev, err := p.VerifyAndParseWebhook(map[string][]string{
-		"X-Signature-SHA256": {sig},
+		"X-Signature-SHA256": {wiseTestSign(t, key, body)},
 	}, body)
 	if err != nil {
 		t.Fatalf("VerifyAndParseWebhook: %v", err)
 	}
 	if ev.Type != PayoutEventAccountActivated || ev.RawEventID != "e1" {
 		t.Errorf("event=%+v", ev)
+	}
+}
+
+func TestWise_VerifyWebhook_RejectsBadSignature(t *testing.T) {
+	_, pubPEM := genWiseTestKey(t)
+	otherKey, _ := genWiseTestKey(t)
+	p, _ := NewWiseProvider("k", pubPEM, nil)
+	body := []byte(`{"event_id":"e1","event_type":"recipients#updated","data":{"resource":{"id":"r1","status":"ACTIVE"}}}`)
+	if _, err := p.VerifyAndParseWebhook(map[string][]string{
+		"X-Signature-SHA256": {wiseTestSign(t, otherKey, body)},
+	}, body); err == nil || !strings.Contains(err.Error(), "invalid signature") {
+		t.Fatalf("err=%v, want invalid signature", err)
 	}
 }
 

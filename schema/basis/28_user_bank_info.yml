@@ -1,11 +1,19 @@
 table: user_bank_info
 comment: |
-  Per (user, partner) bank account details for out-bound payouts.
+  Versioned (user, partner) bank account details for out-bound payouts.
   Owned by keel/payout. Raw routing details live with the provider
   (Airwallex / Stripe Connect / Wise); this row carries only the
   provider handle plus tax/correspondence metadata.
+  Rows are versions: identity-bearing changes (provider, account,
+  tax id, holder, country, currency, address) close the active row
+  (status='S', superseded_at) and insert a new one; onboarding
+  lifecycle fields mutate the active row in place. At most one
+  active row per (user_id, partner_id) — partial unique index on
+  PostgreSQL, service-enforced on MySQL.
 order: 50
 columns:
+  - name: id
+    type: BIGINT
   - name: user_id
     type: BIGINT
   - name: partner_id
@@ -33,14 +41,33 @@ columns:
   - name: provider_onboarded_at
     type: TIMESTAMP
     nullable: true
+  - name: status
+    type: CHAR(1)
+    default: A
+  - name: superseded_at
+    type: TIMESTAMP
+    nullable: true
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
   - name: updated_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [user_id, partner_id]
+primary_key: [id]
+sequence:
+  name: user_bank_info_seq
+  column: id
+checks:
+  - name: chk_user_bank_info_lifecycle
+    expression: "(status = 'A' AND superseded_at IS NULL) OR (status = 'S' AND superseded_at IS NOT NULL)"
 indexes:
+  - name: user_bank_info_active_uq
+    columns: [user_id, partner_id]
+    unique: true
+    where: "status = 'A'"
+  - name: user_bank_info_id_partner_uq
+    columns: [id, partner_id]
+    unique: true
   - name: idx_user_bank_info_partner
     columns: [partner_id]
 foreign_keys:

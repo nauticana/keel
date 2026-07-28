@@ -17,6 +17,7 @@ const (
 	qSSCreateInvoice = "ss_create_invoice"
 	qSSInsertLine    = "ss_insert_line"
 	qSSMarkPaid      = "ss_mark_paid"
+	qSSInsertSubLine = "ss_insert_sub_line"
 	qSSMarkAction    = "ss_mark_action_required"
 	qSSMarkRetry     = "ss_mark_retry"
 	qSSListRetryable = "ss_list_retryable"
@@ -33,8 +34,12 @@ INSERT INTO invoice (id, partner_id, invoice_number, status, subtotal, tax, tota
 VALUES (?, ?, ?, 'O', ?, 0, ?, ?, ?, CURRENT_TIMESTAMP)`,
 
 	qSSInsertLine: `
-INSERT INTO invoice_line (invoice_id, seq, description, quantity, unit_price, amount)
-VALUES (?, ?, ?, ?, ?, ?)`,
+INSERT INTO invoice_line (invoice_id, seq, description, quantity, unit_price, amount, amount_minor, service_from, service_to)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+
+	qSSInsertSubLine: `
+INSERT INTO subscription_invoice_line (invoice_id, invoice_line_seq, plan_id, addon_id)
+VALUES (?, ?, ?, ?)`,
 
 	qSSMarkPaid: `UPDATE invoice SET status = 'P', paid_at = CURRENT_TIMESTAMP, provider_charge_id = ? WHERE id = ?`,
 
@@ -282,9 +287,29 @@ func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64
 	}
 	for i, l := range draft.Lines {
 		unit := payment.MinorToMajor(l.UnitPriceMinor, draft.Currency)
-		amount := payment.MinorToMajor(l.UnitPriceMinor*l.Quantity, draft.Currency)
-		if _, err := tx.Query(ctx, qSSInsertLine, id, i+1, l.Description, l.Quantity, unit, amount); err != nil {
+		amountMinor := l.UnitPriceMinor * l.Quantity
+		amount := payment.MinorToMajor(amountMinor, draft.Currency)
+		var svcFrom, svcTo any
+		if !l.ServiceFrom.IsZero() {
+			svcFrom = l.ServiceFrom
+		}
+		if !l.ServiceTo.IsZero() {
+			svcTo = l.ServiceTo
+		}
+		if _, err := tx.Query(ctx, qSSInsertLine, id, i+1, l.Description, l.Quantity, unit, amount, amountMinor, svcFrom, svcTo); err != nil {
 			return 0, err
+		}
+		if l.PlanID != "" || l.AddonID != "" {
+			var planID, addonID any
+			if l.PlanID != "" {
+				planID = l.PlanID
+			}
+			if l.AddonID != "" {
+				addonID = l.AddonID
+			}
+			if _, err := tx.Query(ctx, qSSInsertSubLine, id, i+1, planID, addonID); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -341,7 +366,14 @@ func (e *SelfScheduledEngine) chargeDueSub(ctx context.Context, row []any) {
 	amount := InstallmentMinor(total, n, k)
 
 	draft := &InvoiceDraft{Currency: currency, Lines: []InvoiceLineDraft{
-		{Description: fmt.Sprintf("%s subscription", planID), Quantity: 1, UnitPriceMinor: amount},
+		{
+			Description:    fmt.Sprintf("%s subscription", planID),
+			Quantity:       1,
+			UnitPriceMinor: amount,
+			PlanID:         planID,
+			ServiceFrom:    nextCharge,
+			ServiceTo:      terms.BillingCycle.NextRenewal(nextCharge),
+		},
 	}}
 	invID, err := e.createInvoice(ctx, partnerID, draft)
 	if err != nil {

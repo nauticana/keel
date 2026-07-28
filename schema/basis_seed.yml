@@ -10,6 +10,7 @@ seeds:
       - [tax_id_type, "Tax ID Type"]
       - [payment_method_type, "Payment Method Type"]
       - [measurement_unit, "Measurement Unit"]
+      - [bank_info_status, "Bank Info Status"]
 
   - table: constant_value
     columns: [constant_id, value, caption]
@@ -32,6 +33,8 @@ seeds:
       - [payment_method_type, wallet,     "Wallet"]
       - [payment_method_type, apple_pay,  "Apple Pay"]
       - [payment_method_type, google_pay, "Google Pay"]
+      - [bank_info_status, A, "Active"]
+      - [bank_info_status, S, "Superseded"]
       # Measurement / pricing units. Value is the API-returned token (AI-facing:
       # "per hour" reads better than "HR"); caption is the dropdown label.
       # time + service  (the units service pricing needs most)
@@ -82,7 +85,9 @@ seeds:
       - [action_kind, table_action, action_kind]
       - [payout_provider, user_bank_info, provider]
       - [tax_id_type, user_bank_info, tax_id_type]
+      - [bank_info_status, user_bank_info, status]
       - [payment_method_type, user_payment_method, method_type]
+      - [payout_provider, payout_webhook_log, provider]
 
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
@@ -97,7 +102,6 @@ seeds:
       - [counties, S, "*"]
       - [partner_payment_methods, S, "*"]
       - [partner_payment_records, S, "*"]
-      - [payment_record_plans, D, caption]
       - [application_config_values, S, "*"]
 
   - table: authorization_object
@@ -135,6 +139,8 @@ seeds:
       - [payment_method, payment_method]
       - [user_bank_info, user_bank_info]
       - [user_payment_method, user_payment_method]
+      - [payout_webhook_log, payout_webhook_log]
+      - [payment_invoice_line_allocation, payment_invoice_line_allocation]
       - [table_action, table_action]
       - [application_config_flag, application_config_flag]
 
@@ -204,7 +210,9 @@ seeds:
       - [20,  false, payments, payment_methods, payment_method, "Payment Methods"]
       - [30,  false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]
       - [40,  true,  payments, user_payment_methods, user_payment_method, "User Payment Methods"]
+      - [50,  false, payments, payment_invoice_line_allocations, payment_invoice_line_allocation, "Payment Allocations"]
       - [10,  true,  payouts,  user_bank_infos, user_bank_info, "Bank Accounts"]
+      - [20,  false, payouts,  payout_webhook_logs, payout_webhook_log, "Webhook Logs"]
 
   # Audit-column display modes for keel's own framework tables. R = display-only
   # (system-set, excluded from writes); U = keel stamps now() on UPDATE. All
@@ -225,6 +233,10 @@ seeds:
       - [payment_record,      created_at,         R]
       - [user_bank_info,      created_at,         R]
       - [user_bank_info,      updated_at,         U]
+      - [user_bank_info,      superseded_at,      R]
+      - [user_bank_info,      tax_id_encrypted,   S]
+      - [payout_webhook_log,  received_at,        R]
+      - [payment_invoice_line_allocation, created_at, R]
       - [user_payment_method, created_at,         R]
       - [api_key,             key_hash,           S]
       - [user_account,        passtext,           S]
@@ -313,6 +325,8 @@ seeds:
       - [payout_return_url,            string,   false, "",                                    "Deep-link the payout provider redirects back to"]
       - [payout_webhook_url,           string,   false, "",                                    "Public host for payout provider webhooks"]
       - [airwallex_api_base,           string,   true,  "https://api-demo.airwallex.com",      "Airwallex REST API base URL"]
+      - [airwallex_transfer_method,    string,   true,  "LOCAL",                               "Airwallex payout rail: LOCAL | SWIFT"]
+      - [airwallex_transfer_reason,    string,   true,  "professional_business_services",      "Airwallex documented transfer reason code"]
       - [wise_api_base,                string,   true,  "https://api.sandbox.transferwise.tech", "Wise Platform REST API base URL"]
       - [wise_profile_id,              string,   true,  "",                                    "Wise platform profile id (numeric)"]
 
