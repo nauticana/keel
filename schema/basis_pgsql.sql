@@ -877,7 +877,7 @@ INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES
 -- Consumers that recognize value per line (commission ledgers, revenue
 -- reporting, partial-refund processing) key on this row rather than
 -- reconstructing identity from payment + invoice + line columns.
-CREATE TABLE IF NOT EXISTS payment_invoice_line_allocation (
+CREATE TABLE IF NOT EXISTS invoice_line_payment (
     id                                   BIGINT        NOT NULL,
     payment_record_id                    BIGINT        NOT NULL,
     invoice_id                           BIGINT        NOT NULL,
@@ -885,14 +885,14 @@ CREATE TABLE IF NOT EXISTS payment_invoice_line_allocation (
     entry_type                           CHAR(1)       NOT NULL DEFAULT 'P',
     amount_minor                         BIGINT        NOT NULL,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT payment_invoice_line_allocation_pk PRIMARY KEY (id),
-    CONSTRAINT chk_pmt_line_alloc_sign CHECK ((entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0))
+    CONSTRAINT invoice_line_payment_pk PRIMARY KEY (id),
+    CONSTRAINT chk_inv_line_pmt_sign CHECK ((entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0))
 );
-CREATE INDEX IF NOT EXISTS idx_pmt_line_alloc_payment ON payment_invoice_line_allocation(payment_record_id);
-CREATE INDEX IF NOT EXISTS idx_pmt_line_alloc_line ON payment_invoice_line_allocation(invoice_id, invoice_line_seq);
+CREATE INDEX IF NOT EXISTS idx_inv_line_pmt_payment ON invoice_line_payment(payment_record_id);
+CREATE INDEX IF NOT EXISTS idx_inv_line_pmt_line ON invoice_line_payment(invoice_id, invoice_line_seq);
 
-CREATE SEQUENCE IF NOT EXISTS payment_invoice_line_allocation_seq INCREMENT BY 1 START WITH 1;
-INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payment_invoice_line_allocation', 'id', 'payment_invoice_line_allocation_seq') ON CONFLICT DO NOTHING;
+CREATE SEQUENCE IF NOT EXISTS invoice_line_payment_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('invoice_line_payment', 'id', 'invoice_line_payment_seq') ON CONFLICT DO NOTHING;
 
 -- Raw inbound payout-provider webhooks — durable event-id idempotency +
 -- audit for account-lifecycle and transfer-lifecycle events. Financial
@@ -1478,18 +1478,18 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
-     WHERE constraint_name = 'payment_allocations' AND table_name = 'payment_invoice_line_allocation'
+     WHERE constraint_name = 'payment_allocations' AND table_name = 'invoice_line_payment'
   ) THEN
-    ALTER TABLE payment_invoice_line_allocation ADD CONSTRAINT payment_allocations FOREIGN KEY (payment_record_id, invoice_id) REFERENCES payment_record(id, invoice_id);
+    ALTER TABLE invoice_line_payment ADD CONSTRAINT payment_allocations FOREIGN KEY (payment_record_id, invoice_id) REFERENCES payment_record(id, invoice_id);
   END IF;
 END $$;
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
-     WHERE constraint_name = 'invoice_line_allocations' AND table_name = 'payment_invoice_line_allocation'
+     WHERE constraint_name = 'invoice_line_allocations' AND table_name = 'invoice_line_payment'
   ) THEN
-    ALTER TABLE payment_invoice_line_allocation ADD CONSTRAINT invoice_line_allocations FOREIGN KEY (invoice_id, invoice_line_seq) REFERENCES invoice_line(invoice_id, seq);
+    ALTER TABLE invoice_line_payment ADD CONSTRAINT invoice_line_allocations FOREIGN KEY (invoice_id, invoice_line_seq) REFERENCES invoice_line(invoice_id, seq);
   END IF;
 END $$;
 DO $$

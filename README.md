@@ -1428,7 +1428,7 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 | `payment_webhook_log` | Raw inbound webhooks — idempotency key on `(provider, event_id)` + audit |
 | `payment_method` | Partner-owned provider customer tokens (`stripe cus_...`) |
 | `payment_record` | Completed / failed / refunded transactions — `amount_minor` is authoritative; provider-scoped unique payment id; `invoice_id` FK |
-| `payment_invoice_line_allocation` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units |
+| `invoice_line_payment` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units |
 
 ### Checkout modes
 
@@ -2274,8 +2274,8 @@ erDiagram
     invoice_line ||--o| subscription_invoice_line : "sold as"
     subscription_invoice_line }o--|| subscription_plan : bills
     subscription_invoice_line }o--|| subscription_addon : bills
-    payment_record ||--o{ payment_invoice_line_allocation : allocates
-    invoice_line ||--o{ payment_invoice_line_allocation : receives
+    payment_record ||--o{ invoice_line_payment : allocates
+    invoice_line ||--o{ invoice_line_payment : receives
     business_partner ||--o{ user_bank_info : "scopes payouts"
     user_bank_info }o--|| user_account : "owns (1 active per partner)"
     user_account ||--o{ user_payment_method : saves
@@ -2304,7 +2304,7 @@ erDiagram
         TEXT raw_payload
         TIMESTAMP created_at
     }
-    payment_invoice_line_allocation {
+    invoice_line_payment {
         BIGINT id PK
         BIGINT payment_record_id FK
         BIGINT invoice_id FK
@@ -2475,7 +2475,7 @@ erDiagram
 | `payout_webhook_log` | Raw inbound payout-provider webhooks (account + transfer lifecycle) with idempotency + audit |
 | `payment_method` | Stored payment methods per partner (provider customer tokens) |
 | `payment_record` | Completed/failed/refunded payment transactions (minor-unit amount, provider-scoped unique payment id, invoice FK) |
-| `payment_invoice_line_allocation` | Durable payment/refund → invoice-line allocation in minor units, invoice-consistent by composite FK |
+| `invoice_line_payment` | Durable payment/refund → invoice-line allocation in minor units, invoice-consistent by composite FK |
 | `invoice` / `invoice_line` | Invoices; lines are domain-neutral finance data with minor units + covered-service period |
 | `subscription_invoice_line` | Subscription-domain extension naming the plan/add-on an invoice line bills |
 | `user_bank_info` | Versioned payout destinations — one active row per (user, partner), history preserved |

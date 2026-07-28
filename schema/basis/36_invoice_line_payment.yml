@@ -1,4 +1,4 @@
-table: payment_invoice_line_allocation
+table: invoice_line_payment
 comment: |
   Durable allocation of one payment (or refund) to one invoice line in
   integer minor units. entry_type P allocates a collected payment
@@ -27,15 +27,15 @@ columns:
     default: CURRENT_TIMESTAMP
 primary_key: [id]
 sequence:
-  name: payment_invoice_line_allocation_seq
+  name: invoice_line_payment_seq
   column: id
 checks:
-  - name: chk_pmt_line_alloc_sign
+  - name: chk_inv_line_pmt_sign
     expression: "(entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0)"
 indexes:
-  - name: idx_pmt_line_alloc_payment
+  - name: idx_inv_line_pmt_payment
     columns: [payment_record_id]
-  - name: idx_pmt_line_alloc_line
+  - name: idx_inv_line_pmt_line
     columns: [invoice_id, invoice_line_seq]
 foreign_keys:
   # Invoice-consistent by construction: the payment FK carries invoice_id,

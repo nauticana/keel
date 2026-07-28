@@ -140,7 +140,7 @@ seeds:
       - [user_bank_info, user_bank_info]
       - [user_payment_method, user_payment_method]
       - [payout_webhook_log, payout_webhook_log]
-      - [payment_invoice_line_allocation, payment_invoice_line_allocation]
+      - [invoice_line_payment, invoice_line_payment]
       - [table_action, table_action]
       - [application_config_flag, application_config_flag]
 
@@ -210,7 +210,7 @@ seeds:
       - [20,  false, payments, payment_methods, payment_method, "Payment Methods"]
       - [30,  false, payments, payment_webhook_logs, payment_webhook_log, "Webhook Logs"]
       - [40,  true,  payments, user_payment_methods, user_payment_method, "User Payment Methods"]
-      - [50,  false, payments, payment_invoice_line_allocations, payment_invoice_line_allocation, "Payment Allocations"]
+      - [50,  false, payments, invoice_line_payments, invoice_line_payment, "Payment Allocations"]
       - [10,  true,  payouts,  user_bank_infos, user_bank_info, "Bank Accounts"]
       - [20,  false, payouts,  payout_webhook_logs, payout_webhook_log, "Webhook Logs"]
 
@@ -236,7 +236,7 @@ seeds:
       - [user_bank_info,      superseded_at,      R]
       - [user_bank_info,      tax_id_encrypted,   S]
       - [payout_webhook_log,  received_at,        R]
-      - [payment_invoice_line_allocation, created_at, R]
+      - [invoice_line_payment,  created_at,         R]
       - [user_payment_method, created_at,         R]
       - [api_key,             key_hash,           S]
       - [user_account,        passtext,           S]

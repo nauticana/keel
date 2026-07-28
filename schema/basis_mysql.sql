@@ -881,7 +881,7 @@ CREATE UNIQUE INDEX payment_record_id_invoice_uq ON payment_record(id, invoice_i
 -- Consumers that recognize value per line (commission ledgers, revenue
 -- reporting, partial-refund processing) key on this row rather than
 -- reconstructing identity from payment + invoice + line columns.
-CREATE TABLE IF NOT EXISTS payment_invoice_line_allocation (
+CREATE TABLE IF NOT EXISTS invoice_line_payment (
     id                                   BIGINT        NOT NULL,
     payment_record_id                    BIGINT        NOT NULL,
     invoice_id                           BIGINT        NOT NULL,
@@ -892,10 +892,10 @@ CREATE TABLE IF NOT EXISTS payment_invoice_line_allocation (
     PRIMARY KEY (id),
     CONSTRAINT payment_allocations FOREIGN KEY (payment_record_id, invoice_id) REFERENCES payment_record(id, invoice_id),
     CONSTRAINT invoice_line_allocations FOREIGN KEY (invoice_id, invoice_line_seq) REFERENCES invoice_line(invoice_id, seq),
-    CONSTRAINT chk_pmt_line_alloc_sign CHECK ((entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0))
+    CONSTRAINT chk_inv_line_pmt_sign CHECK ((entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_pmt_line_alloc_payment ON payment_invoice_line_allocation(payment_record_id);
-CREATE INDEX idx_pmt_line_alloc_line ON payment_invoice_line_allocation(invoice_id, invoice_line_seq);
+CREATE INDEX idx_inv_line_pmt_payment ON invoice_line_payment(payment_record_id);
+CREATE INDEX idx_inv_line_pmt_line ON invoice_line_payment(invoice_id, invoice_line_seq);
 
 -- Raw inbound payout-provider webhooks — durable event-id idempotency +
 -- audit for account-lifecycle and transfer-lifecycle events. Financial
