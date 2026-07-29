@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v1.2.37",
+      "title": "AbstractService class provided",
+      "tags": [
+        "service"
+      ],
+      "summary": "service/abstract_service.go added",
+      "body_markdown": "Additive; AbstractService is the OO base for downstream projects that talk to the database through QueryService interface. Concrete services embed it by value at the top of the struct declaration."
+    },
+    {
       "version": "v1.2.36",
       "title": "invoice_line_payment.provider_ref — source-idempotent refund allocations",
       "tags": [
