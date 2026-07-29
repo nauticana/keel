@@ -22,6 +22,9 @@ columns:
     default: P
   - name: amount_minor
     type: BIGINT
+  - name: provider_ref
+    type: VARCHAR(255)
+    nullable: true
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -33,6 +36,10 @@ checks:
   - name: chk_inv_line_pmt_sign
     expression: "(entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0)"
 indexes:
+  - name: inv_line_pmt_ref_uq
+    columns: [provider_ref]
+    unique: true
+    where: "provider_ref IS NOT NULL"
   - name: idx_inv_line_pmt_payment
     columns: [payment_record_id]
   - name: idx_inv_line_pmt_line

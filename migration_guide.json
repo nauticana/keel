@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.36",
+      "title": "invoice_line_payment.provider_ref — source-idempotent refund allocations",
+      "tags": [
+        "schema",
+        "additive"
+      ],
+      "summary": "invoice_line_payment gains a nullable provider_ref VARCHAR(255) with a partial unique index (WHERE provider_ref IS NOT NULL). Writers of R (refund) allocations pass the provider's refund/charge id so a replayed refund webhook is a database-level no-op (INSERT … ON CONFLICT (provider_ref) DO NOTHING) and every refund allocation carries its source for reconciliation — the payment_webhook_log (provider, event_id) philosophy applied to allocations. P rows may leave it null.",
+      "body_markdown": "Additive; existing consumers compile and behave unchanged.\n\n- New column: `invoice_line_payment.provider_ref VARCHAR(255) NULL`.\n- New index: `inv_line_pmt_ref_uq UNIQUE (provider_ref) WHERE provider_ref IS NOT NULL` (PostgreSQL partial; MySQL emits a plain UNIQUE, which allows multiple NULLs — same semantics).\n\n**Migration steps:** apply the regenerated basis DDL (idempotent `CREATE INDEX IF NOT EXISTS`; deployed databases add the column with `ALTER TABLE invoice_line_payment ADD COLUMN provider_ref VARCHAR(255);` before it). Refund writers should insert `entry_type='R'` rows with `provider_ref` set and `ON CONFLICT (provider_ref) WHERE provider_ref IS NOT NULL DO NOTHING`, treating zero returned rows as an already-processed replay."
+    },
+    {
       "version": "v1.2.35",
       "title": "Rename payment_invoice_line_allocation → invoice_line_payment",
       "tags": [

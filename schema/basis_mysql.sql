@@ -888,12 +888,14 @@ CREATE TABLE IF NOT EXISTS invoice_line_payment (
     invoice_line_seq                     INT           NOT NULL,
     entry_type                           CHAR(1)       NOT NULL DEFAULT 'P',
     amount_minor                         BIGINT        NOT NULL,
+    provider_ref                         VARCHAR(255) ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT payment_allocations FOREIGN KEY (payment_record_id, invoice_id) REFERENCES payment_record(id, invoice_id),
     CONSTRAINT invoice_line_allocations FOREIGN KEY (invoice_id, invoice_line_seq) REFERENCES invoice_line(invoice_id, seq),
     CONSTRAINT chk_inv_line_pmt_sign CHECK ((entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX inv_line_pmt_ref_uq ON invoice_line_payment(provider_ref);
 CREATE INDEX idx_inv_line_pmt_payment ON invoice_line_payment(payment_record_id);
 CREATE INDEX idx_inv_line_pmt_line ON invoice_line_payment(invoice_id, invoice_line_seq);
 

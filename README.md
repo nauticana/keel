@@ -1428,7 +1428,7 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 | `payment_webhook_log` | Raw inbound webhooks — idempotency key on `(provider, event_id)` + audit |
 | `payment_method` | Partner-owned provider customer tokens (`stripe cus_...`) |
 | `payment_record` | Completed / failed / refunded transactions — `amount_minor` is authoritative; provider-scoped unique payment id; `invoice_id` FK |
-| `invoice_line_payment` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units |
+| `invoice_line_payment` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units; `provider_ref` uniquely keys refund sources |
 
 ### Checkout modes
 
@@ -2311,6 +2311,7 @@ erDiagram
         INTEGER invoice_line_seq FK
         CHAR entry_type
         BIGINT amount_minor
+        VARCHAR provider_ref UK
         TIMESTAMP created_at
     }
     user_bank_info {
@@ -2475,7 +2476,7 @@ erDiagram
 | `payout_webhook_log` | Raw inbound payout-provider webhooks (account + transfer lifecycle) with idempotency + audit |
 | `payment_method` | Stored payment methods per partner (provider customer tokens) |
 | `payment_record` | Completed/failed/refunded payment transactions (minor-unit amount, provider-scoped unique payment id, invoice FK) |
-| `invoice_line_payment` | Durable payment/refund → invoice-line allocation in minor units, invoice-consistent by composite FK |
+| `invoice_line_payment` | Durable payment/refund → invoice-line allocation in minor units, invoice-consistent by composite FK; `provider_ref` uniquely keys refund sources |
 | `invoice` / `invoice_line` | Invoices; lines are domain-neutral finance data with minor units + covered-service period |
 | `subscription_invoice_line` | Subscription-domain extension naming the plan/add-on an invoice line bills |
 | `user_bank_info` | Versioned payout destinations — one active row per (user, partner), history preserved |

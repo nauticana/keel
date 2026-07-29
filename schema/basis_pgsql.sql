@@ -884,10 +884,12 @@ CREATE TABLE IF NOT EXISTS invoice_line_payment (
     invoice_line_seq                     INTEGER       NOT NULL,
     entry_type                           CHAR(1)       NOT NULL DEFAULT 'P',
     amount_minor                         BIGINT        NOT NULL,
+    provider_ref                         VARCHAR(255) ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT invoice_line_payment_pk PRIMARY KEY (id),
     CONSTRAINT chk_inv_line_pmt_sign CHECK ((entry_type = 'P' AND amount_minor > 0) OR (entry_type = 'R' AND amount_minor < 0))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS inv_line_pmt_ref_uq ON invoice_line_payment(provider_ref) WHERE provider_ref IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inv_line_pmt_payment ON invoice_line_payment(payment_record_id);
 CREATE INDEX IF NOT EXISTS idx_inv_line_pmt_line ON invoice_line_payment(invoice_id, invoice_line_seq);
 
