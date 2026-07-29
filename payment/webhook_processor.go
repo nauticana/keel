@@ -256,6 +256,12 @@ func (p *WebhookProcessor) dispatch(
 		return nil
 	}
 	event.Provider = provider.Name()
+	if enricher, ok := provider.(PaymentEventEnricher); ok {
+		if err := enricher.EnrichPaymentEvent(ctx, event); err != nil {
+			_ = p.Repo.UpdateStatus(ctx, logID, StatusFailed, err.Error())
+			return fmt.Errorf("enrich event: %w", err)
+		}
+	}
 
 	if err := handler.OnPaymentEvent(ctx, event); err != nil {
 		_ = p.Repo.UpdateStatus(ctx, logID, StatusFailed, err.Error())

@@ -220,13 +220,43 @@ func main() {
 
 ```go
 import (
-    "github.com/nauticana/keel/rest"
+    "errors"
+    "fmt"
+
+    "github.com/nauticana/keel/common"
     "github.com/nauticana/keel/handler"
+    "github.com/nauticana/keel/port"
+    "github.com/nauticana/keel/rest"
 )
 
 // Initialize REST service — reads API definitions from DB
 restService := &rest.RestService{}
 apis, reports, _ := restService.Init(ctx, db)
+
+// Optional: validate a generic CRUD batch after all parent/child writes are
+// visible, but before the transaction commits. Returning an error rolls back
+// the entire batch and is surfaced by RestHandler as a failed POST.
+validationQueries := map[string]string{
+    "validate_schedule": `SELECT COUNT(*) FROM commission_rule WHERE ...`,
+}
+apis["commission_rule"].SetTransactionalWriteHook(
+    func(ctx context.Context, tx port.TxView, partnerID int64, userID int,
+        table string, items []any) error {
+        queryTx, ok := tx.(port.TxQueryView)
+        if !ok {
+            return fmt.Errorf("transactional named queries are unavailable")
+        }
+        result, err := queryTx.QueryService(validationQueries).
+            Query(ctx, "validate_schedule", partnerID)
+        if err != nil {
+            return err
+        }
+        if common.AsInt64(result.Rows[0][0]) != 0 {
+            return errors.New("commission schedule has a gap")
+        }
+        return nil
+    },
+)
 
 // Create handlers for each API
 for name, api := range apis {
@@ -241,6 +271,15 @@ for name, api := range apis {
     })
 }
 ```
+
+`TransactionalWriteHook` is the financial/business-invariant hook for
+auto-CRUD. `RelationAPI.Post` first writes the complete nested batch through
+transaction-bound `TableService` instances, then calls the hook, and commits
+only when the hook returns nil. PostgreSQL's transaction view implements the
+optional `port.TxQueryView`, allowing named SQL to inspect the proposed state.
+This is different from `handler.RestHandler.PostWrite`: `PostWrite` runs after
+commit and is appropriate for cache invalidation or notifications, never for
+validation that must roll back the write.
 
 ### 4. Run a background worker
 
@@ -403,7 +442,7 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 | `billing.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables; `GetPlans` returns each plan with its `Prices[]` (one per offered billing interval); `CreateSubscription` takes the chosen interval; returns the `ErrNoSubscription`/`ErrPlanNotFound`/`ErrPriceNotFound` sentinels so a handler can `errors.Is` → 404/400 | `Queries` overrides, `ResourceNames` |
 | `billing.AbstractBillingService` provider-driven write helpers (exposed via the `ProviderBillingStore` interface): `RecordProviderInvoice` (writes the `invoice` row on a provider `invoice.paid` so `GetInvoices` isn't empty — keel otherwise writes invoices only in the SelfScheduledEngine; idempotent on `invoice_number`), `LinkCustomer`/`CustomerToken`/`PartnerByCustomer` (partner ↔ provider-customer mapping in the dedicated `partner_billing_customer` table, for the portal + recurring-invoice attribution), `ListPaymentMethods` (the partner's saved methods for sail's `listPaymentMethods()`) | — (call from your `AbstractWebhookEventHandler` hooks / billing bridges) |
 | `billing.SubscriptionLifecycle` (on `AbstractBillingService`) | the subscription verbs over `partner_plan_subscription`: `Activate(…, BillingTerms, …)`/`ChangePlan(…, BillingTerms)`/`CreateSubscription(…, BillingTerms)` take the chosen offer (billing cycle + commitment term) — they read the matching `subscription_plan_price` row and snapshot the price, set `renewal_date` (= term end), `next_charge_date`, and the per-installment `monthly_cost`, `CancelByPartner`/`CancelByProviderSubID` (immediate or at-period-end), `ConvertTrial`, `SetSeats`, `Reactivate`, `SetDunningState` | per-plan `activation_mode` + `trial_days` + the `subscription_plan_price` rows; the metadata keys |
-| `payment.PaymentEvent.EventKind` + `SubscriptionID`/`InvoiceID` | provider-agnostic normalized event kind (set by every parser) + the ids, so handlers stop digging raw JSON | — |
+| `payment.PaymentEvent.EventKind` + typed ids/lines | provider-agnostic event kind; `SubscriptionID`, `InvoiceID`, `ChargeID`, `DisputeID`; and canonical `InvoiceLines` with completeness, signed minor amount, currency, service period, and metadata | — |
 | `payment.AbstractWebhookEventHandler` | dispatches `EventKind` → nil-safe hooks (`OnCheckoutCompleted/OnInvoicePaid/OnInvoicePaymentFailed/OnSubscriptionUpdated/…`) | the per-kind closures (your domain SQL) |
 | `billing.ProviderSubscriptionEventHandler` (a `payment.PaymentEventHandler`) | the **default** provider-driven mapping pre-wired on `AbstractWebhookEventHandler`: `checkout_completed`→`LinkCustomer`+`Activate` (terms from `metadata[BillingCycleKey/TermTypeKey/TermCountKey]`), `invoice_paid`→`RecordProviderInvoice`+`ConvertTrial`, `invoice_payment_failed`→past-due (`X`), `subscription_canceled`→`CancelByProviderSubID` (fallback `CancelByPartner`). Collapses a hand-written `payment_service.go` to wiring | `billing.NewProviderSubscriptionEventHandler(svc, svc, opts)` — partner resolution + metadata keys (`PartnerIDKey`/`PlanIDKey`/`BillingCycleKey`/`TermTypeKey`/`TermCountKey`) |
 | `handler.QuotaEnforcer` | HTTP middleware: count new resources in a POST body → `CheckQuota` → **402** + optional post-write `After` hook. `CountOpCodeRows` builds your extractors | `Extractors []ResourceExtractor` |
@@ -423,6 +462,14 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 **Off-session charge idempotency & atomicity.** `SelfScheduledEngine` charges with the invoice id as Stripe's `Idempotency-Key` (threaded via `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)`), so a charge retried after an ambiguous transport failure resolves to the original PaymentIntent instead of double-charging. Stripe remembers a key for 24h; a dunning retry past that window is treated as new, so the engine still stops once the invoice flips to paid. The `invoice` header + its lines are written in one `TxQueryService` transaction, so a half-written invoice is never charged.
 
 **Off-session charge metadata.** `ChargeRequest.Metadata map[string]string` is forwarded as PaymentIntent `metadata[k]=v`, so the resulting `charge`/`payment_intent` webhook arrives with the same pairs on `PaymentEvent.Metadata` — the outbound counterpart to the inbound metadata already surfaced to webhook handlers. Use it to carry the originating record's ids (e.g. order/booking id, line splits) and correlate the settled charge back without a Stripe round-trip. It is validated against Stripe's limits **before** the network call (≤49 caller keys, key ≤40 chars, value ≤500 chars; the `idempotency_key` key is reserved); a violation returns the typed `payment.ErrInvalidMetadata` (map to a 4xx at the handler boundary) rather than silently truncating.
+
+**Checkout line correlation.** `CheckoutRequest.LineMetadata` is separate from
+top-level Session `Metadata`. Stripe subscription checkouts mirror it into
+`subscription_data[metadata]` (one-shot payments into
+`payment_intent_data[metadata]`, setup mode into
+`setup_intent_data[metadata]`). Stripe snapshots subscription metadata onto
+subscription invoice lines, so keys such as `business_id` survive from
+checkout creation to `PaymentEvent.InvoiceLines[i].Metadata`.
 
 ### Subscription lifecycle & activation modes
 
@@ -1271,10 +1318,11 @@ POST /public/webhook/{provider}
   3. Verify signature BEFORE any DB write — bad signatures never touch storage
   4. Idempotency check on (provider, event_id) — duplicates → return without dispatching
   5. Insert log row (unique-index race guard catches concurrent retries)
-  6. Parse into canonical PaymentEvent (amount in major units, metadata flattened)
-  7. Call project's PaymentEventHandler.OnPaymentEvent(event)
-  8. AfterHandler hook (optional, idempotent) — e.g. attach SetupIntent's PaymentMethod
-  9. Update log status → 'P' (processed), 'F' (failed), 'S' (skipped), or 'D' (duplicate)
+  6. Parse into canonical PaymentEvent (minor-unit amount, typed identities, metadata)
+  7. Enrich through optional PaymentEventEnricher (Stripe fetches every invoice-line page)
+  8. Call project's PaymentEventHandler.OnPaymentEvent(event)
+  9. AfterHandler hook (optional, idempotent) — e.g. attach SetupIntent's PaymentMethod
+ 10. Update log status → 'P' (processed), 'F' (failed), 'S' (skipped), or 'D' (duplicate)
 ```
 
 The verify-before-log ordering is load-bearing: an attacker pumping invalid-signature requests never reaches the DB, so `payment_webhook_log` cannot be filled with unsigned junk. Step 4 is the cheap-path dedupe; step 5's unique index on `(provider, event_id)` is the authoritative race guard for the TOCTOU window between them.
@@ -1308,6 +1356,7 @@ Defined in [port/payment.go](port/payment.go):
 | `SignatureVerifier` | Validates a provider's webhook signature |
 | `EventParser` | Converts raw provider body → canonical `PaymentEvent` |
 | `PaymentProvider` | Bundles name + signature header + verifier + parser |
+| `PaymentEventEnricher` | Optional authenticated follow-up that completes a parsed event before dispatch |
 | `WebhookRepository` | Persists log rows (idempotency + audit) — `SQLWebhookRepository` is the default |
 | `CheckoutClient` | Outbound checkout / billing-portal API (Stripe impl: `StripeCheckoutClient`) |
 
@@ -1372,7 +1421,14 @@ srv.Handle(map[string]func(http.ResponseWriter, *http.Request){
 
 ### Project-Specific Handler
 
-`OnPaymentEvent` receives a typed `*PaymentEvent` with the setup-mode fields pre-extracted as of v0.5.1 — branch on `e.Mode == "setup"` instead of unmarshalling `e.RawPayload`. The JWT-gated checkout path also injects `user_id` into metadata automatically (v0.5.1-A), so consumers no longer round-trip the id through the client.
+`OnPaymentEvent` receives a typed `*PaymentEvent`; branch on typed fields
+instead of unmarshalling `RawPayload`. Stripe invoice events carry
+pagination-complete `InvoiceLines` before dispatch. Check
+`InvoiceLinesComplete` before treating an empty slice as authoritative. Each
+line carries `AmountMinor`, `Currency`, `ServiceFrom`, `ServiceTo`, and
+`Metadata`. Refund/dispute consumers correlate through `ChargeID` and
+`DisputeID`. The JWT-gated checkout path also injects `user_id` into top-level
+metadata automatically.
 
 ```go
 func (h *myDomainHandler) OnPaymentEvent(ctx context.Context, e *payment.PaymentEvent) error {
@@ -1427,7 +1483,7 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 |-------|---------|
 | `payment_webhook_log` | Raw inbound webhooks — idempotency key on `(provider, event_id)` + audit |
 | `payment_method` | Partner-owned provider customer tokens (`stripe cus_...`) |
-| `payment_record` | Completed / failed / refunded transactions — `amount_minor` is authoritative; provider-scoped unique payment id; `invoice_id` FK |
+| `payment_record` | Completed / failed / refunded transactions — `amount_minor` is authoritative; provider-scoped unique payment id; optional indexed `(provider, provider_charge_id)` for refund/dispute correlation; `invoice_id` FK |
 | `invoice_line_payment` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units; `provider_ref` uniquely keys refund sources |
 
 ### Checkout modes
@@ -2295,6 +2351,7 @@ erDiagram
         VARCHAR provider
         VARCHAR provider_payment_id UK
         VARCHAR provider_event_type
+        VARCHAR provider_charge_id
         NUMERIC amount
         BIGINT amount_minor
         CHAR currency
@@ -2475,7 +2532,7 @@ erDiagram
 | `payment_webhook_log` | Raw inbound payment-provider webhooks with idempotency + audit |
 | `payout_webhook_log` | Raw inbound payout-provider webhooks (account + transfer lifecycle) with idempotency + audit |
 | `payment_method` | Stored payment methods per partner (provider customer tokens) |
-| `payment_record` | Completed/failed/refunded payment transactions (minor-unit amount, provider-scoped unique payment id, invoice FK) |
+| `payment_record` | Completed/failed/refunded payment transactions (minor-unit amount, provider-scoped unique payment id, indexed provider charge id, invoice FK) |
 | `invoice_line_payment` | Durable payment/refund → invoice-line allocation in minor units, invoice-consistent by composite FK; `provider_ref` uniquely keys refund sources |
 | `invoice` / `invoice_line` | Invoices; lines are domain-neutral finance data with minor units + covered-service period |
 | `subscription_invoice_line` | Subscription-domain extension naming the plan/add-on an invoice line bills |

@@ -853,6 +853,7 @@ CREATE TABLE IF NOT EXISTS payment_record (
     provider                             VARCHAR(30)   NOT NULL,
     provider_payment_id                  VARCHAR(255) ,
     provider_event_type                  VARCHAR(100) ,
+    provider_charge_id                   VARCHAR(255) ,
     amount                               NUMERIC(18,2) NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
@@ -864,6 +865,7 @@ CREATE TABLE IF NOT EXISTS payment_record (
     CONSTRAINT payment_record_pk PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_payment_record_partner ON payment_record(partner_id, paid_at);
+CREATE INDEX IF NOT EXISTS idx_payment_record_provider_charge ON payment_record(provider, provider_charge_id);
 CREATE UNIQUE INDEX IF NOT EXISTS payment_record_provider_uq ON payment_record(provider, provider_payment_id) WHERE provider_payment_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS payment_record_id_invoice_uq ON payment_record(id, invoice_id);
 

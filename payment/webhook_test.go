@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -114,6 +115,22 @@ type stubProvider struct {
 	event     *PaymentEvent
 }
 
+type enrichingProvider struct {
+	*stubProvider
+	enrichErr error
+	called    bool
+}
+
+func (p *enrichingProvider) EnrichPaymentEvent(_ context.Context, event *PaymentEvent) error {
+	p.called = true
+	if p.enrichErr != nil {
+		return p.enrichErr
+	}
+	event.InvoiceLines = []InvoiceLine{{ProviderLineID: "il_complete"}}
+	event.InvoiceLinesComplete = true
+	return nil
+}
+
 func (s *stubProvider) Name() string                                       { return s.name }
 func (s *stubProvider) SignatureHeader() string                            { return s.sigHeader }
 func (s *stubProvider) Verify(_ context.Context, _ string, _ []byte) error { return s.verifyErr }
@@ -173,6 +190,40 @@ func TestProcess_HappyPath(t *testing.T) {
 	}
 	if got := repo.statusOf(1); got != StatusProcessed {
 		t.Fatalf("expected status=P, got %q", got)
+	}
+}
+
+func TestProcess_EnrichesBeforeHandler(t *testing.T) {
+	repo := newMemRepo()
+	prov := &enrichingProvider{stubProvider: &stubProvider{
+		name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123", InvoiceID: "in_1"},
+	}}
+	handler := &recordingHandler{}
+	p := newProcessor(repo, prov)
+
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler); err != nil {
+		t.Fatal(err)
+	}
+	if !prov.called || len(handler.events) != 1 || !handler.events[0].InvoiceLinesComplete {
+		t.Fatalf("called=%v events=%d event=%+v", prov.called, len(handler.events), handler.events)
+	}
+}
+
+func TestProcess_EnrichmentFailureIsRetryable(t *testing.T) {
+	repo := newMemRepo()
+	prov := &enrichingProvider{
+		stubProvider: &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123", InvoiceID: "in_1"}},
+		enrichErr:    errors.New("stripe unavailable"),
+	}
+	handler := &recordingHandler{}
+	p := newProcessor(repo, prov)
+
+	err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler)
+	if err == nil || !strings.Contains(err.Error(), "enrich event") {
+		t.Fatalf("err=%v", err)
+	}
+	if len(handler.events) != 0 || repo.statusOf(1) != StatusFailed {
+		t.Fatalf("events=%d status=%q", len(handler.events), repo.statusOf(1))
 	}
 }
 

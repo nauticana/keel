@@ -111,13 +111,14 @@ func (h *AbstractPaymentHandler) HandleLemonSqueezyWebhook(w http.ResponseWriter
 
 // CreateCheckoutRequest is the JSON body accepted by CreateCheckout.
 type CreateCheckoutRequest struct {
-	Mode       string            `json:"mode"`
-	PriceID    string            `json:"priceId"`
-	Quantity   int64             `json:"quantity"`
-	Email      string            `json:"email"`
-	SuccessURL string            `json:"successUrl"`
-	CancelURL  string            `json:"cancelUrl"`
-	Metadata   map[string]string `json:"metadata"`
+	Mode         string            `json:"mode"`
+	PriceID      string            `json:"priceId"`
+	Quantity     int64             `json:"quantity"`
+	Email        string            `json:"email"`
+	SuccessURL   string            `json:"successUrl"`
+	CancelURL    string            `json:"cancelUrl"`
+	Metadata     map[string]string `json:"metadata"`
+	LineMetadata map[string]string `json:"lineMetadata"`
 }
 
 // CreateCheckout exposes CheckoutClient.CreateCheckoutSession as an HTTP
@@ -213,13 +214,14 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 		return
 	}
 	url, err := h.Checkout.CreateCheckoutSession(r.Context(), payment.CheckoutRequest{
-		Mode:       mode,
-		PriceID:    req.PriceID,
-		Quantity:   req.Quantity,
-		Email:      req.Email,
-		SuccessURL: req.SuccessURL,
-		CancelURL:  req.CancelURL,
-		Metadata:   req.Metadata,
+		Mode:         mode,
+		PriceID:      req.PriceID,
+		Quantity:     req.Quantity,
+		Email:        req.Email,
+		SuccessURL:   req.SuccessURL,
+		CancelURL:    req.CancelURL,
+		Metadata:     req.Metadata,
+		LineMetadata: req.LineMetadata,
 	})
 	if err != nil {
 		// Stripe's raw error body sometimes reveals account / price-id

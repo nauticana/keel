@@ -31,13 +31,14 @@ func TestCreateCheckoutSession_FormBody(t *testing.T) {
 		HTTPClient: srv.Client(),
 	}
 	url, err := c.CreateCheckoutSession(context.Background(), CheckoutRequest{
-		Mode:       "subscription",
-		PriceID:    "price_123",
-		Quantity:   1,
-		Email:      "foo@bar.com",
-		SuccessURL: "https://app/ok",
-		CancelURL:  "https://app/cancel",
-		Metadata:   map[string]string{"partner_id": "42"},
+		Mode:         "subscription",
+		PriceID:      "price_123",
+		Quantity:     1,
+		Email:        "foo@bar.com",
+		SuccessURL:   "https://app/ok",
+		CancelURL:    "https://app/cancel",
+		Metadata:     map[string]string{"partner_id": "42"},
+		LineMetadata: map[string]string{"business_id": "7"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -51,6 +52,7 @@ func TestCreateCheckoutSession_FormBody(t *testing.T) {
 		"line_items%5B0%5D%5Bprice%5D=price_123",
 		"line_items%5B0%5D%5Bquantity%5D=1",
 		"metadata%5Bpartner_id%5D=42",
+		"subscription_data%5Bmetadata%5D%5Bbusiness_id%5D=7",
 		"success_url=https%3A%2F%2Fapp%2Fok",
 		"cancel_url=https%3A%2F%2Fapp%2Fcancel",
 	} {
@@ -63,6 +65,51 @@ func TestCreateCheckoutSession_FormBody(t *testing.T) {
 	}
 	if captured.ctype != "application/x-www-form-urlencoded" {
 		t.Errorf("unexpected Content-Type %q", captured.ctype)
+	}
+}
+
+func TestFetchInvoiceLines_AllPages(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		if r.URL.Query().Get("starting_after") == "" {
+			io.WriteString(w, `{"has_more":true,"data":[{"id":"il_1","amount":400,"currency":"usd","period":{"start":1,"end":2},"metadata":{"business_id":"7"}}]}`)
+			return
+		}
+		io.WriteString(w, `{"has_more":false,"data":[{"id":"il_2","amount":199,"currency":"usd","period":{"start":2,"end":3},"metadata":{"business_id":"8"}}]}`)
+	}))
+	defer srv.Close()
+
+	c := &StripeCheckoutClient{
+		Secrets:    fakeSecrets{map[string]string{"stripe_secret_key": "sk_test"}},
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+	}
+	lines, err := c.FetchInvoiceLines(context.Background(), "in_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[0].ProviderLineID != "il_1" || lines[1].ProviderLineID != "il_2" {
+		t.Fatalf("lines=%+v", lines)
+	}
+	if len(queries) != 2 || !strings.Contains(queries[1], "starting_after=il_1") {
+		t.Fatalf("queries=%v", queries)
+	}
+}
+
+func TestFetchInvoiceLines_MissingCompletenessFlagFailsClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"data":[]}`)
+	}))
+	defer srv.Close()
+
+	c := &StripeCheckoutClient{
+		Secrets:    fakeSecrets{map[string]string{"stripe_secret_key": "sk_test"}},
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+	}
+	if _, err := c.FetchInvoiceLines(context.Background(), "in_1"); err == nil {
+		t.Fatal("missing has_more must not produce a supposedly complete line list")
 	}
 }
 

@@ -102,6 +102,32 @@ type PaymentEvent struct {
 	// InvoiceID is the provider invoice id (Stripe in_xxx) on invoice.*
 	// events, or the invoice referenced by another event. Empty otherwise.
 	InvoiceID string
+
+	// ChargeID is the provider charge identity referenced by this event
+	// (Stripe ch_xxx). DisputeID is the provider dispute identity (dp_xxx).
+	// Both are pre-extracted so financial consumers never need to parse
+	// RawPayload to correlate refunds or disputes.
+	ChargeID  string
+	DisputeID string
+
+	// InvoiceLines is the provider-neutral, pagination-complete line list for
+	// invoice events. InvoiceLinesComplete distinguishes a genuinely complete
+	// empty list from an event/provider that supplied no canonical line data.
+	InvoiceLines         []InvoiceLine
+	InvoiceLinesComplete bool
+}
+
+// InvoiceLine is one canonical provider invoice line. AmountMinor is signed
+// integer minor units; Currency is upper-case ISO 4217. Metadata is copied so
+// downstream domains can correlate a generic finance line to their own entity.
+type InvoiceLine struct {
+	ProviderLineID string
+	Description    string
+	AmountMinor    int64
+	Currency       string
+	ServiceFrom    time.Time
+	ServiceTo      time.Time
+	Metadata       map[string]string
 }
 
 // PaymentEventHandler is what each project implements. keel's
@@ -121,6 +147,10 @@ type CheckoutRequest struct {
 	SuccessURL string
 	CancelURL  string
 	Metadata   map[string]string // written into provider's checkout metadata
+	// LineMetadata is stamped onto the mode-specific downstream provider
+	// object instead of stopping at Checkout. For Stripe subscriptions, the
+	// subscription metadata is also reflected on subscription invoice lines.
+	LineMetadata map[string]string
 }
 
 // SignatureVerifier validates a webhook signature for a specific provider.
@@ -154,6 +184,14 @@ type PaymentProvider interface {
 	SignatureHeader() string // e.g. "Stripe-Signature"
 	SignatureVerifier
 	EventParser
+}
+
+// PaymentEventEnricher is an optional provider capability invoked after Parse
+// and before the domain handler. It performs authenticated follow-up reads
+// needed to make a canonical event complete, such as fetching every page of
+// Stripe invoice lines. Enrichment failures are retryable webhook failures.
+type PaymentEventEnricher interface {
+	EnrichPaymentEvent(ctx context.Context, event *PaymentEvent) error
 }
 
 // WebhookRepository persists webhook log rows — the idempotency and audit

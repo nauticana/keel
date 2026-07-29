@@ -106,6 +106,16 @@ func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req Ch
 	for k, v := range req.Metadata {
 		form.Set("metadata["+k+"]", v)
 	}
+	for k, v := range req.LineMetadata {
+		switch req.Mode {
+		case ModeSubscription:
+			form.Set("subscription_data[metadata]["+k+"]", v)
+		case ModePayment:
+			form.Set("payment_intent_data[metadata]["+k+"]", v)
+		case ModeSetup:
+			form.Set("setup_intent_data[metadata]["+k+"]", v)
+		}
+	}
 	// Mirror metadata into setup_intent_data[metadata][...] when the
 	// session spawns a SetupIntent. Stripe does NOT propagate Session
 	// metadata to the SetupIntent it creates, so without this branch
@@ -131,6 +141,55 @@ func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req Ch
 		return "", fmt.Errorf("stripe: no checkout url in response")
 	}
 	return checkoutURL, nil
+}
+
+// FetchInvoiceLines retrieves every Stripe invoice-line page. It never returns
+// a partial list: any failed page aborts enrichment so the webhook remains
+// retryable.
+func (c *StripeCheckoutClient) FetchInvoiceLines(ctx context.Context, invoiceID string) ([]InvoiceLine, error) {
+	if invoiceID == "" {
+		return nil, fmt.Errorf("stripe: invoice id is required")
+	}
+	var result []InvoiceLine
+	startingAfter := ""
+	for {
+		params := url.Values{"limit": {"100"}}
+		if startingAfter != "" {
+			params.Set("starting_after", startingAfter)
+		}
+		body, err := c.Get(ctx, "/invoices/"+url.PathEscape(invoiceID)+"/lines", params)
+		if err != nil {
+			return nil, fmt.Errorf("stripe: fetch invoice lines: %w", err)
+		}
+		var page struct {
+			Data    []map[string]any `json:"data"`
+			HasMore *bool            `json:"has_more"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("stripe: parse invoice lines: %w", err)
+		}
+		if page.Data == nil || page.HasMore == nil {
+			return nil, fmt.Errorf("stripe: incomplete invoice-lines page")
+		}
+		for _, raw := range page.Data {
+			line, ok := stripeInvoiceLine(raw)
+			if !ok {
+				return nil, fmt.Errorf("stripe: malformed invoice line")
+			}
+			result = append(result, line)
+		}
+		if !*page.HasMore {
+			return result, nil
+		}
+		if len(page.Data) == 0 {
+			return nil, fmt.Errorf("stripe: invoice lines has_more without a cursor")
+		}
+		next, _ := page.Data[len(page.Data)-1]["id"].(string)
+		if next == "" || next == startingAfter {
+			return nil, fmt.Errorf("stripe: invoice lines pagination did not advance")
+		}
+		startingAfter = next
+	}
 }
 
 // CreatePortalSession POSTs to /v1/billing_portal/sessions and returns

@@ -52,3 +52,12 @@ type TxView interface {
 	// surrounding RunInTx callback.
 	Table(name string) TableService
 }
+
+// TxQueryView is an optional TxView capability for downstream transactional
+// validation hooks that need named SQL in addition to generic TableService
+// operations. PostgreSQL repositories implement it; custom repositories can
+// opt in without widening the base TxView interface.
+type TxQueryView interface {
+	TxView
+	QueryService(queries map[string]string) QueryService
+}

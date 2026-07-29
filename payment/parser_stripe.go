@@ -117,8 +117,87 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 			event.InvoiceID = s
 		}
 	}
+	event.ChargeID, event.DisputeID = stripeFinancialIdentities(raw.Type, obj)
+	if lines, present, complete := stripeEmbeddedInvoiceLines(obj); present {
+		for i := range lines {
+			if lines[i].Currency == "" {
+				lines[i].Currency = event.Currency
+			}
+		}
+		event.InvoiceLines = lines
+		event.InvoiceLinesComplete = complete
+	}
 	event.EventKind = stripeEventKind(raw.Type)
 	return event, nil
+}
+
+func stripeFinancialIdentities(eventType string, obj map[string]any) (chargeID, disputeID string) {
+	if s, ok := obj["charge"].(string); ok {
+		chargeID = s
+	}
+	if strings.HasPrefix(eventType, "charge.") &&
+		!strings.HasPrefix(eventType, "charge.dispute.") &&
+		!strings.HasPrefix(eventType, "charge.refund.") {
+		if s, ok := obj["id"].(string); ok {
+			chargeID = s
+		}
+	}
+	if strings.HasPrefix(eventType, "charge.dispute.") {
+		if s, ok := obj["id"].(string); ok {
+			disputeID = s
+		}
+	}
+	return chargeID, disputeID
+}
+
+func stripeEmbeddedInvoiceLines(obj map[string]any) ([]InvoiceLine, bool, bool) {
+	rawLines, ok := obj["lines"].(map[string]any)
+	if !ok {
+		return nil, false, false
+	}
+	rawData, dataOK := rawLines["data"].([]any)
+	if !dataOK {
+		return nil, true, false
+	}
+	lines := make([]InvoiceLine, 0, len(rawData))
+	allValid := true
+	for _, raw := range rawData {
+		line, ok := stripeInvoiceLine(raw)
+		if ok {
+			lines = append(lines, line)
+		} else {
+			allValid = false
+		}
+	}
+	hasMore, hasCompletenessFlag := rawLines["has_more"].(bool)
+	return lines, true, allValid && hasCompletenessFlag && !hasMore
+}
+
+func stripeInvoiceLine(raw any) (InvoiceLine, bool) {
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return InvoiceLine{}, false
+	}
+	line := InvoiceLine{
+		Currency: stripeCurrency(obj),
+		Metadata: stripeMetadata(obj),
+	}
+	line.ProviderLineID, _ = obj["id"].(string)
+	line.Description, _ = obj["description"].(string)
+	amount, amountOK := asInt64(obj["amount"])
+	if line.ProviderLineID == "" || line.Currency == "" || !amountOK {
+		return InvoiceLine{}, false
+	}
+	line.AmountMinor = amount
+	period, periodOK := obj["period"].(map[string]any)
+	start, startOK := asInt64(period["start"])
+	end, endOK := asInt64(period["end"])
+	if !periodOK || !startOK || !endOK || start <= 0 || end <= 0 {
+		return InvoiceLine{}, false
+	}
+	line.ServiceFrom = time.Unix(start, 0).UTC()
+	line.ServiceTo = time.Unix(end, 0).UTC()
+	return line, true
 }
 
 // stripeEventKind maps a raw Stripe event type onto the provider-agnostic

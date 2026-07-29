@@ -140,10 +140,11 @@ func TestCreateCheckout_SubscriptionMode_HappyPath(t *testing.T) {
 	h := newCheckoutHandler(fake)
 
 	rec := postCheckout(h, map[string]any{
-		"mode":       "subscription",
-		"priceId":    "price_ok",
-		"successUrl": "https://app.example/ok",
-		"cancelUrl":  "https://app.example/cancel",
+		"mode":         "subscription",
+		"priceId":      "price_ok",
+		"successUrl":   "https://app.example/ok",
+		"cancelUrl":    "https://app.example/cancel",
+		"lineMetadata": map[string]string{"business_id": "42"},
 	})
 
 	if rec.Code != http.StatusOK {
@@ -151,6 +152,9 @@ func TestCreateCheckout_SubscriptionMode_HappyPath(t *testing.T) {
 	}
 	if fake.last.PriceID != "price_ok" {
 		t.Errorf("priceID forwarded: got %q, want price_ok", fake.last.PriceID)
+	}
+	if fake.last.LineMetadata["business_id"] != "42" {
+		t.Errorf("lineMetadata not forwarded: %+v", fake.last.LineMetadata)
 	}
 }
 

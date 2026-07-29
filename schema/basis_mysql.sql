@@ -856,6 +856,7 @@ CREATE TABLE IF NOT EXISTS payment_record (
     provider                             VARCHAR(30)   NOT NULL,
     provider_payment_id                  VARCHAR(255) ,
     provider_event_type                  VARCHAR(100) ,
+    provider_charge_id                   VARCHAR(255) ,
     amount                               DECIMAL(18,2) NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
@@ -871,6 +872,7 @@ CREATE TABLE IF NOT EXISTS payment_record (
     CONSTRAINT payment_record_invoice_currency FOREIGN KEY (invoice_id, currency) REFERENCES invoice(id, currency)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_payment_record_partner ON payment_record(partner_id, paid_at);
+CREATE INDEX idx_payment_record_provider_charge ON payment_record(provider, provider_charge_id);
 CREATE UNIQUE INDEX payment_record_provider_uq ON payment_record(provider, provider_payment_id);
 CREATE UNIQUE INDEX payment_record_id_invoice_uq ON payment_record(id, invoice_id);
 

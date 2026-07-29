@@ -44,6 +44,13 @@ func (s *RestAPI) Post(ctx context.Context, partnerID int64, userID int, data ..
 	return s.Relations.Post(ctx, partnerID, userID, data...)
 }
 
+// SetTransactionalWriteHook installs an after-write/before-commit validator
+// for this auto-CRUD API. Configure it after RestService.Init returns the API
+// map and before serving requests.
+func (s *RestAPI) SetTransactionalWriteHook(hook TransactionalWriteHook) {
+	s.Relations.TransactionalWriteHook = hook
+}
+
 func (s *RestAPI) GetDefinition() map[string]any {
 	return s.Relations.GetDefinition(s.APIName, s.Version)
 }

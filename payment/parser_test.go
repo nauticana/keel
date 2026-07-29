@@ -54,6 +54,83 @@ func TestStripeParser_InvoicePaid(t *testing.T) {
 	}
 }
 
+func TestStripeParser_InvoiceLinesAndChargeIdentity(t *testing.T) {
+	body := []byte(`{
+		"id":"evt_lines","type":"invoice.paid",
+		"data":{"object":{
+			"id":"in_1","charge":"ch_1","amount_paid":599,"currency":"usd",
+			"lines":{"has_more":false,"data":[{
+				"id":"il_1","amount":599,"currency":"usd","description":"Starter",
+				"period":{"start":1754006400,"end":1756684800},
+				"metadata":{"business_id":"42"}
+			}]}
+		}}
+	}`)
+	e, err := NewStripeEventParser().Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.InvoiceID != "in_1" || e.ChargeID != "ch_1" || !e.InvoiceLinesComplete {
+		t.Fatalf("invoice=%q charge=%q complete=%v", e.InvoiceID, e.ChargeID, e.InvoiceLinesComplete)
+	}
+	if len(e.InvoiceLines) != 1 {
+		t.Fatalf("lines=%d, want 1", len(e.InvoiceLines))
+	}
+	line := e.InvoiceLines[0]
+	if line.ProviderLineID != "il_1" || line.AmountMinor != 599 || line.Currency != "USD" ||
+		line.Metadata["business_id"] != "42" || line.ServiceFrom.Unix() != 1754006400 {
+		t.Fatalf("line=%+v", line)
+	}
+}
+
+func TestStripeParser_PartialInvoiceLinesAndDisputeIdentity(t *testing.T) {
+	body := []byte(`{
+		"id":"evt_dispute","type":"charge.dispute.funds_withdrawn",
+		"data":{"object":{
+			"id":"dp_1","charge":"ch_1",
+			"lines":{"has_more":true,"data":[]}
+		}}
+	}`)
+	e, err := NewStripeEventParser().Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ChargeID != "ch_1" || e.DisputeID != "dp_1" {
+		t.Fatalf("charge=%q dispute=%q", e.ChargeID, e.DisputeID)
+	}
+	if e.InvoiceLinesComplete {
+		t.Fatal("has_more=true must never be marked complete")
+	}
+}
+
+func TestStripeParser_LinesWithoutCompletenessFlagRequireEnrichment(t *testing.T) {
+	body := []byte(`{
+		"id":"evt_lines_unknown","type":"invoice.paid",
+		"data":{"object":{"id":"in_1","lines":{"data":[]}}}
+	}`)
+	e, err := NewStripeEventParser().Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.InvoiceLinesComplete {
+		t.Fatal("missing lines.has_more must fail closed and require enrichment")
+	}
+}
+
+func TestStripeParser_RefundUsesReferencedChargeIdentity(t *testing.T) {
+	body := []byte(`{
+		"id":"evt_refund","type":"charge.refund.updated",
+		"data":{"object":{"id":"re_1","charge":"ch_1","amount":599,"currency":"usd"}}
+	}`)
+	e, err := NewStripeEventParser().Parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ChargeID != "ch_1" {
+		t.Fatalf("charge=%q, want ch_1 (not refund id)", e.ChargeID)
+	}
+}
+
 // v0.5.1-D: setup-mode checkout.session.completed pre-extracts Mode,
 // SetupIntentID, and CustomerID so domain handlers branch on typed
 // fields instead of re-parsing RawPayload.

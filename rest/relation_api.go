@@ -25,7 +25,25 @@ type RelationAPI struct {
 	// constructing RelationAPI by hand must wire Database before
 	// calling Post.
 	Database port.DatabaseRepository
+
+	// TransactionalWriteHook runs once after the complete parent/child batch
+	// has been written but before its transaction commits. Returning an error
+	// rolls back every write. The hook sees the final in-transaction state and
+	// may use port.TxQueryView for named-SQL validation.
+	TransactionalWriteHook TransactionalWriteHook
 }
+
+// TransactionalWriteHook validates or extends an auto-CRUD write inside its
+// transaction. It is intentionally distinct from handler.PostWrite, which
+// runs after commit and is suitable only for cache invalidation/notifications.
+type TransactionalWriteHook func(
+	ctx context.Context,
+	tx port.TxView,
+	partnerID int64,
+	userID int,
+	table string,
+	items []any,
+) error
 
 func (s *RelationAPI) Init() error {
 	return s.DataService.Init()
@@ -311,7 +329,13 @@ func (s *RelationAPI) Post(ctx context.Context, partnerID int64, userID int, ite
 		return fmt.Errorf("parent table not defined")
 	}
 	return s.Database.RunInTx(ctx, func(view port.TxView) error {
-		return s.postInTx(ctx, view, partnerID, userID, items...)
+		if err := s.postInTx(ctx, view, partnerID, userID, items...); err != nil {
+			return err
+		}
+		if s.TransactionalWriteHook != nil {
+			return s.TransactionalWriteHook(ctx, view, partnerID, userID, s.DataService.GetTable().TableName, items)
+		}
+		return nil
 	})
 }
 

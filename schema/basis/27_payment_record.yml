@@ -20,6 +20,10 @@ columns:
   - name: provider_event_type
     type: VARCHAR(100)
     nullable: true
+  - name: provider_charge_id
+    type: VARCHAR(255)
+    nullable: true
+    comment: typed provider charge identity for refund/dispute correlation
   - name: amount
     type: NUMERIC(18,2)
   - name: amount_minor
@@ -75,6 +79,8 @@ foreign_keys:
 indexes:
   - name: idx_payment_record_partner
     columns: [partner_id, paid_at]
+  - name: idx_payment_record_provider_charge
+    columns: [provider, provider_charge_id]
   - name: payment_record_provider_uq
     columns: [provider, provider_payment_id]
     unique: true

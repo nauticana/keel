@@ -2,6 +2,8 @@ package payment
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/nauticana/keel/secret"
 )
@@ -32,7 +34,10 @@ func (a *AbstractProvider) PeekEventMeta(body []byte) (string, string, error) {
 }
 
 // StripeProvider bundles verifier + parser for Stripe.
-type StripeProvider struct{ AbstractProvider }
+type StripeProvider struct {
+	AbstractProvider
+	InvoiceLineClient *StripeCheckoutClient
+}
 
 func NewStripeProvider(secrets secret.SecretProvider) *StripeProvider {
 	return &StripeProvider{
@@ -42,7 +47,30 @@ func NewStripeProvider(secrets secret.SecretProvider) *StripeProvider {
 			Verifier:     NewStripeSignatureVerifier(secrets),
 			Parser:       NewStripeEventParser(),
 		},
+		InvoiceLineClient: NewStripeCheckoutClient(secrets),
 	}
+}
+
+func (p *StripeProvider) EnrichPaymentEvent(ctx context.Context, event *PaymentEvent) error {
+	if event == nil || event.InvoiceID == "" || event.InvoiceLinesComplete ||
+		!strings.HasPrefix(event.EventType, "invoice.") {
+		return nil
+	}
+	if p.InvoiceLineClient == nil {
+		return fmt.Errorf("stripe: invoice-line client is not configured")
+	}
+	lines, err := p.InvoiceLineClient.FetchInvoiceLines(ctx, event.InvoiceID)
+	if err != nil {
+		return err
+	}
+	for i := range lines {
+		if lines[i].Currency == "" {
+			lines[i].Currency = event.Currency
+		}
+	}
+	event.InvoiceLines = lines
+	event.InvoiceLinesComplete = true
+	return nil
 }
 
 // LemonSqueezyProvider bundles verifier + parser for LemonSqueezy.
@@ -61,7 +89,8 @@ func NewLemonSqueezyProvider(secrets secret.SecretProvider) *LemonSqueezyProvide
 
 // compile-time interface checks
 var (
-	_ PaymentProvider = (*AbstractProvider)(nil)
-	_ PaymentProvider = (*StripeProvider)(nil)
-	_ PaymentProvider = (*LemonSqueezyProvider)(nil)
+	_ PaymentProvider      = (*AbstractProvider)(nil)
+	_ PaymentProvider      = (*StripeProvider)(nil)
+	_ PaymentEventEnricher = (*StripeProvider)(nil)
+	_ PaymentProvider      = (*LemonSqueezyProvider)(nil)
 )

@@ -26,4 +26,16 @@ func (v *pgsqlTxView) Table(name string) port.TableService {
 	return base.WithTx(v.tx)
 }
 
+// QueryService returns a named-query service bound to the same transaction as
+// every TableService from this view. A validation hook can therefore inspect
+// the proposed post-write state and fail the transaction atomically.
+func (v *pgsqlTxView) QueryService(queries map[string]string) port.QueryService {
+	return &TxQueryServicePgsql{
+		Tx:          v.tx,
+		Queries:     queries,
+		IdGenerator: v.repo.IdGenerator,
+	}
+}
+
 var _ port.TxView = (*pgsqlTxView)(nil)
+var _ port.TxQueryView = (*pgsqlTxView)(nil)
