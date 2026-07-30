@@ -1,0 +1,33 @@
+table: agency_client_rate
+comment: |
+  Percentage commission rate frozen per agency/client at the client's first
+  earning. Resolution prefers agency_profile.default_commission_rate_bp and
+  otherwise uses application_config_value/default_commission_rate_bp.
+order: 68
+columns:
+  - name: agency_partner_id
+    type: BIGINT
+  - name: client_partner_id
+    type: BIGINT
+  - name: commission_rate_bp
+    type: INTEGER
+  - name: first_earned_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [agency_partner_id, client_partner_id]
+checks:
+  - name: chk_agency_client_rate
+    expression: "commission_rate_bp > 0 AND commission_rate_bp <= 10000"
+foreign_keys:
+  - name: client_rate_agency
+    columns: [agency_partner_id]
+    references:
+      table: agency_profile
+      columns: [agency_partner_id]
+    on_delete: CASCADE
+  - name: client_rate_client
+    columns: [client_partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: CASCADE

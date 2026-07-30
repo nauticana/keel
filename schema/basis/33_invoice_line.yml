@@ -19,9 +19,9 @@ columns:
     type: INTEGER
     default: "1"
   - name: unit_price
-    type: NUMERIC(18,2)
+    type: NUMERIC(20,4)
   - name: amount
-    type: NUMERIC(18,2)
+    type: NUMERIC(20,4)
   - name: amount_minor
     type: BIGINT
   - name: service_from

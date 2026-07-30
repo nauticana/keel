@@ -1,0 +1,39 @@
+table: agency_profile
+comment: |
+  Agency capability and approval state for a business partner. Referral
+  commission is available to every approved agency; wholesale_allowed is a
+  permission for per-client wholesale assignments, not a global billing mode.
+order: 63
+columns:
+  - name: agency_partner_id
+    type: BIGINT
+  - name: wholesale_allowed
+    type: BOOLEAN
+    default: "FALSE"
+  - name: default_commission_rate_bp
+    type: INTEGER
+    nullable: true
+    comment: Optional agency override; null uses the program config value when a client first earns
+  - name: approved_at
+    type: TIMESTAMP
+    nullable: true
+  - name: suspended
+    type: BOOLEAN
+    default: "FALSE"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [agency_partner_id]
+checks:
+  - name: chk_agency_profile_rate
+    expression: "default_commission_rate_bp IS NULL OR (default_commission_rate_bp > 0 AND default_commission_rate_bp <= 10000)"
+foreign_keys:
+  - name: agency_profile_partner
+    columns: [agency_partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: CASCADE

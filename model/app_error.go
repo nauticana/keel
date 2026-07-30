@@ -31,3 +31,10 @@ func NewAppError(code string, status int, message string) *AppError {
 func NewForbidden(message string) *AppError {
 	return &AppError{Code: ErrForbidden, Status: 403, Message: message}
 }
+
+// NewBadRequest is malformed caller input (400) — an unresolvable column name,
+// an unparseable value. The server is healthy, so the message reaches the
+// client instead of being sanitised into a 500 the caller cannot act on.
+func NewBadRequest(message string) *AppError {
+	return &AppError{Code: ErrBadRequest, Status: 400, Message: message}
+}

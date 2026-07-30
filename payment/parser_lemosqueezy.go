@@ -72,6 +72,7 @@ func (p *LemonSqueezyEventParser) Parse(body []byte) (*PaymentEvent, error) {
 	switch {
 	case strings.HasPrefix(raw.Meta.EventName, "subscription_payment_"):
 		event.InvoiceID = raw.Data.ID // the subscription-invoice id
+		event.PaymentID = raw.Data.ID // Lemon Squeezy identifies this transaction with data.id
 	case strings.HasPrefix(raw.Meta.EventName, "subscription_"):
 		event.SubscriptionID = raw.Data.ID
 	}

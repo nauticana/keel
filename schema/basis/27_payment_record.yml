@@ -17,6 +17,7 @@ columns:
   - name: provider_payment_id
     type: VARCHAR(255)
     nullable: true
+    comment: provider payment transaction identity, distinct from invoice and webhook event ids
   - name: provider_event_type
     type: VARCHAR(100)
     nullable: true
@@ -25,7 +26,7 @@ columns:
     nullable: true
     comment: typed provider charge identity for refund/dispute correlation
   - name: amount
-    type: NUMERIC(18,2)
+    type: NUMERIC(20,4)
   - name: amount_minor
     type: BIGINT
     comment: authoritative integer minor-unit amount, no default — writers must supply it; amount stays for display

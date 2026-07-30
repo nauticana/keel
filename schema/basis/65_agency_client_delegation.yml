@@ -1,0 +1,70 @@
+table: agency_client_delegation
+comment: |
+  Owner-granted, revocable partner-to-partner management delegation. The
+  generic table permits several active rows for one client partner so an app
+  extension can scope them to different managed entities (for example, each
+  business). The direct-partner base service enforces one active row itself.
+order: 65
+columns:
+  - name: id
+    type: BIGINT
+  - name: client_partner_id
+    type: BIGINT
+  - name: agency_partner_id
+    type: BIGINT
+  - name: granted_by
+    type: BIGINT
+  - name: status
+    type: CHAR(1)
+    default: A
+  - name: granted_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: revoked_at
+    type: TIMESTAMP
+    nullable: true
+  - name: revoked_by
+    type: BIGINT
+    nullable: true
+primary_key: [id]
+sequence:
+  name: agency_client_delegation_seq
+  column: id
+checks:
+  - name: chk_delegation_distinct
+    expression: "client_partner_id <> agency_partner_id"
+  - name: chk_delegation_lifecycle
+    expression: "(status = 'A' AND revoked_at IS NULL AND revoked_by IS NULL) OR (status = 'R' AND revoked_at IS NOT NULL AND revoked_by IS NOT NULL)"
+indexes:
+  - name: delegation_episode_uq
+    columns: [agency_partner_id, client_partner_id, granted_at]
+    unique: true
+  - name: idx_agency_client_delegation_client
+    columns: [client_partner_id, status]
+  - name: idx_agency_client_delegation_agency
+    columns: [agency_partner_id, status]
+foreign_keys:
+  - name: delegation_client
+    columns: [client_partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: CASCADE
+  - name: delegation_agency
+    columns: [agency_partner_id]
+    references:
+      table: agency_profile
+      columns: [agency_partner_id]
+    on_delete: CASCADE
+  - name: delegation_grantor
+    columns: [granted_by]
+    references:
+      table: user_account
+      columns: [id]
+    on_delete: RESTRICT
+  - name: delegation_revoker
+    columns: [revoked_by]
+    references:
+      table: user_account
+      columns: [id]
+    on_delete: RESTRICT

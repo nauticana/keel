@@ -11,6 +11,9 @@ func baseRows() map[string]ConfigRow {
 	for _, id := range baseFlagIDs {
 		m[id] = ConfigRow{}
 	}
+	m[default_commission_rate_bp] = ConfigRow{Default: "2000"}
+	m[commission_hold_days] = ConfigRow{Default: "14"}
+	m[agency_payout_min_minor] = ConfigRow{Default: "2500"}
 	return m
 }
 
@@ -63,6 +66,22 @@ func TestApplyBase_MissingFlagRows(t *testing.T) {
 	err := (&BaseConfig{}).ApplyBase(m)
 	if err == nil || !strings.Contains(err.Error(), "mail_mode") {
 		t.Fatalf("want missing-flag error naming mail_mode, got: %v", err)
+	}
+}
+
+func TestApplyBase_InvalidAgencyValuesFailLoudly(t *testing.T) {
+	m := baseRows()
+	m[default_commission_rate_bp] = ConfigRow{Value: "10001"}
+	m[commission_hold_days] = ConfigRow{Value: "-1"}
+	m[agency_payout_min_minor] = ConfigRow{Value: "-1"}
+	err := (&BaseConfig{}).ApplyBase(m)
+	if err == nil {
+		t.Fatal("ApplyBase: want invalid agency flag error")
+	}
+	for _, flag := range []string{default_commission_rate_bp, commission_hold_days, agency_payout_min_minor} {
+		if !strings.Contains(err.Error(), flag) {
+			t.Errorf("error should mention %q; got %v", flag, err)
+		}
 	}
 }
 

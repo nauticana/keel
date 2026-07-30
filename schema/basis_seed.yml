@@ -11,6 +11,13 @@ seeds:
       - [payment_method_type, "Payment Method Type"]
       - [measurement_unit, "Measurement Unit"]
       - [bank_info_status, "Bank Info Status"]
+      - [agency_client_status, "Agency Client Status"]
+      - [agency_delegation_status, "Agency Delegation Status"]
+      - [agency_billing_model, "Agency Billing Model"]
+      - [agency_payout_profile_status, "Agency Payout Profile Status"]
+      - [agency_commission_entry, "Agency Commission Entry"]
+      - [agency_commission_status, "Agency Commission Status"]
+      - [agency_payout_status, "Agency Payout Status"]
 
   - table: constant_value
     columns: [constant_id, value, caption]
@@ -35,6 +42,30 @@ seeds:
       - [payment_method_type, google_pay, "Google Pay"]
       - [bank_info_status, A, "Active"]
       - [bank_info_status, S, "Superseded"]
+      - [agency_client_status, S, "Staged"]
+      - [agency_client_status, I, "Invited"]
+      - [agency_client_status, V, "Client"]
+      - [agency_client_status, X, "Cancelled"]
+      - [agency_delegation_status, A, "Active"]
+      - [agency_delegation_status, R, "Revoked"]
+      - [agency_billing_model, R, "Referral"]
+      - [agency_billing_model, W, "Wholesale"]
+      - [agency_payout_profile_status, A, "Active"]
+      - [agency_payout_profile_status, I, "Inactive"]
+      - [agency_commission_entry, E, "Earning"]
+      - [agency_commission_entry, R, "Reversal"]
+      - [agency_commission_status, H, "Held"]
+      - [agency_commission_status, P, "Payable"]
+      - [agency_commission_status, R, "Reserved"]
+      - [agency_commission_status, D, "Paid"]
+      - [agency_commission_status, O, "Offset"]
+      - [agency_payout_status, C, "Created"]
+      - [agency_payout_status, P, "Processing"]
+      - [agency_payout_status, D, "Paid"]
+      - [agency_payout_status, F, "Failed"]
+      - [agency_payout_status, R, "Returned"]
+      - [agency_payout_status, V, "Reversed"]
+      - [agency_payout_status, M, "Manual review"]
       # Measurement / pricing units. Value is the API-returned token (AI-facing:
       # "per hour" reads better than "HR"); caption is the dropdown label.
       # time + service  (the units service pricing needs most)
@@ -88,6 +119,14 @@ seeds:
       - [bank_info_status, user_bank_info, status]
       - [payment_method_type, user_payment_method, method_type]
       - [payout_provider, payout_webhook_log, provider]
+      - [agency_client_status, agency_client_invitation, status]
+      - [agency_delegation_status, agency_client_delegation, status]
+      - [agency_billing_model, agency_client_billing, billing_model]
+      - [agency_payout_profile_status, agency_payout_profile, status]
+      - [agency_commission_entry, agency_commission, entry_type]
+      - [agency_commission_status, agency_commission, status]
+      - [agency_payout_status, agency_payout, status]
+      - [payout_provider, agency_payout, provider]
 
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
@@ -143,6 +182,7 @@ seeds:
       - [invoice_line_payment, invoice_line_payment]
       - [table_action, table_action]
       - [application_config_flag, application_config_flag]
+      - [agency_profile, agency_profile]
 
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
@@ -164,6 +204,8 @@ seeds:
       - [API_KEY, "API Key to access the system"]
       - [PARTNER_CREDENTIAL, "Partner Connection Actions"]
       - [APPLICATION_CONFIG_FLAG, "Application Config Actions"]
+      - [AGENCY_PROFILE, "Agency Profile Actions"]
+      - [AGENCY, "Agency Self-Service Actions"]
 
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
@@ -173,6 +215,10 @@ seeds:
       - [API_KEY, ROLL, "Roll"]
       - [PARTNER_CREDENTIAL, MANAGE, "Manage Connections"]
       - [APPLICATION_CONFIG_FLAG, RELOAD, "Reload"]
+      - [AGENCY_PROFILE, APPROVE, "Approve a sales agency"]
+      - [AGENCY, MANAGE_CLIENTS, "Manage agency clients"]
+      - [AGENCY, VIEW_EARNINGS, "View agency earnings"]
+      - [AGENCY, MANAGE_PAYOUT, "Manage agency payout destination"]
 
   - table: table_action
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
@@ -181,6 +227,7 @@ seeds:
       - [api_key, generate, "Generate", plus, V, false, 10]
       - [api_key, roll, "Roll", edit, V, true, 20]
       - [application_config_flag, reload, "Reload Config", refresh, P, false, 10]
+      - [agency_profile, approve, "Approve", check, P, true, 10]
 
   - table: application_menu
     columns: [display_order, id, caption]
@@ -188,6 +235,7 @@ seeds:
       - [99, setup, "Setup"]
       - [90, payments, "Payments"]
       - [95, payouts, "Payouts"]
+      - [92, agencies, "Agencies"]
 
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
@@ -213,6 +261,7 @@ seeds:
       - [50,  false, payments, invoice_line_payments, invoice_line_payment, "Payment Allocations"]
       - [10,  true,  payouts,  user_bank_infos, user_bank_info, "Bank Accounts"]
       - [20,  false, payouts,  payout_webhook_logs, payout_webhook_log, "Webhook Logs"]
+      - [10,  false, agencies, agency_profiles, agency_profile, "Agency Profiles"]
 
   # Audit-column display modes for keel's own framework tables. R = display-only
   # (system-set, excluded from writes); U = keel stamps now() on UPDATE. All
@@ -249,6 +298,23 @@ seeds:
       # admins assign per-node values via application_config_value instead.
       - [application_config_flag, needs_restart,   R]
       - [application_config_flag, default_value,   R]
+      - [agency_profile, created_at, R]
+      - [agency_profile, updated_at, U]
+      - [agency_profile, approved_at, R]
+      - [agency_client_invitation, invited_at, R]
+      - [agency_client_invitation, accepted_at, R]
+      - [agency_client_invitation, created_at, R]
+      - [agency_client_invitation, updated_at, U]
+      - [agency_client_delegation, granted_at, R]
+      - [agency_client_delegation, revoked_at, R]
+      - [agency_client_billing, created_at, R]
+      - [agency_client_rate, first_earned_at, R]
+      - [agency_commission, created_at, R]
+      - [agency_commission, earned_at, R]
+      - [agency_payout, created_at, R]
+      - [agency_payout, paid_at, R]
+      - [agency_payout_profile, created_at, R]
+      - [agency_payout_profile, updated_at, U]
 
   # Application config flag catalog — one row per common.BaseConfig field.
   # Bootstrap settings (log sink, secret provider, DB coordinates, node_id)
@@ -366,3 +432,6 @@ seeds:
       - [default_outbound_timeout,     duration, true, "30",   "Default outbound HTTP client timeout"]
       - [snowflake_state_persist_ms,   int64,    false, "1000", "Snowflake state-persist cadence (ms)"]
       - [memory_cache_sweep_interval,  duration, true, "60",   "In-memory cache expiry sweep interval"]
+      - [default_commission_rate_bp,   int,      false, "2000", "Program default agency commission rate in basis points (2000 = 20.00%); frozen per client at first earning unless the agency profile overrides it"]
+      - [commission_hold_days,          int,      false, "14",   "Refund/dispute hold in days before an agency earning becomes payable"]
+      - [agency_payout_min_minor,       int64,    false, "2500", "Minimum netted agency payout in minor units; smaller balances roll to the next cycle"]

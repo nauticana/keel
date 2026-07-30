@@ -103,6 +103,11 @@ type PaymentEvent struct {
 	// events, or the invoice referenced by another event. Empty otherwise.
 	InvoiceID string
 
+	// PaymentID is the provider's payment transaction identity (for example a
+	// Stripe PaymentIntent). It is distinct from both the webhook event id and
+	// the invoice id; financial persistence uses it as the provider payment key.
+	PaymentID string
+
 	// ChargeID is the provider charge identity referenced by this event
 	// (Stripe ch_xxx). DisputeID is the provider dispute identity (dp_xxx).
 	// Both are pre-extracted so financial consumers never need to parse

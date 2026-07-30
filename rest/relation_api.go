@@ -134,6 +134,45 @@ func (s *RelationAPI) List(ctx context.Context, partnerID int64, userID int, whe
 	return records, nil
 }
 
+// ListPage returns one page of a collection plus the unpaged total. When the
+// bound TableService implements port.PagedTableService the bounds reach the
+// database; otherwise the collection is read and sliced, which is what every
+// caller did before the capability existed.
+//
+// Both paths order by the primary key, so paging is deterministic whichever one
+// runs. The fallback expresses that as comma-separated order terms, so a custom
+// TableService.Get must accept the ?order= grammar to page correctly.
+func (s *RelationAPI) ListPage(ctx context.Context, partnerID int64, userID int, where map[string]any, page port.PageRequest) ([]any, int, error) {
+	pager, ok := s.DataService.(port.PagedTableService)
+	if !ok {
+		records, err := s.List(ctx, partnerID, userID, where, page.StableOrderBy(s.keyColumns()))
+		if err != nil {
+			return nil, 0, err
+		}
+		return page.Slice(records), len(records), nil
+	}
+	records, total, err := pager.GetPage(ctx, partnerID, userID, where, page)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.maskSecrets(records)
+	return records, total, nil
+}
+
+// keyColumns names the bound table's primary key, or nil when no table
+// definition is available (nothing to tie-break on).
+func (s *RelationAPI) keyColumns() []string {
+	table := s.DataService.GetTable()
+	if table == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(table.Keys))
+	for _, key := range table.Keys {
+		keys = append(keys, key.ColumnName)
+	}
+	return keys
+}
+
 func (s *RelationAPI) Insert(ctx context.Context, partnerID int64, userID int, data any) ([]int64, error) {
 	return s.DataService.Insert(ctx, partnerID, userID, data)
 }

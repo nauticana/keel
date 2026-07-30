@@ -65,6 +65,7 @@ graph TD
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
 | `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository |
 | `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
+| `agency` | Agency/reseller lifecycle, frozen per-client percentage rates, append-only commission/reversal ledger, and monthly payout state machine over billing provenance |
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
@@ -280,6 +281,32 @@ optional `port.TxQueryView`, allowing named SQL to inspect the proposed state.
 This is different from `handler.RestHandler.PostWrite`: `PostWrite` runs after
 commit and is appropriate for cache invalidation or notifications, never for
 validation that must roll back the write.
+
+**List pagination.** `RestHandler.List` takes `?limit=` / `?offset=` (default
+`default_list_page_size`, hard-capped at `max_list_page_size`) and `?order=`,
+and answers with `{items, limit, offset, total}` where `total` is the unpaged
+count. The bounds reach SQL as `LIMIT` / `OFFSET` when the bound table service
+implements the optional `port.PagedTableService` — PostgreSQL's does — so the
+response cap is also a read cap rather than a slice taken after a full-table
+scan (KR-006). A paged read always gets a total order: the primary key is
+appended to whatever `?order=` asked for, because rows tied on the caller's
+column could otherwise repeat or vanish as a client walks offsets. A
+`TableService` that does not implement the capability keeps working — callers
+fall back to reading the collection and slicing it, and that path appends the
+key too (via `port.PageRequest.StableOrderBy`), so paging is deterministic
+either way. Because the fallback passes the tie-break through the `orderby`
+string, a custom `TableService.Get` must accept the comma-separated `?order=`
+grammar below to page correctly. `?order=` accepts
+comma-separated `column [ASC|DESC]` terms (`?order=amount DESC, id`); a term
+that doesn't resolve to a declared column is rejected, never silently dropped.
+
+Unresolvable `?order=` terms and filter columns are `model.NewBadRequest`
+(400), not 500: the value is caller-controlled, so the server is healthy and
+the client is the one who must fix the request. This also makes the failure
+actionable — `writeError` sanitizes 5xx bodies and journals them, so at 500 the
+caller could not see *which* column was rejected and every query-string typo
+landed in the operator error log. It matches how the handler already answers an
+unknown *filter* field in `castFilterValues`.
 
 ### 4. Run a background worker
 
@@ -1604,8 +1631,99 @@ Wise's Platform API does not have a hosted KYC flow for platform-paid recipients
 `OnboardingService` deliberately stops at the bank-info table. The calling application is responsible for:
 
 - **Fee / minimum / cooldown** policy on `RequestInstantPayout`. Keel runs the transfer; the application gates whether it should.
-- **Payout ledger + state machine** — recording the returned `ProviderPayoutID` against the application's domain table and consuming `transfer.*` events via a `TransferEventSink`. A payout is paid only on provider-confirmed completion, never on creation.
+- **Payout ledger + state machine** — generic payout callers record the returned `ProviderPayoutID` against their domain table and consume `transfer.*` events via a `TransferEventSink`. Agency commission payouts can use `agency.BaseAgencyPayoutService` instead. A payout is paid only on provider-confirmed completion, never on creation.
 - **Reconciliation cadence** — polling `GetPayoutStatus` for payouts stuck in a non-terminal state past a threshold. (Event dedup itself is keel's job now — `payout_webhook_log` — not an application cache.)
+
+## Agency / reseller commission (v1.2.40)
+
+`keel/agency` is the shared agency-channel layer over `billing` provenance and
+`payout` providers. Basis now owns `agency_profile`,
+`agency_client_invitation`, `agency_client_delegation`,
+`agency_client_billing`, `agency_client_rate`, `agency_commission`,
+`agency_payout_profile`, `agency_payout`, and `agency_payout_line`. Apps add only
+FK-backed extension tables when their managed entity is narrower than a
+`business_partner` (for example, a business below the client partner). Basis
+does not impose a partner-wide active-delegation uniqueness constraint: the
+direct-partner base service serializes on the partner row and permits one,
+while a narrower app enforces uniqueness on its extension entity so separate
+businesses owned by one client can use different agencies.
+
+The agency commission, provenance, and payout runtime is PostgreSQL-only. The
+MySQL artifact includes the tables for schema portability, but it does not
+provide a runnable implementation of the transaction/query semantics.
+
+The commercial model is deliberately small:
+
+- Every accepted client starts in referral (`R`) billing. Referral charges the
+  client normally and creates commission for the agency.
+- `agency_profile.wholesale_allowed` is permission to switch an individual
+  client to wholesale (`W`); it does not force every client wholesale.
+- Commission is percentage-only. `BaseFrozenRateResolver` freezes one
+  `agency_client_rate.commission_rate_bp` at the client's first eligible earning:
+  agency override first, otherwise the `default_commission_rate_bp` application
+  config flag. Later default changes do not rewrite that client; each ledger row
+  snapshots `applied_rate_bp`.
+- There is no `agency_commission_rule`, tier/fixed-rate schedule, or
+  `btree_gist` dependency. PostgreSQL prevents two open billing rows with a
+  partial unique index; historical intervals are maintained by the atomic
+  close-then-insert service flow.
+- Amounts remain integer minor units and balances/payouts remain separated by
+  currency. `commission_hold_days` controls held-to-payable promotion and
+  `agency_payout_min_minor` controls monthly selection. Display projections use
+  `NUMERIC(20,4)` so currencies with three minor-unit digits are not rounded.
+
+`billing.ProvenanceRecorder` writes `payment_record`, `invoice_line`, and
+`invoice_line_payment` atomically, validates canonical provider lines fail
+closed, and invokes an injected recognition hook in the same transaction.
+`PaymentEvent.PaymentID` is the provider payment transaction key (separate from
+the invoice and webhook-event ids). Signed credit/proration lines remain on the
+invoice; captured money is apportioned across positive service lines, and a
+line whose share rounds to zero receives no allocation or commission.
+`billing.ProvenanceReverser` performs source-idempotent, balance-capped refund
+allocation and invokes an injected reversal hook. `agency.BaseCommissionRecognizer`
+and `agency.BaseCommissionReverser` are the standard hooks. The monthly
+`BaseAgencyPayoutService` reserves payable ledger rows in a short transaction,
+dispatches outside that transaction, resumes retryable work with the same
+provider idempotency key, releases provider-confirmed terminal failures, and
+uses manual-review state for partial or otherwise unknown provider outcomes.
+Payable reversals net immediately against the next payout even when the refund
+arrives after the monthly earning cutoff. A balance at or above the payout
+minimum with no active destination for its provider/currency is returned as an
+operations-visible cycle error instead of remaining silent.
+
+Agency enrollment grants the `AGENCY` role while approval is pending so the
+app can render profile and read-only status/history views. Client, billing,
+invitation-cancellation, and payout-destination mutations also enforce an
+active, non-suspended profile in the service. Payout-profile `GET` requires
+`AGENCY/VIEW_EARNINGS`; `POST` separately requires `AGENCY/MANAGE_PAYOUT`.
+The generic `agency_profile` admin API intentionally has no nested commission
+ledger children; ledger/history views use their dedicated endpoints.
+
+Status codes are column-scoped. Commission `entry_type` uses `E` earning / `R`
+reversal; commission `status` uses `H` held, `P` payable, `R` reserved, `D`
+disbursed, `O` offset or settled reversal. Payout `status` uses `C` created,
+`P` provider-pending, `D` disbursed, `F` failed, `M` manual review, `R`
+returned, and `V` reversed.
+
+The HTTP surface is supplied by `handler.AgencyHandler`:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/v1/agency/enroll` | Create a pending `agency_profile` |
+| GET | `/api/v1/agency/profile` | Read agency approval/wholesale state |
+| GET/POST | `/api/v1/agency/clients` | List or stage invitations |
+| POST | `/api/v1/agency/clients/invite` | Mint/reuse an invitation token |
+| POST | `/api/v1/agency/clients/cancel` | Withdraw an invitation |
+| GET | `/public/agency/invite` | Read public invitation summary |
+| POST | `/api/v1/agency/invite/accept` | Accept and create referral delegation |
+| GET/POST | `/api/v1/agency/payout-profile` | Read/select a fully onboarded payout destination |
+| GET | `/api/v1/agency/earnings` | Read currency-separated balances and history |
+
+Wire `AgencyHandler.Routes(restPrefix+"/v1", "/public")`, install the returned
+handlers, and wire `payout.OnboardingService.TransferSink` to the agency payout service.
+The consuming app still decides which invoice lines are commission-eligible and
+supplies that attribution when invoking the provenance recorder. Routes and
+brand copy remain app-owned on the frontend.
 
 ## Table Actions
 
@@ -2190,6 +2308,56 @@ erDiagram
     }
 ```
 
+### ER Diagram — Business Partners
+
+```mermaid
+erDiagram
+    business_partner ||--o{ partner_domain : has
+    business_partner ||--o{ partner_user : has
+    business_partner ||--o{ api_key : owns
+    business_partner ||--o{ partner_address : has
+    partner_user }o--|| user_account : belongs
+    api_key }o--|| user_account : creates
+
+
+    business_partner {
+        BIGINT id PK
+        VARCHAR caption
+    }
+    partner_user {
+        BIGINT partner_id PK,FK
+        BIGINT user_id PK,FK
+        TIMESTAMP begda PK
+        TIMESTAMP endda
+    }
+    api_key {
+        BIGINT id PK
+        BIGINT partner_id FK
+        VARCHAR key_name
+        CHAR key_prefix
+        CHAR key_hash
+        VARCHAR scopes
+        BOOLEAN is_active
+        BIGINT user_id FK
+    }
+    partner_address {
+        BIGINT partner_id PK,FK
+        VARCHAR address PK
+        VARCHAR city
+        VARCHAR state
+        VARCHAR zipcode
+        VARCHAR country
+        VARCHAR phone
+        NUMERIC latitude
+        NUMERIC longitude
+    }
+    partner_domain {
+        BIGINT partner_id PK,FK
+        VARCHAR domain_url PK
+        BOOLEAN is_primary
+        TIMESTAMP created_at
+    }
+```
 ### ER Diagram — Subscription Tables
 
 ```mermaid
@@ -2449,96 +2617,225 @@ erDiagram
     }
 ```
 
-## Business Partners
+### ER Diagram — Agency / Reseller Tables
+
+The agency group keeps the generic partner-to-partner lifecycle in basis. An
+application that manages a child entity, such as an individual business owned
+by the client partner, adds an FK-backed extension table to the invitation and
+delegation instead of weakening these relationships with a polymorphic id.
+
 ```mermaid
 erDiagram
-    business_partner ||--o{ partner_domain : has
-    business_partner ||--o{ partner_user : has
-    business_partner ||--o{ api_key : owns
-    business_partner ||--o{ partner_address : has
-    partner_user }o--|| user_account : belongs
-    api_key }o--|| user_account : creates
+    agency_client_invitation }o--|| agency_profile : stages
+
+    business_partner ||--o{ agency_client_delegation : delegates
+    business_partner o|--o{ agency_client_invitation : "accepts as client"
+    business_partner ||--o| agency_profile : "qualifies as"
+    business_partner ||--o{ agency_client_rate : receives
+
+    agency_client_rate }o--|| agency_profile : freezes
+
+    agency_profile ||--o{ agency_payout : receives
+    agency_profile ||--o| agency_payout_profile : selects
+
+    agency_client_delegation ||--o{ agency_client_billing : classifies
+    agency_client_delegation }o--|| agency_profile : manages
+
+    agency_client_billing ||--o{ agency_commission : earns
+    invoice_line_payment ||--o{ agency_commission : sources
+    agency_payout ||--|{ agency_payout_line : contains
+    agency_commission o|--o{ agency_commission : reverses
+    agency_commission ||--o{ agency_payout_line : allocates
+
+    agency_payout_profile |o--|| user_bank_info : destination
+    agency_payout }o--|| user_bank_info : snapshots
 
 
     business_partner {
         BIGINT id PK
-        VARCHAR caption
     }
-    partner_user {
-        BIGINT partner_id PK,FK
-        BIGINT user_id PK,FK
-        TIMESTAMP begda PK
-        TIMESTAMP endda
-    }
-    api_key {
+    user_bank_info {
         BIGINT id PK
-        BIGINT partner_id FK
-        VARCHAR key_name
-        CHAR key_prefix
-        CHAR key_hash
-        VARCHAR scopes
-        BOOLEAN is_active
         BIGINT user_id FK
+        BIGINT partner_id FK
     }
-    partner_address {
-        BIGINT partner_id PK,FK
-        VARCHAR address PK
-        VARCHAR city
-        VARCHAR state
-        VARCHAR zipcode
-        VARCHAR country
-        VARCHAR phone
-        NUMERIC latitude
-        NUMERIC longitude
+    invoice_line_payment {
+        BIGINT id PK
     }
-    partner_domain {
-        BIGINT partner_id PK,FK
-        VARCHAR domain_url PK
-        BOOLEAN is_primary
+    agency_profile {
+        BIGINT agency_partner_id PK,FK
+        BOOLEAN wholesale_allowed
+        INTEGER default_commission_rate_bp
+        TIMESTAMP approved_at
+        BOOLEAN suspended
         TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+    agency_client_invitation {
+        BIGINT id PK
+        BIGINT agency_partner_id FK
+        VARCHAR client_name
+        VARCHAR client_email
+        VARCHAR client_website
+        VARCHAR invite_token UK
+        CHAR status
+        BIGINT client_partner_id FK
+        BIGINT accepted_by FK
+        TIMESTAMP invited_at
+        TIMESTAMP accepted_at
+    }
+    agency_client_delegation {
+        BIGINT id PK
+        BIGINT client_partner_id FK
+        BIGINT agency_partner_id FK
+        BIGINT granted_by FK
+        CHAR status
+        TIMESTAMP granted_at
+        TIMESTAMP revoked_at
+        BIGINT revoked_by FK
+    }
+    agency_client_billing {
+        BIGINT id PK
+        BIGINT client_delegation_id FK
+        CHAR billing_model
+        TIMESTAMP effective_from
+        TIMESTAMP effective_to
+    }
+    agency_payout_profile {
+        BIGINT agency_partner_id PK,FK
+        BIGINT user_bank_info_id FK
+        CHAR status
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+    agency_client_rate {
+        BIGINT agency_partner_id PK,FK
+        BIGINT client_partner_id PK,FK
+        INTEGER commission_rate_bp
+        TIMESTAMP first_earned_at
+    }
+    agency_commission {
+        BIGINT id PK
+        BIGINT client_billing_id FK
+        BIGINT invoice_line_payment_id FK
+        TIMESTAMP earning_period_start
+        TIMESTAMP earning_period_end
+        BIGINT gross_amount_minor
+        BIGINT commission_amount_minor
+        INTEGER applied_rate_bp
+        CHAR currency
+        CHAR entry_type
+        CHAR status
+        BIGINT reversal_of_id FK
+        TIMESTAMP earned_at
+    }
+    agency_payout {
+        BIGINT id PK
+        BIGINT agency_partner_id FK
+        BIGINT user_bank_info_id FK
+        BIGINT amount_minor
+        CHAR currency
+        CHAR provider
+        VARCHAR provider_account_id
+        TIMESTAMP selection_cutoff_at
+        VARCHAR idempotency_key UK
+        VARCHAR provider_transfer_id UK
+        VARCHAR provider_funding_id
+        CHAR status
+        INTEGER attempt_count
+        TIMESTAMP attempted_at
+        TIMESTAMP next_attempt_at
+        TIMESTAMP paid_at
+    }
+    agency_payout_line {
+        BIGINT payout_id PK,FK
+        BIGINT commission_id PK,FK
+        BIGINT amount_minor
+        TIMESTAMP released_at
     }
 ```
 
 ### Table Summary
 
+All 74 tables emitted by `schema/basis_pgsql.sql` are listed individually so
+this summary can be checked directly against the generated schema.
+
 | Table | Purpose |
 |-------|---------|
-| `constant_header` / `constant_value` | Dropdown/enum lookup values |
+| `constant_header` | Constant/enum catalogue headers |
+| `constant_value` | Values and captions belonging to a constant catalogue |
 | `constant_lookup` | Maps constants to table columns |
 | `foreign_key_lookup` | Controls FK display behavior |
-| `rest_api_header` / `rest_api_child` | REST API definitions (metadata-driven) |
-| `rest_report_header` / `rest_report_param` | Report definitions with parameters |
+| `rest_api_header` | Metadata-driven REST API root definitions |
+| `rest_api_child` | Nested child relations exposed by a REST API |
+| `rest_report_header` | Named report definitions |
+| `rest_report_param` | Typed parameters accepted by reports |
 | `table_sequence_usage` | Maps tables to PostgreSQL sequences |
-| `application_menu` / `application_menu_item` | Navigation menu structure |
-| `authorization_object` / `authorization_object_action` | RBAC object definitions |
-| `authorization_role` / `authorization_role_permission` | Role-based permissions |
+| `application_menu` | Navigation menu headers |
+| `application_menu_item` | Ordered navigation entries within a menu |
+| `authorization_object` | RBAC-protected object definitions |
+| `authorization_object_action` | Actions supported by an authorization object |
+| `service_registry` | Background worker registration and heartbeat |
+| `country` | Country reference catalogue |
+| `state` | State/province reference catalogue |
+| `county` | County reference catalogue |
+| `authorization_role` | RBAC role definitions |
+| `authorization_role_permission` | Object/action/scope grants assigned to roles |
+| `user_account_policy` | Password and account-policy settings |
 | `user_account` | User accounts with password, 2FA fields |
-| `user_account_policy` | Password/account policy settings |
 | `user_permission` | User-to-role assignments |
 | `user_account_history` | Login audit trail |
 | `user_registration` | Email confirmation flow |
-| `user_refresh_token` / `user_trusted_device` | Session and device management |
+| `business_partner` | Tenant/business-partner identity |
+| `partner_user` | Effective-dated membership of users in partners |
+| `partner_address` | Partner addresses and geographic coordinates |
+| `partner_domain` | Domains owned or verified by partners |
+| `column_display_attribute` | UI display and edit behavior for table columns |
+| `user_refresh_token` | Rotatable and revocable login refresh tokens |
+| `user_trusted_device` | Server-minted trusted-device credentials |
+| `api_key` | Partner-scoped API key lifecycle and scopes |
 | `user_otp` | OTP codes with expiry and attempt tracking |
 | `user_social_provider` | Social login provider links (Google, Apple) |
-| `business_partner` / `partner_user` | Multi-tenant partner structure |
-| `partner_address` / `partner_domain` | Partner locations and domains |
-| `api_key` | API key management per partner |
-| `subscription_plan` / `subscription_quota` | Subscription plans with resource limits |
+| `consent_policy` | Versioned regional consent-policy documents |
+| `consent_event` | Immutable user or pre-registration consent evidence |
+| `device_token` | Push-notification device registrations |
+| `oauth_client` | OAuth 2.1 client registrations |
+| `subscription_plan` | Subscription-plan catalogue |
+| `oauth_authorization_code` | Short-lived OAuth authorization codes |
 | `subscription_plan_price` | Per-offer prices (billing cycle + commitment term) for a plan |
 | `subscription_resource` | Quota-tracked resources |
+| `oauth_refresh_token` | OAuth refresh-token families and rotation state |
+| `subscription_quota` | Per-plan resource limits and reset periods |
+| `partner_credential` | Partner-owned provider connection references |
 | `subscription_addon` | Optional add-on features |
-| `partner_plan_subscription` / `partner_addon_subscription` | Active subscriptions per partner |
+| `auth_nonce` | Single-use authentication/OAuth nonce records |
+| `partner_plan_subscription` | Effective-dated plan subscriptions per partner |
+| `partner_addon_subscription` | Effective-dated add-on subscriptions per partner |
 | `usage_ledger` | Resource usage tracking for quota enforcement |
 | `payment_webhook_log` | Raw inbound payment-provider webhooks with idempotency + audit |
-| `payout_webhook_log` | Raw inbound payout-provider webhooks (account + transfer lifecycle) with idempotency + audit |
 | `payment_method` | Stored payment methods per partner (provider customer tokens) |
-| `payment_record` | Completed/failed/refunded payment transactions (minor-unit amount, provider-scoped unique payment id, indexed provider charge id, invoice FK) |
-| `invoice_line_payment` | Durable payment/refund → invoice-line allocation in minor units, invoice-consistent by composite FK; `provider_ref` uniquely keys refund sources |
-| `invoice` / `invoice_line` | Invoices; lines are domain-neutral finance data with minor units + covered-service period |
-| `subscription_invoice_line` | Subscription-domain extension naming the plan/add-on an invoice line bills |
 | `user_bank_info` | Versioned payout destinations — one active row per (user, partner), history preserved |
-| `country` / `state` / `county` | Geographic hierarchy |
-| `service_registry` | Background worker registration and heartbeat |
+| `user_payment_method` | Saved end-user cards, wallets, and bank methods |
+| `table_action` | Authorized custom actions surfaced by generic CRUD UIs |
+| `invoice` | Partner invoices and provider reconciliation state |
+| `invoice_line` | Domain-neutral invoice lines with minor units and service periods |
+| `partner_billing_customer` | Partner-to-provider customer-token mapping |
+| `subscription_invoice_line` | Subscription extension naming the plan/add-on billed by a line |
+| `payment_record` | Completed/failed/refunded payment transactions with provider identities |
+| `invoice_line_payment` | Durable payment/refund allocation to an invoice line |
+| `payout_webhook_log` | Raw payout-provider account/transfer events with idempotency + audit |
+| `outbox_event` | Transactional outbox records for asynchronous delivery |
+| `application_config_flag` | Non-secret runtime configuration catalogue and defaults |
+| `application_config_value` | Per-node/shared overrides for configuration flags |
+| `agency_profile` | Agency approval, suspension, wholesale permission, and default rate override |
+| `agency_client_invitation` | Staged prospect and explicit agency-management invitation lifecycle |
+| `agency_client_delegation` | Revocable partner-to-partner management grants |
+| `agency_client_billing` | Effective-dated referral/wholesale model per delegation |
+| `agency_payout_profile` | Selected versioned bank destination for agency payouts |
+| `agency_client_rate` | Percentage commission rate frozen per agency/client at first earning |
+| `agency_commission` | Append-only commission earning and reversal ledger |
+| `agency_payout` | Monthly agency payout aggregate and provider dispatch state |
+| `agency_payout_line` | Allocation of commission ledger entries to a payout |
 
 ## Flag Variables
 

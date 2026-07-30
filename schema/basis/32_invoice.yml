@@ -12,12 +12,12 @@ columns:
     type: CHAR(1)
     default: D
   - name: subtotal
-    type: NUMERIC(18,2)
+    type: NUMERIC(20,4)
   - name: tax
-    type: NUMERIC(18,2)
+    type: NUMERIC(20,4)
     default: "0.00"
   - name: total
-    type: NUMERIC(18,2)
+    type: NUMERIC(20,4)
   - name: total_minor
     type: BIGINT
     comment: authoritative charge amount, no default — writers must supply it

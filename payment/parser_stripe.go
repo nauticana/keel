@@ -117,7 +117,13 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 			event.InvoiceID = s
 		}
 	}
+	if s, ok := obj["payment_intent"].(string); ok {
+		event.PaymentID = s
+	}
 	event.ChargeID, event.DisputeID = stripeFinancialIdentities(raw.Type, obj)
+	if event.PaymentID == "" {
+		event.PaymentID = event.ChargeID
+	}
 	if lines, present, complete := stripeEmbeddedInvoiceLines(obj); present {
 		for i := range lines {
 			if lines[i].Currency == "" {

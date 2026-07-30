@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
 type RestAPI struct {
@@ -26,6 +27,10 @@ func (s *RestAPI) Get(ctx context.Context, partnerID int64, userID int, where ma
 
 func (s *RestAPI) List(ctx context.Context, partnerID int64, userID int, where map[string]any, order string) ([]any, error) {
 	return s.Relations.List(ctx, partnerID, userID, where, order)
+}
+
+func (s *RestAPI) ListPage(ctx context.Context, partnerID int64, userID int, where map[string]any, page port.PageRequest) ([]any, int, error) {
+	return s.Relations.ListPage(ctx, partnerID, userID, where, page)
 }
 
 func (s *RestAPI) Insert(ctx context.Context, partnerID int64, userID int, data any) ([]int64, error) {

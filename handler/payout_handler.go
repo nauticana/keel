@@ -27,7 +27,8 @@ type PayoutHandler struct {
 	PayoutService *payout.OnboardingService
 
 	// SealTaxID encrypts the tax id before persistence (wire crypto.Seal
-	// with the app's KEK). Nil stores the raw bytes — pilot only.
+	// with the app's KEK). A non-empty tax id is rejected when this is nil;
+	// keel never falls back to storing identity data as raw bytes.
 	SealTaxID func(string) ([]byte, error)
 }
 
@@ -145,8 +146,12 @@ func (h *PayoutHandler) ReplaceBank(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusConflict, "Conflict", "payout provider not configured")
 		return
 	}
-	sealed := []byte(req.TaxID)
-	if h.SealTaxID != nil && req.TaxID != "" {
+	var sealed []byte
+	if req.TaxID != "" {
+		if h.SealTaxID == nil {
+			h.WriteError(w, http.StatusServiceUnavailable, "Service Unavailable", "tax id encryption is not configured")
+			return
+		}
 		var err error
 		if sealed, err = h.SealTaxID(req.TaxID); err != nil {
 			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "seal tax id: "+err.Error())

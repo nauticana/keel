@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/rest"
 )
 
@@ -165,22 +166,6 @@ func extractOrder(filter map[string]string) string {
 	return strings.TrimSpace(v)
 }
 
-// applyPagination slices a result set to (offset, offset+limit). The
-// underlying List() still pulls everything from the DB — a proper SQL
-// LIMIT push-down would require widening the rest.RestAPI signature
-// — but the cap here at least bounds what crosses the wire and what
-// the JSON encoder buffers.
-func applyPagination(results []any, limit, offset int) []any {
-	if offset >= len(results) {
-		return []any{}
-	}
-	end := offset + limit
-	if end > len(results) {
-		end = len(results)
-	}
-	return results[offset:end]
-}
-
 // Get serves a single-record (or filtered-collection) read. Requires
 // an authenticated session — keel-side handler rejects -1 sentinels
 // so a misconfigured route can never serve unauth'd reads.
@@ -211,12 +196,13 @@ func (h *RestHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 // List serves a collection read with pagination via ?limit= and
-// ?offset=. Optional ?order= takes column names with ASC / DESC
-// keywords; the data layer rejects anything outside the table's
-// declared columns, so the value is safe to surface from query
+// ?offset=. Optional ?order= takes comma-separated column names with
+// ASC / DESC keywords; the data layer rejects anything outside the
+// table's declared columns, so the value is safe to surface from query
 // parameters (P2-22). The default limit is the default_list_page_size
-// config and is hard-capped at max_list_page_size to prevent unbounded DB scans
-// driving memory / network DoS.
+// config and is hard-capped at max_list_page_size. The bounds reach SQL
+// when the table service supports it, so the response cap is also a
+// read cap; "total" is the unpaged count.
 func (h *RestHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -233,20 +219,20 @@ func (h *RestHandler) List(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", err.Error())
 		return
 	}
-	results, err := h.Api.List(r.Context(), session.PartnerId, session.Id, filter, order)
+	items, total, err := h.Api.ListPage(r.Context(), session.PartnerId, session.Id, filter,
+		port.PageRequest{Limit: limit, Offset: offset, OrderBy: order})
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
 	}
-	if results == nil {
-		results = []any{}
+	if items == nil {
+		items = []any{}
 	}
-	page := applyPagination(results, limit, offset)
 	common.WriteJSON(w, http.StatusOK, map[string]any{
-		"items":  page,
+		"items":  items,
 		"limit":  limit,
 		"offset": offset,
-		"total":  len(results),
+		"total":  total,
 	})
 }
 

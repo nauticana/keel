@@ -772,9 +772,9 @@ CREATE TABLE IF NOT EXISTS invoice (
     partner_id                           BIGINT        NOT NULL,
     invoice_number                       VARCHAR(30)   NOT NULL,
     status                               CHAR(1)       NOT NULL DEFAULT 'D',
-    subtotal                             NUMERIC(18,2) NOT NULL,
-    tax                                  NUMERIC(18,2) NOT NULL DEFAULT 0.00,
-    total                                NUMERIC(18,2) NOT NULL,
+    subtotal                             NUMERIC(20,4) NOT NULL,
+    tax                                  NUMERIC(20,4) NOT NULL DEFAULT 0.00,
+    total                                NUMERIC(20,4) NOT NULL,
     total_minor                          BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     issued_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -808,8 +808,8 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     seq                                  INTEGER       NOT NULL,
     description                          VARCHAR(200)  NOT NULL,
     quantity                             INTEGER       NOT NULL DEFAULT 1,
-    unit_price                           NUMERIC(18,2) NOT NULL,
-    amount                               NUMERIC(18,2) NOT NULL,
+    unit_price                           NUMERIC(20,4) NOT NULL,
+    amount                               NUMERIC(20,4) NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     service_from                         TIMESTAMP    ,
     service_to                           TIMESTAMP    ,
@@ -854,7 +854,7 @@ CREATE TABLE IF NOT EXISTS payment_record (
     provider_payment_id                  VARCHAR(255) ,
     provider_event_type                  VARCHAR(100) ,
     provider_charge_id                   VARCHAR(255) ,
-    amount                               NUMERIC(18,2) NOT NULL,
+    amount                               NUMERIC(20,4) NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
     invoice_id                           BIGINT       ,
@@ -963,6 +963,193 @@ CREATE TABLE IF NOT EXISTS application_config_value (
     assigned_value                       TEXT         ,
     CONSTRAINT application_config_value_pk PRIMARY KEY (node_id, flag_id)
 );
+
+-- Agency capability and approval state for a business partner. Referral
+-- commission is available to every approved agency; wholesale_allowed is a
+-- permission for per-client wholesale assignments, not a global billing mode.
+CREATE TABLE IF NOT EXISTS agency_profile (
+    agency_partner_id                    BIGINT        NOT NULL,
+    wholesale_allowed                    BOOLEAN       NOT NULL DEFAULT FALSE,
+    default_commission_rate_bp           INTEGER      ,
+    approved_at                          TIMESTAMP    ,
+    suspended                            BOOLEAN       NOT NULL DEFAULT FALSE,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_profile_pk PRIMARY KEY (agency_partner_id),
+    CONSTRAINT chk_agency_profile_rate CHECK (default_commission_rate_bp IS NULL OR (default_commission_rate_bp > 0 AND default_commission_rate_bp <= 10000))
+);
+
+-- An agency's staged and invited prospective clients. Prospects need not be
+-- users or partners yet; client_partner_id is populated only after the
+-- invitee has a partner and explicitly accepts the delegation.
+CREATE TABLE IF NOT EXISTS agency_client_invitation (
+    id                                   BIGINT        NOT NULL,
+    agency_partner_id                    BIGINT        NOT NULL,
+    client_name                          VARCHAR(200)  NOT NULL,
+    client_email                         VARCHAR(255) ,
+    client_website                       VARCHAR(255) ,
+    invite_token                         VARCHAR(64)  ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'S',
+    client_partner_id                    BIGINT       ,
+    accepted_by                          BIGINT       ,
+    invited_at                           TIMESTAMP    ,
+    accepted_at                          TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_client_invitation_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS invitation_token_uq ON agency_client_invitation(invite_token);
+CREATE INDEX IF NOT EXISTS idx_agency_client_invitation ON agency_client_invitation(agency_partner_id, status);
+
+CREATE SEQUENCE IF NOT EXISTS agency_client_invitation_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('agency_client_invitation', 'id', 'agency_client_invitation_seq') ON CONFLICT DO NOTHING;
+
+-- Owner-granted, revocable partner-to-partner management delegation. The
+-- generic table permits several active rows for one client partner so an app
+-- extension can scope them to different managed entities (for example, each
+-- business). The direct-partner base service enforces one active row itself.
+CREATE TABLE IF NOT EXISTS agency_client_delegation (
+    id                                   BIGINT        NOT NULL,
+    client_partner_id                    BIGINT        NOT NULL,
+    agency_partner_id                    BIGINT        NOT NULL,
+    granted_by                           BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    granted_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at                           TIMESTAMP    ,
+    revoked_by                           BIGINT       ,
+    CONSTRAINT agency_client_delegation_pk PRIMARY KEY (id),
+    CONSTRAINT chk_delegation_distinct CHECK (client_partner_id <> agency_partner_id),
+    CONSTRAINT chk_delegation_lifecycle CHECK ((status = 'A' AND revoked_at IS NULL AND revoked_by IS NULL) OR (status = 'R' AND revoked_at IS NOT NULL AND revoked_by IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS delegation_episode_uq ON agency_client_delegation(agency_partner_id, client_partner_id, granted_at);
+CREATE INDEX IF NOT EXISTS idx_agency_client_delegation_client ON agency_client_delegation(client_partner_id, status);
+CREATE INDEX IF NOT EXISTS idx_agency_client_delegation_agency ON agency_client_delegation(agency_partner_id, status);
+
+CREATE SEQUENCE IF NOT EXISTS agency_client_delegation_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('agency_client_delegation', 'id', 'agency_client_delegation_seq') ON CONFLICT DO NOTHING;
+
+-- Effective-dated referral (R) or wholesale (W) model per delegation. The
+-- partial unique index permits only one open row without a database extension;
+-- services close then insert atomically and validate historical intervals.
+CREATE TABLE IF NOT EXISTS agency_client_billing (
+    id                                   BIGINT        NOT NULL,
+    client_delegation_id                 BIGINT        NOT NULL,
+    billing_model                        CHAR(1)       NOT NULL,
+    effective_from                       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    effective_to                         TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_client_billing_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_client_billing_model CHECK (billing_model IN ('R', 'W')),
+    CONSTRAINT chk_agency_client_billing_period CHECK (effective_to IS NULL OR effective_to > effective_from)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS agency_client_billing_open_uq ON agency_client_billing(client_delegation_id) WHERE effective_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_agency_client_billing_period ON agency_client_billing(client_delegation_id, effective_from);
+
+CREATE SEQUENCE IF NOT EXISTS agency_client_billing_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('agency_client_billing', 'id', 'agency_client_billing_seq') ON CONFLICT DO NOTHING;
+
+-- Selects the exact active user_bank_info version used for an agency's
+-- commission payouts. The composite FK proves the destination belongs to the
+-- agency; user and provider are derived from user_bank_info, not duplicated.
+CREATE TABLE IF NOT EXISTS agency_payout_profile (
+    agency_partner_id                    BIGINT        NOT NULL,
+    user_bank_info_id                    BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_payout_profile_pk PRIMARY KEY (agency_partner_id),
+    CONSTRAINT chk_agency_payout_profile_status CHECK (status IN ('A', 'I'))
+);
+
+-- Percentage commission rate frozen per agency/client at the client's first
+-- earning. Resolution prefers agency_profile.default_commission_rate_bp and
+-- otherwise uses application_config_value/default_commission_rate_bp.
+CREATE TABLE IF NOT EXISTS agency_client_rate (
+    agency_partner_id                    BIGINT        NOT NULL,
+    client_partner_id                    BIGINT        NOT NULL,
+    commission_rate_bp                   INTEGER       NOT NULL,
+    first_earned_at                      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_client_rate_pk PRIMARY KEY (agency_partner_id, client_partner_id),
+    CONSTRAINT chk_agency_client_rate CHECK (commission_rate_bp > 0 AND commission_rate_bp <= 10000)
+);
+
+-- Append-only earning/reversal ledger. The frozen percentage is snapshotted
+-- in applied_rate_bp; only payout lifecycle status changes after insertion.
+-- Codes are column-scoped: entry_type E=earning/R=reversal; status H=held,
+-- P=payable, R=reserved, D=disbursed, O=offset/settled reversal.
+CREATE TABLE IF NOT EXISTS agency_commission (
+    id                                   BIGINT        NOT NULL,
+    client_billing_id                    BIGINT        NOT NULL,
+    invoice_line_payment_id              BIGINT        NOT NULL,
+    earning_period_start                 TIMESTAMP     NOT NULL,
+    earning_period_end                   TIMESTAMP     NOT NULL,
+    gross_amount_minor                   BIGINT        NOT NULL,
+    commission_amount_minor              BIGINT        NOT NULL,
+    applied_rate_bp                      INTEGER       NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    entry_type                           CHAR(1)       NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'H',
+    reversal_of_id                       BIGINT       ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    earned_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_commission_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_commission_entry CHECK ((entry_type = 'E' AND gross_amount_minor > 0 AND commission_amount_minor > 0 AND reversal_of_id IS NULL) OR (entry_type = 'R' AND gross_amount_minor < 0 AND commission_amount_minor < 0 AND reversal_of_id IS NOT NULL)),
+    CONSTRAINT chk_agency_commission_period CHECK (earning_period_end > earning_period_start),
+    CONSTRAINT chk_agency_commission_rate CHECK (applied_rate_bp > 0 AND applied_rate_bp <= 10000)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS agency_commission_source_uq ON agency_commission(invoice_line_payment_id, earning_period_start) WHERE entry_type = 'E';
+CREATE INDEX IF NOT EXISTS idx_agency_commission_status ON agency_commission(status, currency);
+CREATE INDEX IF NOT EXISTS idx_agency_commission_billing ON agency_commission(client_billing_id);
+
+CREATE SEQUENCE IF NOT EXISTS agency_commission_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('agency_commission', 'id', 'agency_commission_seq') ON CONFLICT DO NOTHING;
+
+-- One aggregate payout per agency, currency, destination, and selection
+-- cutoff. Destination fields are immutable snapshots. user_id is derived
+-- through user_bank_info and is deliberately not duplicated here. Status:
+-- C=created, P=provider-pending, D=disbursed, F=failed, M=manual review,
+-- R=returned, V=reversed. Codes are scoped to this column.
+CREATE TABLE IF NOT EXISTS agency_payout (
+    id                                   BIGINT        NOT NULL,
+    agency_partner_id                    BIGINT        NOT NULL,
+    user_bank_info_id                    BIGINT        NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    provider                             CHAR(2)       NOT NULL,
+    provider_account_id                  VARCHAR(100)  NOT NULL,
+    selection_cutoff_at                  TIMESTAMP     NOT NULL,
+    idempotency_key                      VARCHAR(100)  NOT NULL,
+    provider_transfer_id                 VARCHAR(255) ,
+    provider_funding_id                  VARCHAR(255) ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'C',
+    attempt_count                        INTEGER       NOT NULL DEFAULT 0,
+    attempted_at                         TIMESTAMP    ,
+    next_attempt_at                      TIMESTAMP    ,
+    paid_at                              TIMESTAMP    ,
+    failure_message                      TEXT         ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_payout_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_payout_amount CHECK (amount_minor > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS agency_payout_idem_uq ON agency_payout(idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS agency_payout_transfer_uq ON agency_payout(provider, provider_transfer_id) WHERE provider_transfer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agency_payout_funding ON agency_payout(provider_funding_id) WHERE provider_funding_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS agency_payout_cycle_uq ON agency_payout(agency_partner_id, currency, provider_account_id, selection_cutoff_at) WHERE status <> 'F';
+
+CREATE SEQUENCE IF NOT EXISTS agency_payout_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('agency_payout', 'id', 'agency_payout_seq') ON CONFLICT DO NOTHING;
+
+-- Allocation of commission ledger entries to aggregate payouts. A null
+-- released_at marks the live allocation; terminal failure releases the line.
+CREATE TABLE IF NOT EXISTS agency_payout_line (
+    payout_id                            BIGINT        NOT NULL,
+    commission_id                        BIGINT        NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    released_at                          TIMESTAMP    ,
+    CONSTRAINT agency_payout_line_pk PRIMARY KEY (payout_id, commission_id),
+    CONSTRAINT chk_agency_payout_line_amount CHECK (amount_minor <> 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS agency_payout_line_live_uq ON agency_payout_line(commission_id) WHERE released_at IS NULL;
 
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
@@ -1512,5 +1699,185 @@ BEGIN
      WHERE constraint_name = 'application_config_values' AND table_name = 'application_config_value'
   ) THEN
     ALTER TABLE application_config_value ADD CONSTRAINT application_config_values FOREIGN KEY (flag_id) REFERENCES application_config_flag(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'agency_profile_partner' AND table_name = 'agency_profile'
+  ) THEN
+    ALTER TABLE agency_profile ADD CONSTRAINT agency_profile_partner FOREIGN KEY (agency_partner_id) REFERENCES business_partner(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'invitation_agency' AND table_name = 'agency_client_invitation'
+  ) THEN
+    ALTER TABLE agency_client_invitation ADD CONSTRAINT invitation_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'invitation_client' AND table_name = 'agency_client_invitation'
+  ) THEN
+    ALTER TABLE agency_client_invitation ADD CONSTRAINT invitation_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'invitation_accepted_by' AND table_name = 'agency_client_invitation'
+  ) THEN
+    ALTER TABLE agency_client_invitation ADD CONSTRAINT invitation_accepted_by FOREIGN KEY (accepted_by) REFERENCES user_account(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_client' AND table_name = 'agency_client_delegation'
+  ) THEN
+    ALTER TABLE agency_client_delegation ADD CONSTRAINT delegation_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_agency' AND table_name = 'agency_client_delegation'
+  ) THEN
+    ALTER TABLE agency_client_delegation ADD CONSTRAINT delegation_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_grantor' AND table_name = 'agency_client_delegation'
+  ) THEN
+    ALTER TABLE agency_client_delegation ADD CONSTRAINT delegation_grantor FOREIGN KEY (granted_by) REFERENCES user_account(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_revoker' AND table_name = 'agency_client_delegation'
+  ) THEN
+    ALTER TABLE agency_client_delegation ADD CONSTRAINT delegation_revoker FOREIGN KEY (revoked_by) REFERENCES user_account(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'client_billing_delegation' AND table_name = 'agency_client_billing'
+  ) THEN
+    ALTER TABLE agency_client_billing ADD CONSTRAINT client_billing_delegation FOREIGN KEY (client_delegation_id) REFERENCES agency_client_delegation(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'agency_payout_profile_agency' AND table_name = 'agency_payout_profile'
+  ) THEN
+    ALTER TABLE agency_payout_profile ADD CONSTRAINT agency_payout_profile_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'agency_payout_profile_bank_info' AND table_name = 'agency_payout_profile'
+  ) THEN
+    ALTER TABLE agency_payout_profile ADD CONSTRAINT agency_payout_profile_bank_info FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'client_rate_agency' AND table_name = 'agency_client_rate'
+  ) THEN
+    ALTER TABLE agency_client_rate ADD CONSTRAINT client_rate_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'client_rate_client' AND table_name = 'agency_client_rate'
+  ) THEN
+    ALTER TABLE agency_client_rate ADD CONSTRAINT client_rate_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'commission_client_billing' AND table_name = 'agency_commission'
+  ) THEN
+    ALTER TABLE agency_commission ADD CONSTRAINT commission_client_billing FOREIGN KEY (client_billing_id) REFERENCES agency_client_billing(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'commission_source_allocation' AND table_name = 'agency_commission'
+  ) THEN
+    ALTER TABLE agency_commission ADD CONSTRAINT commission_source_allocation FOREIGN KEY (invoice_line_payment_id) REFERENCES invoice_line_payment(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'commission_reversal_of' AND table_name = 'agency_commission'
+  ) THEN
+    ALTER TABLE agency_commission ADD CONSTRAINT commission_reversal_of FOREIGN KEY (reversal_of_id) REFERENCES agency_commission(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_agency' AND table_name = 'agency_payout'
+  ) THEN
+    ALTER TABLE agency_payout ADD CONSTRAINT payout_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_destination_version' AND table_name = 'agency_payout'
+  ) THEN
+    ALTER TABLE agency_payout ADD CONSTRAINT payout_destination_version FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_lines' AND table_name = 'agency_payout_line'
+  ) THEN
+    ALTER TABLE agency_payout_line ADD CONSTRAINT payout_lines FOREIGN KEY (payout_id) REFERENCES agency_payout(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_line_commission' AND table_name = 'agency_payout_line'
+  ) THEN
+    ALTER TABLE agency_payout_line ADD CONSTRAINT payout_line_commission FOREIGN KEY (commission_id) REFERENCES agency_commission(id);
   END IF;
 END $$;

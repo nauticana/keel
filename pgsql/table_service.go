@@ -56,6 +56,7 @@ type TableServicePgsql struct {
 	Client        pgxQuerier
 	Schema        string
 	sqlSelectAll  string
+	sqlWhereByID  string
 	sqlSelectByID string
 	sqlUpdateByID string
 	sqlDeleteByID string
@@ -177,9 +178,9 @@ func (s *TableServicePgsql) Init() error {
 	for i, id := range s.Table.Keys {
 		idPlaceholders[i] = fmt.Sprintf("%s = %s", quoteIdent(id.ColumnName), s.Placeholder(i+1))
 	}
-	whr := " WHERE " + strings.Join(idPlaceholders, " AND ")
-	s.sqlSelectByID = s.sqlSelectAll + whr
-	s.sqlDeleteByID = "DELETE FROM " + s.quotedTable() + whr
+	s.sqlWhereByID = " WHERE " + strings.Join(idPlaceholders, " AND ")
+	s.sqlSelectByID = s.sqlSelectAll + s.sqlWhereByID
+	s.sqlDeleteByID = "DELETE FROM " + s.quotedTable() + s.sqlWhereByID
 
 	var updateSet []string
 	plcCnt := 1
@@ -248,7 +249,20 @@ func quoteSQLString(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
-func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int, where map[string]any, orderby string) ([]any, error) {
+// selectPlan is the resolved shape of one scoped read: the SELECT statement,
+// the WHERE fragment a COUNT over the same rows reuses, the bound values, and
+// whether the primary-key fast path matched (at most one row).
+type selectPlan struct {
+	text  string
+	where string
+	vals  []any
+	byKey bool
+}
+
+// planSelect authorizes the read, pins the caller's partner / owner scope, and
+// builds the statement. Get and GetPage both go through it so no scoping rule
+// can apply to one path and not the other.
+func (s *TableServicePgsql) planSelect(ctx context.Context, partnerID int64, userID int, where map[string]any) (*selectPlan, error) {
 	allowed, ownScope := false, false
 	if userID > 0 {
 		allowed, ownScope = s.CheckPermission(ctx, userID, "SELECT")
@@ -256,6 +270,7 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 			return nil, model.NewForbidden(fmt.Sprintf("No authorization for SELECT on %s", s.Table.TableName))
 		}
 	}
+	plan := &selectPlan{}
 	var sqlText string
 	var vals []any
 
@@ -300,7 +315,8 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 			}
 		}
 		if match {
-			sqlText = s.sqlSelectByID
+			plan.byKey = true
+			plan.where = s.sqlWhereByID
 			vals = sortedVals
 			// By-key fast path on a PartnerUserScoped table still needs
 			// the partner_user gate — a PARTNER_ADMIN supplying a known
@@ -311,10 +327,11 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 			// targets the first (and only) key.
 			if applyPartnerUserScope {
 				keyCol := s.Table.Keys[0].ColumnName
-				sqlText += fmt.Sprintf(" AND %s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
+				plan.where += fmt.Sprintf(" AND %s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
 					quoteIdent(keyCol), quoteIdent("partner_user"), s.Placeholder(len(vals)+1))
 				vals = append(vals, partnerID)
 			}
+			sqlText = s.sqlSelectAll + plan.where
 		}
 	}
 	if sqlText == "" {
@@ -324,7 +341,7 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 		for k, v := range where {
 			colName, ok := s.resolveColumnName(k)
 			if !ok {
-				return nil, fmt.Errorf("invalid filter column: %s", k)
+				return nil, model.NewBadRequest(fmt.Sprintf("invalid filter column: %s", k))
 			}
 			conditions = append(conditions, fmt.Sprintf("%s = %s", quoteIdent(colName), s.Placeholder(plcCnt)))
 			vals = append(vals, v)
@@ -340,36 +357,178 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 			vals = append(vals, partnerID)
 		}
 		if len(conditions) > 0 {
-			sqlText += " WHERE " + strings.Join(conditions, " AND ")
+			plan.where = " WHERE " + strings.Join(conditions, " AND ")
+		}
+		sqlText += plan.where
+	}
+	plan.text = sqlText
+	plan.vals = vals
+	return plan, nil
+}
+
+// orderTerm is one validated ORDER BY element: a canonical column name and an
+// optional direction keyword.
+type orderTerm struct {
+	column    string
+	direction string
+}
+
+func (t orderTerm) sql() string {
+	if t.direction == "" {
+		return quoteIdent(t.column)
+	}
+	return quoteIdent(t.column) + " " + t.direction
+}
+
+func orderSQL(terms []orderTerm) string {
+	if len(terms) == 0 {
+		return ""
+	}
+	parts := make([]string, len(terms))
+	for i, term := range terms {
+		parts[i] = term.sql()
+	}
+	return " ORDER BY " + strings.Join(parts, ", ")
+}
+
+// orderTerms validates a caller-supplied ordering against the table's declared
+// columns. Terms are comma-separated, each a column with an optional ASC / DESC
+// ("name DESC, created_at"). Anything that doesn't resolve to a column is
+// rejected — never dropped — so a typo can't silently reorder a paged read.
+func (s *TableServicePgsql) orderTerms(orderby string) ([]orderTerm, error) {
+	if strings.TrimSpace(orderby) == "" {
+		return nil, nil
+	}
+	var terms []orderTerm
+	for _, raw := range strings.Split(orderby, ",") {
+		fields := strings.Fields(raw)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) > 2 {
+			return nil, model.NewBadRequest(fmt.Sprintf("invalid order by term: %s", strings.TrimSpace(raw)))
+		}
+		colName, ok := s.resolveOrderColumn(fields[0])
+		if !ok {
+			return nil, model.NewBadRequest(fmt.Sprintf("invalid order by column: %s", fields[0]))
+		}
+		term := orderTerm{column: colName}
+		if len(fields) == 2 {
+			switch upper := strings.ToUpper(fields[1]); upper {
+			case "ASC", "DESC":
+				term.direction = upper
+			default:
+				return nil, model.NewBadRequest(fmt.Sprintf("invalid order by direction: %s", fields[1]))
+			}
+		}
+		terms = append(terms, term)
+	}
+	return terms, nil
+}
+
+// resolveOrderColumn matches either name form, case-insensitively, so clients
+// can order by the snake_case column or the PascalName they read in the JSON.
+func (s *TableServicePgsql) resolveOrderColumn(key string) (string, bool) {
+	lower := strings.ToLower(key)
+	for _, col := range s.Table.Columns {
+		if strings.ToLower(col.ColumnName) == lower || strings.ToLower(col.PascalName) == lower {
+			return col.ColumnName, true
 		}
 	}
-	if orderby != "" {
-		var validParts []string
-		parts := strings.Fields(orderby)
-		for _, part := range parts {
-			cleanPart := strings.TrimSuffix(part, ",")
-			upper := strings.ToUpper(cleanPart)
-			if upper == "ASC" || upper == "DESC" {
-				validParts = append(validParts, upper)
-				continue
-			}
-			isValidCol := false
-			lowerPart := strings.ToLower(cleanPart)
-			for _, col := range s.Table.Columns {
-				if strings.ToLower(col.ColumnName) == lowerPart || strings.ToLower(col.PascalName) == lowerPart {
-					validParts = append(validParts, col.ColumnName)
-					isValidCol = true
-					break
-				}
-			}
-			if !isValidCol {
-				return nil, fmt.Errorf("invalid order by column: %s", cleanPart)
-			}
-		}
-		if len(validParts) > 0 {
-			sqlText += " ORDER BY " + strings.Join(validParts, " ")
+	return "", false
+}
+
+// stableOrder appends any primary-key column the caller didn't already name, so
+// the ordering is total. Without it, rows that tie under the caller's ORDER BY
+// come back in whatever order the plan produces, and a client walking offsets
+// can see the same row twice or miss one entirely.
+func (s *TableServicePgsql) stableOrder(terms []orderTerm) []orderTerm {
+	named := make(map[string]bool, len(terms))
+	for _, term := range terms {
+		named[term.column] = true
+	}
+	for _, key := range s.Table.Keys {
+		if !named[key.ColumnName] {
+			terms = append(terms, orderTerm{column: key.ColumnName})
 		}
 	}
+	return terms
+}
+
+func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int, where map[string]any, orderby string) ([]any, error) {
+	plan, err := s.planSelect(ctx, partnerID, userID, where)
+	if err != nil {
+		return nil, err
+	}
+	terms, err := s.orderTerms(orderby)
+	if err != nil {
+		return nil, err
+	}
+	return s.selectRows(ctx, plan.text+orderSQL(terms), plan.vals...)
+}
+
+// GetPage pushes the page bounds into SQL and reports the unpaged total, so a
+// bounded response costs a bounded read instead of a full-table scan.
+func (s *TableServicePgsql) GetPage(ctx context.Context, partnerID int64, userID int, where map[string]any, page port.PageRequest) ([]any, int, error) {
+	plan, err := s.planSelect(ctx, partnerID, userID, where)
+	if err != nil {
+		return nil, 0, err
+	}
+	terms, err := s.orderTerms(page.OrderBy)
+	if err != nil {
+		return nil, 0, err
+	}
+	// The primary-key fast path returns at most one row; LIMIT / OFFSET and a
+	// COUNT would only add work.
+	if plan.byKey {
+		items, err := s.selectRows(ctx, plan.text+orderSQL(terms), plan.vals...)
+		if err != nil {
+			return nil, 0, err
+		}
+		return page.Slice(items), len(items), nil
+	}
+	offset := page.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	sqlText := plan.text + orderSQL(s.stableOrder(terms))
+	vals := append([]any(nil), plan.vals...)
+	if page.Limit > 0 {
+		sqlText += " LIMIT " + s.Placeholder(len(vals)+1)
+		vals = append(vals, page.Limit)
+	}
+	if offset > 0 {
+		sqlText += " OFFSET " + s.Placeholder(len(vals)+1)
+		vals = append(vals, offset)
+	}
+	items, err := s.selectRows(ctx, sqlText, vals...)
+	if err != nil {
+		return nil, 0, err
+	}
+	// A first page that didn't fill is the entire result set — the COUNT would
+	// tell us what we already know.
+	if offset == 0 && (page.Limit <= 0 || len(items) < page.Limit) {
+		return items, len(items), nil
+	}
+	total, err := s.countRows(ctx, plan)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+// countRows counts the rows the plan selects, reusing its WHERE fragment and
+// bound values so the total always describes the same scoped set as the page.
+func (s *TableServicePgsql) countRows(ctx context.Context, plan *selectPlan) (int, error) {
+	var total int64
+	sqlText := "SELECT count(*) FROM " + s.quotedTable() + plan.where
+	if err := s.Client.QueryRow(ctx, sqlText, plan.vals...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("failed to count rows: %w", err)
+	}
+	return int(total), nil
+}
+
+func (s *TableServicePgsql) selectRows(ctx context.Context, sqlText string, vals ...any) ([]any, error) {
 	rows, err := s.Client.Query(ctx, sqlText, vals...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run query: %w", err)
@@ -697,3 +856,4 @@ func (s *TableServicePgsql) Post(ctx context.Context, partnerID int64, userID in
 }
 
 var _ port.TableService = (*TableServicePgsql)(nil)
+var _ port.PagedTableService = (*TableServicePgsql)(nil)

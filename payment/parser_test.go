@@ -58,7 +58,7 @@ func TestStripeParser_InvoiceLinesAndChargeIdentity(t *testing.T) {
 	body := []byte(`{
 		"id":"evt_lines","type":"invoice.paid",
 		"data":{"object":{
-			"id":"in_1","charge":"ch_1","amount_paid":599,"currency":"usd",
+			"id":"in_1","payment_intent":"pi_1","charge":"ch_1","amount_paid":599,"currency":"usd",
 			"lines":{"has_more":false,"data":[{
 				"id":"il_1","amount":599,"currency":"usd","description":"Starter",
 				"period":{"start":1754006400,"end":1756684800},
@@ -70,8 +70,8 @@ func TestStripeParser_InvoiceLinesAndChargeIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.InvoiceID != "in_1" || e.ChargeID != "ch_1" || !e.InvoiceLinesComplete {
-		t.Fatalf("invoice=%q charge=%q complete=%v", e.InvoiceID, e.ChargeID, e.InvoiceLinesComplete)
+	if e.InvoiceID != "in_1" || e.PaymentID != "pi_1" || e.ChargeID != "ch_1" || !e.InvoiceLinesComplete {
+		t.Fatalf("invoice=%q payment=%q charge=%q complete=%v", e.InvoiceID, e.PaymentID, e.ChargeID, e.InvoiceLinesComplete)
 	}
 	if len(e.InvoiceLines) != 1 {
 		t.Fatalf("lines=%d, want 1", len(e.InvoiceLines))

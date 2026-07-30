@@ -68,6 +68,7 @@ seeds:
       - [BUSINESS_ADMIN, "Business Administrator"]
       - [PARTNER_ADMIN, "Partner Administrator"]
       - [PAYMENT_ADMIN, "Payment Administrator"]
+      - [AGENCY, "Sales Agency"]
 
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
@@ -80,6 +81,12 @@ seeds:
       - [SUPER, TABLE, DELETE, "*"]
       - [SUPER, REPORT, ACCESS, "*"]
 
+      # AGENCY — self-service routes still enforce active profile state and
+      # partner ownership inside agency.BaseAgencyService.
+      - [AGENCY, AGENCY, MANAGE_CLIENTS, agency_clients]
+      - [AGENCY, AGENCY, VIEW_EARNINGS, agency_earnings]
+      - [AGENCY, AGENCY, MANAGE_PAYOUT, agency_payout_profile]
+
       # APP_ADMIN — read-only on most keel tables, CRUD on framework config
       - [APP_ADMIN, PAGE, ACCESS, api_keys]
       - [APP_ADMIN, PAGE, ACCESS, application_config_flags]
@@ -89,6 +96,10 @@ seeds:
       - [APP_ADMIN, TABLE, SELECT, application_config_flag]
       - [APP_ADMIN, TABLE, UPDATE, application_config_flag]
       - [APP_ADMIN, APPLICATION_CONFIG_FLAG, RELOAD, application_config_flag]
+      - [APP_ADMIN, PAGE, ACCESS, agency_profiles]
+      - [APP_ADMIN, TABLE, SELECT, agency_profile]
+      - [APP_ADMIN, TABLE, UPDATE, agency_profile]
+      - [APP_ADMIN, AGENCY_PROFILE, APPROVE, agency_profile]
       - [APP_ADMIN, TABLE, SELECT, application_config_value]
       - [APP_ADMIN, TABLE, INSERT, application_config_value]
       - [APP_ADMIN, TABLE, UPDATE, application_config_value]

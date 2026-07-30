@@ -274,9 +274,17 @@ func (h *OTPHandler) SendOTP(w http.ResponseWriter, r *http.Request) {
 // rateLimitOTP enforces per-contact + per-IP caps shared by both
 // channels. Returns true when the request should proceed; false means
 // an error response has already been written.
+// Send is the one rate-limited path with no database-backed backstop: OTP
+// verify, password login, and 2FA verify all bump a persisted attempt counter
+// and lock the account, but nothing bounds *dispatch*. A swallowed cache error
+// therefore removed the only cap standing between an attacker and unbounded
+// SMS/email spend, so a counter that cannot be read fails closed.
 func (h *OTPHandler) rateLimitOTP(w http.ResponseWriter, r *http.Request, contactKeySuffix string) bool {
 	contactKey := "otp_rate:" + contactKeySuffix
-	count, _ := h.Cache.Increment(r.Context(), contactKey)
+	count, err := h.Cache.Increment(r.Context(), contactKey)
+	if err != nil {
+		return h.rateLimitUnavailable(w, r, "per-contact OTP counter", err)
+	}
 	if count == 1 {
 		h.Cache.Set(r.Context(), contactKey, "1", 10*time.Minute)
 	}
@@ -287,7 +295,10 @@ func (h *OTPHandler) rateLimitOTP(w http.ResponseWriter, r *http.Request, contac
 	// Per-IP cap prevents pumping attacks that enumerate contacts
 	// (each under the per-contact limit) from a single origin.
 	ipKey := "otp_rate_ip:" + TrustedClientIP(r)
-	ipCount, _ := h.Cache.Increment(r.Context(), ipKey)
+	ipCount, err := h.Cache.Increment(r.Context(), ipKey)
+	if err != nil {
+		return h.rateLimitUnavailable(w, r, "per-IP OTP counter", err)
+	}
 	if ipCount == 1 {
 		h.Cache.Set(r.Context(), ipKey, "1", 10*time.Minute)
 	}
@@ -296,6 +307,18 @@ func (h *OTPHandler) rateLimitOTP(w http.ResponseWriter, r *http.Request, contac
 		return false
 	}
 	return true
+}
+
+// rateLimitUnavailable refuses the send and records the cause. The client gets
+// a retryable 503 with no detail; the operator gets the backend error, which a
+// discarded error left invisible until the provider invoice arrived.
+func (h *OTPHandler) rateLimitUnavailable(w http.ResponseWriter, r *http.Request, which string, err error) bool {
+	if h.Journal != nil {
+		h.Journal.Error(fmt.Sprintf("otp rate limit unavailable (%s): %v", which, err))
+	}
+	h.WriteError(w, http.StatusServiceUnavailable, "Service Unavailable",
+		"rate limiting is temporarily unavailable, try again later")
+	return false
 }
 
 // sendOTPPhone is the original SMS-channel path, factored out so

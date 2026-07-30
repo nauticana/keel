@@ -3,11 +3,26 @@ package pgsql
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
+
+var txQueryCatalogs sync.Map
+
+func cachedTransactionQueries(catalogID string, queries map[string]string) map[string]string {
+	if catalogID == "" {
+		return rewriteQueries(queries)
+	}
+	if cached, ok := txQueryCatalogs.Load(catalogID); ok {
+		return cached.(map[string]string)
+	}
+	rewritten := rewriteQueries(queries)
+	actual, _ := txQueryCatalogs.LoadOrStore(catalogID, rewritten)
+	return actual.(map[string]string)
+}
 
 type TxQueryServicePgsql struct {
 	Tx          pgx.Tx
@@ -69,4 +84,15 @@ func (s *TxQueryServicePgsql) GenID() int64 {
 	return s.IdGenerator.NextID()
 }
 
+// QueryService binds an independently-owned named query catalog to this same
+// pgx transaction. It does not begin or commit another transaction.
+func (s *TxQueryServicePgsql) QueryService(catalogID string, queries map[string]string) port.QueryService {
+	return &TxQueryServicePgsql{
+		Tx:          s.Tx,
+		Queries:     cachedTransactionQueries(catalogID, queries),
+		IdGenerator: s.IdGenerator,
+	}
+}
+
 var _ port.TxQueryService = (*TxQueryServicePgsql)(nil)
+var _ port.TxQueryCatalog = (*TxQueryServicePgsql)(nil)

@@ -1,0 +1,76 @@
+table: agency_commission
+comment: |
+  Append-only earning/reversal ledger. The frozen percentage is snapshotted
+  in applied_rate_bp; only payout lifecycle status changes after insertion.
+  Codes are column-scoped: entry_type E=earning/R=reversal; status H=held,
+  P=payable, R=reserved, D=disbursed, O=offset/settled reversal.
+order: 69
+columns:
+  - name: id
+    type: BIGINT
+  - name: client_billing_id
+    type: BIGINT
+  - name: invoice_line_payment_id
+    type: BIGINT
+  - name: earning_period_start
+    type: TIMESTAMP
+  - name: earning_period_end
+    type: TIMESTAMP
+  - name: gross_amount_minor
+    type: BIGINT
+  - name: commission_amount_minor
+    type: BIGINT
+  - name: applied_rate_bp
+    type: INTEGER
+  - name: currency
+    type: CHAR(3)
+  - name: entry_type
+    type: CHAR(1)
+  - name: status
+    type: CHAR(1)
+    default: H
+  - name: reversal_of_id
+    type: BIGINT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: earned_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agency_commission_seq
+  column: id
+checks:
+  - name: chk_agency_commission_entry
+    expression: "(entry_type = 'E' AND gross_amount_minor > 0 AND commission_amount_minor > 0 AND reversal_of_id IS NULL) OR (entry_type = 'R' AND gross_amount_minor < 0 AND commission_amount_minor < 0 AND reversal_of_id IS NOT NULL)"
+  - name: chk_agency_commission_period
+    expression: "earning_period_end > earning_period_start"
+  - name: chk_agency_commission_rate
+    expression: "applied_rate_bp > 0 AND applied_rate_bp <= 10000"
+indexes:
+  - name: agency_commission_source_uq
+    columns: [invoice_line_payment_id, earning_period_start]
+    unique: true
+    where: "entry_type = 'E'"
+  - name: idx_agency_commission_status
+    columns: [status, currency]
+  - name: idx_agency_commission_billing
+    columns: [client_billing_id]
+foreign_keys:
+  - name: commission_client_billing
+    columns: [client_billing_id]
+    references:
+      table: agency_client_billing
+      columns: [id]
+  - name: commission_source_allocation
+    columns: [invoice_line_payment_id]
+    references:
+      table: invoice_line_payment
+      columns: [id]
+  - name: commission_reversal_of
+    columns: [reversal_of_id]
+    references:
+      table: agency_commission
+      columns: [id]

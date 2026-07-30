@@ -2,7 +2,7 @@
 
 Tracking known issues and contribution opportunities. Items are grouped by tier; within a tier the order roughly matches priority. Severity tags: **HIGH** = security or data-integrity; **MED** = ergonomics or hardening; **LOW** = polish. Status tags: ✅ done, 🚧 in progress, ⏳ open, ⛔ won't do.
 
-This file consolidates the prior v0.6 deferral notes plus the downstream-consumer review that previously lived in `TODO_FROM_SEO.md`.
+This file consolidates the v0.6 deferral notes plus the downstream-consumer review that previously lived in `TODO_FROM_SEO.md`. Last reconciled against the tree at **v1.2.40** (2026-07-29). Shipped feature work is not tracked here — `migration_guide.json` is the changelog and `CODE_REVIEW_*.md` holds review findings; this file tracks only what is still deferred.
 
 ---
 
@@ -18,19 +18,21 @@ This file consolidates the prior v0.6 deferral notes plus the downstream-consume
 | B2 | `pgsql/` package tests | B | MED | ✅ done (bundled with A1) |
 | B3 | Commit generated DDL + `make verify-schema` | B | MED | ✅ done |
 | B4 | `VerifySchema` invariant check on `SQLWebhookRepository` | B | MED | ✅ done |
-| B5a | Picker scope: "unassigned users" view for partner_user FK | B | MED | ⏳ open — alternative to B5b |
-| B5b | Invite-by-email handler (cleaner UX) | B | MED | ⏳ open — alternative to B5a |
+| B5a | Picker scope: "unassigned users" view for partner_user FK | B | LOW | ⏳ open — alternative to B5b, **re-scoped** |
+| B5b | Invite-by-email handler (cleaner UX) | B | MED | ⏳ open — alternative to B5a, **preferred** |
 | B6 | Document Wise SCA funding gap | B | MED | ✅ done |
-| C1 | `port.MetricsRecorder` + Prometheus + correlation-id propagation | C | MED | ⏳ open — driven by demand |
+| C1 | `port.MetricsRecorder` + Prometheus; correlation-id through the webhook lifecycle | C | **HIGH** | ⏳ open — **re-ranked**, amplifies C6: money-path failures are currently unobservable |
 | C2 | Distributed lock on `CacheService` for OTP issuance race | C | MED | ⏳ open — driven by demand |
 | C3 | Paddle payment provider (ed25519) | C | MED | ⏳ open — driven by demand |
-| C4 | Subscription mutation API on `CheckoutClient` | C | MED | ⏳ open — driven by demand |
-| C5 | `CreateRefund` + `SubmitDisputeEvidence` | C | MED | ⏳ open — driven by demand |
-| C6 | Webhook replay / dead-letter | C | MED | ⏳ open — driven by demand |
+| C4 | Subscription mutation API | C | MED | ✅ done — shipped on `billing.SubscriptionLifecycle`, not `CheckoutClient` |
+| C5 | `CreateRefund` + `SubmitDisputeEvidence` | C | MED | ⏳ open — premise strengthened by v1.2.39/40 |
+| C6 | Operator-initiated webhook replay + dead-letter | C | **HIGH** | ⏳ open — **re-ranked**, ledger-integrity risk once the agency layer carries volume |
 | C7 | Tax + coupon on `CheckoutRequest` | C | MED | ⏳ open — driven by demand |
 | C8 | IP allowlist on webhook endpoints (defence-in-depth) | C | MED | ⏳ open — driven by demand |
-| C9 | Fuzz tests on Stripe signature verification | C | LOW | ⏳ open |
-| C10 | Property-based parser tests (`rapid`) | C | LOW | ⏳ open |
+| C9 | Fuzz tests on Stripe signature verification | C | LOW | ✅ done |
+| C10 | Property-based parser tests (`rapid`) | C | LOW | ⏳ open — lower value now, fuzz targets cover adjacent ground |
+| C11 | Subscription pause / resume | C | LOW | ⏳ open — residual of C4 |
+| D1 | Reconcile fail-open vs fail-closed on `SecurityHandler.Cache == nil` | D | MED | ⏳ open |
 | — | Body cap inside `WebhookProcessor` | — | — | ⛔ won't do — see Won't do section |
 | — | Log encoder errors on 5xx in `WriteError` | — | — | ⛔ won't do |
 | — | Write-amplification DoS via webhook log | — | — | ⛔ won't do — closed in v0.5.0 |
@@ -40,17 +42,25 @@ This file consolidates the prior v0.6 deferral notes plus the downstream-consume
 | — | Per-package READMEs | — | — | ⛔ won't do — Standards §10 (doc-comments are the surface) |
 | — | Rename `CheckoutClient` → `PaymentClient` | — | — | ⛔ won't do — major-version territory |
 
-**Quick read.** All Tier A done. Tier B: ✅ five done, ⏳ one open (B5 — pick one of two alternatives). Tier C: ⏳ all ten open, defer until a downstream consumer asks.
+**Quick read.** All Tier A done. Tier B: ✅ five done, ⏳ one open (B5 — pick one of two alternatives; B5b preferred). Tier C: ✅ two done (C4, C9), ⏳ nine open — **C6 and C1 are the two to close before the agency/commission layer carries production volume**; the rest wait for a downstream consumer to ask. Tier D: ⏳ one open.
+
+**Severity note.** No open item is a brute-force or data-exposure hole: password login, OTP verify, TOTP verify, and backup-code verify all bound attempts through a persisted counter that locks the account, so they are unaffected by cache backend or replica count. C2's per-process counters multiply only the secondary layers. The genuine production exposure is on the money path — C6 (a webhook stranded past the provider's retry window yields no `payment_record`, therefore no commission, permanently and silently) and C1 (nothing surfaces that it happened).
 
 ---
 
 ## Tier B (open items only)
 
-### B5. Pick one — picker scope OR invite-by-email [MED] ⏳
+### B5. Pick one — picker scope OR invite-by-email ⏳
 
-These are alternatives. Both close the "PARTNER_ADMIN sees all users globally on the picker" hole that A1 doesn't address (A1 stops API enumeration; the picker is the ADD path).
+These are alternatives, and **the original rationale no longer holds**. This entry used to read "both close the *PARTNER_ADMIN sees all users globally on the picker* hole that A1 doesn't address (A1 stops API enumeration; the picker is the ADD path)."
 
-**B5a. Picker scope: "unassigned users only" for `partner_user → user_account` FK** ⏳
+A1 set `PartnerUserScoped` on `user_account` ([data/abstract_repository.go](data/abstract_repository.go)`:275`), and `Get` injects `id IN (SELECT user_id FROM partner_user WHERE partner_id = …)` for every non-global role. The picker reads that same scoped list endpoint, so the enumeration hole is closed — and the problem inverted: a `PARTNER_ADMIN` now sees **only already-assigned** users, so the ADD picker cannot surface anyone to add. What is left is a functional gap, not a security hole. Severity drops accordingly, and the inversion favours B5b, which needs no unassigned-users view at all.
+
+Before acting, confirm the picker really does read `/api/v1/user_account/list`. The `foreign_key_lookup.lookup_style` metadata implies it, but the fetch is sail-side and cannot be verified from this repo.
+
+**B5a. Picker scope: "unassigned users only" for `partner_user → user_account` FK** [LOW] ⏳
+
+Plan below is still accurate: the `user_partners` FK exists ([schema/security/09_partner_user.yml](schema/security/09_partner_user.yml)) and `foreign_key_lookup` carries no row for it.
 
 - New DB view `unassigned_user_account` shipped via `schema/security/`.
 - `foreign_key_lookup` table gains a `source_table VARCHAR(60) NULLABLE` column.
@@ -62,7 +72,9 @@ These are alternatives. Both close the "PARTNER_ADMIN sees all users globally on
 
 Effort: ~40 lines Go + ~30 lines schema + ~10 lines seed. **Depends on A1 (done).**
 
-**B5b. Custom invite-by-email handler (cleaner UX, replaces B5a)** ⏳
+**B5b. Custom invite-by-email handler (cleaner UX, replaces B5a — preferred)** [MED] ⏳
+
+The agency layer shipped a working precedent to mirror rather than reinvent: `agency_client_invitation` + `AgencyHandler.InviteClient` / `AcceptInvite` already implement token-minting, TTL expiry, and a uniform response across the exists / already-assigned / unknown branches.
 
 - New endpoint: `POST /api/partner-user/invite { email }`.
 - If `user_account` exists for that email AND no active partner_user row: creates the partner_user (atomic).
@@ -81,16 +93,31 @@ Real value but no concrete consumer asking yet. Defer until a downstream project
 
 | ID | Title | Effort |
 |---|---|---|
-| C1 | `port.MetricsRecorder` interface + Prometheus impl + correlation-id propagation through webhook lifecycle | 1–2 days |
-| C2 | Distributed lock on `port.CacheService` (`Lock(ctx, key, ttl)`) to close the multi-instance OTP race | 4–6 hr |
+| C1 | `port.MetricsRecorder` interface + Prometheus impl, and correlation-id propagation through the **webhook lifecycle**. The HTTP-boundary half already shipped (`common.RequestID` context key, `ProblemDetail.RequestID`, 5xx log correlation in `writeError`) — only metrics and the webhook path remain | 1 day |
+| C2 | Distributed lock on `cache.CacheService` (`Lock(ctx, key, ttl)`) to close the multi-instance OTP race | 4–6 hr |
 | C3 | Paddle payment provider (ed25519 signatures) — stress-tests the `SignatureVerifier` abstraction | 2–3 days |
-| C4 | Subscription mutation API on `CheckoutClient` (`UpdateSubscription`, `Cancel/Pause/Resume`) | 1 day |
-| C5 | Refund + dispute creation API — `CreateRefund` + `SubmitDisputeEvidence` (additive methods only; rename to `PaymentClient` is v1.0) | 4–6 hr |
-| C6 | Webhook replay / dead-letter — `WebhookProcessor.RetryFailed` + `ReplayMode` flag on `PaymentEvent` | 1 day |
+| C5 | Refund + dispute creation API — `CreateRefund` + `SubmitDisputeEvidence` on `ChargeClient` (additive only; a rename to `PaymentClient` is v2.0 territory). v1.2.39/40 added inbound refund/dispute **provenance** (`billing.BaseProvenanceReverser`, typed `ChargeID`/`DisputeID`), so keel now reconciles refunds it cannot itself create — the asymmetry is the argument for closing this | 4–6 hr |
+| C6 | **Operator-initiated** webhook replay + dead-letter. Retry-on-provider-redelivery already shipped via `WebhookRepository.ReclaimFailed` (KR-002), so a failed delivery is no longer permanently stranded; what remains is an explicit replay sweep and a dead-letter terminal state. The `outbox` package's dead-letter handling is the model to follow | 4–6 hr |
 | C7 | Tax + coupon on `CheckoutRequest` — `CouponID`, `AutomaticTax`, `CustomerTaxID` | 1 day |
 | C8 | IP allowlist on webhook endpoints — defence-in-depth + CPU savings (not the DoS fix originally claimed; that was closed in v0.5.0) | 3–4 hr |
-| C9 | Fuzz tests on Stripe signature verification | 1 hr |
-| C10 | Property-based parser tests (`rapid`) | 2 hr |
+| C10 | Property-based parser tests (`rapid`). Lower value since C9: `payment/parser_test.go` and `signature_test.go` carry four fuzz targets covering adjacent ground | 2 hr |
+| C11 | Subscription pause / resume — the only mutation C4 listed that `billing.SubscriptionLifecycle` does not cover | 3–4 hr |
+
+---
+
+## Tier D — security-control failure modes ⏳
+
+Not feature surface: cases where a control's behavior on misconfiguration or backend failure is the open question.
+
+### D1. Reconcile fail-open vs fail-closed on an unwired cache [MED] ⏳
+
+`SecurityHandler.rateLimitVerify2FA` returns "allow" when `Cache == nil` ([handler/security_handler.go](handler/security_handler.go)). That is deliberate and documented — it keeps pre-cache deployments working — and the blast radius is bounded, because `LocalUserService.Verify2FA` / `VerifyBackupCode` lock the account at `MaxAttempts` through a persisted counter that no cache outage can touch.
+
+It nonetheless runs against the convention the rest of the codebase follows: `AbstractTableService.IsGlobalRole` fails **closed** specifically so "a misconfigured deployment applies the stricter scope rather than silently granting". Two security helpers, opposite defaults, no stated rule for choosing.
+
+Options: (a) require `Cache` at wiring time and fail startup, turning a silent config gap into a boot error; (b) keep allow-on-nil but document the convention explicitly, naming the DB lockout as the control that makes it safe; (c) add a `RequireRateLimiter bool` so a deployment can opt into strict mode. (a) is the cleanest but is a breaking wiring change for downstreams that never set `Cache`.
+
+Note the distinction already drawn in code, which any resolution should preserve: `Cache == nil` means "the layer was never wired" (a deployment choice), while a cache **error** means "wired but broken" (an incident). The send path treats the error as fatal because dispatch has no backstop; verify treats it as allow-and-log because it does.
 
 ---
 
@@ -107,13 +134,25 @@ These items appeared in the prior reviews but conflict with Development Standard
 | Full typed event-type enum (every Stripe / LemonSqueezy event name) | Stripe alone has 100+ event types. A keel-side enum becomes a maintenance lag — every new provider event needs a keel update before downstreams can `case payment.EventChargeRefunded:`. The provider-name + checkout-mode constants shipped earlier are the right scope. |
 | `CONTRIBUTING.md` walkthrough | Development Standards §1–§12 in README cover contribution conventions. Duplicating into `CONTRIBUTING.md` invites drift. |
 | Per-package READMEs | Development Standards §10: "Doc comments are the public surface." Per-package READMEs drift from code; package-level Go doc-comments don't. Improve doc-comments where they're thin instead. |
-| Rename `CheckoutClient` → `PaymentClient` | Development Standards §11: renames go in major version bumps, not minor. v1.0 territory if ever. |
+| Rename `CheckoutClient` → `PaymentClient` | Development Standards §11: renames go in major version bumps, not minor. v1.0 has shipped, so this is **v2.0** territory if ever. |
 
 ---
 
-## Done in current cycle ✅
+## Done in v1.0 – v1.2 ✅
 
-Closed by recent work. Each row links to the artifact that made the change.
+Tracked items closed after the v0.6 cycle. Feature work is not listed — see `migration_guide.json`.
+
+| ID | Title | Where |
+|---|---|---|
+| C4 | Subscription mutation API — shipped on `billing.SubscriptionLifecycle` rather than `CheckoutClient`: `Activate`, `ChangePlan` (+ `ChangePlanTx` for a caller-owned tx), `Reactivate`, `ConvertTrial`, `SetSeats`, `CancelByPartner` (immediate or period-end), `CancelByProviderSubID`, `SetDunningState`. Pause/Resume remain open as C11 | [billing/subscription_lifecycle.go](billing/subscription_lifecycle.go), [billing/abstract_billing_service.go](billing/abstract_billing_service.go) |
+| C9 | Fuzz tests on signature verification — `FuzzStripeSignatureHeader`, `FuzzLemonSqueezyVerifier`, plus `FuzzStripeParser` / `FuzzLemonSqueezyParser` | [payment/signature_test.go](payment/signature_test.go), [payment/parser_test.go](payment/parser_test.go) |
+| — | Rate limiters no longer discard cache errors. `rateLimitOTP` fails **closed** with a 503 + journal entry: dispatch is the one limited path with no persisted-counter backstop, so a swallowed error silently uncapped SMS/email spend. `rateLimitVerify2FA` still allows on error but logs it, because the account lockout in `Verify2FA` / `VerifyBackupCode` remains the real bound and failing closed there would turn a cache hiccup into a 2FA login outage | [handler/otp_handler.go](handler/otp_handler.go), [handler/security_handler.go](handler/security_handler.go), [handler/rate_limit_failure_test.go](handler/rate_limit_failure_test.go) |
+| KR-001…KR-005 | v1.0.9 review round — generic-CRUD scope coercion, webhook retry-after-failure, exact-or-`*` permission-match contract, test-helper row shape, OTP TTL binding. Review write-up was `CODE_REVIEW_20260613.md`, removed during v1.2.40 staging — recover with `git show 3dd2aa9` | [pgsql/table_service.go](pgsql/table_service.go), [payment/webhook_repository_sql.go](payment/webhook_repository_sql.go), [data/abstract_repository.go](data/abstract_repository.go), [user/user_service_local.go](user/user_service_local.go) |
+| KR-006 | REST list pagination pushed into SQL via the optional `port.PagedTableService` capability, with a primary-key tie-break on both the capability and fallback paths. Documented under v1.2.40 in [migration_guide.json](migration_guide.json) | [pgsql/table_service.go](pgsql/table_service.go), [port/table_service.go](port/table_service.go), [rest/relation_api.go](rest/relation_api.go) |
+
+## Done in the v0.5 – v0.6 cycle ✅
+
+Each row links to the artifact that made the change.
 
 | ID | Title | Where |
 |---|---|---|

@@ -189,6 +189,9 @@ type BaseConfig struct {
 	DefaultOutboundTimeout      time.Duration // default_outbound_timeout      30                 Default outbound HTTP client timeout
 	SnowflakeStatePersistMs     int64         // snowflake_state_persist_ms    1000               Snowflake state-persist cadence (ms)
 	MemoryCacheSweepInterval    time.Duration // memory_cache_sweep_interval   60                 In-memory cache expiry sweep interval
+	DefaultCommissionRateBP     int           // default_commission_rate_bp    2000               Program agency commission rate (2000 = 20.00%)
+	CommissionHoldDays          int           // commission_hold_days          14                 Refund/dispute hold before an earning becomes payable
+	AgencyPayoutMinMinor        int64         // agency_payout_min_minor       2500               Minimum net agency payout; smaller balances roll forward
 
 	// parseErrs accumulates malformed-value errors from ParseValue* during a
 	// load; ApplyBase / ParseErr drain it. Never inspect it directly.
@@ -305,6 +308,9 @@ const (
 	default_outbound_timeout      = "default_outbound_timeout"
 	snowflake_state_persist_ms    = "snowflake_state_persist_ms"
 	memory_cache_sweep_interval   = "memory_cache_sweep_interval"
+	default_commission_rate_bp    = "default_commission_rate_bp"
+	commission_hold_days          = "commission_hold_days"
+	agency_payout_min_minor       = "agency_payout_min_minor"
 )
 
 // ConfigRow is one flag's resolved (assigned value, catalog default) pair.
@@ -371,7 +377,8 @@ var baseFlagIDs = []string{
 	verify_2fa_window, verify_2fa_per_ip, max_list_page_size,
 	default_list_page_size, post_write_timeout, stripe_webhook_tolerance,
 	stripe_max_retries, default_outbound_timeout, snowflake_state_persist_ms,
-	memory_cache_sweep_interval,
+	memory_cache_sweep_interval, default_commission_rate_bp,
+	commission_hold_days, agency_payout_min_minor,
 }
 
 // configMu serializes config loads (concurrent RELOADs, startup vs reload).
@@ -572,6 +579,12 @@ func (c *BaseConfig) ApplyBase(m map[string]ConfigRow) error {
 			c.SnowflakeStatePersistMs = c.ParseValueBI(r.Value, r.Default)
 		case memory_cache_sweep_interval:
 			c.MemoryCacheSweepInterval = c.ParseValueD(r.Value, r.Default)
+		case default_commission_rate_bp:
+			c.DefaultCommissionRateBP = c.ParseValueI(r.Value, r.Default)
+		case commission_hold_days:
+			c.CommissionHoldDays = c.ParseValueI(r.Value, r.Default)
+		case agency_payout_min_minor:
+			c.AgencyPayoutMinMinor = c.ParseValueBI(r.Value, r.Default)
 		}
 		for i := seen; i < len(c.parseErrs); i++ {
 			c.parseErrs[i] = fmt.Errorf("%s: %w", flg, c.parseErrs[i])
@@ -579,6 +592,15 @@ func (c *BaseConfig) ApplyBase(m map[string]ConfigRow) error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("application_config_flag catalog is missing framework flags: %s — re-seed basis_seed.yml", strings.Join(missing, ", "))
+	}
+	if c.DefaultCommissionRateBP <= 0 || c.DefaultCommissionRateBP > 10000 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 1 and 10000", default_commission_rate_bp))
+	}
+	if c.CommissionHoldDays < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", commission_hold_days))
+	}
+	if c.AgencyPayoutMinMinor < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", agency_payout_min_minor))
 	}
 	return c.ParseErr()
 }

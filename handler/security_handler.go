@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/nauticana/keel/cache"
@@ -59,12 +60,27 @@ type SecurityHandler struct {
 // rateLimitVerify2FA returns true when the caller IP has exceeded the
 // per-window verify budget. Returns false (allow) when no Cache is
 // wired so existing deployments without a cache backend keep working.
+//
+// A cache error also allows, but is logged rather than discarded. This layer is
+// defence-in-depth against one IP spraying many accounts; the control that
+// actually bounds brute force against a single account is the persisted attempt
+// counter in LocalUserService.Verify2FA / VerifyBackupCode, which locks at
+// MaxAttempts and is unaffected by a cache outage. Failing closed here would
+// trade a bounded, still-backstopped abuse window for a total 2FA login outage
+// every time the cache hiccups. Contrast rateLimitOTP, which fails closed
+// because dispatch has no such backstop.
 func (h *SecurityHandler) rateLimitVerify2FA(r *http.Request) bool {
 	if h.Cache == nil {
 		return false
 	}
 	key := "2fa_verify_ip:" + TrustedClientIP(r)
-	count, _ := h.Cache.IncrementWithTTL(r.Context(), key, common.Config().Verify2FAWindow)
+	count, err := h.Cache.IncrementWithTTL(r.Context(), key, common.Config().Verify2FAWindow)
+	if err != nil {
+		if h.Journal != nil {
+			h.Journal.Error(fmt.Sprintf("2fa verify rate limit unavailable, allowing: %v", err))
+		}
+		return false
+	}
 	return count > int64(common.Config().Verify2FAPerIP)
 }
 
