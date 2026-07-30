@@ -643,12 +643,18 @@ CREATE TABLE IF NOT EXISTS payment_webhook_log (
     event_type                           VARCHAR(100)  NOT NULL,
     processing_status                    CHAR(1)       NOT NULL DEFAULT 'R',
     error_message                        TEXT         ,
+    request_id                           TEXT         ,
     raw_payload                          TEXT         ,
+    replay_attempts                      INTEGER       NOT NULL DEFAULT 0,
     received_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     processed_at                         TIMESTAMP    ,
-    CONSTRAINT payment_webhook_log_pk PRIMARY KEY (id)
+    last_claimed_at                      TIMESTAMP    ,
+    CONSTRAINT payment_webhook_log_pk PRIMARY KEY (id),
+    CONSTRAINT chk_payment_webhook_status CHECK (processing_status IN ('R', 'P', 'F', 'D', 'S', 'L')),
+    CONSTRAINT chk_payment_webhook_replay_attempts CHECK (replay_attempts >= 0)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payment_webhook_log_uq ON payment_webhook_log(provider, event_id);
+CREATE INDEX IF NOT EXISTS idx_payment_webhook_replay ON payment_webhook_log(processing_status, id);
 
 CREATE SEQUENCE IF NOT EXISTS payment_webhook_log_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payment_webhook_log', 'id', 'payment_webhook_log_seq') ON CONFLICT DO NOTHING;

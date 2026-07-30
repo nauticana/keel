@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/port"
 )
 
 // memRepo is an in-memory port.WebhookRepository for tests.
@@ -22,25 +25,58 @@ import (
 // this the concurrency test (P2-31) couldn't exercise the unique-
 // violation race-guard branch in WebhookProcessor.Process.
 type memRepo struct {
-	mu     sync.Mutex
-	rows   []memRow
-	logged map[string]bool // (provider, event_id) — set once Log succeeds
+	mu        sync.Mutex
+	rows      []memRow
+	logged    map[string]bool // (provider, event_id) — set once Log succeeds
+	updateErr error
+	clock     time.Time // fake DB clock driving the claim lease
+	lease     time.Duration
 }
 
 type memRow struct {
-	ID        int64
-	Provider  string
-	EventID   string
-	EventType string
-	Status    string
-	Message   string
+	ID             int64
+	Provider       string
+	EventID        string
+	EventType      string
+	RequestID      string
+	RawBody        []byte
+	Status         string
+	Message        string
+	ReplayAttempts int
+	ReceivedAt     time.Time
+	LastClaimedAt  time.Time
 }
 
 func newMemRepo() *memRepo {
-	return &memRepo{logged: map[string]bool{}}
+	return &memRepo{
+		logged: map[string]bool{},
+		clock:  time.Unix(1_700_000_000, 0),
+		lease:  900 * time.Second,
+	}
 }
 
-func (r *memRepo) Log(_ context.Context, provider, eventID, eventType string, _ []byte) (int64, error) {
+func (r *memRepo) advance(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clock = r.clock.Add(d)
+}
+
+// pastLease mirrors the SQL `< CURRENT_TIMESTAMP - make_interval(...)`.
+func (r *memRepo) pastLease(t time.Time) bool {
+	return !t.IsZero() && r.clock.Sub(t) > r.lease
+}
+
+// claimable mirrors the SQL claim predicate: F past its cooldown, or an
+// abandoned R past its lease.
+func (r *memRepo) claimable(row *memRow) bool {
+	if !row.LastClaimedAt.IsZero() && !r.pastLease(row.LastClaimedAt) {
+		return false
+	}
+	return row.Status == StatusFailed ||
+		(row.Status == StatusReceived && r.pastLease(coalesce(row.LastClaimedAt, row.ReceivedAt)))
+}
+
+func (r *memRepo) Log(_ context.Context, provider, eventID, eventType, requestID string, rawBody []byte) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := provider + "|" + eventID
@@ -54,7 +90,11 @@ func (r *memRepo) Log(_ context.Context, provider, eventID, eventType string, _ 
 	}
 	r.logged[key] = true
 	id := int64(len(r.rows) + 1)
-	r.rows = append(r.rows, memRow{ID: id, Provider: provider, EventID: eventID, EventType: eventType, Status: StatusReceived})
+	r.rows = append(r.rows, memRow{
+		ID: id, Provider: provider, EventID: eventID, EventType: eventType,
+		RequestID: requestID, RawBody: append([]byte(nil), rawBody...), Status: StatusReceived,
+		ReceivedAt: r.clock,
+	})
 	return id, nil
 }
 
@@ -67,24 +107,75 @@ func (r *memRepo) Exists(_ context.Context, provider, eventID string) (bool, err
 	return r.logged[provider+"|"+eventID], nil
 }
 
-// ReclaimFailed mirrors SQLWebhookRepository: atomically flip a failed
-// row back to received and return its id; ok=false if none is in F.
+// ReclaimFailed mirrors SQLWebhookRepository: atomically claim a failed or
+// lease-expired received row back to R and renew the lease; ok=false otherwise.
 func (r *memRepo) ReclaimFailed(_ context.Context, provider, eventID string) (int64, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.rows {
-		if r.rows[i].Provider == provider && r.rows[i].EventID == eventID && r.rows[i].Status == StatusFailed {
-			r.rows[i].Status = StatusReceived
-			r.rows[i].Message = ""
-			return r.rows[i].ID, true, nil
+		row := &r.rows[i]
+		if row.Provider != provider || row.EventID != eventID {
+			continue
 		}
+		abandoned := row.Status == StatusReceived && r.pastLease(coalesce(row.LastClaimedAt, row.ReceivedAt))
+		if row.Status != StatusFailed && !abandoned {
+			continue
+		}
+		row.Status = StatusReceived
+		row.Message = ""
+		row.LastClaimedAt = r.clock
+		return row.ID, true, nil
 	}
 	return 0, false, nil
+}
+
+func coalesce(a, b time.Time) time.Time {
+	if a.IsZero() {
+		return b
+	}
+	return a
+}
+
+func (r *memRepo) ClaimFailed(_ context.Context, maxAttempts int, afterID int64, providers []string) (*WebhookDelivery, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.rows {
+		row := &r.rows[i]
+		if row.ID <= afterID || !slices.Contains(providers, row.Provider) || !r.claimable(row) {
+			continue
+		}
+		row.LastClaimedAt = r.clock
+		if row.ReplayAttempts >= maxAttempts {
+			row.Status = StatusDeadLetter
+			return &WebhookDelivery{
+				LogID: row.ID, Provider: row.Provider, EventID: row.EventID,
+				EventType: row.EventType, RequestID: row.RequestID,
+				RawBody: append([]byte(nil), row.RawBody...), ReplayAttempts: row.ReplayAttempts,
+				DeadLettered: true,
+			}, true, nil
+		}
+		row.Status = StatusReceived
+		row.Message = ""
+		row.ReplayAttempts++
+		return &WebhookDelivery{
+			LogID:          row.ID,
+			Provider:       row.Provider,
+			EventID:        row.EventID,
+			EventType:      row.EventType,
+			RequestID:      row.RequestID,
+			RawBody:        append([]byte(nil), row.RawBody...),
+			ReplayAttempts: row.ReplayAttempts,
+		}, true, nil
+	}
+	return nil, false, nil
 }
 
 func (r *memRepo) UpdateStatus(_ context.Context, logID int64, status, message string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.updateErr != nil {
+		return r.updateErr
+	}
 	for i := range r.rows {
 		if r.rows[i].ID == logID {
 			r.rows[i].Status = status
@@ -163,6 +254,28 @@ type recordingHandler struct {
 	events []*PaymentEvent
 	err    error
 }
+
+type recordedMetric struct {
+	requestID   string
+	measurement port.MetricMeasurement
+}
+
+type recordingMetrics struct {
+	mu      sync.Mutex
+	records []recordedMetric
+}
+
+func (m *recordingMetrics) RecordMetric(ctx context.Context, measurement port.MetricMeasurement) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, recordedMetric{
+		requestID:   common.RequestIDFromContext(ctx),
+		measurement: measurement,
+	})
+	return nil
+}
+
+var _ port.MetricsRecorder = (*recordingMetrics)(nil)
 
 func (h *recordingHandler) OnPaymentEvent(_ context.Context, e *PaymentEvent) error {
 	h.events = append(h.events, e)
@@ -312,6 +425,21 @@ func TestProcess_HandlerFails(t *testing.T) {
 	}
 }
 
+func TestProcess_StatusWriteFailureIsSurfaced(t *testing.T) {
+	repo := newMemRepo()
+	repo.updateErr = errors.New("database write failed")
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	p := newProcessor(repo, prov)
+
+	err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), &recordingHandler{})
+	if err == nil || !strings.Contains(err.Error(), "update webhook") {
+		t.Fatalf("err = %v, want surfaced status-write failure", err)
+	}
+	if got := repo.statusOf(1); got != StatusReceived {
+		t.Fatalf("status = %q, false processed acknowledgement", got)
+	}
+}
+
 // TestProcess_RetriesAfterTransientFailure is the KR-002 regression: a
 // delivery whose handler fails transiently (status F) must be re-claimed
 // and re-run on the provider's next retry, not swallowed as "already
@@ -342,6 +470,272 @@ func TestProcess_RetriesAfterTransientFailure(t *testing.T) {
 	}
 	if got := len(repo.rows); got != 1 {
 		t.Fatalf("expected exactly 1 row (reclaimed, not re-inserted), got %d", got)
+	}
+}
+
+func TestProcess_PropagatesRequestIDAndRecordsMetrics(t *testing.T) {
+	repo := newMemRepo()
+	metrics := &recordingMetrics{}
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	handler := &recordingHandler{}
+	p := newProcessor(repo, prov)
+	p.Metrics = metrics
+	ctx := common.WithRequestID(context.Background(), "req-webhook-1")
+
+	if err := p.Process(ctx, "stripe", "sig", []byte(stripeBody), handler); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.events) != 1 || handler.events[0].RequestID != "req-webhook-1" {
+		t.Fatalf("handler events = %+v, want correlated request id", handler.events)
+	}
+	if repo.rows[0].RequestID != "req-webhook-1" {
+		t.Fatalf("stored request id = %q", repo.rows[0].RequestID)
+	}
+	if len(metrics.records) != 2 {
+		t.Fatalf("metrics = %d, want counter + histogram", len(metrics.records))
+	}
+	for _, record := range metrics.records {
+		if record.requestID != "req-webhook-1" {
+			t.Errorf("metric request id = %q", record.requestID)
+		}
+		if got := record.measurement.Labels["outcome"]; got != webhookOutcomeProcessed {
+			t.Errorf("metric outcome = %q", got)
+		}
+		if got := record.measurement.Labels["mode"]; got != webhookModeDelivery {
+			t.Errorf("metric mode = %q", got)
+		}
+	}
+}
+
+func TestRetryFailed_ReplaysStoredDelivery(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	p := newProcessor(repo, prov)
+	ctx := common.WithRequestID(context.Background(), "req-original")
+	if err := p.Process(ctx, "stripe", "sig", []byte(stripeBody), &recordingHandler{err: errors.New("down")}); err == nil {
+		t.Fatal("initial delivery must fail")
+	}
+
+	handler := &recordingHandler{}
+	summary, err := p.RetryFailed(context.Background(), handler, WebhookReplayOptions{Limit: 10, MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("RetryFailed: %v", err)
+	}
+	if summary != (WebhookReplaySummary{Claimed: 1, Processed: 1}) {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if len(handler.events) != 1 {
+		t.Fatalf("handler calls = %d", len(handler.events))
+	}
+	if !handler.events[0].ReplayMode || handler.events[0].RequestID != "req-original" {
+		t.Fatalf("replayed event = %+v", handler.events[0])
+	}
+	if got := repo.statusOf(1); got != StatusProcessed {
+		t.Fatalf("status = %q, want P", got)
+	}
+}
+
+func TestRetryFailed_DeadLettersFinalAttempt(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	p := newProcessor(repo, prov)
+	failing := &recordingHandler{err: errors.New("ledger unavailable")}
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), failing); err == nil {
+		t.Fatal("initial delivery must fail")
+	}
+
+	first, err := p.RetryFailed(context.Background(), failing, WebhookReplayOptions{Limit: 1, MaxAttempts: 2})
+	if err == nil {
+		t.Fatal("first replay failure must be surfaced")
+	}
+	if first.Failed != 1 || repo.statusOf(1) != StatusFailed {
+		t.Fatalf("first summary=%+v status=%q", first, repo.statusOf(1))
+	}
+
+	repo.advance(16 * time.Minute)
+	second, err := p.RetryFailed(context.Background(), failing, WebhookReplayOptions{Limit: 1, MaxAttempts: 2})
+	if err == nil {
+		t.Fatal("final replay failure must be surfaced")
+	}
+	if second.DeadLettered != 1 || repo.statusOf(1) != StatusDeadLetter {
+		t.Fatalf("second summary=%+v status=%q", second, repo.statusOf(1))
+	}
+
+	repo.advance(16 * time.Minute)
+	third, err := p.RetryFailed(context.Background(), failing, WebhookReplayOptions{Limit: 1, MaxAttempts: 2})
+	if err != nil || third.Claimed != 0 {
+		t.Fatalf("dead-letter must be terminal: summary=%+v err=%v", third, err)
+	}
+}
+
+func TestRetryFailed_LeaseSpacesAttemptsAcrossSweeps(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	p := newProcessor(repo, prov)
+	failing := &recordingHandler{err: errors.New("still down")}
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), failing); err == nil {
+		t.Fatal("initial delivery must fail")
+	}
+
+	if summary, _ := p.RetryFailed(context.Background(), failing, WebhookReplayOptions{Limit: 5, MaxAttempts: 5}); summary.Claimed != 1 {
+		t.Fatalf("first sweep summary = %+v", summary)
+	}
+	// A second sweep inside the lease window — the overlapping-sweep case —
+	// must not spend another attempt on the same row.
+	summary, err := p.RetryFailed(context.Background(), failing, WebhookReplayOptions{Limit: 5, MaxAttempts: 5})
+	if err != nil || summary.Claimed != 0 {
+		t.Fatalf("in-lease sweep summary=%+v err=%v", summary, err)
+	}
+	if repo.rows[0].ReplayAttempts != 1 {
+		t.Fatalf("attempts = %d, want 1", repo.rows[0].ReplayAttempts)
+	}
+
+	repo.advance(16 * time.Minute)
+	if summary, _ := p.RetryFailed(context.Background(), failing, WebhookReplayOptions{Limit: 5, MaxAttempts: 5}); summary.Claimed != 1 {
+		t.Fatalf("post-lease sweep summary = %+v", summary)
+	}
+	if repo.rows[0].ReplayAttempts != 2 {
+		t.Fatalf("attempts = %d, want 2", repo.rows[0].ReplayAttempts)
+	}
+}
+
+func TestRetryFailed_RecoversAbandonedClaim(t *testing.T) {
+	repo := newMemRepo()
+	repo.rows = append(repo.rows, memRow{
+		ID: 1, Provider: "stripe", EventID: "evt_123", EventType: "invoice.paid",
+		RawBody: []byte(stripeBody), Status: StatusReceived, ReceivedAt: repo.clock,
+	})
+	repo.logged["stripe|evt_123"] = true
+	p := newProcessor(repo, &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}})
+	handler := &recordingHandler{}
+
+	if summary, _ := p.RetryFailed(context.Background(), handler, WebhookReplayOptions{Limit: 5, MaxAttempts: 5}); summary.Claimed != 0 {
+		t.Fatalf("in-lease R row must not be claimed: %+v", summary)
+	}
+
+	repo.advance(16 * time.Minute)
+	summary, err := p.RetryFailed(context.Background(), handler, WebhookReplayOptions{Limit: 5, MaxAttempts: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != (WebhookReplaySummary{Claimed: 1, Processed: 1}) || repo.statusOf(1) != StatusProcessed {
+		t.Fatalf("summary=%+v status=%q", summary, repo.statusOf(1))
+	}
+}
+
+func TestProcess_RedeliveryReclaimsAbandonedClaim(t *testing.T) {
+	repo := newMemRepo()
+	repo.rows = append(repo.rows, memRow{
+		ID: 1, Provider: "stripe", EventID: "evt_123", EventType: "invoice.paid",
+		RawBody: []byte(stripeBody), Status: StatusReceived, ReceivedAt: repo.clock,
+	})
+	repo.logged["stripe|evt_123"] = true
+	p := newProcessor(repo, &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}})
+	handler := &recordingHandler{}
+
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler); err != nil || len(handler.events) != 0 {
+		t.Fatalf("in-lease R row must short-circuit as duplicate: err=%v dispatches=%d", err, len(handler.events))
+	}
+
+	repo.advance(16 * time.Minute)
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), handler); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.events) != 1 || repo.statusOf(1) != StatusProcessed {
+		t.Fatalf("dispatches=%d status=%q", len(handler.events), repo.statusOf(1))
+	}
+}
+
+func TestRetryFailed_ClaimsEachRowOncePerSweep(t *testing.T) {
+	repo := newMemRepo()
+	prov := &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}}
+	p := newProcessor(repo, prov)
+	failing := &recordingHandler{err: errors.New("still down")}
+	if err := p.Process(context.Background(), "stripe", "sig", []byte(stripeBody), failing); err == nil {
+		t.Fatal("initial delivery must fail")
+	}
+
+	summary, err := p.RetryFailed(context.Background(), failing, WebhookReplayOptions{Limit: 50, MaxAttempts: 5})
+	if err == nil {
+		t.Fatal("replay failure must be surfaced")
+	}
+	if summary != (WebhookReplaySummary{Claimed: 1, Failed: 1}) {
+		t.Fatalf("summary = %+v, one sweep must not burn the attempt budget", summary)
+	}
+	if repo.statusOf(1) != StatusFailed || repo.rows[0].ReplayAttempts != 1 {
+		t.Fatalf("status=%q attempts=%d, want F with a single attempt", repo.statusOf(1), repo.rows[0].ReplayAttempts)
+	}
+}
+
+func TestRetryFailed_DeadLettersRowExhaustedByLoweredBudget(t *testing.T) {
+	repo := newMemRepo()
+	repo.rows = append(repo.rows, memRow{
+		ID: 1, Provider: "stripe", EventID: "evt_123",
+		EventType: "invoice.paid", RawBody: []byte(stripeBody),
+		Status: StatusFailed, ReplayAttempts: 3,
+	})
+	repo.logged["stripe|evt_123"] = true
+	p := newProcessor(repo, &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}})
+	handler := &recordingHandler{}
+
+	summary, err := p.RetryFailed(context.Background(), handler, WebhookReplayOptions{Limit: 1, MaxAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Claimed != 1 || summary.DeadLettered != 1 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if len(handler.events) != 0 || repo.statusOf(1) != StatusDeadLetter {
+		t.Fatalf("handler events=%d status=%q", len(handler.events), repo.statusOf(1))
+	}
+}
+
+func TestRetryFailed_SkipsUnregisteredProviderRows(t *testing.T) {
+	repo := newMemRepo()
+	repo.rows = append(repo.rows,
+		memRow{ID: 1, Provider: "paddle", EventID: "evt_p", EventType: "invoice.paid", RawBody: []byte(stripeBody), Status: StatusFailed},
+		memRow{ID: 2, Provider: "stripe", EventID: "evt_123", EventType: "invoice.paid", RawBody: []byte(stripeBody), Status: StatusFailed},
+	)
+	p := newProcessor(repo, &stubProvider{name: "stripe", event: &PaymentEvent{ProviderEventID: "evt_123"}})
+
+	summary, err := p.RetryFailed(context.Background(), &recordingHandler{}, WebhookReplayOptions{Limit: 10, MaxAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != (WebhookReplaySummary{Claimed: 1, Processed: 1}) {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if repo.statusOf(1) != StatusFailed || repo.rows[0].ReplayAttempts != 0 {
+		t.Fatalf("unregistered-provider row must stay untouched: status=%q attempts=%d", repo.statusOf(1), repo.rows[0].ReplayAttempts)
+	}
+}
+
+func TestWebhookReplaySQLUsesAtomicClaimAndVisibleStatusWrites(t *testing.T) {
+	claimSQL := webhookQueries[qClaimFailedWebhook]
+	for _, required := range []string{
+		"FOR UPDATE SKIP LOCKED",
+		"provider = ANY(?)",
+		"AND id > ?",
+		"last_claimed_at IS NULL",
+		"COALESCE(last_claimed_at, received_at) < CURRENT_TIMESTAMP - make_interval(secs => ?)",
+		"ELSE webhook.replay_attempts + 1",
+		"WHEN candidate.exhausted THEN 'L'",
+	} {
+		if !strings.Contains(claimSQL, required) {
+			t.Errorf("claim query missing %q", required)
+		}
+	}
+	reclaimSQL := webhookQueries[qReclaimFailedWebhook]
+	for _, required := range []string{
+		"last_claimed_at = CURRENT_TIMESTAMP",
+		"COALESCE(last_claimed_at, received_at) < CURRENT_TIMESTAMP - make_interval(secs => ?)",
+	} {
+		if !strings.Contains(reclaimSQL, required) {
+			t.Errorf("reclaim query missing %q", required)
+		}
+	}
+	if !strings.Contains(webhookQueries[qUpdateWebhookStatus], "RETURNING id") {
+		t.Fatal("status update must expose a zero-row write")
 	}
 }
 

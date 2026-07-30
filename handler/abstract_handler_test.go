@@ -44,3 +44,20 @@ func TestHasScope(t *testing.T) {
 		}
 	})
 }
+
+func TestEnsureRequestIDPreservesOrCreatesCorrelation(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/public/webhook/stripe", nil)
+	correlated := EnsureRequestID(request)
+	generated := common.RequestIDFromContext(correlated.Context())
+	if generated == "" {
+		t.Fatal("request id was not generated")
+	}
+	if EnsureRequestID(correlated) != correlated {
+		t.Fatal("already-correlated request must be returned unchanged")
+	}
+
+	upstream := request.WithContext(common.WithRequestID(request.Context(), "edge-request-7"))
+	if got := common.RequestIDFromContext(EnsureRequestID(upstream).Context()); got != "edge-request-7" {
+		t.Fatalf("request id = %q, want upstream id", got)
+	}
+}

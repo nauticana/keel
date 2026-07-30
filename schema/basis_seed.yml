@@ -429,6 +429,7 @@ seeds:
       - [post_write_timeout,           duration, false, "10",   "Post-response write timeout"]
       - [stripe_webhook_tolerance,     duration, false, "300",  "Stripe webhook timestamp tolerance"]
       - [stripe_max_retries,           int,      false, "3",    "Stripe API retry count (429/5xx)"]
+      - [webhook_claim_lease_seconds,  int,      false, "900",  "Payment-webhook claim lease in seconds; must exceed the slowest dispatch"]
       - [default_outbound_timeout,     duration, true, "30",   "Default outbound HTTP client timeout"]
       - [snowflake_state_persist_ms,   int64,    false, "1000", "Snowflake state-persist cadence (ms)"]
       - [memory_cache_sweep_interval,  duration, true, "60",   "In-memory cache expiry sweep interval"]

@@ -96,7 +96,7 @@ var ReloadFunc func(ctx context.Context) error
 // There is intentionally no interface: main knows the concrete type at the Load
 // call site, and field readers need the concrete struct anyway.
 type BaseConfig struct {
-	// Name                   data type        name in database              default            description
+	// Name                  data type        name in database              default            description
 	HttpApiPort           int           // http_api_port                 8080               HTTP server port
 	HTTPSPort             int           // https_port                    443                HTTPS server port
 	TLSCert               string        // tls_cert                      ""                 TLS certificate file path
@@ -186,6 +186,7 @@ type BaseConfig struct {
 	PostWriteTimeout            time.Duration // post_write_timeout            10                 Post-response write timeout
 	StripeWebhookTolerance      time.Duration // stripe_webhook_tolerance      300                Stripe webhook timestamp tolerance
 	StripeMaxRetries            int           // stripe_max_retries            3                  Stripe API retry count (429/5xx)
+	WebhookClaimLeaseSeconds    int           // webhook_claim_lease_seconds   900                Payment-webhook claim lease (sec); must exceed the slowest dispatch or a live claim is redispatched
 	DefaultOutboundTimeout      time.Duration // default_outbound_timeout      30                 Default outbound HTTP client timeout
 	SnowflakeStatePersistMs     int64         // snowflake_state_persist_ms    1000               Snowflake state-persist cadence (ms)
 	MemoryCacheSweepInterval    time.Duration // memory_cache_sweep_interval   60                 In-memory cache expiry sweep interval
@@ -305,6 +306,7 @@ const (
 	post_write_timeout            = "post_write_timeout"
 	stripe_webhook_tolerance      = "stripe_webhook_tolerance"
 	stripe_max_retries            = "stripe_max_retries"
+	webhook_claim_lease_seconds   = "webhook_claim_lease_seconds"
 	default_outbound_timeout      = "default_outbound_timeout"
 	snowflake_state_persist_ms    = "snowflake_state_persist_ms"
 	memory_cache_sweep_interval   = "memory_cache_sweep_interval"
@@ -376,7 +378,8 @@ var baseFlagIDs = []string{
 	registration_confirmation_ttl, max_registration_attempts,
 	verify_2fa_window, verify_2fa_per_ip, max_list_page_size,
 	default_list_page_size, post_write_timeout, stripe_webhook_tolerance,
-	stripe_max_retries, default_outbound_timeout, snowflake_state_persist_ms,
+	stripe_max_retries, webhook_claim_lease_seconds,
+	default_outbound_timeout, snowflake_state_persist_ms,
 	memory_cache_sweep_interval, default_commission_rate_bp,
 	commission_hold_days, agency_payout_min_minor,
 }
@@ -573,6 +576,8 @@ func (c *BaseConfig) ApplyBase(m map[string]ConfigRow) error {
 			c.StripeWebhookTolerance = c.ParseValueD(r.Value, r.Default)
 		case stripe_max_retries:
 			c.StripeMaxRetries = c.ParseValueI(r.Value, r.Default)
+		case webhook_claim_lease_seconds:
+			c.WebhookClaimLeaseSeconds = c.ParseValueI(r.Value, r.Default)
 		case default_outbound_timeout:
 			c.DefaultOutboundTimeout = c.ParseValueD(r.Value, r.Default)
 		case snowflake_state_persist_ms:
@@ -601,6 +606,9 @@ func (c *BaseConfig) ApplyBase(m map[string]ConfigRow) error {
 	}
 	if c.AgencyPayoutMinMinor < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", agency_payout_min_minor))
+	}
+	if c.WebhookClaimLeaseSeconds <= 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive — a zero lease makes every webhook claim instantly stealable", webhook_claim_lease_seconds))
 	}
 	return c.ParseErr()
 }

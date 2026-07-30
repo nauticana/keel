@@ -11,18 +11,27 @@ import (
 
 // Webhook processing status values stored in payment_webhook_log.processing_status.
 const (
-	StatusReceived  = "R" // logged, not yet processed
-	StatusProcessed = "P" // handler returned nil
-	StatusFailed    = "F" // handler or verification returned an error
-	StatusDuplicate = "D" // idempotency: already seen
-	StatusSkipped   = "S" // event-type not in WebhookProcessor.AllowedEventTypes; never reached the handler
+	StatusReceived   = "R" // logged, not yet processed
+	StatusProcessed  = "P" // handler returned nil
+	StatusFailed     = "F" // parsing, enrichment, handler, or after-hook returned an error
+	StatusDuplicate  = "D" // idempotency: already seen
+	StatusSkipped    = "S" // event-type not in WebhookProcessor.AllowedEventTypes; never reached the handler
+	StatusDeadLetter = "L" // replay failed at MaxAttempts; terminal until an operator intervenes
 )
+
+// claimLeaseSeconds (DB clock, last_claimed_at) spaces replay attempts per
+// row and bounds how long a crashed claim blocks recovery. Sourced from the
+// webhook_claim_lease_seconds config flag; ApplyBase rejects non-positive
+// values.
+func claimLeaseSeconds() int { return common.Config().WebhookClaimLeaseSeconds }
 
 const (
 	qLogWebhook           = "payment_log_webhook"
 	qCheckWebhookExists   = "payment_check_webhook_exists"
 	qUpdateWebhookStatus  = "payment_update_webhook_status"
 	qReclaimFailedWebhook = "payment_reclaim_failed_webhook"
+	qClaimFailedWebhook   = "payment_claim_failed_webhook"
+	qVerifyWebhookColumns = "payment_verify_webhook_columns"
 	// qVerifyWebhookIndex asserts the UNIQUE index on
 	// payment_webhook_log(provider, event_id) exists. The index is the
 	// authoritative race guard for concurrent webhook retries — if a
@@ -42,9 +51,9 @@ const (
 var webhookQueries = map[string]string{
 	qLogWebhook: `
 INSERT INTO payment_webhook_log
- (id, provider, event_id, event_type, processing_status, raw_payload)
+ (id, provider, event_id, event_type, processing_status, request_id, raw_payload)
 VALUES
- (nextval('payment_webhook_log_seq'), ?, ?, ?, 'R', ?)
+ (nextval('payment_webhook_log_seq'), ?, ?, ?, 'R', ?, ?)
 RETURNING id
 `,
 	// Match any prior log for (provider, event_id) regardless of its
@@ -65,20 +74,67 @@ UPDATE payment_webhook_log
        error_message = ?,
        processed_at = CURRENT_TIMESTAMP
  WHERE id = ?
+RETURNING id
 `,
-	// Atomically re-claim a previously-failed delivery for reprocessing.
-	// The `processing_status = 'F'` predicate is the race guard: among
-	// concurrent provider retries, exactly one UPDATE flips F→R and gets
-	// the RETURNING id; the rest match no row. Terminal (P/D/S) and
-	// in-flight (R) rows are left untouched so a retry never re-runs a
-	// handler that already succeeded or is still running.
+	// Atomically re-claim a failed or abandoned delivery: among concurrent
+	// provider retries exactly one UPDATE matches and renews the lease.
+	// Terminal rows and R rows within their lease never match; an R row
+	// past its lease is a crashed claim and is claimable again.
 	qReclaimFailedWebhook: `
 UPDATE payment_webhook_log
    SET processing_status = 'R',
        error_message = NULL,
-       processed_at = CURRENT_TIMESTAMP
- WHERE provider = ? AND event_id = ? AND processing_status = 'F'
+       processed_at = NULL,
+       last_claimed_at = CURRENT_TIMESTAMP
+ WHERE provider = ? AND event_id = ?
+   AND (processing_status = 'F'
+        OR (processing_status = 'R'
+            AND COALESCE(last_claimed_at, received_at) < CURRENT_TIMESTAMP - make_interval(secs => ?)))
 RETURNING id
+`,
+	// Claim one replayable delivery: a failed row past the lease cooldown,
+	// or an abandoned R row past its lease. The cooldown — not the row
+	// lock, which ends at commit — is what keeps overlapping sweeps from
+	// spending multiple attempts on the same row; the id cursor does the
+	// same within one sweep.
+	qClaimFailedWebhook: `
+WITH candidate AS (
+    SELECT id,
+           replay_attempts >= ? AS exhausted
+      FROM payment_webhook_log
+     WHERE provider = ANY(?)
+       AND id > ?
+       AND (last_claimed_at IS NULL
+            OR last_claimed_at < CURRENT_TIMESTAMP - make_interval(secs => ?))
+       AND (processing_status = 'F'
+            OR (processing_status = 'R'
+                AND COALESCE(last_claimed_at, received_at) < CURRENT_TIMESTAMP - make_interval(secs => ?)))
+     ORDER BY id
+     LIMIT 1
+       FOR UPDATE SKIP LOCKED
+)
+UPDATE payment_webhook_log AS webhook
+   SET processing_status = CASE WHEN candidate.exhausted THEN 'L' ELSE 'R' END,
+       error_message = CASE
+           WHEN candidate.exhausted THEN COALESCE(webhook.error_message, 'replay attempts exhausted')
+           ELSE NULL
+       END,
+       processed_at = CASE WHEN candidate.exhausted THEN CURRENT_TIMESTAMP ELSE NULL END,
+       replay_attempts = CASE
+           WHEN candidate.exhausted THEN webhook.replay_attempts
+           ELSE webhook.replay_attempts + 1
+       END,
+       last_claimed_at = CURRENT_TIMESTAMP
+  FROM candidate
+ WHERE webhook.id = candidate.id
+RETURNING webhook.id,
+          webhook.provider,
+          webhook.event_id,
+          webhook.event_type,
+          webhook.request_id,
+          webhook.raw_payload,
+          webhook.replay_attempts,
+          webhook.processing_status
 `,
 	qVerifyWebhookIndex: `
 SELECT 1
@@ -89,6 +145,13 @@ SELECT 1
    AND indexdef ILIKE '%provider%'
    AND indexdef ILIKE '%event_id%'
  LIMIT 1
+`,
+	qVerifyWebhookColumns: `
+SELECT column_name
+  FROM information_schema.columns
+ WHERE table_schema = current_schema()
+   AND table_name = 'payment_webhook_log'
+   AND column_name IN ('request_id', 'replay_attempts', 'last_claimed_at')
 `,
 }
 
@@ -128,8 +191,12 @@ func (r *SQLWebhookRepository) queryService(ctx context.Context) port.QueryServi
 }
 
 // Log inserts a raw webhook row and returns the generated log ID.
-func (r *SQLWebhookRepository) Log(ctx context.Context, provider, eventID, eventType string, rawBody []byte) (int64, error) {
-	res, err := r.queryService(ctx).Query(ctx, qLogWebhook, provider, eventID, eventType, string(rawBody))
+func (r *SQLWebhookRepository) Log(ctx context.Context, provider, eventID, eventType, requestID string, rawBody []byte) (int64, error) {
+	var correlated any
+	if requestID != "" {
+		correlated = requestID
+	}
+	res, err := r.queryService(ctx).Query(ctx, qLogWebhook, provider, eventID, eventType, correlated, string(rawBody))
 	if err != nil {
 		return 0, fmt.Errorf("log webhook: %w", err)
 	}
@@ -137,6 +204,40 @@ func (r *SQLWebhookRepository) Log(ctx context.Context, provider, eventID, event
 		return 0, fmt.Errorf("log webhook: no id returned")
 	}
 	return common.AsInt64(res.Rows[0][0]), nil
+}
+
+// ClaimFailed atomically claims the oldest replayable delivery for one of
+// providers with id > afterID. An exhausted row is moved directly to
+// StatusDeadLetter; otherwise ReplayAttempts includes the new claim.
+func (r *SQLWebhookRepository) ClaimFailed(ctx context.Context, maxAttempts int, afterID int64, providers []string) (*WebhookDelivery, bool, error) {
+	if maxAttempts <= 0 {
+		return nil, false, fmt.Errorf("claim failed webhook: maxAttempts must be positive")
+	}
+	if len(providers) == 0 {
+		return nil, false, fmt.Errorf("claim failed webhook: providers are required")
+	}
+	res, err := r.queryService(ctx).Query(ctx, qClaimFailedWebhook,
+		maxAttempts, providers, afterID, claimLeaseSeconds(), claimLeaseSeconds())
+	if err != nil {
+		return nil, false, fmt.Errorf("claim failed webhook: %w", err)
+	}
+	if len(res.Rows) == 0 {
+		return nil, false, nil
+	}
+	row := res.Rows[0]
+	if len(row) < 8 {
+		return nil, false, fmt.Errorf("claim failed webhook: got %d columns, want 8", len(row))
+	}
+	return &WebhookDelivery{
+		LogID:          common.AsInt64(row[0]),
+		Provider:       common.AsString(row[1]),
+		EventID:        common.AsString(row[2]),
+		EventType:      common.AsString(row[3]),
+		RequestID:      common.AsString(row[4]),
+		RawBody:        []byte(common.AsString(row[5])),
+		ReplayAttempts: int(common.AsInt64(row[6])),
+		DeadLettered:   common.AsString(row[7]) == StatusDeadLetter,
+	}, true, nil
 }
 
 // Exists returns true if a webhook for (provider, eventID) has already
@@ -153,11 +254,11 @@ func (r *SQLWebhookRepository) Exists(ctx context.Context, provider, eventID str
 	return len(res.Rows) > 0, nil
 }
 
-// ReclaimFailed atomically re-claims a StatusFailed delivery for retry.
-// ok=false when no failed row matched (absent, terminal, in-flight, or
-// claimed by a concurrent retry).
+// ReclaimFailed atomically re-claims a StatusFailed or lease-expired
+// StatusReceived delivery for retry. ok=false when no row matched (absent,
+// terminal, in-flight within its lease, or claimed by a concurrent retry).
 func (r *SQLWebhookRepository) ReclaimFailed(ctx context.Context, provider, eventID string) (int64, bool, error) {
-	res, err := r.queryService(ctx).Query(ctx, qReclaimFailedWebhook, provider, eventID)
+	res, err := r.queryService(ctx).Query(ctx, qReclaimFailedWebhook, provider, eventID, claimLeaseSeconds())
 	if err != nil {
 		return 0, false, fmt.Errorf("reclaim failed webhook: %w", err)
 	}
@@ -173,15 +274,18 @@ func (r *SQLWebhookRepository) UpdateStatus(ctx context.Context, logID int64, st
 	if message != "" {
 		msg = message
 	}
-	_, err := r.queryService(ctx).Query(ctx, qUpdateWebhookStatus, status, msg, logID)
+	res, err := r.queryService(ctx).Query(ctx, qUpdateWebhookStatus, status, msg, logID)
 	if err != nil {
 		return fmt.Errorf("update webhook status: %w", err)
+	}
+	if len(res.Rows) == 0 {
+		return fmt.Errorf("update webhook status: row %d not found", logID)
 	}
 	return nil
 }
 
-// VerifySchema asserts the schema invariants this repository relies on
-// — currently the UNIQUE index on (provider, event_id). Call once at
+// VerifySchema asserts the schema invariants this repository relies on: the
+// UNIQUE index on (provider, event_id) and the correlation/replay columns. Call once at
 // boot from main.go so a partially-migrated database (e.g. the YAML
 // shipped but the index DDL was applied by hand and dropped) fails the
 // app at startup with a clear error instead of silently losing
@@ -197,6 +301,21 @@ func (r *SQLWebhookRepository) VerifySchema(ctx context.Context) error {
 	if len(res.Rows) == 0 {
 		return fmt.Errorf("payment_webhook_log: missing UNIQUE index on (provider, event_id) — idempotency cannot be enforced without it; apply the index defined in schema/basis/25_payment_webhook_log.yml")
 	}
+	res, err = r.queryService(ctx).Query(ctx, qVerifyWebhookColumns)
+	if err != nil {
+		return fmt.Errorf("verify webhook replay schema: %w", err)
+	}
+	found := make(map[string]bool, len(res.Rows))
+	for _, row := range res.Rows {
+		if len(row) > 0 {
+			found[common.AsString(row[0])] = true
+		}
+	}
+	for _, column := range []string{"request_id", "replay_attempts", "last_claimed_at"} {
+		if !found[column] {
+			return fmt.Errorf("payment_webhook_log: missing %s column — apply the migration in migration_guide.json", column)
+		}
+	}
 	return nil
 }
 
@@ -204,5 +323,3 @@ var (
 	_ WebhookRepository = (*SQLWebhookRepository)(nil)
 	_ WebhookReclaimer  = (*SQLWebhookRepository)(nil)
 )
-
-var _ WebhookRepository = (*SQLWebhookRepository)(nil)

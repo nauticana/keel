@@ -328,6 +328,16 @@ type ProblemDetail struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
+// EnsureRequestID returns a request whose context contains a correlation id.
+// Existing middleware-bound ids win; otherwise a new id is generated once and
+// reused by the handler, service, metrics exemplar, and error response.
+func EnsureRequestID(r *http.Request) *http.Request {
+	if r == nil || common.RequestIDFromContext(r.Context()) != "" {
+		return r
+	}
+	return r.WithContext(common.WithRequestID(r.Context(), newRequestID()))
+}
+
 // WriteError writes an RFC 7807 problem-detail response. Status 5xx
 // responses get a stable opaque request id so operators can correlate
 // the user-visible error to a structured log line, and the caller's
@@ -366,9 +376,7 @@ func (h *AbstractHandler) writeError(r *http.Request, w http.ResponseWriter, sta
 func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, status int, title, detail, code string) {
 	requestID := ""
 	if r != nil {
-		if v, ok := r.Context().Value(common.RequestID).(string); ok && v != "" {
-			requestID = v
-		}
+		requestID = common.RequestIDFromContext(r.Context())
 	}
 	if requestID == "" {
 		requestID = newRequestID()

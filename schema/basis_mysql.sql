@@ -652,12 +652,18 @@ CREATE TABLE IF NOT EXISTS payment_webhook_log (
     event_type                           VARCHAR(100)  NOT NULL,
     processing_status                    CHAR(1)       NOT NULL DEFAULT 'R',
     error_message                        TEXT         ,
+    request_id                           TEXT         ,
     raw_payload                          TEXT         ,
+    replay_attempts                      INT           NOT NULL DEFAULT 0,
     received_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     processed_at                         DATETIME     ,
-    PRIMARY KEY (id)
+    last_claimed_at                      DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT chk_payment_webhook_status CHECK (processing_status IN ('R', 'P', 'F', 'D', 'S', 'L')),
+    CONSTRAINT chk_payment_webhook_replay_attempts CHECK (replay_attempts >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX payment_webhook_log_uq ON payment_webhook_log(provider, event_id);
+CREATE INDEX idx_payment_webhook_replay ON payment_webhook_log(processing_status, id);
 
 -- Stored payment methods per business partner (provider customer tokens)
 CREATE TABLE IF NOT EXISTS payment_method (

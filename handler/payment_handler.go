@@ -56,12 +56,17 @@ type AbstractPaymentHandler struct {
 // Mount as many methods as needed (HandleStripeWebhook, HandleLemonSqueezyWebhook)
 // or call HandleWebhook directly from a custom route.
 func (h *AbstractPaymentHandler) HandleWebhook(providerName string, w http.ResponseWriter, r *http.Request) {
+	r = EnsureRequestID(r)
 	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if h.Processor == nil {
+		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", "webhook processor not configured")
 		return
 	}
 	provider := h.Processor.Provider(providerName)
 	if provider == nil {
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", "unknown payment provider")
+		h.WriteRequestError(r, w, http.StatusBadRequest, "Bad Request", "unknown payment provider")
 		return
 	}
 
@@ -72,7 +77,7 @@ func (h *AbstractPaymentHandler) HandleWebhook(providerName string, w http.Respo
 	r.Body = http.MaxBytesReader(w, r.Body, MaxWebhookBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", "failed to read body")
+		h.WriteRequestError(r, w, http.StatusBadRequest, "Bad Request", "failed to read body")
 		return
 	}
 
@@ -88,12 +93,12 @@ func (h *AbstractPaymentHandler) HandleWebhook(providerName string, w http.Respo
 		//     "give up, this delivery is bad" and stop retrying.
 		//   - Transient (handler / DB / network) → 500. The provider
 		//     re-delivers on its standard backoff schedule.
-		h.logError("webhook %s: %v", providerName, err)
+		h.logError("request_id=%s webhook %s: %v", common.RequestIDFromContext(r.Context()), providerName, err)
 		if errors.Is(err, payment.ErrPermanent) {
-			h.WriteError(w, http.StatusBadRequest, "Bad Request", "webhook rejected")
+			h.WriteRequestError(r, w, http.StatusBadRequest, "Bad Request", "webhook rejected")
 			return
 		}
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "webhook processing failed")
+		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", "webhook processing failed")
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

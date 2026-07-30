@@ -62,6 +62,8 @@ type PaymentEvent struct {
 	Provider        string  // "stripe" | "lemonsqueezy"
 	ProviderEventID string  // idempotency key
 	EventType       string  // "checkout.session.completed", etc.
+	RequestID       string  // correlation id spanning HTTP/replay, metrics, logs, and domain handling
+	ReplayMode      bool    // true only when dispatched by WebhookProcessor.RetryFailed
 	Amount          float64 // DEPRECATED — major units, lossy for accounting. Prefer MinorUnits.
 	MinorUnits      int64   // integer minor-currency units (e.g. cents). Authoritative.
 	Currency        string  // upper-case ISO 4217
@@ -203,9 +205,13 @@ type PaymentEventEnricher interface {
 // store. Separated from the processor so consumers can back it with any
 // storage (SQL, in-memory for tests, NoSQL, etc.).
 type WebhookRepository interface {
-	Log(ctx context.Context, provider, eventID, eventType string, rawBody []byte) (logID int64, err error)
+	Log(ctx context.Context, provider, eventID, eventType, requestID string, rawBody []byte) (logID int64, err error)
 	Exists(ctx context.Context, provider, eventID string) (bool, error)
 	UpdateStatus(ctx context.Context, logID int64, status string, message string) error
+	// ClaimFailed atomically claims the oldest replayable delivery (failed, or
+	// abandoned mid-claim by a crash) for one of providers with id > afterID —
+	// the previous claim's LogID, so one sweep claims each row at most once.
+	ClaimFailed(ctx context.Context, maxAttempts int, afterID int64, providers []string) (*WebhookDelivery, bool, error)
 }
 
 // WebhookReclaimer is an optional extension of WebhookRepository. When a
@@ -217,13 +223,27 @@ type WebhookRepository interface {
 // failures (the bug this interface fixes). The default SQLWebhookRepository
 // implements it; custom repositories opt in without a breaking change.
 type WebhookReclaimer interface {
-	// ReclaimFailed atomically transitions the (provider, eventID) row from
-	// StatusFailed back to StatusReceived and returns its logID. ok=false
-	// means there was no failed row to claim — none exists, it is terminal
-	// (P/D/S), it is in flight (R), or a concurrent retry claimed it first.
-	// The single conditional UPDATE makes the claim race-safe: at most one
+	// ReclaimFailed atomically claims the (provider, eventID) row back to
+	// StatusReceived and returns its logID. Claimable rows are StatusFailed
+	// or StatusReceived past their claim lease (crashed mid-dispatch).
+	// ok=false means nothing to claim — no row, terminal (P/D/S/L), in
+	// flight within its lease, or a concurrent retry claimed it first. The
+	// single conditional UPDATE makes the claim race-safe: at most one
 	// caller gets ok=true.
 	ReclaimFailed(ctx context.Context, provider, eventID string) (logID int64, ok bool, err error)
+}
+
+// WebhookDelivery is one verified, stored delivery atomically claimed for an
+// operator-initiated replay. ReplayAttempts includes the current claim.
+type WebhookDelivery struct {
+	LogID          int64
+	Provider       string
+	EventID        string
+	EventType      string
+	RequestID      string
+	RawBody        []byte
+	ReplayAttempts int
+	DeadLettered   bool // true when the claim terminalized an already-exhausted F row without dispatch
 }
 
 // CheckoutClient abstracts outbound calls to a payment provider's

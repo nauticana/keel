@@ -14,6 +14,7 @@ func baseRows() map[string]ConfigRow {
 	m[default_commission_rate_bp] = ConfigRow{Default: "2000"}
 	m[commission_hold_days] = ConfigRow{Default: "14"}
 	m[agency_payout_min_minor] = ConfigRow{Default: "2500"}
+	m[webhook_claim_lease_seconds] = ConfigRow{Default: "900"}
 	return m
 }
 

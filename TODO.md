@@ -21,12 +21,12 @@ This file consolidates the v0.6 deferral notes plus the downstream-consumer revi
 | B5a | Picker scope: "unassigned users" view for partner_user FK | B | LOW | ⏳ open — alternative to B5b, **re-scoped** |
 | B5b | Invite-by-email handler (cleaner UX) | B | MED | ⏳ open — alternative to B5a, **preferred** |
 | B6 | Document Wise SCA funding gap | B | MED | ✅ done |
-| C1 | `port.MetricsRecorder` + Prometheus; correlation-id through the webhook lifecycle | C | **HIGH** | ⏳ open — **re-ranked**, amplifies C6: money-path failures are currently unobservable |
+| C1 | `port.MetricsRecorder` + Prometheus; correlation-id through the webhook lifecycle | C | **HIGH** | ✅ done |
 | C2 | Distributed lock on `CacheService` for OTP issuance race | C | MED | ⏳ open — driven by demand |
 | C3 | Paddle payment provider (ed25519) | C | MED | ⏳ open — driven by demand |
 | C4 | Subscription mutation API | C | MED | ✅ done — shipped on `billing.SubscriptionLifecycle`, not `CheckoutClient` |
 | C5 | `CreateRefund` + `SubmitDisputeEvidence` | C | MED | ⏳ open — premise strengthened by v1.2.39/40 |
-| C6 | Operator-initiated webhook replay + dead-letter | C | **HIGH** | ⏳ open — **re-ranked**, ledger-integrity risk once the agency layer carries volume |
+| C6 | Operator-initiated webhook replay + dead-letter | C | **HIGH** | ✅ done |
 | C7 | Tax + coupon on `CheckoutRequest` | C | MED | ⏳ open — driven by demand |
 | C8 | IP allowlist on webhook endpoints (defence-in-depth) | C | MED | ⏳ open — driven by demand |
 | C9 | Fuzz tests on Stripe signature verification | C | LOW | ✅ done |
@@ -42,9 +42,9 @@ This file consolidates the v0.6 deferral notes plus the downstream-consumer revi
 | — | Per-package READMEs | — | — | ⛔ won't do — Standards §10 (doc-comments are the surface) |
 | — | Rename `CheckoutClient` → `PaymentClient` | — | — | ⛔ won't do — major-version territory |
 
-**Quick read.** All Tier A done. Tier B: ✅ five done, ⏳ one open (B5 — pick one of two alternatives; B5b preferred). Tier C: ✅ two done (C4, C9), ⏳ nine open — **C6 and C1 are the two to close before the agency/commission layer carries production volume**; the rest wait for a downstream consumer to ask. Tier D: ⏳ one open.
+**Quick read.** All Tier A done. Tier B: ✅ five done, ⏳ one open (B5 — pick one of two alternatives; B5b preferred). Tier C: ✅ four done (C1, C4, C6, C9), ⏳ seven open; the rest wait for a downstream consumer to ask. Tier D: ⏳ one open.
 
-**Severity note.** No open item is a brute-force or data-exposure hole: password login, OTP verify, TOTP verify, and backup-code verify all bound attempts through a persisted counter that locks the account, so they are unaffected by cache backend or replica count. C2's per-process counters multiply only the secondary layers. The genuine production exposure is on the money path — C6 (a webhook stranded past the provider's retry window yields no `payment_record`, therefore no commission, permanently and silently) and C1 (nothing surfaces that it happened).
+**Severity note.** No open item is a brute-force or data-exposure hole: password login, OTP verify, TOTP verify, and backup-code verify all bound attempts through a persisted counter that locks the account, so they are unaffected by cache backend or replica count. C2's per-process counters multiply only the secondary layers. The money-path observability and recovery gap is closed by C1/C6: failed deliveries now emit correlated metrics and can be swept into retry or terminal dead-letter states.
 
 ---
 
@@ -93,11 +93,9 @@ Real value but no concrete consumer asking yet. Defer until a downstream project
 
 | ID | Title | Effort |
 |---|---|---|
-| C1 | `port.MetricsRecorder` interface + Prometheus impl, and correlation-id propagation through the **webhook lifecycle**. The HTTP-boundary half already shipped (`common.RequestID` context key, `ProblemDetail.RequestID`, 5xx log correlation in `writeError`) — only metrics and the webhook path remain | 1 day |
 | C2 | Distributed lock on `cache.CacheService` (`Lock(ctx, key, ttl)`) to close the multi-instance OTP race | 4–6 hr |
 | C3 | Paddle payment provider (ed25519 signatures) — stress-tests the `SignatureVerifier` abstraction | 2–3 days |
 | C5 | Refund + dispute creation API — `CreateRefund` + `SubmitDisputeEvidence` on `ChargeClient` (additive only; a rename to `PaymentClient` is v2.0 territory). v1.2.39/40 added inbound refund/dispute **provenance** (`billing.BaseProvenanceReverser`, typed `ChargeID`/`DisputeID`), so keel now reconciles refunds it cannot itself create — the asymmetry is the argument for closing this | 4–6 hr |
-| C6 | **Operator-initiated** webhook replay + dead-letter. Retry-on-provider-redelivery already shipped via `WebhookRepository.ReclaimFailed` (KR-002), so a failed delivery is no longer permanently stranded; what remains is an explicit replay sweep and a dead-letter terminal state. The `outbox` package's dead-letter handling is the model to follow | 4–6 hr |
 | C7 | Tax + coupon on `CheckoutRequest` — `CouponID`, `AutomaticTax`, `CustomerTaxID` | 1 day |
 | C8 | IP allowlist on webhook endpoints — defence-in-depth + CPU savings (not the DoS fix originally claimed; that was closed in v0.5.0) | 3–4 hr |
 | C10 | Property-based parser tests (`rapid`). Lower value since C9: `payment/parser_test.go` and `signature_test.go` carry four fuzz targets covering adjacent ground | 2 hr |
@@ -144,7 +142,9 @@ Tracked items closed after the v0.6 cycle. Feature work is not listed — see `m
 
 | ID | Title | Where |
 |---|---|---|
+| C1 | Metrics and webhook correlation — `port.MetricsRecorder`, an opt-in Prometheus recorder for a downstream-owned registry, request-id persistence and propagation into `PaymentEvent`, correlated lifecycle logs, and request-id metric exemplars | [port/metrics.go](port/metrics.go), [metrics/prometheus.go](metrics/prometheus.go), [payment/webhook_processor.go](payment/webhook_processor.go) |
 | C4 | Subscription mutation API — shipped on `billing.SubscriptionLifecycle` rather than `CheckoutClient`: `Activate`, `ChangePlan` (+ `ChangePlanTx` for a caller-owned tx), `Reactivate`, `ConvertTrial`, `SetSeats`, `CancelByPartner` (immediate or period-end), `CancelByProviderSubID`, `SetDunningState`. Pause/Resume remain open as C11 | [billing/subscription_lifecycle.go](billing/subscription_lifecycle.go), [billing/abstract_billing_service.go](billing/abstract_billing_service.go) |
+| C6 | Operator replay and dead-letter — `WebhookProcessor.RetryFailed` atomically claims stored failed deliveries, marks replay events, counts attempts, and transitions the final failure to terminal status `L` | [payment/webhook_processor.go](payment/webhook_processor.go), [payment/webhook_repository_sql.go](payment/webhook_repository_sql.go), [schema/basis/25_payment_webhook_log.yml](schema/basis/25_payment_webhook_log.yml) |
 | C9 | Fuzz tests on signature verification — `FuzzStripeSignatureHeader`, `FuzzLemonSqueezyVerifier`, plus `FuzzStripeParser` / `FuzzLemonSqueezyParser` | [payment/signature_test.go](payment/signature_test.go), [payment/parser_test.go](payment/parser_test.go) |
 | — | Rate limiters no longer discard cache errors. `rateLimitOTP` fails **closed** with a 503 + journal entry: dispatch is the one limited path with no persisted-counter backstop, so a swallowed error silently uncapped SMS/email spend. `rateLimitVerify2FA` still allows on error but logs it, because the account lockout in `Verify2FA` / `VerifyBackupCode` remains the real bound and failing closed there would turn a cache hiccup into a 2FA login outage | [handler/otp_handler.go](handler/otp_handler.go), [handler/security_handler.go](handler/security_handler.go), [handler/rate_limit_failure_test.go](handler/rate_limit_failure_test.go) |
 | KR-001…KR-005 | v1.0.9 review round — generic-CRUD scope coercion, webhook retry-after-failure, exact-or-`*` permission-match contract, test-helper row shape, OTP TTL binding. Review write-up was `CODE_REVIEW_20260613.md`, removed during v1.2.40 staging — recover with `git show 3dd2aa9` | [pgsql/table_service.go](pgsql/table_service.go), [payment/webhook_repository_sql.go](payment/webhook_repository_sql.go), [data/abstract_repository.go](data/abstract_repository.go), [user/user_service_local.go](user/user_service_local.go) |

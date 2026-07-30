@@ -63,6 +63,7 @@ graph TD
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `redis_url` / `valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob. `New(ctx, mode, WithSecretProvider(sp))` sources S3 credentials from the keystore instead of the AWS ambient env chain |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
+| `metrics` | Optional Prometheus adapter for `port.MetricsRecorder`. It records into a downstream-owned registerer; keel creates no registry or scrape endpoint. |
 | `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository |
 | `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
 | `agency` | Agency/reseller lifecycle, frozen per-client percentage rates, append-only commission/reversal ledger, and monthly payout state machine over billing provenance |
@@ -1340,19 +1341,40 @@ record ride payment, extend license, etc.). See
 
 ```
 POST /public/webhook/{provider}
-  1. Read body (MaxBytesReader, 256 KiB cap)
+  1. Bind/reuse request id; read body (MaxBytesReader, 256 KiB cap)
   2. Peek event id + type via EventParser.PeekEventMeta — reject empty id
   3. Verify signature BEFORE any DB write — bad signatures never touch storage
   4. Idempotency check on (provider, event_id) — duplicates → return without dispatching
-  5. Insert log row (unique-index race guard catches concurrent retries)
-  6. Parse into canonical PaymentEvent (minor-unit amount, typed identities, metadata)
+  5. Insert correlated log row (unique-index race guard catches concurrent retries)
+  6. Parse into canonical PaymentEvent (minor-unit amount, identities, request id, metadata)
   7. Enrich through optional PaymentEventEnricher (Stripe fetches every invoice-line page)
   8. Call project's PaymentEventHandler.OnPaymentEvent(event)
   9. AfterHandler hook (optional, idempotent) — e.g. attach SetupIntent's PaymentMethod
- 10. Update log status → 'P' (processed), 'F' (failed), 'S' (skipped), or 'D' (duplicate)
+ 10. Update log status; when Metrics is wired, record counter + duration with a request-id exemplar
 ```
 
 The verify-before-log ordering is load-bearing: an attacker pumping invalid-signature requests never reaches the DB, so `payment_webhook_log` cannot be filled with unsigned junk. Step 4 is the cheap-path dedupe; step 5's unique index on `(provider, event_id)` is the authoritative race guard for the TOCTOU window between them.
+
+Statuses are `R` (received/in progress), `P` (processed), `F` (failed and replayable), `S` (skipped by the allowlist), `D` (legacy duplicate), and `L` (dead-lettered, terminal). Status-write failures are returned rather than discarded, so an HTTP 200 can no longer hide a row that failed to reach `P`.
+
+`AbstractPaymentHandler` preserves an upstream `common.RequestID` or creates one before processing. The same id is stored on `payment_webhook_log.request_id`, exposed to the domain handler as `PaymentEvent.RequestID`, included in lifecycle logs, and attached to Prometheus samples as an exemplar. It is deliberately not a metric label: request ids as labels create one time series per request.
+
+### Operator replay and dead-letter
+
+Provider redelivery still atomically reclaims an `F` row. Once the provider's retry window has ended, run an explicit operator sweep:
+
+```go
+summary, err := processor.RetryFailed(ctx, domainHandler, payment.WebhookReplayOptions{
+    Limit:       50,
+    MaxAttempts: 5,
+})
+```
+
+`RetryFailed` claims one oldest replayable row at a time with `FOR UPDATE SKIP LOCKED`, increments `replay_attempts`, and dispatches its already-verified stored payload. Claims are scoped to the processor's registered providers, so a row for a decommissioned provider stays `F` untouched instead of spending budget or dead-lettering. An id cursor guarantees each row is claimed at most once per sweep, and a claim lease (`last_claimed_at`, database clock, `webhook_claim_lease_seconds` config flag, default 900) spaces attempts on the same row across sweeps — including concurrent ones — so a still-failing row costs one attempt per lease window rather than burning its whole budget at once. It intentionally does not recheck the provider signature: a Stripe signature timestamp has normally expired by then. `PaymentEvent.ReplayMode` is true on this path, so domain code can suppress non-idempotent ancillary behavior if necessary. A final failed attempt moves the row to `L`; an already-failed row beyond a newly lowered attempt budget is terminalized without dispatch. Later provider deliveries and replay sweeps cannot reclaim `L`. The sweep continues past individual event failures and returns both its `WebhookReplaySummary` and a joined error for operator alerting.
+
+The same lease recovers crashed claims: a row stuck in `R` past its lease — the process died between the claim and the terminal status write — is claimable again by both provider redelivery and `RetryFailed`. Configure the lease longer than the slowest dispatch; a handler that legitimately runs longer would have its claim stolen and dispatched twice, which idempotent handlers absorb.
+
+Run this from an authenticated operator action or a separate worker/CLI, never from the public provider endpoint. Domain handlers and `AfterHandler` must remain idempotent because a replay re-enters both.
 
 ### Signature replay protection per provider
 
@@ -1375,7 +1397,7 @@ Operational implications:
 
 ### Core Interfaces
 
-Defined in [port/payment.go](port/payment.go):
+Payment interfaces are defined in [payment/payment_interfaces.go](payment/payment_interfaces.go); the monitoring boundary is [port/metrics.go](port/metrics.go):
 
 | Interface | Purpose |
 |-----------|---------|
@@ -1384,8 +1406,9 @@ Defined in [port/payment.go](port/payment.go):
 | `EventParser` | Converts raw provider body → canonical `PaymentEvent` |
 | `PaymentProvider` | Bundles name + signature header + verifier + parser |
 | `PaymentEventEnricher` | Optional authenticated follow-up that completes a parsed event before dispatch |
-| `WebhookRepository` | Persists log rows (idempotency + audit) — `SQLWebhookRepository` is the default |
+| `WebhookRepository` | Persists, claims, and updates log rows (idempotency + audit + replay) — `SQLWebhookRepository` is the default |
 | `CheckoutClient` | Outbound checkout / billing-portal API (Stripe impl: `StripeCheckoutClient`) |
+| `port.MetricsRecorder` | Records backend-neutral counter/histogram measurements; `metrics.PrometheusRecorder` is the Prometheus adapter |
 
 ### Wiring Example
 
@@ -1413,7 +1436,6 @@ processor := payment.NewWebhookProcessor(
         "invoice.paid",
         "customer.subscription.deleted",
     )
-
 // v0.5.1-F: optional follow-up hook for cross-cutting work that must
 // run AFTER OnPaymentEvent succeeded — e.g. attaching a freshly-saved
 // PaymentMethod to the customer for default-payment-method routing.
@@ -1446,6 +1468,13 @@ srv.Handle(map[string]func(http.ResponseWriter, *http.Request){
 })
 ```
 
+`Processor.Metrics` is optional. A deployment with an existing Prometheus
+runtime can construct `metrics.NewPrometheusRecorder(ownedRegisterer)` and
+inject it. Keel does not create a registry, expose a `/metrics` route, or choose
+a scrape topology; deployments without that monitoring design leave the field
+nil. Correlated lifecycle logs and replay/dead-letter behavior are independent
+of metrics wiring.
+
 ### Project-Specific Handler
 
 `OnPaymentEvent` receives a typed `*PaymentEvent`; branch on typed fields
@@ -1455,7 +1484,8 @@ pagination-complete `InvoiceLines` before dispatch. Check
 line carries `AmountMinor`, `Currency`, `ServiceFrom`, `ServiceTo`, and
 `Metadata`. Refund/dispute consumers correlate through `ChargeID` and
 `DisputeID`. The JWT-gated checkout path also injects `user_id` into top-level
-metadata automatically.
+metadata automatically. `RequestID` correlates domain logs to the webhook log
+and metrics exemplar; `ReplayMode` identifies an operator replay.
 
 ```go
 func (h *myDomainHandler) OnPaymentEvent(ctx context.Context, e *payment.PaymentEvent) error {
@@ -1508,7 +1538,7 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 
 | Table | Purpose |
 |-------|---------|
-| `payment_webhook_log` | Raw inbound webhooks — idempotency key on `(provider, event_id)` + audit |
+| `payment_webhook_log` | Raw inbound webhooks — idempotency key on `(provider, event_id)`, request correlation, replay attempts, and terminal dead-letter state |
 | `payment_method` | Partner-owned provider customer tokens (`stripe cus_...`) |
 | `payment_record` | Completed / failed / refunded transactions — `amount_minor` is authoritative; provider-scoped unique payment id; optional indexed `(provider, provider_charge_id)` for refund/dispute correlation; `invoice_id` FK |
 | `invoice_line_payment` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units; `provider_ref` uniquely keys refund sources |
