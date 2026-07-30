@@ -323,6 +323,7 @@ type ProblemDetail struct {
 	Title     string `json:"title"`
 	Status    int    `json:"status"`
 	Detail    string `json:"detail,omitempty"`
+	Code      string `json:"code,omitempty"`
 	Instance  string `json:"instance,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
 }
@@ -359,6 +360,10 @@ func (h *AbstractHandler) WriteRequestError(r *http.Request, w http.ResponseWrit
 }
 
 func (h *AbstractHandler) writeError(r *http.Request, w http.ResponseWriter, status int, title, detail string) {
+	h.writeProblem(r, w, status, title, detail, "")
+}
+
+func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, status int, title, detail, code string) {
 	requestID := ""
 	if r != nil {
 		if v, ok := r.Context().Value(common.RequestID).(string); ok && v != "" {
@@ -389,6 +394,7 @@ func (h *AbstractHandler) writeError(r *http.Request, w http.ResponseWriter, sta
 		Title:     title,
 		Status:    status,
 		Detail:    detail,
+		Code:      code,
 		RequestID: requestID,
 	}
 	_ = json.NewEncoder(w).Encode(problem)

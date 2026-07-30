@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "1.2.41",
+      "title": "machine-readable service error codes",
+      "tags": [
+        "additive"
+      ],
+      "summary": "RFC 7807 service errors can now carry an optional stable code; agency invitation acceptance uses agency_no_partner so clients do not match human-readable prose.",
+      "body_markdown": "`handler.ProblemDetail` gains optional `code`, and `handler.RegisterErrorCode` lets a sentinel register a stable client discriminator alongside its HTTP status. `ErrNoPartnerYet` now returns `code: agency_no_partner`; invitation UIs should branch on that code rather than matching `detail`. Existing `RegisterErrorStatus` callers and responses remain unchanged because `code` is omitted when no code is registered. This is additive for custom handlers and clients."
+    },
+    {
       "version": "v1.2.40",
       "title": "shared agency and reseller commission layer",
       "tags": [

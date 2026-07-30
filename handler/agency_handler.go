@@ -15,7 +15,7 @@ func init() {
 	RegisterErrorStatus(port.ErrSelfDelegation, http.StatusConflict)
 	RegisterErrorStatus(port.ErrAgencyNotApproved, http.StatusForbidden)
 	RegisterErrorStatus(port.ErrAgencySuspended, http.StatusForbidden)
-	RegisterErrorStatus(port.ErrNoPartnerYet, http.StatusConflict)
+	RegisterErrorCode(port.ErrNoPartnerYet, http.StatusConflict, "agency_no_partner")
 	RegisterErrorStatus(port.ErrInviteExpired, http.StatusGone)
 	RegisterErrorStatus(port.ErrInvalidBillingModel, http.StatusUnprocessableEntity)
 	RegisterErrorStatus(port.ErrWholesaleNotAllowed, http.StatusForbidden)

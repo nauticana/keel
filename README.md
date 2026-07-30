@@ -1725,6 +1725,12 @@ The consuming app still decides which invoice lines are commission-eligible and
 supplies that attribution when invoking the provenance recorder. Routes and
 brand copy remain app-owned on the frontend.
 
+When invitation acceptance fails because the authenticated user has no business
+partner yet, the RFC 7807 response includes `code: "agency_no_partner"`.
+Clients branch on this stable code; `detail` remains human-readable copy and may
+change. Other registered errors continue to omit `code` unless explicitly
+registered with `handler.RegisterErrorCode`.
+
 ## Table Actions
 
 `table_action` is a basis table that surfaces custom buttons in sail's generic CRUD screens (table_list, table_detail, table_search) — collapsing the five-piece boilerplate every "Set Default" / "Enable" / "Calculate" / "Assign" button used to need (handler + route + Angular button + click handler + permission grant) down to **one seed row + one Go handler + one auth grant**.

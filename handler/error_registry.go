@@ -14,29 +14,41 @@ import (
 
 var (
 	errorStatusMu       sync.RWMutex
-	errorStatusRegistry = map[error]int{}
+	errorStatusRegistry = map[error]errorRegistration{}
 )
+
+type errorRegistration struct {
+	status int
+	code   string
+}
 
 // RegisterErrorStatus maps a sentinel error to the HTTP status WriteServiceError
 // returns for it (and any error that wraps it, via errors.Is). Registering the
 // same sentinel again overwrites the prior status. Call at init/wiring time.
 func RegisterErrorStatus(sentinel error, status int) {
-	errorStatusMu.Lock()
-	defer errorStatusMu.Unlock()
-	errorStatusRegistry[sentinel] = status
+	RegisterErrorCode(sentinel, status, "")
 }
 
-// statusForError returns the registered status for err (matched with errors.Is),
-// or 0 when no registered sentinel matches.
-func statusForError(err error) int {
+// RegisterErrorCode maps a sentinel to an HTTP status and a stable
+// machine-readable RFC 7807 code. Use it when clients must branch on the
+// error reason without coupling to human-readable detail text.
+func RegisterErrorCode(sentinel error, status int, code string) {
+	errorStatusMu.Lock()
+	defer errorStatusMu.Unlock()
+	errorStatusRegistry[sentinel] = errorRegistration{status: status, code: code}
+}
+
+// registrationForError returns the registration for err (matched with
+// errors.Is), or the zero value when no registered sentinel matches.
+func registrationForError(err error) errorRegistration {
 	errorStatusMu.RLock()
 	defer errorStatusMu.RUnlock()
-	for sentinel, status := range errorStatusRegistry {
+	for sentinel, registration := range errorStatusRegistry {
 		if errors.Is(err, sentinel) {
-			return status
+			return registration
 		}
 	}
-	return 0
+	return errorRegistration{}
 }
 
 // WriteServiceError writes an RFC 7807 response whose status comes from the
@@ -48,7 +60,8 @@ func (h *AbstractHandler) WriteServiceError(w http.ResponseWriter, r *http.Reque
 	}
 	// A typed *model.AppError carries its own status (e.g. a FORBIDDEN
 	// authorization failure); honor it before the sentinel registry.
-	status := statusForError(err)
+	registration := registrationForError(err)
+	status := registration.status
 	var appErr *model.AppError
 	if status == 0 && errors.As(err, &appErr) {
 		status = appErr.Status
@@ -56,5 +69,5 @@ func (h *AbstractHandler) WriteServiceError(w http.ResponseWriter, r *http.Reque
 	if status == 0 {
 		status = http.StatusInternalServerError
 	}
-	h.writeError(r, w, status, http.StatusText(status), err.Error())
+	h.writeProblem(r, w, status, http.StatusText(status), err.Error(), registration.code)
 }

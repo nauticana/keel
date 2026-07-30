@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,6 +9,23 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestWriteServiceError_RegisteredCodeIsMachineReadable(t *testing.T) {
+	errNeedsBusiness := errors.New("human-readable wording may change")
+	RegisterErrorCode(errNeedsBusiness, http.StatusConflict, "agency_no_partner")
+
+	h := &AbstractHandler{}
+	rec := httptest.NewRecorder()
+	h.WriteServiceError(rec, httptest.NewRequest(http.MethodPost, "/agency/accept", nil), errNeedsBusiness)
+
+	var problem ProblemDetail
+	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Code != "agency_no_partner" {
+		t.Fatalf("code=%q, want agency_no_partner", problem.Code)
+	}
+}
 
 func TestWriteServiceError_RegisteredMapsToStatus_DetailShownFor4xx(t *testing.T) {
 	errTaken := errors.New("email already registered")
