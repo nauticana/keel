@@ -86,6 +86,7 @@ seeds:
       - [AGENCY, AGENCY, MANAGE_CLIENTS, agency_clients]
       - [AGENCY, AGENCY, VIEW_EARNINGS, agency_earnings]
       - [AGENCY, AGENCY, MANAGE_PAYOUT, agency_payout_profile]
+      - [AGENCY, PAGE, ACCESS, agency_clients]
 
       # APP_ADMIN — read-only on most keel tables, CRUD on framework config
       - [APP_ADMIN, PAGE, ACCESS, api_keys]

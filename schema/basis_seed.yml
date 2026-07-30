@@ -261,6 +261,7 @@ seeds:
       - [50,  false, payments, invoice_line_payments, invoice_line_payment, "Payment Allocations"]
       - [10,  true,  payouts,  user_bank_infos, user_bank_info, "Bank Accounts"]
       - [20,  false, payouts,  payout_webhook_logs, payout_webhook_log, "Webhook Logs"]
+      - [5,   false, agencies, agency_clients, agency/clients, "Agency Clients"]
       - [10,  false, agencies, agency_profiles, agency_profile, "Agency Profiles"]
 
   # Audit-column display modes for keel's own framework tables. R = display-only
@@ -293,9 +294,6 @@ seeds:
       - [user_account,        twofa_backup_codes, S]
       - [partner_credential,  created_at,         R]
       - [partner_credential,  cred_ref,           S]
-      # application_config_flag is seed-managed: the catalog's needs_restart and
-      # default_value are display-only in the UI (id is the PK, read-only anyway);
-      # admins assign per-node values via application_config_value instead.
       - [application_config_flag, needs_restart,   R]
       - [application_config_flag, default_value,   R]
       - [agency_profile, created_at, R]

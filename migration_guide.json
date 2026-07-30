@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v1.2.43",
+      "title": "seeded agency self-service navigation",
+      "tags": [
+        "additive"
+      ],
+      "summary": "Basis seeds the agency_clients menu item (menu 'agencies', rest_uri 'agency/clients') and the AGENCY role's PAGE/ACCESS grant for it, so downstreams no longer seed their own nav entry for the agency self-service page.",
+      "body_markdown": "Seed-only release; no DDL or Go API change.\n\n- `application_menu_item` gains `(5, false, agencies, agency_clients, agency/clients, \"Agency Clients\")`. `rest_uri` `agency/clients` is a routing contract, not a table: the consuming app binds its page component (composing the sail agency components) to that key — in sail via `menuItemRouteOverrides: { 'agency/clients': <YourAgencyPage> }`. Without a binding the item resolves to the generic table screen and fails; register the override before deploying this seed.\n- `authorization_role_permission` gains `(AGENCY, PAGE, ACCESS, agency_clients)` so the item appears only for agency users (and '*'-grant operators).\n- Downstreams that seeded their own agency nav item or AGENCY page grant must delete those rows — same-key duplicates would collide with this seed on the next reload."
+    },
+    {
       "version": "v1.2.42",
       "title": "correlated payment metrics, operator webhook replay, and dead-letter",
       "tags": [
