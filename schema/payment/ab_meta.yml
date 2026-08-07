@@ -1,0 +1,4 @@
+tables:
+  - payment_webhook_log
+  - payment_method
+  - user_payment_method

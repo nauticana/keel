@@ -1,0 +1,3 @@
+tables:
+  - partner_credential
+  - auth_nonce

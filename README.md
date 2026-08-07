@@ -622,7 +622,7 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 | Field | `APIKeyService.KeyPrefix` | Required. Per-product user-visible prefix (e.g., `"myapp_"`). |
 | Field | `APIKeyService.QuotaResource` | Optional. Defaults to `"API_CALLS"`. The resource id passed to `QuotaService.LogUsage` and `CheckQuota`. |
 | Field | `APIKeyService.QuotaCaption` | Optional. Defaults to `"public-api"`. The caption recorded in usage rows. |
-| Schema | `api_key` table + sequence | Already in keel's `schema/security/14_api_key.yml`. No project-side schema. |
+| Schema | `api_key` table + sequence | Already in keel's `schema/api_key_management/api_key.yml`. No project-side schema. |
 
 ### Database Table
 
@@ -938,7 +938,7 @@ srv.Handle(securityHandler.GetAuthRoutes())    // /api/user/2fa/*, /api/user/tru
 
 ### Database Tables
 
-These tables must exist (defined in `schema/security/`):
+These tables must exist (defined in `schema/core/`):
 
 | Table | Purpose |
 |-------|---------|
@@ -1069,7 +1069,7 @@ Combined with the password-login history that was already written by `GetUserByL
 
 ### Duplicate prevention — UNIQUE indexes on email and phone
 
-`schema/security/04_user_account.yml` declares two unique indexes:
+`schema/core/user_account.yml` declares two unique indexes:
 
 | Index | Column | What it prevents |
 |---|---|---|
@@ -2037,759 +2037,39 @@ Snowflake ids are always > 2^52, so naive JavaScript `JSON.parse` will lose prec
 
 ## Database Schema Requirements
 
-Keel expects certain tables to exist in your PostgreSQL database. These are described in YAML under `schema/basis/` and `schema/security/`. The companion CLI [`cmd/schemagen`](cmd/schemagen) compiles those YAML files into DDL + seed SQL for the chosen dialect (PostgreSQL by default).
+Keel's table YAML files are organized by component under `schema/`.
+[`schema/dependency.yml`](schema/dependency.yml) lists every component folder,
+its seed file, direct FK dependencies, and application-layer dependencies on
+shared tables targeted by its stock seeds. The companion CLI
+[`cmd/schemagen`](cmd/schemagen) walks the selected directories recursively and
+compiles them into DDL + seed SQL for the chosen dialect (PostgreSQL by
+default). Use `-input schema` for the complete schema, or pass a comma-separated
+set of component directories after including the dependencies declared in the
+manifest.
+
+Seed data lives under [`schema/seed/`](schema/seed), with one file per component.
+A component seed may insert configuration rows into shared metadata, menu, or
+RBAC tables; the filename identifies the component being configured, not only
+the tables receiving those rows.
+
+Each component directory contains unprefixed `<table>.yml` definitions and an
+`ab_meta.yml`. The ordered `tables` list in `ab_meta.yml` is the authoritative
+creation order for that component; table files do not declare their own order.
 
 ### Geographic & tax reference data
 
-Keel ships `country`, `state`, and `county` as pure reference tables, seeded in [schema/geo_seed.yml](schema/geo_seed.yml). Scope: countries for N+S America / Turkey / Europe; states for US + Canada; counties for US only (FIPS-derived).
+Keel ships `country`, `state`, and `county` as pure reference tables, seeded in [schema/seed/geo.yml](schema/seed/geo.yml). Scope: countries for N+S America / Turkey / Europe; states for US + Canada; counties for US only (FIPS-derived).
 
 Tax lives in the consumer, not in keel. Apps that charge tax define their own `tax_jurisdiction` table that FK's to keel's `country` / `state`, with their own rate/caption columns. This keeps keel provider-neutral and lets each app model its jurisdictions independently (US sales tax by county, Canadian GST/HST/PST/QST by province, EU VAT by country, etc.).
 
 Cities are not normalized in keel. Consumer address tables carry city as a free-form string and use it only for display.
 
-### ER Diagram — Framework Tables
+### Database diagrams
 
-Dictionary add-ons
-```mermaid
-erDiagram
-    table_action {
-        VARCHAR table_name PK
-        VARCHAR action_name PK
-        VARCHAR caption
-        VARCHAR icon
-        BOOLEAN record_specific
-        VARCHAR method_name
-        SMALLINT display_order
-        VARCHAR confirm_message
-    }
-    table_sequence_usage {
-        VARCHAR table_name PK
-        VARCHAR column_name
-        VARCHAR sequence_name
-    }
-    column_display_attribute {
-        VARCHAR table_name PK
-        VARCHAR column_name PK
-        CHAR display_mode
-        INTEGER display_width
-        INTEGER display_rows
-    }
-```
-
-Lookup constants
-
-```mermaid
-erDiagram
-    constant_header ||--o{ constant_value : has
-    constant_header ||--o{ constant_lookup : has
-    constant_header {
-        VARCHAR id PK
-        VARCHAR caption
-    }
-    constant_value {
-        VARCHAR constant_id PK,FK
-        VARCHAR value PK
-        VARCHAR caption
-    }
-    constant_lookup {
-        VARCHAR constant_id PK,FK
-        VARCHAR table_name PK
-        VARCHAR column_name PK
-    }
-```
-
-REST API for CRUD and Reporting
-
-```mermaid
-erDiagram
-    rest_api_header ||--o{ rest_api_child : has
-    foreign_key_lookup ||--o{ rest_api_child : references
-    rest_report_header ||--o{ rest_report_param : has
-
-    foreign_key_lookup {
-        VARCHAR constraint_name PK
-        CHAR lookup_style
-        VARCHAR display_column
-    }
-    rest_api_header {
-        VARCHAR id PK
-        VARCHAR version
-        VARCHAR master_table
-        BOOLEAN is_active
-    }
-    rest_api_child {
-        VARCHAR api_id PK,FK
-        INTEGER seq PK
-        INTEGER parent_seq
-        VARCHAR constraint_name FK
-    }
-    rest_report_header {
-        VARCHAR id PK
-        VARCHAR version
-        VARCHAR query_name
-        BOOLEAN is_active
-    }
-    rest_report_param {
-        VARCHAR report_id PK,FK
-        INTEGER seq PK
-        VARCHAR param_name
-        VARCHAR data_type
-    }
-```
-
-Application Menu, GEO locations
-
-```mermaid
-erDiagram
-    application_menu ||--o{ application_menu_item : has
-    country ||--o{ state : has
-    state ||--o{ county : has
-
-    application_menu {
-        VARCHAR id PK
-        VARCHAR caption
-        INTEGER display_order
-        BOOLEAN is_active
-    }
-    application_menu_item {
-        VARCHAR menu_id PK,FK
-        VARCHAR item_id PK
-        TEXT caption
-        INTEGER display_order
-        VARCHAR rest_uri
-        BOOLEAN is_active
-    }
-    country {
-        CHAR id PK
-        VARCHAR caption
-    }
-    state {
-        CHAR country_id PK,FK
-        CHAR id PK
-        VARCHAR caption
-    }
-    county {
-        CHAR country_id PK,FK
-        CHAR state_id PK,FK
-        VARCHAR id PK
-    }
-    service_registry {
-        VARCHAR service_name PK
-        TIMESTAMP started_at PK
-        VARCHAR hostname
-        BIGINT pid
-        CHAR status
-        TIMESTAMP last_heartbeat
-    }
-```
-
-### ER Diagram — Security Tables
-
-Policy and registration
-
-```mermaid
-erDiagram
-    user_account_policy {
-        VARCHAR id PK
-        INTEGER policy_value
-    }
-
-    user_registration {
-        VARCHAR user_email PK
-        INTEGER confirmation PK
-        TEXT payload
-        CHAR status
-        TIMESTAMP created_at
-        TIMESTAMP confirmed_at
-    }
-```
-
-Roles and permitted actions
-
-```mermaid
-erDiagram
-    authorization_object ||--o{ authorization_object_action : has
-    authorization_role ||--o{ authorization_role_permission : has
-    authorization_object_action ||--o{ authorization_role_permission : grants
-
-    authorization_object {
-        VARCHAR id PK
-        VARCHAR caption
-    }
-    authorization_object_action {
-        VARCHAR authorization_object_id PK,FK
-        VARCHAR action PK
-        VARCHAR caption
-    }
-    authorization_role {
-        VARCHAR id PK
-        VARCHAR caption
-    }
-    authorization_role_permission {
-        VARCHAR role_id PK,FK
-        VARCHAR authorization_object_id PK,FK
-        VARCHAR action PK,FK
-        VARCHAR low_limit PK
-        VARCHAR high_limit
-        BOOLEAN is_active
-    }
-```
-
-User accounts
-
-```mermaid
-erDiagram
-    consent_policy ||--o{ consent_event : tracks
-    authorization_role ||--o{ user_permission : assigned
-    user_account_history }o--|| user_account : logs
-    user_permission }o--|| user_account : has
-    user_social_provider }o--|| user_account : has
-    user_account ||--o{ user_refresh_token : has
-    user_account ||--o{ user_otp : has
-    user_account ||--o{ user_trusted_device : has
-    user_account ||--o{ device_token : has
-    user_account ||--o{ consent_event : has
-
-    user_account {
-        BIGINT id PK
-        VARCHAR first_name
-        VARCHAR last_name
-        VARCHAR user_name
-        VARCHAR user_email UK
-        VARCHAR phone UK
-        VARCHAR locale
-        CHAR status
-        VARCHAR passtext
-        TIMESTAMP passdate
-        SMALLINT login_attempts
-        BOOLEAN twofa_enabled
-    }
-    user_permission {
-        BIGINT user_id PK,FK
-        VARCHAR role_id PK,FK
-        TIMESTAMP begda PK
-        TIMESTAMP endda
-    }
-    user_account_history {
-        BIGINT user_id PK,FK
-        TIMESTAMP action_time PK
-        CHAR action_type
-        CHAR status
-        VARCHAR object_name
-        VARCHAR client_address
-    }
-    user_refresh_token {
-        BIGINT id PK
-        BIGINT user_id FK
-        VARCHAR token_hash
-        TIMESTAMP expires_at
-        TIMESTAMP revoked_at
-        TIMESTAMP created_at
-    }
-    user_trusted_device {
-        BIGINT id PK
-        BIGINT user_id FK
-        VARCHAR device_fingerprint
-        VARCHAR device_name
-        TIMESTAMP trusted_at
-        TIMESTAMP expires_at
-    }
-    user_otp {
-        BIGINT id PK
-        BIGINT user_id FK
-        VARCHAR code
-        VARCHAR purpose
-        TIMESTAMP expires_at
-        INTEGER attempts
-    }
-    user_social_provider {
-        BIGINT user_id PK,FK
-        VARCHAR provider PK
-        VARCHAR provider_id
-    }
-    device_token {
-        BIGINT id PK
-        BIGINT user_id FK
-        CHAR platform
-        TEXT token
-        VARCHAR app_version
-        VARCHAR device_model
-        BOOLEAN is_active
-        TIMESTAMP last_seen_at
-    }
-    consent_policy {
-        BIGINT id PK
-        VARCHAR policy_type
-        VARCHAR region
-        VARCHAR version
-        VARCHAR language
-        VARCHAR content_url
-        VARCHAR content_sha256
-        TIMESTAMP effective_from
-        TIMESTAMP deprecated_at
-    }
-    consent_event {
-        BIGINT id PK
-        BIGINT user_id FK
-        VARCHAR email_hash
-        VARCHAR phone_hash
-        VARCHAR consent_type
-        BOOLEAN consented
-        BIGINT policy_id FK
-        VARCHAR event_ref
-        VARCHAR region
-        VARCHAR client_ip
-        VARCHAR client_user_agent
-        TIMESTAMP created_at
-    }
-```
-
-### ER Diagram — Business Partners
-
-```mermaid
-erDiagram
-    business_partner ||--o{ partner_domain : has
-    business_partner ||--o{ partner_user : has
-    business_partner ||--o{ api_key : owns
-    business_partner ||--o{ partner_address : has
-    partner_user }o--|| user_account : belongs
-    api_key }o--|| user_account : creates
-
-
-    business_partner {
-        BIGINT id PK
-        VARCHAR caption
-    }
-    partner_user {
-        BIGINT partner_id PK,FK
-        BIGINT user_id PK,FK
-        TIMESTAMP begda PK
-        TIMESTAMP endda
-    }
-    api_key {
-        BIGINT id PK
-        BIGINT partner_id FK
-        VARCHAR key_name
-        CHAR key_prefix
-        CHAR key_hash
-        VARCHAR scopes
-        BOOLEAN is_active
-        BIGINT user_id FK
-    }
-    partner_address {
-        BIGINT partner_id PK,FK
-        VARCHAR address PK
-        VARCHAR city
-        VARCHAR state
-        VARCHAR zipcode
-        VARCHAR country
-        VARCHAR phone
-        NUMERIC latitude
-        NUMERIC longitude
-    }
-    partner_domain {
-        BIGINT partner_id PK,FK
-        VARCHAR domain_url PK
-        BOOLEAN is_primary
-        TIMESTAMP created_at
-    }
-```
-### ER Diagram — Subscription Tables
-
-```mermaid
-erDiagram
-    subscription_resource ||--o{ subscription_quota : limits
-    subscription_plan ||--o{ subscription_quota : has
-    subscription_plan ||--o{ subscription_plan_price : prices
-    subscription_plan ||--o{ partner_plan_subscription : subscribed
-    business_partner ||--o{ partner_plan_subscription : has
-    business_partner ||--o{ usage_ledger : tracks
-    subscription_addon ||--o{ partner_addon_subscription : subscribed
-    business_partner ||--o{ partner_addon_subscription : has
-
-    subscription_plan {
-        VARCHAR id PK
-        VARCHAR caption
-        BOOLEAN is_active
-        CHAR currency
-        CHAR activation_mode
-        INTEGER trial_days
-    }
-    subscription_plan_price {
-        VARCHAR plan_id PK,FK
-        CHAR billing_cycle PK
-        CHAR term_type PK
-        INTEGER term_count PK
-        BIGINT amount_minor
-        CHAR currency
-        VARCHAR provider_price_id
-    }
-    subscription_resource {
-        VARCHAR id PK
-        VARCHAR table_name
-        VARCHAR status_column
-        VARCHAR status_value
-        VARCHAR date_column
-    }
-    subscription_quota {
-        VARCHAR plan_id PK,FK
-        VARCHAR resource_id PK,FK
-        BIGINT max_value
-        CHAR period_type
-    }
-    subscription_addon {
-        VARCHAR id PK
-        VARCHAR caption
-        BIGINT max_value
-        BOOLEAN is_active
-        NUMERIC monthly_cost
-        CHAR currency
-        CHAR billing_cycle
-        INTEGER term_count
-        CHAR term_type
-    }
-    partner_plan_subscription {
-        BIGINT partner_id PK,FK
-        VARCHAR plan_id PK,FK
-        TIMESTAMP begda PK
-        TIMESTAMP endda
-        CHAR status
-        BOOLEAN auto_renew
-        VARCHAR provider_subscription_id
-        CHAR billing_cycle
-        INTEGER term_count
-        CHAR term_type
-        BIGINT amount_minor
-        TIMESTAMP renewal_date
-        TIMESTAMP next_charge_date
-        TIMESTAMP effective_cancel_date
-        TIMESTAMP trial_end
-        INTEGER seats
-    }
-    partner_addon_subscription {
-        BIGINT partner_id PK,FK
-        VARCHAR addon_id PK,FK
-        TIMESTAMP begda PK
-        TIMESTAMP endda
-        CHAR status
-        BOOLEAN auto_renew
-        CHAR billing_cycle
-        INTEGER term_count
-        CHAR term_type
-        BIGINT amount_minor
-        TIMESTAMP renewal_date
-        TIMESTAMP next_charge_date
-    }
-    usage_ledger {
-        BIGINT partner_id FK
-        TIMESTAMP usage_time
-        VARCHAR resource_name
-        BIGINT amount
-        VARCHAR notes
-    }
-```
-
-### ER Diagram — Payment + Payout Tables
-
-Provider log
-
-```mermaid
-erDiagram
-    payment_webhook_log {
-        BIGINT id PK
-        VARCHAR provider
-        VARCHAR event_id
-        VARCHAR event_type
-        CHAR processing_status
-        TEXT error_message
-        TEXT raw_payload
-        TIMESTAMP received_at
-        TIMESTAMP processed_at
-    }
-    payout_webhook_log {
-        BIGINT id PK
-        CHAR provider
-        VARCHAR event_id
-        VARCHAR event_type
-        VARCHAR provider_account_id
-        VARCHAR provider_transfer_id
-        CHAR processing_status
-        TEXT error_message
-        TEXT raw_payload
-        TIMESTAMP received_at
-        TIMESTAMP processed_at
-    }
-```
-
-Payment, billing and invoice
-
-```mermaid
-erDiagram
-    business_partner ||--o{ payment_record : pays
-    invoice ||--o{ payment_record : settles
-    payment_method }o--|| business_partner : stores
-    partner_billing_customer }o--|| business_partner : "billing customer"
-    business_partner ||--o{ invoice : billed
-    invoice ||--o{ invoice_line : contains
-    invoice_line ||--o| subscription_invoice_line : "sold as"
-    subscription_invoice_line }o--|| subscription_plan : bills
-    subscription_invoice_line }o--|| subscription_addon : bills
-    payment_record ||--o{ invoice_line_payment : allocates
-    invoice_line ||--o{ invoice_line_payment : receives
-    business_partner ||--o{ user_bank_info : "scopes payouts"
-    user_bank_info }o--|| user_account : "owns (1 active per partner)"
-    user_account ||--o{ user_payment_method : saves
-
-    payment_method {
-        BIGINT id PK
-        BIGINT partner_id PK,FK
-        VARCHAR provider
-        VARCHAR provider_token
-        VARCHAR method_type
-        BOOLEAN is_default
-        TIMESTAMP created_at
-    }
-    payment_record {
-        BIGINT id PK
-        BIGINT partner_id FK
-        VARCHAR provider
-        VARCHAR provider_payment_id UK
-        VARCHAR provider_event_type
-        VARCHAR provider_charge_id
-        NUMERIC amount
-        BIGINT amount_minor
-        CHAR currency
-        BIGINT invoice_id FK
-        CHAR payment_status
-        TIMESTAMP paid_at
-        TEXT raw_payload
-        TIMESTAMP created_at
-    }
-    invoice_line_payment {
-        BIGINT id PK
-        BIGINT payment_record_id FK
-        BIGINT invoice_id FK
-        INTEGER invoice_line_seq FK
-        CHAR entry_type
-        BIGINT amount_minor
-        VARCHAR provider_ref UK
-        TIMESTAMP created_at
-    }
-    user_bank_info {
-        BIGINT id PK
-        BIGINT user_id FK
-        BIGINT partner_id FK
-        CHAR country_code
-        CHAR currency
-        VARCHAR account_holder_name
-        TEXT billing_address
-        CHAR tax_id_type
-        BYTEA tax_id_encrypted
-        CHAR provider
-        VARCHAR provider_account_id
-        BOOLEAN provider_agreement
-        TIMESTAMP provider_onboarded_at
-        CHAR status
-        TIMESTAMP superseded_at
-        TIMESTAMP created_at
-        TIMESTAMP updated_at
-    }
-    partner_billing_customer {
-        BIGINT partner_id PK,FK
-        VARCHAR provider PK
-        VARCHAR customer_token UK
-        TIMESTAMP created_at
-    }
-    invoice {
-        BIGINT id PK
-        BIGINT partner_id FK
-        VARCHAR invoice_number UK
-        CHAR status
-        NUMERIC subtotal
-        NUMERIC tax
-        NUMERIC total
-        BIGINT total_minor
-        CHAR currency
-        TIMESTAMP issued_at
-        TIMESTAMP due_at
-        TIMESTAMP paid_at
-        VARCHAR pdf_storage_path
-        VARCHAR provider_invoice_id
-        VARCHAR provider_charge_id
-        INTEGER attempt_count
-        TIMESTAMP next_attempt_at
-        TEXT last_error
-    }
-    invoice_line {
-        BIGINT invoice_id PK,FK
-        INTEGER seq PK
-        VARCHAR description
-        INTEGER quantity
-        NUMERIC unit_price
-        NUMERIC amount
-        BIGINT amount_minor
-        TIMESTAMP service_from
-        TIMESTAMP service_to
-    }
-    subscription_invoice_line {
-        BIGINT invoice_id PK,FK
-        INTEGER invoice_line_seq PK,FK
-        VARCHAR plan_id FK
-        VARCHAR addon_id FK
-    }
-    user_payment_method {
-        BIGINT id PK
-        BIGINT user_id FK
-        VARCHAR method_type
-        VARCHAR provider
-        VARCHAR provider_token
-        VARCHAR last_four
-        VARCHAR brand
-        SMALLINT expiry_month
-        SMALLINT expiry_year
-        CHAR currency
-        BOOLEAN is_default
-        TIMESTAMP created_at
-    }
-```
-
-### ER Diagram — Agency / Reseller Tables
-
-The agency group keeps the generic partner-to-partner lifecycle in basis. An
-application that manages a child entity, such as an individual business owned
-by the client partner, adds an FK-backed extension table to the invitation and
-delegation instead of weakening these relationships with a polymorphic id.
-
-```mermaid
-erDiagram
-    agency_client_invitation }o--|| agency_profile : stages
-
-    business_partner ||--o{ agency_client_delegation : delegates
-    business_partner o|--o{ agency_client_invitation : "accepts as client"
-    business_partner ||--o| agency_profile : "qualifies as"
-    business_partner ||--o{ agency_client_rate : receives
-
-    agency_client_rate }o--|| agency_profile : freezes
-
-    agency_profile ||--o{ agency_payout : receives
-    agency_profile ||--o| agency_payout_profile : selects
-
-    agency_client_delegation ||--o{ agency_client_billing : classifies
-    agency_client_delegation }o--|| agency_profile : manages
-
-    agency_client_billing ||--o{ agency_commission : earns
-    invoice_line_payment ||--o{ agency_commission : sources
-    agency_payout ||--|{ agency_payout_line : contains
-    agency_commission o|--o{ agency_commission : reverses
-    agency_commission ||--o{ agency_payout_line : allocates
-
-    agency_payout_profile |o--|| user_bank_info : destination
-    agency_payout }o--|| user_bank_info : snapshots
-
-
-    business_partner {
-        BIGINT id PK
-    }
-    user_bank_info {
-        BIGINT id PK
-        BIGINT user_id FK
-        BIGINT partner_id FK
-    }
-    invoice_line_payment {
-        BIGINT id PK
-    }
-    agency_profile {
-        BIGINT agency_partner_id PK,FK
-        BOOLEAN wholesale_allowed
-        INTEGER default_commission_rate_bp
-        TIMESTAMP approved_at
-        BOOLEAN suspended
-        TIMESTAMP created_at
-        TIMESTAMP updated_at
-    }
-    agency_client_invitation {
-        BIGINT id PK
-        BIGINT agency_partner_id FK
-        VARCHAR client_name
-        VARCHAR client_email
-        VARCHAR client_website
-        VARCHAR invite_token UK
-        CHAR status
-        BIGINT client_partner_id FK
-        BIGINT accepted_by FK
-        TIMESTAMP invited_at
-        TIMESTAMP accepted_at
-    }
-    agency_client_delegation {
-        BIGINT id PK
-        BIGINT client_partner_id FK
-        BIGINT agency_partner_id FK
-        BIGINT granted_by FK
-        CHAR status
-        TIMESTAMP granted_at
-        TIMESTAMP revoked_at
-        BIGINT revoked_by FK
-    }
-    agency_client_billing {
-        BIGINT id PK
-        BIGINT client_delegation_id FK
-        CHAR billing_model
-        TIMESTAMP effective_from
-        TIMESTAMP effective_to
-    }
-    agency_payout_profile {
-        BIGINT agency_partner_id PK,FK
-        BIGINT user_bank_info_id FK
-        CHAR status
-        TIMESTAMP created_at
-        TIMESTAMP updated_at
-    }
-    agency_client_rate {
-        BIGINT agency_partner_id PK,FK
-        BIGINT client_partner_id PK,FK
-        INTEGER commission_rate_bp
-        TIMESTAMP first_earned_at
-    }
-    agency_commission {
-        BIGINT id PK
-        BIGINT client_billing_id FK
-        BIGINT invoice_line_payment_id FK
-        TIMESTAMP earning_period_start
-        TIMESTAMP earning_period_end
-        BIGINT gross_amount_minor
-        BIGINT commission_amount_minor
-        INTEGER applied_rate_bp
-        CHAR currency
-        CHAR entry_type
-        CHAR status
-        BIGINT reversal_of_id FK
-        TIMESTAMP earned_at
-    }
-    agency_payout {
-        BIGINT id PK
-        BIGINT agency_partner_id FK
-        BIGINT user_bank_info_id FK
-        BIGINT amount_minor
-        CHAR currency
-        CHAR provider
-        VARCHAR provider_account_id
-        TIMESTAMP selection_cutoff_at
-        VARCHAR idempotency_key UK
-        VARCHAR provider_transfer_id UK
-        VARCHAR provider_funding_id
-        CHAR status
-        INTEGER attempt_count
-        TIMESTAMP attempted_at
-        TIMESTAMP next_attempt_at
-        TIMESTAMP paid_at
-    }
-    agency_payout_line {
-        BIGINT payout_id PK,FK
-        BIGINT commission_id PK,FK
-        BIGINT amount_minor
-        TIMESTAMP released_at
-    }
-```
+The component dependency flowcharts and conceptual ER diagrams are maintained in
+[DB.md](DB.md). It contains every table, column, and relationship previously
+diagrammed here, plus the newer component tables. Keep diagram changes there so
+the repository has one database-diagram source of truth.
 
 ### Table Summary
 
@@ -3094,13 +2374,22 @@ keel/
 ├── pgsql/                     # PostgreSQL adapter (pgx/v5): repository, table service,
 │                              #   query service, tx-bound query service, tx view
 ├── schema/                    # YAML schema definitions + seed loader + schemagen model
-│   ├── basis/                 # Framework tables (constants, REST metadata, geo, subscriptions, ...)
-│   ├── security/              # Auth tables (users, roles, permissions, OTP, social, devices, ...)
+│   ├── dependency.yml         # Component folders, FK dependencies, and seed dependencies
+│   ├── core/                  # Startup config, UI/REST metadata, users, RBAC, and consent
+│   ├── worker/                # Worker runtime registry
+│   ├── geo/                   # Country, state, and county reference tables
+│   ├── tenant_management/     # Business partners, users, addresses, domains
+│   ├── oauth_server/          # OAuth clients, codes, refresh tokens
+│   ├── api_key_management/    # Public API keys
+│   ├── oauth_connect/         # Partner credentials and auth nonces
+│   ├── subscription/          # Plans, prices, quotas, subscriptions, usage
+│   ├── payment/               # Payment methods and payment webhook log
+│   ├── payout/                # Bank information and payout webhook log
+│   ├── outbox/                # Transactional outbox
+│   ├── billing/               # Invoices, payments, and allocations
+│   ├── agency/                # Agency clients, commissions, and payouts
+│   ├── seed/                  # One <component>.yml seed file per table group
 │   ├── dialect/               # DDL dialects: PostgreSQL, MySQL
-│   ├── basis_seed.yml         # Framework seed data
-│   ├── geo_seed.yml           # Country / state / county reference data
-│   ├── security_seed.yml      # Built-in roles + permissions
-│   ├── subscription_seed.yml  # PARTNER_ADMIN permissions for the subscription tables
 │   ├── schema.go              # Schema model + parser + Validate
 │   └── seed.go                # Seed-file parser + GenerateSeedSQL (FK-safe topo sort)
 ├── rest/                      # Metadata-driven REST engine + parent-child relation CRUD

@@ -1,0 +1,111 @@
+comment: Agency seed data
+order: 180
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [agency_client_status, Agency Client Status]
+      - [agency_delegation_status, Agency Delegation Status]
+      - [agency_billing_model, Agency Billing Model]
+      - [agency_payout_profile_status, Agency Payout Profile Status]
+      - [agency_commission_entry, Agency Commission Entry]
+      - [agency_commission_status, Agency Commission Status]
+      - [agency_payout_status, Agency Payout Status]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [agency_client_status, S, Staged]
+      - [agency_client_status, I, Invited]
+      - [agency_client_status, V, Client]
+      - [agency_client_status, X, Cancelled]
+      - [agency_delegation_status, A, Active]
+      - [agency_delegation_status, R, Revoked]
+      - [agency_billing_model, R, Referral]
+      - [agency_billing_model, W, Wholesale]
+      - [agency_payout_profile_status, A, Active]
+      - [agency_payout_profile_status, I, Inactive]
+      - [agency_commission_entry, E, Earning]
+      - [agency_commission_entry, R, Reversal]
+      - [agency_commission_status, H, Held]
+      - [agency_commission_status, P, Payable]
+      - [agency_commission_status, R, Reserved]
+      - [agency_commission_status, D, Paid]
+      - [agency_commission_status, O, Offset]
+      - [agency_payout_status, C, Created]
+      - [agency_payout_status, P, Processing]
+      - [agency_payout_status, D, Paid]
+      - [agency_payout_status, F, Failed]
+      - [agency_payout_status, R, Returned]
+      - [agency_payout_status, V, Reversed]
+      - [agency_payout_status, M, Manual review]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [agency_client_status, agency_client_invitation, status]
+      - [agency_delegation_status, agency_client_delegation, status]
+      - [agency_billing_model, agency_client_billing, billing_model]
+      - [agency_payout_profile_status, agency_payout_profile, status]
+      - [agency_commission_entry, agency_commission, entry_type]
+      - [agency_commission_status, agency_commission, status]
+      - [agency_payout_status, agency_payout, status]
+      - [payout_provider, agency_payout, provider]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [agency_profile, agency_profile]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [AGENCY_PROFILE, Agency Profile Actions]
+      - [AGENCY, Agency Self-Service Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [AGENCY_PROFILE, APPROVE, Approve a sales agency]
+      - [AGENCY, MANAGE_CLIENTS, Manage agency clients]
+      - [AGENCY, VIEW_EARNINGS, View agency earnings]
+      - [AGENCY, MANAGE_PAYOUT, Manage agency payout destination]
+  - table: table_action
+    columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
+    rows:
+      - [agency_profile, approve, Approve, check, P, true, 10]
+  - table: application_menu
+    columns: [display_order, id, caption]
+    rows:
+      - [92, agencies, Agencies]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [5, false, agencies, agency_clients, agency/clients, Agency Clients]
+      - [10, false, agencies, agency_profiles, agency_profile, Agency Profiles]
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [agency_profile, created_at, R]
+      - [agency_profile, updated_at, U]
+      - [agency_profile, approved_at, R]
+      - [agency_client_invitation, invited_at, R]
+      - [agency_client_invitation, accepted_at, R]
+      - [agency_client_invitation, created_at, R]
+      - [agency_client_invitation, updated_at, U]
+      - [agency_client_delegation, granted_at, R]
+      - [agency_client_delegation, revoked_at, R]
+      - [agency_client_billing, created_at, R]
+      - [agency_client_rate, first_earned_at, R]
+      - [agency_commission, created_at, R]
+      - [agency_commission, earned_at, R]
+      - [agency_payout, created_at, R]
+      - [agency_payout, paid_at, R]
+      - [agency_payout_profile, created_at, R]
+      - [agency_payout_profile, updated_at, U]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [AGENCY, AGENCY, MANAGE_CLIENTS, agency_clients]
+      - [AGENCY, AGENCY, VIEW_EARNINGS, agency_earnings]
+      - [AGENCY, AGENCY, MANAGE_PAYOUT, agency_payout_profile]
+      - [AGENCY, PAGE, ACCESS, agency_clients]
+      - [APP_ADMIN, PAGE, ACCESS, agency_profiles]
+      - [APP_ADMIN, TABLE, SELECT, agency_profile]
+      - [APP_ADMIN, TABLE, UPDATE, agency_profile]
+      - [APP_ADMIN, AGENCY_PROFILE, APPROVE, agency_profile]

@@ -4,6 +4,55 @@
 -- Agency tables are emitted here for schema portability only.
 -- ==========================================================================
 
+-- Maps tables to their PostgreSQL sequences
+CREATE TABLE IF NOT EXISTS table_sequence_usage (
+    table_name                           VARCHAR(32)   NOT NULL,
+    column_name                          VARCHAR(32)   NOT NULL,
+    sequence_name                        VARCHAR(32)   NOT NULL,
+    PRIMARY KEY (table_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Catalog of runtime configuration flags loaded into common.BaseConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
+CREATE TABLE IF NOT EXISTS application_config_flag (
+    id                                   VARCHAR(80)   NOT NULL,
+    data_type                            VARCHAR(20)   NOT NULL DEFAULT 'string',
+    needs_restart                        TINYINT(1)    NOT NULL DEFAULT 0,
+    default_value                        TEXT         ,
+    description                          TEXT         ,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Per-node assigned values for application_config_flag. node_id identifies the runtime node/process (matched against --node_id). Most single-node deployments use 0; multi-node deployments assign values per node. Missing rows fall back to application_config_flag.default_value.
+CREATE TABLE IF NOT EXISTS application_config_value (
+    node_id                              INT           NOT NULL DEFAULT 0,
+    flag_id                              VARCHAR(80)   NOT NULL,
+    assigned_value                       TEXT         ,
+    PRIMARY KEY (node_id, flag_id),
+    CONSTRAINT application_config_values FOREIGN KEY (flag_id) REFERENCES application_config_flag(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Navigation menu structure
+CREATE TABLE IF NOT EXISTS application_menu (
+    id                                   VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    display_order                        INT           NOT NULL,
+    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Menu items with REST API links
+CREATE TABLE IF NOT EXISTS application_menu_item (
+    menu_id                              VARCHAR(30)   NOT NULL,
+    item_id                              VARCHAR(30)   NOT NULL,
+    caption                              TEXT          NOT NULL,
+    display_order                        INT           NOT NULL,
+    rest_uri                             VARCHAR(255)  NOT NULL,
+    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
+    filter_on_list                       TINYINT(1)    NOT NULL DEFAULT 0,
+    PRIMARY KEY (menu_id, item_id),
+    CONSTRAINT application_menu_items FOREIGN KEY (menu_id) REFERENCES application_menu(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Dropdown/enum header definitions
 CREATE TABLE IF NOT EXISTS constant_header (
     id                                   VARCHAR(60)   NOT NULL,
@@ -80,109 +129,48 @@ CREATE TABLE IF NOT EXISTS rest_report_param (
     CONSTRAINT rest_report_param_constants FOREIGN KEY (constant_id) REFERENCES constant_header(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Maps tables to their PostgreSQL sequences
-CREATE TABLE IF NOT EXISTS table_sequence_usage (
-    table_name                           VARCHAR(32)   NOT NULL,
-    column_name                          VARCHAR(32)   NOT NULL,
-    sequence_name                        VARCHAR(32)   NOT NULL,
-    PRIMARY KEY (table_name)
+-- Per-column UI/CRUD display overrides (mode, field width, textarea rows)
+CREATE TABLE IF NOT EXISTS column_display_attribute (
+    table_name                           VARCHAR(63)   NOT NULL,
+    column_name                          VARCHAR(63)   NOT NULL,
+    display_mode                         CHAR(1)      ,
+    display_width                        INT          ,
+    display_rows                         INT          ,
+    PRIMARY KEY (table_name, column_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Navigation menu structure
-CREATE TABLE IF NOT EXISTS application_menu (
-    id                                   VARCHAR(30)   NOT NULL,
+-- Per-table custom actions surfaced as buttons in CRUD UIs. Each row
+-- registers ONE action; the downstream application must also (a) seed
+-- the matching authorization_object + authorization_object_action rows
+-- so roles can grant access, and (b) register an HTTP handler at the
+-- conventional URL POST /<rest_prefix>/<table_name>/<action_name>.
+--
+-- authorization_object.id mirrors the uppercased table name and
+-- authorization_object_action.action mirrors the uppercased action_name
+-- — gives each table its own action namespace so the same action name
+-- ('assign', 'enable', 'calculate') can mean different things on
+-- different tables without a shared auth dimension.
+--
+-- record_specific=TRUE  → button renders next to per-row edit/delete.
+-- record_specific=FALSE → button renders next to the "New Record"
+--                         control at the table-level toolbar.
+--
+-- Reserved action_name values that collide with generic CRUD subpaths
+-- (list / get / post / delete / get-paginated) are rejected at REST
+-- service boot.
+CREATE TABLE IF NOT EXISTS table_action (
+    table_name                           VARCHAR(80)   NOT NULL,
+    action_name                          VARCHAR(30)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
-    display_order                        INT           NOT NULL,
-    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
-    PRIMARY KEY (id)
+    icon                                 VARCHAR(40)  ,
+    record_specific                      TINYINT(1)    NOT NULL DEFAULT 0,
+    action_kind                          CHAR(1)       NOT NULL DEFAULT 'P',
+    method_name                          VARCHAR(80)  ,
+    display_order                        SMALLINT      NOT NULL DEFAULT 10,
+    confirm_message                      VARCHAR(200) ,
+    PRIMARY KEY (table_name, action_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Menu items with REST API links
-CREATE TABLE IF NOT EXISTS application_menu_item (
-    menu_id                              VARCHAR(30)   NOT NULL,
-    item_id                              VARCHAR(30)   NOT NULL,
-    caption                              TEXT          NOT NULL,
-    display_order                        INT           NOT NULL,
-    rest_uri                             VARCHAR(255)  NOT NULL,
-    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
-    filter_on_list                       TINYINT(1)    NOT NULL DEFAULT 0,
-    PRIMARY KEY (menu_id, item_id),
-    CONSTRAINT application_menu_items FOREIGN KEY (menu_id) REFERENCES application_menu(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- RBAC authorization object definitions
-CREATE TABLE IF NOT EXISTS authorization_object (
-    id                                   VARCHAR(30)   NOT NULL,
-    caption                              VARCHAR(80)   NOT NULL,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Actions available on each authorization object
-CREATE TABLE IF NOT EXISTS authorization_object_action (
-    authorization_object_id              VARCHAR(30)   NOT NULL,
-    action                               VARCHAR(30)   NOT NULL,
-    caption                              VARCHAR(80)   NOT NULL,
-    PRIMARY KEY (authorization_object_id, action),
-    CONSTRAINT authorization_object_actions FOREIGN KEY (authorization_object_id) REFERENCES authorization_object(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Background worker registration and heartbeat
-CREATE TABLE IF NOT EXISTS service_registry (
-    service_name                         VARCHAR(16)   NOT NULL,
-    started_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    hostname                             VARCHAR(64)   NOT NULL,
-    pid                                  BIGINT        NOT NULL,
-    status                               CHAR(1)       NOT NULL,
-    last_heartbeat                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (service_name, started_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Country reference table
-CREATE TABLE IF NOT EXISTS country (
-    id                                   CHAR(2)       NOT NULL,
-    caption                              VARCHAR(100)  NOT NULL,
-    currency                             CHAR(3)       NOT NULL,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- State/province reference table
-CREATE TABLE IF NOT EXISTS state (
-    country_id                           CHAR(2)       NOT NULL,
-    id                                   CHAR(2)       NOT NULL,
-    caption                              VARCHAR(100)  NOT NULL,
-    PRIMARY KEY (country_id, id),
-    CONSTRAINT states FOREIGN KEY (country_id) REFERENCES country(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- County reference table
-CREATE TABLE IF NOT EXISTS county (
-    country_id                           CHAR(2)       NOT NULL,
-    state_id                             CHAR(2)       NOT NULL,
-    id                                   VARCHAR(100)  NOT NULL,
-    PRIMARY KEY (country_id, state_id, id),
-    CONSTRAINT counties FOREIGN KEY (country_id, state_id) REFERENCES state(country_id, id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Authorization roles
-CREATE TABLE IF NOT EXISTS authorization_role (
-    id                                   VARCHAR(30)   NOT NULL,
-    caption                              VARCHAR(80)   NOT NULL,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Role-based permission assignments
-CREATE TABLE IF NOT EXISTS authorization_role_permission (
-    role_id                              VARCHAR(30)   NOT NULL,
-    authorization_object_id              VARCHAR(30)   NOT NULL,
-    action                               VARCHAR(30)   NOT NULL,
-    low_limit                            VARCHAR(80)   NOT NULL,
-    high_limit                           VARCHAR(80)  ,
-    bypass_scope                         TINYINT(1)    NOT NULL DEFAULT 0,
-    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
-    PRIMARY KEY (role_id, authorization_object_id, action, low_limit),
-    CONSTRAINT authorization_role_permissions FOREIGN KEY (role_id) REFERENCES authorization_role(id),
-    CONSTRAINT permitted_object_action FOREIGN KEY (authorization_object_id, action) REFERENCES authorization_object_action(authorization_object_id, action)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_table_action_table ON table_action(table_name);
 
 -- Configurable password and login policies
 CREATE TABLE IF NOT EXISTS user_account_policy (
@@ -219,18 +207,6 @@ CREATE TABLE IF NOT EXISTS user_account (
 CREATE UNIQUE INDEX user_account_email_uq ON user_account(user_email);
 CREATE UNIQUE INDEX user_account_phone_uq ON user_account(phone);
 
--- User-to-role assignments
-CREATE TABLE IF NOT EXISTS user_permission (
-    user_id                              BIGINT        NOT NULL,
-    role_id                              VARCHAR(30)   NOT NULL,
-    begda                                DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    endda                                DATETIME     ,
-    PRIMARY KEY (user_id, role_id, begda),
-    CONSTRAINT user_permissions FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT permitted_users FOREIGN KEY (role_id) REFERENCES authorization_role(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_user_permission_role ON user_permission(role_id);
-
 -- Login audit trail
 CREATE TABLE IF NOT EXISTS user_account_history (
     user_id                              BIGINT        NOT NULL,
@@ -254,6 +230,196 @@ CREATE TABLE IF NOT EXISTS user_registration (
     user_id                              BIGINT       ,
     attempts                             INT           NOT NULL DEFAULT 0,
     PRIMARY KEY (user_email, confirmation)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- JWT refresh tokens
+CREATE TABLE IF NOT EXISTS user_refresh_token (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    token_hash                           VARCHAR(128)  NOT NULL,
+    expires_at                           DATETIME      NOT NULL,
+    revoked_at                           DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT user_refresh_tokens FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_refresh_token_hash ON user_refresh_token(token_hash);
+
+-- Trusted devices for 2FA bypass; device_fingerprint holds hex SHA256 of a server-minted secret kept in an HttpOnly cookie (never the raw secret).
+CREATE TABLE IF NOT EXISTS user_trusted_device (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    device_fingerprint                   VARCHAR(128)  NOT NULL,
+    device_name                          VARCHAR(200) ,
+    trusted_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at                           DATETIME      NOT NULL,
+    last_seen_at                         DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT user_trusted_devices FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_trusted_device_user ON user_trusted_device(user_id, device_fingerprint);
+
+-- One-time password codes for phone/email verification
+CREATE TABLE IF NOT EXISTS user_otp (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    code                                 VARCHAR(6)    NOT NULL,
+    purpose                              VARCHAR(20)   NOT NULL,
+    expires_at                           DATETIME      NOT NULL,
+    attempts                             INT           NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    CONSTRAINT user_otps FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Social login provider links (Google, Apple)
+CREATE TABLE IF NOT EXISTS user_social_provider (
+    user_id                              BIGINT        NOT NULL,
+    provider                             VARCHAR(20)   NOT NULL,
+    provider_id                          VARCHAR(255)  NOT NULL,
+    PRIMARY KEY (user_id, provider),
+    CONSTRAINT user_social_providers FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Mobile device push-notification tokens (FCM / APNs via FCM)
+CREATE TABLE IF NOT EXISTS device_token (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    platform                             CHAR(1)       NOT NULL,
+    token                                TEXT          NOT NULL,
+    app_version                          VARCHAR(32)  ,
+    device_model                         VARCHAR(64)  ,
+    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at                         DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT device_token_users FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX device_token_user_token_uq ON device_token(user_id, token);
+CREATE INDEX idx_device_token_user_active ON device_token(user_id, is_active);
+
+-- RBAC authorization object definitions
+CREATE TABLE IF NOT EXISTS authorization_object (
+    id                                   VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Actions available on each authorization object
+CREATE TABLE IF NOT EXISTS authorization_object_action (
+    authorization_object_id              VARCHAR(30)   NOT NULL,
+    action                               VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    PRIMARY KEY (authorization_object_id, action),
+    CONSTRAINT authorization_object_actions FOREIGN KEY (authorization_object_id) REFERENCES authorization_object(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Authorization roles
+CREATE TABLE IF NOT EXISTS authorization_role (
+    id                                   VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Role-based permission assignments
+CREATE TABLE IF NOT EXISTS authorization_role_permission (
+    role_id                              VARCHAR(30)   NOT NULL,
+    authorization_object_id              VARCHAR(30)   NOT NULL,
+    action                               VARCHAR(30)   NOT NULL,
+    low_limit                            VARCHAR(80)   NOT NULL,
+    high_limit                           VARCHAR(80)  ,
+    bypass_scope                         TINYINT(1)    NOT NULL DEFAULT 0,
+    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
+    PRIMARY KEY (role_id, authorization_object_id, action, low_limit),
+    CONSTRAINT authorization_role_permissions FOREIGN KEY (role_id) REFERENCES authorization_role(id),
+    CONSTRAINT permitted_object_action FOREIGN KEY (authorization_object_id, action) REFERENCES authorization_object_action(authorization_object_id, action)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- User-to-role assignments
+CREATE TABLE IF NOT EXISTS user_permission (
+    user_id                              BIGINT        NOT NULL,
+    role_id                              VARCHAR(30)   NOT NULL,
+    begda                                DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    endda                                DATETIME     ,
+    PRIMARY KEY (user_id, role_id, begda),
+    CONSTRAINT user_permissions FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT permitted_users FOREIGN KEY (role_id) REFERENCES authorization_role(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_user_permission_role ON user_permission(role_id);
+
+-- Versioned privacy/terms/consent policy text registered for audit trail
+CREATE TABLE IF NOT EXISTS consent_policy (
+    id                                   BIGINT        NOT NULL,
+    policy_type                          VARCHAR(30)   NOT NULL,
+    region                               VARCHAR(10)   NOT NULL DEFAULT 'global',
+    version                              VARCHAR(64)   NOT NULL,
+    language                             VARCHAR(8)    NOT NULL DEFAULT 'en',
+    content_url                          VARCHAR(500)  NOT NULL,
+    content_sha256                       VARCHAR(64)   NOT NULL,
+    effective_from                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deprecated_at                        DATETIME     ,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX consent_policy_uq ON consent_policy(policy_type, region, version, language);
+
+-- Per-user consent decisions with full audit trail for PIPEDA/GDPR
+CREATE TABLE IF NOT EXISTS consent_event (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT       ,
+    email_hash                           VARCHAR(64)  ,
+    phone_hash                           VARCHAR(64)  ,
+    consent_type                         VARCHAR(30)   NOT NULL,
+    consented                            TINYINT(1)    NOT NULL,
+    policy_id                            BIGINT        NOT NULL,
+    event_ref                            VARCHAR(64)  ,
+    region                               VARCHAR(10)   NOT NULL,
+    client_ip                            VARCHAR(45)  ,
+    client_user_agent                    VARCHAR(500) ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT consent_event_policies FOREIGN KEY (policy_id) REFERENCES consent_policy(id),
+    CONSTRAINT consent_event_users FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_consent_event_user ON consent_event(user_id, consent_type);
+CREATE INDEX idx_consent_event_email ON consent_event(email_hash, consent_type);
+CREATE INDEX idx_consent_event_phone ON consent_event(phone_hash, consent_type);
+
+-- Background worker registration and heartbeat
+CREATE TABLE IF NOT EXISTS service_registry (
+    service_name                         VARCHAR(16)   NOT NULL,
+    started_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    hostname                             VARCHAR(64)   NOT NULL,
+    pid                                  BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL,
+    last_heartbeat                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (service_name, started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Country reference table
+CREATE TABLE IF NOT EXISTS country (
+    id                                   CHAR(2)       NOT NULL,
+    caption                              VARCHAR(100)  NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- State/province reference table
+CREATE TABLE IF NOT EXISTS state (
+    country_id                           CHAR(2)       NOT NULL,
+    id                                   CHAR(2)       NOT NULL,
+    caption                              VARCHAR(100)  NOT NULL,
+    PRIMARY KEY (country_id, id),
+    CONSTRAINT states FOREIGN KEY (country_id) REFERENCES country(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- County reference table
+CREATE TABLE IF NOT EXISTS county (
+    country_id                           CHAR(2)       NOT NULL,
+    state_id                             CHAR(2)       NOT NULL,
+    id                                   VARCHAR(100)  NOT NULL,
+    PRIMARY KEY (country_id, state_id, id),
+    CONSTRAINT counties FOREIGN KEY (country_id, state_id) REFERENCES state(country_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Multi-tenant business partner entity — shared core only (id + caption). Projects create separate tables for domain-specific extensions (e.g. partner_profile, partner_branding).
@@ -302,42 +468,61 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     CONSTRAINT partner_domains FOREIGN KEY (partner_id) REFERENCES business_partner(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Per-column UI/CRUD display overrides (mode, field width, textarea rows)
-CREATE TABLE IF NOT EXISTS column_display_attribute (
-    table_name                           VARCHAR(63)   NOT NULL,
-    column_name                          VARCHAR(63)   NOT NULL,
-    display_mode                         CHAR(1)      ,
-    display_width                        INT          ,
-    display_rows                         INT          ,
-    PRIMARY KEY (table_name, column_name)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- JWT refresh tokens
-CREATE TABLE IF NOT EXISTS user_refresh_token (
+-- OAuth 2.1 registered clients (Dynamic Client Registration)
+CREATE TABLE IF NOT EXISTS oauth_client (
     id                                   BIGINT        NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    secret_hash                          VARCHAR(64)  ,
+    client_name                          VARCHAR(200) ,
+    redirect_uris                        VARCHAR(2000) NOT NULL,
+    grant_types                          VARCHAR(500)  NOT NULL,
+    scopes                               VARCHAR(1000),
+    token_auth_method                    VARCHAR(40)   NOT NULL DEFAULT 'none',
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_oauth_client_client_id ON oauth_client(client_id);
+
+-- Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
+CREATE TABLE IF NOT EXISTS oauth_authorization_code (
+    id                                   BIGINT        NOT NULL,
+    code_hash                            CHAR(64)      NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
     user_id                              BIGINT        NOT NULL,
-    token_hash                           VARCHAR(128)  NOT NULL,
+    partner_id                           BIGINT       ,
+    scopes                               VARCHAR(1000),
+    redirect_uri                         VARCHAR(2000) NOT NULL,
+    code_challenge                       VARCHAR(128)  NOT NULL,
+    code_challenge_method                VARCHAR(10)   NOT NULL,
+    resource                             VARCHAR(500) ,
+    expires_at                           DATETIME      NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT oauth_authorization_code_user FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT oauth_authorization_code_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_oauth_code_hash ON oauth_authorization_code(code_hash);
+
+-- OAuth 2.1 refresh tokens (hashed) with rotation family for reuse-detection; partner_id is a denormalized snapshot
+CREATE TABLE IF NOT EXISTS oauth_refresh_token (
+    id                                   BIGINT        NOT NULL,
+    token_hash                           CHAR(64)      NOT NULL,
+    family_id                            VARCHAR(64)   NOT NULL,
+    client_id                            VARCHAR(64)   NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    scopes                               VARCHAR(1000),
+    resource                             VARCHAR(500) ,
     expires_at                           DATETIME      NOT NULL,
     revoked_at                           DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT user_refresh_tokens FOREIGN KEY (user_id) REFERENCES user_account(id)
+    CONSTRAINT oauth_refresh_token_user FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT oauth_refresh_token_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_refresh_token_hash ON user_refresh_token(token_hash);
-
--- Trusted devices for 2FA bypass; device_fingerprint holds hex SHA256 of a server-minted secret kept in an HttpOnly cookie (never the raw secret).
-CREATE TABLE IF NOT EXISTS user_trusted_device (
-    id                                   BIGINT        NOT NULL,
-    user_id                              BIGINT        NOT NULL,
-    device_fingerprint                   VARCHAR(128)  NOT NULL,
-    device_name                          VARCHAR(200) ,
-    trusted_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expires_at                           DATETIME      NOT NULL,
-    last_seen_at                         DATETIME     ,
-    PRIMARY KEY (id),
-    CONSTRAINT user_trusted_devices FOREIGN KEY (user_id) REFERENCES user_account(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_trusted_device_user ON user_trusted_device(user_id, device_fingerprint);
+CREATE UNIQUE INDEX idx_oauth_refresh_hash ON oauth_refresh_token(token_hash);
+CREATE INDEX idx_oauth_refresh_family ON oauth_refresh_token(family_id);
+CREATE INDEX idx_oauth_refresh_user ON oauth_refresh_token(user_id);
 
 -- API keys for public API access with rotation support
 CREATE TABLE IF NOT EXISTS api_key (
@@ -361,97 +546,34 @@ CREATE TABLE IF NOT EXISTS api_key (
 CREATE UNIQUE INDEX idx_api_key_hash ON api_key(key_hash);
 CREATE INDEX idx_api_key_partner ON api_key(partner_id);
 
--- One-time password codes for phone/email verification
-CREATE TABLE IF NOT EXISTS user_otp (
+-- OAuth / API-key credentials for partner connections to external providers
+CREATE TABLE IF NOT EXISTS partner_credential (
     id                                   BIGINT        NOT NULL,
-    user_id                              BIGINT        NOT NULL,
-    code                                 VARCHAR(6)    NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    entity_id                            BIGINT        NOT NULL DEFAULT 0,
+    provider                             VARCHAR(30)   NOT NULL,
+    connection_type                      CHAR(1)       NOT NULL DEFAULT 'O',
+    cred_ref                             TEXT          NOT NULL,
+    api_endpoint                         VARCHAR(255) ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    rev                                  INT           NOT NULL DEFAULT 0,
+    lease_until                          DATETIME     ,
+    issued_at                            DATETIME     ,
+    last_checked                         DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_credential_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX partner_credential_uq ON partner_credential(partner_id, entity_id, provider);
+
+-- Single-use, TTL-bounded nonces (OAuth connect-state, JWT handoff). Natural key, no sequence.
+CREATE TABLE IF NOT EXISTS auth_nonce (
+    nonce                                VARCHAR(64)   NOT NULL,
     purpose                              VARCHAR(20)   NOT NULL,
-    expires_at                           DATETIME      NOT NULL,
-    attempts                             INT           NOT NULL DEFAULT 0,
-    PRIMARY KEY (id),
-    CONSTRAINT user_otps FOREIGN KEY (user_id) REFERENCES user_account(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Social login provider links (Google, Apple)
-CREATE TABLE IF NOT EXISTS user_social_provider (
-    user_id                              BIGINT        NOT NULL,
-    provider                             VARCHAR(20)   NOT NULL,
-    provider_id                          VARCHAR(255)  NOT NULL,
-    PRIMARY KEY (user_id, provider),
-    CONSTRAINT user_social_providers FOREIGN KEY (user_id) REFERENCES user_account(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Versioned privacy/terms/consent policy text registered for audit trail
-CREATE TABLE IF NOT EXISTS consent_policy (
-    id                                   BIGINT        NOT NULL,
-    policy_type                          VARCHAR(30)   NOT NULL,
-    region                               VARCHAR(10)   NOT NULL DEFAULT 'global',
-    version                              VARCHAR(64)   NOT NULL,
-    language                             VARCHAR(8)    NOT NULL DEFAULT 'en',
-    content_url                          VARCHAR(500)  NOT NULL,
-    content_sha256                       VARCHAR(64)   NOT NULL,
-    effective_from                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    deprecated_at                        DATETIME     ,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE UNIQUE INDEX consent_policy_uq ON consent_policy(policy_type, region, version, language);
-
--- Per-user consent decisions with full audit trail for PIPEDA/GDPR
-CREATE TABLE IF NOT EXISTS consent_event (
-    id                                   BIGINT        NOT NULL,
-    user_id                              BIGINT       ,
-    email_hash                           VARCHAR(64)  ,
-    phone_hash                           VARCHAR(64)  ,
-    consent_type                         VARCHAR(30)   NOT NULL,
-    consented                            TINYINT(1)    NOT NULL,
-    policy_id                            BIGINT        NOT NULL,
-    event_ref                            VARCHAR(64)  ,
-    region                               VARCHAR(10)   NOT NULL,
-    client_ip                            VARCHAR(45)  ,
-    client_user_agent                    VARCHAR(500) ,
+    payload                              TEXT          NOT NULL,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT consent_event_policies FOREIGN KEY (policy_id) REFERENCES consent_policy(id),
-    CONSTRAINT consent_event_users FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL)
+    PRIMARY KEY (nonce)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_consent_event_user ON consent_event(user_id, consent_type);
-CREATE INDEX idx_consent_event_email ON consent_event(email_hash, consent_type);
-CREATE INDEX idx_consent_event_phone ON consent_event(phone_hash, consent_type);
-
--- Mobile device push-notification tokens (FCM / APNs via FCM)
-CREATE TABLE IF NOT EXISTS device_token (
-    id                                   BIGINT        NOT NULL,
-    user_id                              BIGINT        NOT NULL,
-    platform                             CHAR(1)       NOT NULL,
-    token                                TEXT          NOT NULL,
-    app_version                          VARCHAR(32)  ,
-    device_model                         VARCHAR(64)  ,
-    is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_seen_at                         DATETIME     ,
-    PRIMARY KEY (id),
-    CONSTRAINT device_token_users FOREIGN KEY (user_id) REFERENCES user_account(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE UNIQUE INDEX device_token_user_token_uq ON device_token(user_id, token);
-CREATE INDEX idx_device_token_user_active ON device_token(user_id, is_active);
-
--- OAuth 2.1 registered clients (Dynamic Client Registration)
-CREATE TABLE IF NOT EXISTS oauth_client (
-    id                                   BIGINT        NOT NULL,
-    client_id                            VARCHAR(64)   NOT NULL,
-    secret_hash                          VARCHAR(64)  ,
-    client_name                          VARCHAR(200) ,
-    redirect_uris                        VARCHAR(2000) NOT NULL,
-    grant_types                          VARCHAR(500)  NOT NULL,
-    scopes                               VARCHAR(1000),
-    token_auth_method                    VARCHAR(40)   NOT NULL DEFAULT 'none',
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE UNIQUE INDEX idx_oauth_client_client_id ON oauth_client(client_id);
 
 -- Subscription plans (catalog). Per-interval prices live in subscription_plan_price.
 CREATE TABLE IF NOT EXISTS subscription_plan (
@@ -463,26 +585,6 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     trial_days                           INT          ,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
-CREATE TABLE IF NOT EXISTS oauth_authorization_code (
-    id                                   BIGINT        NOT NULL,
-    code_hash                            CHAR(64)      NOT NULL,
-    client_id                            VARCHAR(64)   NOT NULL,
-    user_id                              BIGINT        NOT NULL,
-    partner_id                           BIGINT       ,
-    scopes                               VARCHAR(1000),
-    redirect_uri                         VARCHAR(2000) NOT NULL,
-    code_challenge                       VARCHAR(128)  NOT NULL,
-    code_challenge_method                VARCHAR(10)   NOT NULL,
-    resource                             VARCHAR(500) ,
-    expires_at                           DATETIME      NOT NULL,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT oauth_authorization_code_user FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT oauth_authorization_code_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE UNIQUE INDEX idx_oauth_code_hash ON oauth_authorization_code(code_hash);
 
 -- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
 CREATE TABLE IF NOT EXISTS subscription_plan_price (
@@ -507,27 +609,6 @@ CREATE TABLE IF NOT EXISTS subscription_resource (
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- OAuth 2.1 refresh tokens (hashed) with rotation family for reuse-detection; partner_id is a denormalized snapshot
-CREATE TABLE IF NOT EXISTS oauth_refresh_token (
-    id                                   BIGINT        NOT NULL,
-    token_hash                           CHAR(64)      NOT NULL,
-    family_id                            VARCHAR(64)   NOT NULL,
-    client_id                            VARCHAR(64)   NOT NULL,
-    user_id                              BIGINT        NOT NULL,
-    partner_id                           BIGINT       ,
-    scopes                               VARCHAR(1000),
-    resource                             VARCHAR(500) ,
-    expires_at                           DATETIME      NOT NULL,
-    revoked_at                           DATETIME     ,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT oauth_refresh_token_user FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT oauth_refresh_token_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE UNIQUE INDEX idx_oauth_refresh_hash ON oauth_refresh_token(token_hash);
-CREATE INDEX idx_oauth_refresh_family ON oauth_refresh_token(family_id);
-CREATE INDEX idx_oauth_refresh_user ON oauth_refresh_token(user_id);
-
 -- Resource limits per subscription plan
 CREATE TABLE IF NOT EXISTS subscription_quota (
     plan_id                              VARCHAR(20)   NOT NULL,
@@ -538,26 +619,6 @@ CREATE TABLE IF NOT EXISTS subscription_quota (
     CONSTRAINT subscription_quotas FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
     CONSTRAINT sub_resources_quotas FOREIGN KEY (resource_id) REFERENCES subscription_resource(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- OAuth / API-key credentials for partner connections to external providers
-CREATE TABLE IF NOT EXISTS partner_credential (
-    id                                   BIGINT        NOT NULL,
-    partner_id                           BIGINT        NOT NULL,
-    entity_id                            BIGINT        NOT NULL DEFAULT 0,
-    provider                             VARCHAR(30)   NOT NULL,
-    connection_type                      CHAR(1)       NOT NULL DEFAULT 'O',
-    cred_ref                             TEXT          NOT NULL,
-    api_endpoint                         VARCHAR(255) ,
-    status                               CHAR(1)       NOT NULL DEFAULT 'A',
-    rev                                  INT           NOT NULL DEFAULT 0,
-    lease_until                          DATETIME     ,
-    issued_at                            DATETIME     ,
-    last_checked                         DATETIME     ,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT partner_credential_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE UNIQUE INDEX partner_credential_uq ON partner_credential(partner_id, entity_id, provider);
 
 -- Optional add-on features with separate pricing
 CREATE TABLE IF NOT EXISTS subscription_addon (
@@ -572,15 +633,6 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
     PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Single-use, TTL-bounded nonces (OAuth connect-state, JWT handoff). Natural key, no sequence.
-CREATE TABLE IF NOT EXISTS auth_nonce (
-    nonce                                VARCHAR(64)   NOT NULL,
-    purpose                              VARCHAR(20)   NOT NULL,
-    payload                              TEXT          NOT NULL,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (nonce)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Active plan subscriptions per business partner
@@ -679,6 +731,30 @@ CREATE TABLE IF NOT EXISTS payment_method (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_payment_method_default ON payment_method(partner_id, is_default);
 
+-- Saved payment methods for end users (cards, wallets, bank accounts).
+-- Distinct from `payment_method`, which is partner-scoped for SaaS
+-- billing — this row is per (user_id), the consumer cards a user has
+-- on file for in-bound payments. provider_token is the provider's
+-- reusable handle (Stripe PaymentMethod id, SetupIntent id, etc.);
+-- raw card numbers / IBANs / SWIFT never land here.
+CREATE TABLE IF NOT EXISTS user_payment_method (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    method_type                          VARCHAR(20)   NOT NULL,
+    provider                             VARCHAR(30)   NOT NULL,
+    provider_token                       VARCHAR(255)  NOT NULL,
+    last_four                            VARCHAR(4)   ,
+    brand                                VARCHAR(20)  ,
+    expiry_month                         SMALLINT     ,
+    expiry_year                          SMALLINT     ,
+    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    is_default                           TINYINT(1)    NOT NULL DEFAULT 0,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_user_payment_method_user ON user_payment_method(user_id, is_default);
+
 -- Versioned (user, partner) bank account details for out-bound payouts.
 -- Owned by keel/payout. Raw routing details live with the provider
 -- (Airwallex / Stripe Connect / Wise); this row carries only the
@@ -717,62 +793,48 @@ CREATE INDEX user_bank_info_active_uq ON user_bank_info(user_id, partner_id);
 CREATE UNIQUE INDEX user_bank_info_id_partner_uq ON user_bank_info(id, partner_id);
 CREATE INDEX idx_user_bank_info_partner ON user_bank_info(partner_id);
 
--- Saved payment methods for end users (cards, wallets, bank accounts).
--- Distinct from `payment_method`, which is partner-scoped for SaaS
--- billing — this row is per (user_id), the consumer cards a user has
--- on file for in-bound payments. provider_token is the provider's
--- reusable handle (Stripe PaymentMethod id, SetupIntent id, etc.);
--- raw card numbers / IBANs / SWIFT never land here.
-CREATE TABLE IF NOT EXISTS user_payment_method (
+-- Raw inbound payout-provider webhooks — durable event-id idempotency +
+-- audit for account-lifecycle and transfer-lifecycle events. Financial
+-- events must never rely on a process-local or expiring cache; the
+-- UNIQUE (provider, event_id) index is the authoritative race guard.
+CREATE TABLE IF NOT EXISTS payout_webhook_log (
     id                                   BIGINT        NOT NULL,
-    user_id                              BIGINT        NOT NULL,
-    method_type                          VARCHAR(20)   NOT NULL,
-    provider                             VARCHAR(30)   NOT NULL,
-    provider_token                       VARCHAR(255)  NOT NULL,
-    last_four                            VARCHAR(4)   ,
-    brand                                VARCHAR(20)  ,
-    expiry_month                         SMALLINT     ,
-    expiry_year                          SMALLINT     ,
-    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
-    is_default                           TINYINT(1)    NOT NULL DEFAULT 0,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id)
+    provider                             CHAR(2)       NOT NULL,
+    event_id                             VARCHAR(255)  NOT NULL,
+    event_type                           VARCHAR(100)  NOT NULL,
+    provider_account_id                  VARCHAR(100) ,
+    provider_transfer_id                 VARCHAR(255) ,
+    processing_status                    CHAR(1)       NOT NULL DEFAULT 'R',
+    error_message                        TEXT         ,
+    raw_payload                          TEXT         ,
+    received_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    processed_at                         DATETIME     ,
+    PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_user_payment_method_user ON user_payment_method(user_id, is_default);
+CREATE UNIQUE INDEX payout_webhook_log_uq ON payout_webhook_log(provider, event_id);
+CREATE INDEX idx_payout_webhook_transfer ON payout_webhook_log(provider_transfer_id);
 
--- Per-table custom actions surfaced as buttons in CRUD UIs. Each row
--- registers ONE action; the downstream application must also (a) seed
--- the matching authorization_object + authorization_object_action rows
--- so roles can grant access, and (b) register an HTTP handler at the
--- conventional URL POST /<rest_prefix>/<table_name>/<action_name>.
--- 
--- authorization_object.id mirrors the uppercased table name and
--- authorization_object_action.action mirrors the uppercased action_name
--- — gives each table its own action namespace so the same action name
--- ('assign', 'enable', 'calculate') can mean different things on
--- different tables without a shared auth dimension.
--- 
--- record_specific=TRUE  → button renders next to per-row edit/delete.
--- record_specific=FALSE → button renders next to the "New Record"
---                         control at the table-level toolbar.
--- 
--- Reserved action_name values that collide with generic CRUD subpaths
--- (list / get / post / delete / get-paginated) are rejected at REST
--- service boot.
-CREATE TABLE IF NOT EXISTS table_action (
-    table_name                           VARCHAR(80)   NOT NULL,
-    action_name                          VARCHAR(30)   NOT NULL,
-    caption                              VARCHAR(80)   NOT NULL,
-    icon                                 VARCHAR(40)  ,
-    record_specific                      TINYINT(1)    NOT NULL DEFAULT 0,
-    action_kind                          CHAR(1)       NOT NULL DEFAULT 'P',
-    method_name                          VARCHAR(80)  ,
-    display_order                        SMALLINT      NOT NULL DEFAULT 10,
-    confirm_message                      VARCHAR(200) ,
-    PRIMARY KEY (table_name, action_name)
+-- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
+CREATE TABLE IF NOT EXISTS outbox_event (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    aggregate_type                       VARCHAR(64)   NOT NULL,
+    aggregate_id                         VARCHAR(128)  NOT NULL,
+    event_type                           VARCHAR(64)   NOT NULL,
+    payload                              TEXT         ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    attempts                             INT           NOT NULL DEFAULT 0,
+    available_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    lease_until                          DATETIME     ,
+    lease_token                          BIGINT       ,
+    last_error                           TEXT         ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT outbox_event_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_table_action_table ON table_action(table_name);
+CREATE INDEX idx_outbox_drain ON outbox_event(status, available_at);
+CREATE INDEX idx_outbox_aggregate ON outbox_event(aggregate_type, aggregate_id);
 
 -- Billing invoices per partner (provider-issued or self-scheduled)
 CREATE TABLE IF NOT EXISTS invoice (
@@ -849,8 +911,8 @@ CREATE TABLE IF NOT EXISTS subscription_invoice_line (
     addon_id                             VARCHAR(20)  ,
     PRIMARY KEY (invoice_id, invoice_line_seq),
     CONSTRAINT subscription_invoice_lines FOREIGN KEY (invoice_id, invoice_line_seq) REFERENCES invoice_line(invoice_id, seq),
-    CONSTRAINT subscription_invoice_line_plans FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
-    CONSTRAINT subscription_invoice_line_addons FOREIGN KEY (addon_id) REFERENCES subscription_addon(id),
+    CONSTRAINT subs_plan_invoice_lines FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
+    CONSTRAINT subs_addon_invoice_lines FOREIGN KEY (addon_id) REFERENCES subscription_addon(id),
     CONSTRAINT chk_sub_invoice_line_one_of CHECK ((plan_id IS NOT NULL AND addon_id IS NULL) OR (plan_id IS NULL AND addon_id IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -909,68 +971,6 @@ CREATE UNIQUE INDEX inv_line_pmt_ref_uq ON invoice_line_payment(provider_ref);
 CREATE INDEX idx_inv_line_pmt_payment ON invoice_line_payment(payment_record_id);
 CREATE INDEX idx_inv_line_pmt_line ON invoice_line_payment(invoice_id, invoice_line_seq);
 
--- Raw inbound payout-provider webhooks — durable event-id idempotency +
--- audit for account-lifecycle and transfer-lifecycle events. Financial
--- events must never rely on a process-local or expiring cache; the
--- UNIQUE (provider, event_id) index is the authoritative race guard.
-CREATE TABLE IF NOT EXISTS payout_webhook_log (
-    id                                   BIGINT        NOT NULL,
-    provider                             CHAR(2)       NOT NULL,
-    event_id                             VARCHAR(255)  NOT NULL,
-    event_type                           VARCHAR(100)  NOT NULL,
-    provider_account_id                  VARCHAR(100) ,
-    provider_transfer_id                 VARCHAR(255) ,
-    processing_status                    CHAR(1)       NOT NULL DEFAULT 'R',
-    error_message                        TEXT         ,
-    raw_payload                          TEXT         ,
-    received_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    processed_at                         DATETIME     ,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE UNIQUE INDEX payout_webhook_log_uq ON payout_webhook_log(provider, event_id);
-CREATE INDEX idx_payout_webhook_transfer ON payout_webhook_log(provider_transfer_id);
-
--- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
-CREATE TABLE IF NOT EXISTS outbox_event (
-    id                                   BIGINT        NOT NULL,
-    partner_id                           BIGINT       ,
-    aggregate_type                       VARCHAR(64)   NOT NULL,
-    aggregate_id                         VARCHAR(128)  NOT NULL,
-    event_type                           VARCHAR(64)   NOT NULL,
-    payload                              TEXT         ,
-    status                               CHAR(1)       NOT NULL DEFAULT 'P',
-    attempts                             INT           NOT NULL DEFAULT 0,
-    available_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    lease_until                          DATETIME     ,
-    lease_token                          BIGINT       ,
-    last_error                           TEXT         ,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    CONSTRAINT outbox_event_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-CREATE INDEX idx_outbox_drain ON outbox_event(status, available_at);
-CREATE INDEX idx_outbox_aggregate ON outbox_event(aggregate_type, aggregate_id);
-
--- Catalog of runtime configuration flags loaded into common.BaseConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
-CREATE TABLE IF NOT EXISTS application_config_flag (
-    id                                   VARCHAR(80)   NOT NULL,
-    data_type                            VARCHAR(20)   NOT NULL DEFAULT 'string',
-    needs_restart                        TINYINT(1)    NOT NULL DEFAULT 0,
-    default_value                        TEXT         ,
-    description                          TEXT         ,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Per-node assigned values for application_config_flag. node_id identifies the runtime node/process (matched against --node_id). Most single-node deployments use 0; multi-node deployments assign values per node. Missing rows fall back to application_config_flag.default_value.
-CREATE TABLE IF NOT EXISTS application_config_value (
-    node_id                              INT           NOT NULL DEFAULT 0,
-    flag_id                              VARCHAR(80)   NOT NULL,
-    assigned_value                       TEXT         ,
-    PRIMARY KEY (node_id, flag_id),
-    CONSTRAINT application_config_values FOREIGN KEY (flag_id) REFERENCES application_config_flag(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- Agency capability and approval state for a business partner. Referral
 -- commission is available to every approved agency; wholesale_allowed is a
 -- permission for per-client wholesale assignments, not a global billing mode.
@@ -1005,8 +1005,8 @@ CREATE TABLE IF NOT EXISTS agency_client_invitation (
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT invitation_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
-    CONSTRAINT invitation_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE SET NULL,
+    CONSTRAINT agency_client_invitations FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
+    CONSTRAINT agency_invitations_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE SET NULL,
     CONSTRAINT invitation_accepted_by FOREIGN KEY (accepted_by) REFERENCES user_account(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX invitation_token_uq ON agency_client_invitation(invite_token);
@@ -1066,7 +1066,7 @@ CREATE TABLE IF NOT EXISTS agency_payout_profile (
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (agency_partner_id),
-    CONSTRAINT agency_payout_profile_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
+    CONSTRAINT agencies_payout_profile FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
     CONSTRAINT agency_payout_profile_bank_info FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id),
     CONSTRAINT chk_agency_payout_profile_status CHECK (status IN ('A', 'I'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1080,8 +1080,8 @@ CREATE TABLE IF NOT EXISTS agency_client_rate (
     commission_rate_bp                   INT           NOT NULL,
     first_earned_at                      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (agency_partner_id, client_partner_id),
-    CONSTRAINT client_rate_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
-    CONSTRAINT client_rate_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE CASCADE,
+    CONSTRAINT agency_client_rates FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
+    CONSTRAINT agency_rates_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE CASCADE,
     CONSTRAINT chk_agency_client_rate CHECK (commission_rate_bp > 0 AND commission_rate_bp <= 10000)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1142,8 +1142,8 @@ CREATE TABLE IF NOT EXISTS agency_payout (
     failure_message                      TEXT         ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT payout_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id),
-    CONSTRAINT payout_destination_version FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id),
+    CONSTRAINT agency_payouts FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id),
+    CONSTRAINT payout_destination_account FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id),
     CONSTRAINT chk_agency_payout_amount CHECK (amount_minor > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX agency_payout_idem_uq ON agency_payout(idempotency_key);
@@ -1161,7 +1161,7 @@ CREATE TABLE IF NOT EXISTS agency_payout_line (
     amount_minor                         BIGINT        NOT NULL,
     released_at                          DATETIME     ,
     PRIMARY KEY (payout_id, commission_id),
-    CONSTRAINT payout_lines FOREIGN KEY (payout_id) REFERENCES agency_payout(id),
+    CONSTRAINT agency_payout_lines FOREIGN KEY (payout_id) REFERENCES agency_payout(id),
     CONSTRAINT payout_line_commission FOREIGN KEY (commission_id) REFERENCES agency_commission(id),
     CONSTRAINT chk_agency_payout_line_amount CHECK (amount_minor <> 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

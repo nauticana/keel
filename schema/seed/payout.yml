@@ -1,0 +1,59 @@
+comment: Payout seed data
+order: 150
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [payout_provider, Payout Provider]
+      - [tax_id_type, Tax ID Type]
+      - [bank_info_status, Bank Info Status]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [payout_provider, AW, Airwallex]
+      - [payout_provider, SC, Stripe Connect]
+      - [payout_provider, WI, Wise]
+      - [tax_id_type, S, SIN (Canada)]
+      - [tax_id_type, N, SSN or EIN (USA)]
+      - [tax_id_type, E, EIN (USA business)]
+      - [tax_id_type, V, VAT (EU)]
+      - [tax_id_type, O, Other]
+      - [bank_info_status, A, Active]
+      - [bank_info_status, S, Superseded]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [payout_provider, user_bank_info, provider]
+      - [tax_id_type, user_bank_info, tax_id_type]
+      - [bank_info_status, user_bank_info, status]
+      - [payout_provider, payout_webhook_log, provider]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [user_bank_info, user_bank_info]
+      - [payout_webhook_log, payout_webhook_log]
+  - table: application_menu
+    columns: [display_order, id, caption]
+    rows:
+      - [95, payouts, Payouts]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [10, true, payouts, user_bank_infos, user_bank_info, Bank Accounts]
+      - [20, false, payouts, payout_webhook_logs, payout_webhook_log, Webhook Logs]
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [user_bank_info, created_at, R]
+      - [user_bank_info, updated_at, U]
+      - [user_bank_info, superseded_at, R]
+      - [user_bank_info, tax_id_encrypted, S]
+      - [payout_webhook_log, received_at, R]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [PAYMENT_ADMIN, PAGE, ACCESS, user_bank_infos]
+      - [PAYMENT_ADMIN, TABLE, SELECT, user_bank_info]
+      - [PAYMENT_ADMIN, TABLE, UPDATE, user_bank_info]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, payout_webhook_logs]
+      - [PAYMENT_ADMIN, TABLE, SELECT, payout_webhook_log]

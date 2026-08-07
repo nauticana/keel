@@ -1,0 +1,71 @@
+table: agency_client_invitation
+comment: |
+  An agency's staged and invited prospective clients. Prospects need not be
+  users or partners yet; client_partner_id is populated only after the
+  invitee has a partner and explicitly accepts the delegation.
+columns:
+  - name: id
+    type: BIGINT
+  - name: agency_partner_id
+    type: BIGINT
+  - name: client_name
+    type: VARCHAR(200)
+  - name: client_email
+    type: VARCHAR(255)
+    nullable: true
+  - name: client_website
+    type: VARCHAR(255)
+    nullable: true
+  - name: invite_token
+    type: VARCHAR(64)
+    nullable: true
+  - name: status
+    type: CHAR(1)
+    default: S
+  - name: client_partner_id
+    type: BIGINT
+    nullable: true
+  - name: accepted_by
+    type: BIGINT
+    nullable: true
+  - name: invited_at
+    type: TIMESTAMP
+    nullable: true
+  - name: accepted_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agency_client_invitation_seq
+  column: id
+indexes:
+  - name: invitation_token_uq
+    columns: [invite_token]
+    unique: true
+  - name: idx_agency_client_invitation
+    columns: [agency_partner_id, status]
+foreign_keys:
+  - name: agency_client_invitations
+    columns: [agency_partner_id]
+    references:
+      table: agency_profile
+      columns: [agency_partner_id]
+    on_delete: CASCADE
+  - name: agency_invitations_client
+    columns: [client_partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: SET NULL
+  - name: invitation_accepted_by
+    columns: [accepted_by]
+    references:
+      table: user_account
+      columns: [id]
+    on_delete: SET NULL

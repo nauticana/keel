@@ -1,0 +1,15 @@
+comment: Worker seed data
+order: 40
+seeds:
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [service_registry, service_registry]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [110, false, setup, service_registries, service_registry, Service Registries]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [APP_ADMIN, TABLE, SELECT, service_registry]

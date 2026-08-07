@@ -1,0 +1,38 @@
+table: subscription_invoice_line
+comment: |
+  Subscription-domain extension of a generic invoice line: names the
+  plan or add-on the line bills. Exactly one of plan_id / addon_id is
+  set (check-enforced). Lines with no row here are non-subscription
+  charges (fees, adjustments). Keeps invoice / invoice_line
+  domain-neutral for finance purposes.
+columns:
+  - name: invoice_id
+    type: BIGINT
+  - name: invoice_line_seq
+    type: INTEGER
+  - name: plan_id
+    type: VARCHAR(20)
+    nullable: true
+  - name: addon_id
+    type: VARCHAR(20)
+    nullable: true
+primary_key: [invoice_id, invoice_line_seq]
+checks:
+  - name: chk_sub_invoice_line_one_of
+    expression: "(plan_id IS NOT NULL AND addon_id IS NULL) OR (plan_id IS NULL AND addon_id IS NOT NULL)"
+foreign_keys:
+  - name: subscription_invoice_lines
+    columns: [invoice_id, invoice_line_seq]
+    references:
+      table: invoice_line
+      columns: [invoice_id, seq]
+  - name: subs_plan_invoice_lines
+    columns: [plan_id]
+    references:
+      table: subscription_plan
+      columns: [id]
+  - name: subs_addon_invoice_lines
+    columns: [addon_id]
+    references:
+      table: subscription_addon
+      columns: [id]

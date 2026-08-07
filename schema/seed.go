@@ -19,9 +19,9 @@ type SeedFile struct {
 
 // SeedTable represents INSERT data for a single table.
 type SeedTable struct {
-	Table   string           `yaml:"table"`
-	Columns []string         `yaml:"columns"`
-	Rows    [][]any          `yaml:"rows"`
+	Table   string   `yaml:"table"`
+	Columns []string `yaml:"columns"`
+	Rows    [][]any  `yaml:"rows"`
 }
 
 // ParseSeedFile parses a single seed YAML file.
@@ -37,7 +37,7 @@ func ParseSeedFile(path string) (*SeedFile, error) {
 	return &sf, nil
 }
 
-// ParseSeedDir parses all seed YAML files in a directory.
+// ParseSeedDir parses all YAML files in a seed directory.
 func ParseSeedDir(dir string) ([]*SeedFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -52,16 +52,13 @@ func ParseSeedDir(dir string) ([]*SeedFile, error) {
 		if ext != ".yml" && ext != ".yaml" {
 			continue
 		}
-		if !strings.Contains(entry.Name(), "seed") {
-			continue
-		}
 		sf, err := ParseSeedFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, err
 		}
 		seeds = append(seeds, sf)
 	}
-	sort.Slice(seeds, func(i, j int) bool {
+	sort.SliceStable(seeds, func(i, j int) bool {
 		return seeds[i].Order < seeds[j].Order
 	})
 	return seeds, nil

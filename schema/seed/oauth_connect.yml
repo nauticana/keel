@@ -1,0 +1,27 @@
+comment: OAuth Connect seed data
+order: 120
+seeds:
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [partner_credential, partner_credential]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [PARTNER_CREDENTIAL, Partner Connection Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [PARTNER_CREDENTIAL, MANAGE, Manage Connections]
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [partner_credential, created_at, R]
+      - [partner_credential, cred_ref, S]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_credentials]
+      - [PARTNER_ADMIN, PARTNER_CREDENTIAL, MANAGE, partner_credential]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_credential]
+      - [PARTNER_ADMIN, TABLE, DELETE, partner_credential]

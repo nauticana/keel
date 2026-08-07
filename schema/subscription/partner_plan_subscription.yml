@@ -1,0 +1,76 @@
+table: partner_plan_subscription
+comment: Active plan subscriptions per business partner
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: plan_id
+    type: VARCHAR(20)
+  - name: begda
+    type: TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: monthly_cost
+    type: NUMERIC(18,2)
+  - name: currency
+    type: CHAR(3)
+  - name: status
+    type: CHAR(1)
+  - name: auto_renew
+    type: BOOLEAN
+    default: "TRUE"
+  - name: provider_subscription_id
+    type: VARCHAR(64)
+    nullable: true
+  # billing_cycle: how often charged (drives next_charge_date). term_count×term_type:
+  # the committed term snapshot at purchase (drives renewal_date = term end).
+  # amount_minor: price per term_type unit, snapshot so committed pricing is fixed.
+  - name: billing_cycle
+    type: CHAR(1)
+    nullable: true
+  - name: term_count
+    type: INTEGER
+    nullable: true
+  - name: term_type
+    type: CHAR(1)
+    nullable: true
+  - name: amount_minor
+    type: BIGINT
+    nullable: true
+  # renewal_date = end of the current term (when it renews if auto_renew, else ends).
+  # next_charge_date = when the next installment is taken (begda + n×billing_cycle).
+  - name: renewal_date
+    type: TIMESTAMP
+    nullable: true
+  - name: next_charge_date
+    type: TIMESTAMP
+    nullable: true
+  - name: cancelled_at
+    type: TIMESTAMP
+    nullable: true
+  - name: effective_cancel_date
+    type: TIMESTAMP
+    nullable: true
+  # trial_end (trial mode) and seats (seat-based modifier — orthogonal to the
+  # activation mode, so it overlays any policy, not a peer enum value).
+  - name: trial_end
+    type: TIMESTAMP
+    nullable: true
+  - name: seats
+    type: INTEGER
+    nullable: true
+primary_key: [partner_id, plan_id, begda]
+foreign_keys:
+  - name: partner_plan_subscriptions
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_subscriptions_plan
+    columns: [plan_id]
+    references:
+      table: subscription_plan
+      columns: [id]
+indexes:
+  - name: idx_partner_plan_subscription_provider_sub
+    columns: [provider_subscription_id]

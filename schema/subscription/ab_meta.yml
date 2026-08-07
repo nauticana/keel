@@ -1,0 +1,9 @@
+tables:
+  - subscription_plan
+  - subscription_plan_price
+  - subscription_resource
+  - subscription_quota
+  - subscription_addon
+  - partner_plan_subscription
+  - partner_addon_subscription
+  - usage_ledger

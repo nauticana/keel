@@ -299,7 +299,7 @@ func (r *SQLWebhookRepository) VerifySchema(ctx context.Context) error {
 		return fmt.Errorf("verify webhook log schema: %w", err)
 	}
 	if len(res.Rows) == 0 {
-		return fmt.Errorf("payment_webhook_log: missing UNIQUE index on (provider, event_id) — idempotency cannot be enforced without it; apply the index defined in schema/basis/25_payment_webhook_log.yml")
+		return fmt.Errorf("payment_webhook_log: missing UNIQUE index on (provider, event_id) — idempotency cannot be enforced without it; apply the index defined in schema/payment/payment_webhook_log.yml")
 	}
 	res, err = r.queryService(ctx).Query(ctx, qVerifyWebhookColumns)
 	if err != nil {

@@ -171,7 +171,7 @@ func (r *SQLWebhookLog) verify(ctx context.Context, qs port.QueryService) error 
 		return fmt.Errorf("payout webhook log requires PostgreSQL (pg_indexes probe failed): %w", err)
 	}
 	if len(res.Rows) == 0 || !indexDefCovers(common.AsString(res.Rows[0][0]), "(provider, event_id)", "") {
-		return fmt.Errorf("payout_webhook_log: unique index payout_webhook_log_uq missing or malformed; apply schema/basis/37_payout_webhook_log.yml")
+		return fmt.Errorf("payout_webhook_log: unique index payout_webhook_log_uq missing or malformed; apply schema/payout/payout_webhook_log.yml")
 	}
 	r.verified = true
 	return nil

@@ -37,7 +37,7 @@ const (
 // Downstream projects that add their own cross-partner role can append
 // to this slice at boot before AbstractRepository.Init runs and re-build
 // the QCheckGlobalRole SQL via buildGlobalRoleQuery. The default set
-// matches the framework roles seeded by schema/security_seed.yml.
+// matches the framework roles seeded by schema/seed/core.yml.
 var GlobalRoleIDs = []string{
 	"SUPER",
 	"BUSINESS_ADMIN",

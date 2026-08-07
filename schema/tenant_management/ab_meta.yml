@@ -1,0 +1,5 @@
+tables:
+  - business_partner
+  - partner_user
+  - partner_address
+  - partner_domain

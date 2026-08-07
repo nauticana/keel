@@ -11,7 +11,7 @@ clean:
 # Schema artifacts
 # ---------------------------------------------------------------------------
 # `gen-pgsql` and `gen-mysql` regenerate the committed reference DDL from
-# the YAML source under schema/basis and schema/security. The output
+# the grouped YAML source under schema/. The output
 # files are build artifacts — they MUST be regenerated whenever a YAML
 # in schema/ changes. `verify-schema` is the CI gate that fails the
 # build if the committed files have drifted from the YAML source.
@@ -20,10 +20,9 @@ clean:
 # keel upgrades against the previous release without running schemagen
 # themselves.
 
-# SCHEMA_DIRS is the comma-separated list of input directories the
-# generator walks. Order matters for FK resolution: basis must come
-# before security since security tables reference basis tables.
-SCHEMA_DIRS := schema/basis,schema/security
+# The generator walks component directories recursively and ignores
+# schema/dependency.yml plus schema/seed/.
+SCHEMA_DIRS := schema
 
 gen-pgsql: build
 	./bin/schemagen -dialect pgsql -input $(SCHEMA_DIRS) -out schema/basis_pgsql.sql

@@ -19,7 +19,7 @@ type Dialect interface {
 }
 
 // commentBlock prefixes every line of a (possibly multi-line) YAML
-// comment with `-- ` so the emitted SQL is parseable. Without per-line
+// comment with a SQL line-comment marker so the emitted SQL is parseable. Without per-line
 // prefixing, the second line of a multi-line comment becomes unquoted
 // text and the DB rejects the file with a syntax error. Trailing
 // newlines on the input are trimmed; the returned string ends with one
@@ -29,11 +29,17 @@ func commentBlock(comment string) string {
 		return ""
 	}
 	comment = strings.TrimRight(comment, "\n")
+	if comment == "" {
+		return ""
+	}
 	lines := strings.Split(comment, "\n")
 	var b strings.Builder
 	for _, line := range lines {
-		b.WriteString("-- ")
-		b.WriteString(line)
+		b.WriteString("--")
+		if line != "" {
+			b.WriteByte(' ')
+			b.WriteString(line)
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()

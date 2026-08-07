@@ -1,0 +1,46 @@
+table: payout_webhook_log
+comment: |
+  Raw inbound payout-provider webhooks — durable event-id idempotency +
+  audit for account-lifecycle and transfer-lifecycle events. Financial
+  events must never rely on a process-local or expiring cache; the
+  UNIQUE (provider, event_id) index is the authoritative race guard.
+columns:
+  - name: id
+    type: BIGINT
+  - name: provider
+    type: CHAR(2)
+  - name: event_id
+    type: VARCHAR(255)
+  - name: event_type
+    type: VARCHAR(100)
+  - name: provider_account_id
+    type: VARCHAR(100)
+    nullable: true
+  - name: provider_transfer_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: processing_status
+    type: CHAR(1)
+    default: R
+  - name: error_message
+    type: TEXT
+    nullable: true
+  - name: raw_payload
+    type: TEXT
+    nullable: true
+  - name: received_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: processed_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: payout_webhook_log_seq
+  column: id
+indexes:
+  - name: payout_webhook_log_uq
+    columns: [provider, event_id]
+    unique: true
+  - name: idx_payout_webhook_transfer
+    columns: [provider_transfer_id]

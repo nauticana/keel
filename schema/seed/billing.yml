@@ -1,0 +1,33 @@
+comment: Billing seed data
+order: 170
+seeds:
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [partner_payment_records, S, "*"]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [payment_record, payment_record]
+      - [invoice_line_payment, invoice_line_payment]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [10, false, payments, payment_records, payment_record, Payment Records]
+      - [50, false, payments, invoice_line_payments, invoice_line_payment, Payment Allocations]
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [payment_record, created_at, R]
+      - [invoice_line_payment, created_at, R]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [APP_ADMIN, PAGE, ACCESS, payment_records]
+      - [APP_ADMIN, TABLE, SELECT, payment_record]
+      - [BUSINESS_ADMIN, PAGE, ACCESS, payment_records]
+      - [BUSINESS_ADMIN, TABLE, SELECT, payment_record]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, payment_records]
+      - [PAYMENT_ADMIN, TABLE, SELECT, payment_record]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, invoice_line_payments]
+      - [PAYMENT_ADMIN, TABLE, SELECT, invoice_line_payment]

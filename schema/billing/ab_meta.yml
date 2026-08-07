@@ -1,0 +1,7 @@
+tables:
+  - invoice
+  - invoice_line
+  - partner_billing_customer
+  - subscription_invoice_line
+  - payment_record
+  - invoice_line_payment

@@ -345,7 +345,7 @@ func (c *BaseConfig) LoadValues(ctx context.Context, db port.DatabaseRepository)
 		m[AsString(row[0])] = ConfigRow{Value: AsString(row[1]), Default: AsString(row[2])}
 	}
 	if len(m) == 0 {
-		return nil, fmt.Errorf("application_config_flag catalog is empty — seed it (basis_seed.yml) before starting")
+		return nil, fmt.Errorf("application_config_flag catalog is empty — seed it (schema/seed/core.yml) before starting")
 	}
 	return m, nil
 }
@@ -596,7 +596,7 @@ func (c *BaseConfig) ApplyBase(m map[string]ConfigRow) error {
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("application_config_flag catalog is missing framework flags: %s — re-seed basis_seed.yml", strings.Join(missing, ", "))
+		return fmt.Errorf("application_config_flag catalog is missing framework flags: %s — re-seed schema/seed/core.yml", strings.Join(missing, ", "))
 	}
 	if c.DefaultCommissionRateBP <= 0 || c.DefaultCommissionRateBP > 10000 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 1 and 10000", default_commission_rate_bp))

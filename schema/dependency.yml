@@ -1,0 +1,83 @@
+# depends_on contains direct table-FK dependencies and determines DDL order.
+# seed_depends_on contains components whose tables receive this group's stock
+# seed rows. These are application-layer inclusion dependencies and do not
+# determine DDL order.
+version: 1
+groups:
+  - name: core
+    path: core
+    seed: seed/core.yml
+    depends_on: []
+    seed_depends_on: []
+
+  - name: worker
+    path: worker
+    seed: seed/worker.yml
+    depends_on: []
+    seed_depends_on: [core]
+
+  - name: geo
+    path: geo
+    seed: seed/geo.yml
+    depends_on: []
+    seed_depends_on: [core]
+
+  - name: tenant_management
+    path: tenant_management
+    seed: seed/tenant_management.yml
+    depends_on: [core, geo]
+    seed_depends_on: [core]
+
+  - name: oauth_server
+    path: oauth_server
+    seed: seed/oauth_server.yml
+    depends_on: [core]
+    seed_depends_on: []
+
+  - name: api_key_management
+    path: api_key_management
+    seed: seed/api_key_management.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: [core]
+
+  - name: oauth_connect
+    path: oauth_connect
+    seed: seed/oauth_connect.yml
+    depends_on: [tenant_management]
+    seed_depends_on: [core]
+
+  - name: subscription
+    path: subscription
+    seed: seed/subscription.yml
+    depends_on: [tenant_management]
+    seed_depends_on: [core]
+
+  - name: payment
+    path: payment
+    seed: seed/payment.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: [core]
+
+  - name: payout
+    path: payout
+    seed: seed/payout.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: [core]
+
+  - name: outbox
+    path: outbox
+    seed: seed/outbox.yml
+    depends_on: [tenant_management]
+    seed_depends_on: []
+
+  - name: billing
+    path: billing
+    seed: seed/billing.yml
+    depends_on: [tenant_management, subscription]
+    seed_depends_on: [core]
+
+  - name: agency
+    path: agency
+    seed: seed/agency.yml
+    depends_on: [core, tenant_management, payout, billing]
+    seed_depends_on: [core]

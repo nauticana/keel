@@ -1,0 +1,79 @@
+comment: Payment seed data
+order: 140
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [payment_method_type, Payment Method Type]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [payment_method_type, card, Card]
+      - [payment_method_type, bank, Bank Account]
+      - [payment_method_type, wallet, Wallet]
+      - [payment_method_type, apple_pay, Apple Pay]
+      - [payment_method_type, google_pay, Google Pay]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [payment_method_type, user_payment_method, method_type]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [partner_payment_methods, S, "*"]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [payment_webhook_log, payment_webhook_log]
+      - [payment_method, payment_method]
+      - [user_payment_method, user_payment_method]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [USER_PAYMENT_METHOD, User Payment Method Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [USER_PAYMENT_METHOD, SET_DEFAULT, Set Default]
+  - table: table_action
+    columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
+    rows:
+      - [user_payment_method, set_default, Set Default, star, P, true, 10]
+  - table: application_menu
+    columns: [display_order, id, caption]
+    rows:
+      - [90, payments, Payments]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [20, false, payments, payment_methods, payment_method, Payment Methods]
+      - [30, false, payments, payment_webhook_logs, payment_webhook_log, Webhook Logs]
+      - [40, true, payments, user_payment_methods, user_payment_method, User Payment Methods]
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [payment_method, created_at, R]
+      - [user_payment_method, created_at, R]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [APP_ADMIN, PAGE, ACCESS, payment_methods]
+      - [APP_ADMIN, PAGE, ACCESS, payment_webhook_logs]
+      - [APP_ADMIN, TABLE, SELECT, payment_method]
+      - [APP_ADMIN, TABLE, SELECT, payment_webhook_log]
+      - [BUSINESS_ADMIN, PAGE, ACCESS, payment_methods]
+      - [BUSINESS_ADMIN, PAGE, ACCESS, payment_webhook_logs]
+      - [BUSINESS_ADMIN, TABLE, SELECT, payment_method]
+      - [BUSINESS_ADMIN, TABLE, INSERT, payment_method]
+      - [BUSINESS_ADMIN, TABLE, UPDATE, payment_method]
+      - [BUSINESS_ADMIN, TABLE, DELETE, payment_method]
+      - [BUSINESS_ADMIN, TABLE, SELECT, payment_webhook_log]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, payment_methods]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, user_payment_methods]
+      - [PAYMENT_ADMIN, TABLE, SELECT, payment_method]
+      - [PAYMENT_ADMIN, TABLE, INSERT, payment_method]
+      - [PAYMENT_ADMIN, TABLE, UPDATE, payment_method]
+      - [PAYMENT_ADMIN, TABLE, DELETE, payment_method]
+      - [PAYMENT_ADMIN, TABLE, SELECT, user_payment_method]
+      - [PAYMENT_ADMIN, TABLE, DELETE, user_payment_method]
+      - [PAYMENT_ADMIN, USER_PAYMENT_METHOD, SET_DEFAULT, user_payment_method]

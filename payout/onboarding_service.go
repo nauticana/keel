@@ -236,7 +236,7 @@ func (s *OnboardingService) ready(ctx context.Context) (port.QueryService, error
 		return nil, fmt.Errorf("payout requires PostgreSQL (pg_indexes probe failed): %w", err)
 	}
 	if len(res.Rows) == 0 || !indexDefCovers(kcommon.AsString(res.Rows[0][0]), "(user_id, partner_id)", "status = 'A'") {
-		return nil, fmt.Errorf("user_bank_info: unique index user_bank_info_active_uq missing or malformed; apply schema/basis/28_user_bank_info.yml")
+		return nil, fmt.Errorf("user_bank_info: unique index user_bank_info_active_uq missing or malformed; apply schema/payout/user_bank_info.yml")
 	}
 	s.verified = true
 	return qs, nil

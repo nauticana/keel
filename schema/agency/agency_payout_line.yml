@@ -1,0 +1,34 @@
+table: agency_payout_line
+comment: |
+  Allocation of commission ledger entries to aggregate payouts. A null
+  released_at marks the live allocation; terminal failure releases the line.
+columns:
+  - name: payout_id
+    type: BIGINT
+  - name: commission_id
+    type: BIGINT
+  - name: amount_minor
+    type: BIGINT
+  - name: released_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [payout_id, commission_id]
+checks:
+  - name: chk_agency_payout_line_amount
+    expression: "amount_minor <> 0"
+indexes:
+  - name: agency_payout_line_live_uq
+    columns: [commission_id]
+    unique: true
+    where: "released_at IS NULL"
+foreign_keys:
+  - name: agency_payout_lines
+    columns: [payout_id]
+    references:
+      table: agency_payout
+      columns: [id]
+  - name: payout_line_commission
+    columns: [commission_id]
+    references:
+      table: agency_commission
+      columns: [id]

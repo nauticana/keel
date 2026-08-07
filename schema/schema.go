@@ -2,9 +2,11 @@ package schema
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -86,6 +88,21 @@ type Sequence struct {
 	StartWith   int    `yaml:"start_with,omitempty"`
 }
 
+type tableGroupMeta struct {
+	Tables []string `yaml:"tables"`
+}
+
+type dependencyPaths struct {
+	Groups []struct {
+		Path string `yaml:"path"`
+	} `yaml:"groups"`
+}
+
+type tableSource struct {
+	Path        string
+	OrderedMeta bool
+}
+
 // ParseFile parses a single YAML schema file.
 func ParseFile(path string) (*Table, error) {
 	data, err := os.ReadFile(path)
@@ -117,79 +134,203 @@ func ParseFile(path string) (*Table, error) {
 	return &table, nil
 }
 
-// ParseDir parses all YAML files in a directory (non-recursive).
+// ParseDir parses all table YAML files below a directory recursively.
 func ParseDir(dir string) (*Schema, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory %s: %w", dir, err)
-	}
-	schema := &Schema{
-		tableMap: make(map[string]*Table),
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		ext := filepath.Ext(entry.Name())
-		if ext != ".yml" && ext != ".yaml" {
-			continue
-		}
-		table, err := ParseFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := schema.tableMap[table.Name]; exists {
-			return nil, fmt.Errorf("duplicate table name %q", table.Name)
-		}
-		schema.tableMap[table.Name] = table
-		schema.Tables = append(schema.Tables, table)
-	}
-	// Sort by order field, then by name for stability
-	sort.Slice(schema.Tables, func(i, j int) bool {
-		if schema.Tables[i].Order != schema.Tables[j].Order {
-			return schema.Tables[i].Order < schema.Tables[j].Order
-		}
-		return schema.Tables[i].Name < schema.Tables[j].Name
-	})
-	return schema, nil
+	return ParseDirs([]string{dir})
 }
 
-// ParseDirs parses multiple directories in order, merging all tables.
+// ParseDirs recursively parses multiple directories and merges all tables.
+// A schema root may contain dependency.yml and a seed directory; neither is a
+// table definition, so both are excluded from the recursive walk.
 func ParseDirs(dirs []string) (*Schema, error) {
 	schema := &Schema{
 		tableMap: make(map[string]*Table),
 	}
+	var hasOrderedMetadata bool
+	var hasLegacyOrder bool
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
+		sources, err := tableSources(dir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read directory %s: %w", dir, err)
+			return nil, err
 		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			ext := filepath.Ext(entry.Name())
-			if ext != ".yml" && ext != ".yaml" {
-				continue
-			}
-			table, err := ParseFile(filepath.Join(dir, entry.Name()))
+		for _, source := range sources {
+			table, err := ParseFile(source.Path)
 			if err != nil {
 				return nil, err
 			}
+			if source.OrderedMeta {
+				hasOrderedMetadata = true
+				if table.Order != 0 {
+					return nil, fmt.Errorf("table %q declares order in %s; put creation order in %s instead",
+						table.Name, source.Path, filepath.Join(filepath.Dir(source.Path), "ab_meta.yml"))
+				}
+				filename := strings.TrimSuffix(filepath.Base(source.Path), filepath.Ext(source.Path))
+				if filename != table.Name {
+					return nil, fmt.Errorf("table %q must be stored as %s.yml, got %s", table.Name, table.Name, source.Path)
+				}
+			} else {
+				hasLegacyOrder = true
+			}
 			if _, exists := schema.tableMap[table.Name]; exists {
 				return nil, fmt.Errorf("duplicate table name %q", table.Name)
+			}
+			if source.OrderedMeta {
+				table.Order = len(schema.Tables) + 1
 			}
 			schema.tableMap[table.Name] = table
 			schema.Tables = append(schema.Tables, table)
 		}
 	}
-	sort.Slice(schema.Tables, func(i, j int) bool {
-		if schema.Tables[i].Order != schema.Tables[j].Order {
-			return schema.Tables[i].Order < schema.Tables[j].Order
-		}
-		return schema.Tables[i].Name < schema.Tables[j].Name
-	})
+	if hasOrderedMetadata && hasLegacyOrder {
+		return nil, fmt.Errorf("cannot mix ab_meta.yml ordered groups with legacy per-table order files")
+	}
+	if hasLegacyOrder {
+		sort.Slice(schema.Tables, func(i, j int) bool {
+			if schema.Tables[i].Order != schema.Tables[j].Order {
+				return schema.Tables[i].Order < schema.Tables[j].Order
+			}
+			return schema.Tables[i].Name < schema.Tables[j].Name
+		})
+	}
 	return schema, nil
+}
+
+func tableSources(dir string) ([]tableSource, error) {
+	root := filepath.Clean(dir)
+	dependencyPath := filepath.Join(root, "dependency.yml")
+	if _, err := os.Stat(dependencyPath); err == nil {
+		return dependencyTableSources(root, dependencyPath)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect dependency file %s: %w", dependencyPath, err)
+	}
+	metaPath := filepath.Join(root, "ab_meta.yml")
+	if _, err := os.Stat(metaPath); err == nil {
+		return groupTableSources(root, metaPath)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect table metadata %s: %w", metaPath, err)
+	}
+	return legacyTableSources(root)
+}
+
+func dependencyTableSources(root, dependencyPath string) ([]tableSource, error) {
+	data, err := os.ReadFile(dependencyPath)
+	if err != nil {
+		return nil, fmt.Errorf("read dependency file %s: %w", dependencyPath, err)
+	}
+	var dependencies dependencyPaths
+	if err := yaml.Unmarshal(data, &dependencies); err != nil {
+		return nil, fmt.Errorf("parse dependency file %s: %w", dependencyPath, err)
+	}
+	if len(dependencies.Groups) == 0 {
+		return nil, fmt.Errorf("dependency file %s has no groups", dependencyPath)
+	}
+	seen := make(map[string]bool)
+	var sources []tableSource
+	for _, group := range dependencies.Groups {
+		if group.Path == "" {
+			return nil, fmt.Errorf("dependency file %s contains a group without a path", dependencyPath)
+		}
+		if seen[group.Path] {
+			return nil, fmt.Errorf("dependency file %s repeats group path %q", dependencyPath, group.Path)
+		}
+		seen[group.Path] = true
+		groupDir := filepath.Join(root, group.Path)
+		groupSources, err := groupTableSources(groupDir, filepath.Join(groupDir, "ab_meta.yml"))
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, groupSources...)
+	}
+	return sources, nil
+}
+
+func groupTableSources(dir, metaPath string) ([]tableSource, error) {
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, fmt.Errorf("read table metadata %s: %w", metaPath, err)
+	}
+	var meta tableGroupMeta
+	if err := yaml.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("parse table metadata %s: %w", metaPath, err)
+	}
+	if len(meta.Tables) == 0 {
+		return nil, fmt.Errorf("table metadata %s has no tables", metaPath)
+	}
+	seen := make(map[string]bool)
+	sources := make([]tableSource, 0, len(meta.Tables))
+	for _, table := range meta.Tables {
+		if table == "" {
+			return nil, fmt.Errorf("table metadata %s contains an empty table name", metaPath)
+		}
+		if seen[table] {
+			return nil, fmt.Errorf("table metadata %s repeats table %q", metaPath, table)
+		}
+		seen[table] = true
+		path := filepath.Join(dir, table+".yml")
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			alternate := filepath.Join(dir, table+".yaml")
+			if _, alternateErr := os.Stat(alternate); alternateErr != nil {
+				return nil, fmt.Errorf("table metadata %s lists %q but neither %s nor %s exists", metaPath, table, path, alternate)
+			}
+			path = alternate
+		} else if err != nil {
+			return nil, fmt.Errorf("inspect table file %s: %w", path, err)
+		}
+		sources = append(sources, tableSource{Path: path, OrderedMeta: true})
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read table group directory %s: %w", dir, err)
+	}
+	var tableFileCount int
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == "ab_meta.yml" || entry.Name() == "ab_meta.yaml" {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if ext == ".yml" || ext == ".yaml" {
+			tableFileCount++
+		}
+	}
+	if tableFileCount != len(sources) {
+		return nil, fmt.Errorf("table metadata %s lists %d tables but directory contains %d table YAML files",
+			metaPath, len(sources), tableFileCount)
+	}
+	return sources, nil
+}
+
+func legacyTableSources(root string) ([]tableSource, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && entry.Name() == "seed" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() == "dependency.yml" || entry.Name() == "dependency.yaml" ||
+			entry.Name() == "ab_meta.yml" || entry.Name() == "ab_meta.yaml" {
+			return nil
+		}
+		ext := filepath.Ext(entry.Name())
+		if ext == ".yml" || ext == ".yaml" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk directory %s: %w", root, err)
+	}
+	sort.Strings(files)
+	sources := make([]tableSource, len(files))
+	for index, file := range files {
+		sources[index] = tableSource{Path: file}
+	}
+	return sources, nil
 }
 
 // GetTable returns a table by name.
@@ -209,7 +350,12 @@ func (s *Schema) GetTable(name string) *Table {
 //   - sequence column exists in the table
 //   - index columns exist in the table
 //   - constraint / index / FK / check names are unique within a table
+//   - every FK parent is ordered before its child (required by MySQL)
 func (s *Schema) Validate() error {
+	position := make(map[string]int, len(s.Tables))
+	for index, table := range s.Tables {
+		position[table.Name] = index
+	}
 	for _, t := range s.Tables {
 		colSet := map[string]struct{}{}
 		for _, c := range t.Columns {
@@ -243,6 +389,10 @@ func (s *Schema) Validate() error {
 			if parent == nil {
 				return fmt.Errorf("schema: FK %q on table %q references unknown table %q",
 					fk.Name, t.Name, fk.References.Table)
+			}
+			if parent.Name != t.Name && position[parent.Name] > position[t.Name] {
+				return fmt.Errorf("schema: FK %q requires parent table %q before child table %q; fix the component ab_meta.yml or dependency.yml order",
+					fk.Name, parent.Name, t.Name)
 			}
 			parentCols := map[string]struct{}{}
 			for _, c := range parent.Columns {

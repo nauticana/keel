@@ -1,0 +1,10 @@
+tables:
+  - agency_profile
+  - agency_client_invitation
+  - agency_client_delegation
+  - agency_client_billing
+  - agency_payout_profile
+  - agency_client_rate
+  - agency_commission
+  - agency_payout
+  - agency_payout_line

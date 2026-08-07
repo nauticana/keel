@@ -8,16 +8,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed basis_seed.yml
-var basisSeedYML []byte
+//go:embed seed/core.yml
+var coreSeedYML []byte
 
-// ConfigDefaults returns the framework flag catalog from the embedded basis
+// ConfigDefaults returns the framework flag catalog from the embedded core
 // seed as flag_id -> ConfigRow (defaults only, no assigned values) — the same
 // shape BaseConfig.ApplyBase consumes.
 func ConfigDefaults() (map[string]common.ConfigRow, error) {
 	var sf SeedFile
-	if err := yaml.Unmarshal(basisSeedYML, &sf); err != nil {
-		return nil, fmt.Errorf("parse embedded basis seed: %w", err)
+	if err := yaml.Unmarshal(coreSeedYML, &sf); err != nil {
+		return nil, fmt.Errorf("parse embedded core seed: %w", err)
 	}
 	m := make(map[string]common.ConfigRow)
 	for _, t := range sf.Seeds {

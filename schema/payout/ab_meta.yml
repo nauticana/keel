@@ -1,0 +1,3 @@
+tables:
+  - user_bank_info
+  - payout_webhook_log

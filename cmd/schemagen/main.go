@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ func main() {
 	inputDirs := flag.String("input", "schema/", "Comma-separated list of schema directories")
 	seedDirs := flag.String("seed", "", "Comma-separated list of directories containing seed YAML files")
 	outputFile := flag.String("out", "", "Output file path (default: stdout)")
-	singleTable := flag.String("table", "", "Generate DDL for a single table (by YAML filename without extension)")
+	singleTable := flag.String("table", "", "Generate DDL for a single table by table name")
 	flag.Parse()
 
 	dirs := strings.Split(*inputDirs, ",")
@@ -38,30 +39,21 @@ func main() {
 	var output string
 
 	if *singleTable != "" {
-		// Find and generate a single table
-		var found bool
-		for _, dir := range dirs {
-			for _, ext := range []string{".yml", ".yaml"} {
-				path := filepath.Join(dir, *singleTable+ext)
-				if _, err := os.Stat(path); err == nil {
-					table, err := schema.ParseFile(path)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "error: %v\n", err)
-						os.Exit(1)
-					}
-					output = d.GenerateTable(table)
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
+		path, err := findTableFile(dirs, *singleTable)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
 		}
-		if !found {
+		if path == "" {
 			fmt.Fprintf(os.Stderr, "table %q not found in directories: %s\n", *singleTable, *inputDirs)
 			os.Exit(1)
 		}
+		table, err := schema.ParseFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		output = d.GenerateTable(table)
 	} else {
 		// Generate full schema
 		s, err := schema.ParseDirs(dirs)
@@ -120,4 +112,37 @@ func main() {
 	} else {
 		fmt.Print(output)
 	}
+}
+
+func findTableFile(dirs []string, table string) (string, error) {
+	for _, dir := range dirs {
+		var found string
+		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				if path != filepath.Clean(dir) && entry.Name() == "seed" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if entry.Name() == "ab_meta.yml" || entry.Name() == "ab_meta.yaml" {
+				return nil
+			}
+			ext := filepath.Ext(entry.Name())
+			if (ext == ".yml" || ext == ".yaml") && strings.TrimSuffix(entry.Name(), ext) == table {
+				found = path
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to search directory %s: %w", dir, err)
+		}
+		if found != "" {
+			return found, nil
+		}
+	}
+	return "", nil
 }

@@ -1,0 +1,86 @@
+table: agency_payout
+comment: |
+  One aggregate payout per agency, currency, destination, and selection
+  cutoff. Destination fields are immutable snapshots. user_id is derived
+  through user_bank_info and is deliberately not duplicated here. Status:
+  C=created, P=provider-pending, D=disbursed, F=failed, M=manual review,
+  R=returned, V=reversed. Codes are scoped to this column.
+columns:
+  - name: id
+    type: BIGINT
+  - name: agency_partner_id
+    type: BIGINT
+  - name: user_bank_info_id
+    type: BIGINT
+  - name: amount_minor
+    type: BIGINT
+  - name: currency
+    type: CHAR(3)
+  - name: provider
+    type: CHAR(2)
+  - name: provider_account_id
+    type: VARCHAR(100)
+  - name: selection_cutoff_at
+    type: TIMESTAMP
+  - name: idempotency_key
+    type: VARCHAR(100)
+  - name: provider_transfer_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: provider_funding_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: status
+    type: CHAR(1)
+    default: C
+  - name: attempt_count
+    type: INTEGER
+    default: "0"
+  - name: attempted_at
+    type: TIMESTAMP
+    nullable: true
+  - name: next_attempt_at
+    type: TIMESTAMP
+    nullable: true
+  - name: paid_at
+    type: TIMESTAMP
+    nullable: true
+  - name: failure_message
+    type: TEXT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agency_payout_seq
+  column: id
+checks:
+  - name: chk_agency_payout_amount
+    expression: "amount_minor > 0"
+indexes:
+  - name: agency_payout_idem_uq
+    columns: [idempotency_key]
+    unique: true
+  - name: agency_payout_transfer_uq
+    columns: [provider, provider_transfer_id]
+    unique: true
+    where: "provider_transfer_id IS NOT NULL"
+  - name: idx_agency_payout_funding
+    columns: [provider_funding_id]
+    where: "provider_funding_id IS NOT NULL"
+  - name: agency_payout_cycle_uq
+    columns: [agency_partner_id, currency, provider_account_id, selection_cutoff_at]
+    unique: true
+    where: "status <> 'F'"
+foreign_keys:
+  - name: agency_payouts
+    columns: [agency_partner_id]
+    references:
+      table: agency_profile
+      columns: [agency_partner_id]
+  - name: payout_destination_account
+    columns: [user_bank_info_id, agency_partner_id]
+    references:
+      table: user_bank_info
+      columns: [id, partner_id]

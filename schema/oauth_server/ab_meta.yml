@@ -1,0 +1,4 @@
+tables:
+  - oauth_client
+  - oauth_authorization_code
+  - oauth_refresh_token

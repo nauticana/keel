@@ -1,0 +1,8 @@
+table: constant_header
+comment: Dropdown/enum header definitions
+columns:
+  - name: id
+    type: VARCHAR(60)
+  - name: caption
+    type: VARCHAR(80)
+primary_key: [id]

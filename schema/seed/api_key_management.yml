@@ -1,0 +1,47 @@
+comment: API Key Management seed data
+order: 110
+seeds:
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [API_KEY, API Key to access the system]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [API_KEY, GENERATE, Generate]
+      - [API_KEY, ROLL, Roll]
+  - table: table_action
+    columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
+    rows:
+      - [api_key, generate, Generate, plus, V, false, 10]
+      - [api_key, roll, Roll, edit, V, true, 20]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [90, false, setup, api_keys, api_key, API Keys]
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [api_key, created_at, R]
+      - [api_key, key_hash, S]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [api_key_partners, S, "*"]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [api_key, api_key]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [APP_ADMIN, PAGE, ACCESS, api_keys]
+      - [APP_ADMIN, TABLE, SELECT, api_key]
+      - [SECURITY_ADMIN, PAGE, ACCESS, api_keys]
+      - [SECURITY_ADMIN, TABLE, SELECT, api_key]
+      - [BUSINESS_ADMIN, TABLE, SELECT, api_key]
+      - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
+      - [PARTNER_ADMIN, TABLE, SELECT, api_key]
+      - [PARTNER_ADMIN, TABLE, INSERT, api_key]
+      - [PARTNER_ADMIN, TABLE, UPDATE, api_key]
+      - [PARTNER_ADMIN, TABLE, DELETE, api_key]

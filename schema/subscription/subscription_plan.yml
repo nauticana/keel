@@ -1,0 +1,25 @@
+table: subscription_plan
+comment: Subscription plans (catalog). Per-interval prices live in subscription_plan_price.
+columns:
+  - name: id
+    type: VARCHAR(20)
+  - name: caption
+    type: VARCHAR(80)
+  - name: is_active
+    type: BOOLEAN
+    default: "TRUE"
+  # currency is the plan's display/default currency; the authoritative per-interval
+  # charge currency lives on each subscription_plan_price row.
+  - name: currency
+    type: CHAR(3)
+    default: USD
+  # activation_mode (SUBSCRIPTION_ACTIVATION_MODE dict): how a checkout activates
+  # the sub. A=create-active, P=activate-pending, T=trial, F=free. Open dictionary
+  # — one_time/invoice_terms/manual_approval slot in later as rows, no schema break.
+  - name: activation_mode
+    type: CHAR(1)
+    default: A
+  - name: trial_days
+    type: INTEGER
+    nullable: true
+primary_key: [id]
