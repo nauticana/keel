@@ -49,10 +49,29 @@ seeds:
       - [agency_commission_status, agency_commission, status]
       - [agency_payout_status, agency_payout, status]
       - [payout_provider, agency_payout, provider]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [agency_payout_profile_bank_info, S, "*"]
+      - [commission_client_billing, S, "*"]
+      - [commission_source_allocation, S, "*"]
+      - [commission_reversal_of, S, "*"]
+      - [agency_payouts, S, "*"]
+      - [payout_destination_account, S, "*"]
+      - [agency_payout_lines, S, "*"]
+      - [payout_line_commission, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
       - [agency_profile, agency_profile]
+      - [agency_payout_profile, agency_payout_profile]
+      - [agency_commission, agency_commission]
+      - [agency_payout, agency_payout]
+  - table: rest_api_child
+    columns: [api_id, seq, parent_seq, constraint_name]
+    rows:
+      - [agency_payout, 1, 0, agency_payout_lines]
+      - [agency_commission, 1, 0, commission_reversal_of]
   - table: authorization_object
     columns: [id, caption]
     rows:

@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v1.2.45",
+      "title": "agency stock seed completes payout/commission REST metadata",
+      "tags": [
+        "additive"
+      ],
+      "summary": "The agency component's stock seed now carries the REST metadata for its own payout and commission relations: foreign_key_lookup rows for the component's FK constraints, rest_api_header rows for agency_payout_profile, agency_commission, and agency_payout, and rest_api_child nesting rows. There is no Go API, DDL, or runtime-behavior change.",
+      "body_markdown": "## Scope\n\nOnly `schema/seed/agency.yml` changes. No table, column, constraint, Go API, or runtime-behavior change.\n\n## What the agency seed now includes\n\n- `foreign_key_lookup` rows for the agency component's own FK constraints: `agency_payout_profile_bank_info`, `commission_client_billing`, `commission_source_allocation`, `commission_reversal_of`, `agency_payouts`, `payout_destination_account`, `agency_payout_lines`, `payout_line_commission` (all `S` / `*`).\n- `rest_api_header` rows for `agency_payout_profile`, `agency_commission`, and `agency_payout`, alongside the existing `agency_profile` header. Selecting the agency component with its stock seed now exposes these REST APIs.\n- `rest_api_child` rows nesting `agency_payout_lines` under `agency_payout` and `commission_reversal_of` under `agency_commission`.\n\nThese rows use the constraint identifiers introduced in v1.2.44; apply that release's constraint-name migration first.\n\n## Downstream migration\n\n- A downstream that previously seeded any of these rows itself should delete them from its own seed files and take them from the stock agency seed. Because metadata seeds insert with conflict-ignore semantics, temporary duplication is harmless, but each row should live upstream only.\n- Existing databases receive the rows on the next seed application; no manual data migration is required beyond the v1.2.44 constraint renames.\n- Lookup and nesting rows for downstream-owned FK constraints (relations whose child or parent table is not an agency-component table) remain the downstream's responsibility."
+    },
+    {
       "version": "v1.2.44",
       "title": "component-aware schema generation and FK naming",
       "tags": [
