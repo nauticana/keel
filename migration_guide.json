@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v1.2.46",
+      "title": "correct lookup bindings and dropdown cache for composite foreign keys",
+      "tags": [
+        "additive"
+      ],
+      "summary": "Two composite-FK lookup fixes. A column referenced by several FKs no longer gets a nondeterministic lookup binding: FKs are processed in a deterministic order and only an FK's last column carries LookupTable/LookupStyle, so leading columns of a composite FK keep the binding from their own single-column FK. TableCache entries for composite-key lookup tables are now keyed by the table's last (own-id) key column instead of the first, so such dropdowns list every row instead of collapsing to one entry per ancestor key. No Go API, DDL, or seed change.",
+      "body_markdown": "## Scope\n\nBehavior-only fixes in FK metadata loading and the appdata `TableCache`. No Go API, DDL, or seed change.\n\n## Lookup binding on composite FKs\n\nPreviously every column of every FK received `LookupTable`/`LookupStyle` from that FK, in Go map iteration order — a column covered by both a single-column FK and a composite FK could randomly end up bound to the composite FK's parent table. Now FKs are processed fewest-columns-first (name as tie-break) and only the last column of each FK is bound; leading columns of a composite FK retain the binding from their own single-column FK. If two FKs share the same last column, the composite (more specific) relation wins.\n\n## TableCache keying\n\nFor a `D`-style lookup whose parent table has a composite primary key, the cache was keyed by the first key column, collapsing the option list to one entry per ancestor value. It is now keyed by the last key column — the parent's own id, which is also the value the child FK column stores.\n\n## Downstream migration\n\nNo code change required; adopt the version and restart so appdata is rebuilt. Dropdowns on composite-key lookup tables are still unfiltered by the ancestor columns; rows from different ancestor scopes whose own-id values collide share one cache entry (last read wins). Scope-filtered (cascading) dropdowns remain a UI-layer concern."
+    },
+    {
       "version": "v1.2.45",
       "title": "agency stock seed completes payout/commission REST metadata",
       "tags": [

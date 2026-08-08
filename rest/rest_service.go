@@ -343,16 +343,17 @@ func (s *RestService) GetTableCache(ctx context.Context) (map[string]map[string]
 				continue
 			}
 			result[table.TableName] = make(map[string]string)
-			keyName := table.Keys[0].ColumnName
+			// Dropdown values are the parent's own id — the last key column.
+			keyCol := table.Keys[len(table.Keys)-1]
 			qColumn := displayColumn
-			if displayColumn == keyName {
+			if displayColumn == keyCol.ColumnName {
 				qColumn = ""
 			}
 			data, err := svc.Get(ctx, 0, 0, nil, qColumn)
 			if err != nil {
 				return nil, err
 			}
-			keyPascal := table.Keys[0].PascalName
+			keyPascal := keyCol.PascalName
 			valPascal := common.PascalCase(displayColumn)
 			for _, rec := range data {
 				r := rec.(map[string]any)

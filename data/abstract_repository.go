@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/nauticana/keel/common"
@@ -414,20 +415,37 @@ func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.Que
 		}
 	}
 
-	for _, fk := range r.ForeignKeys {
-		fk.ChildColumns = make([]*model.TableColumn, len(columns[fk.ConstraintName]))
-		fk.Columns = columns[fk.ConstraintName]
+	// Fewer-column FKs first: on a shared last column the composite relation wins.
+	names := make([]string, 0, len(r.ForeignKeys))
+	for name := range r.ForeignKeys {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		li, lj := len(columns[names[i]]), len(columns[names[j]])
+		if li != lj {
+			return li < lj
+		}
+		return names[i] < names[j]
+	})
+	for _, name := range names {
+		fk := r.ForeignKeys[name]
+		fkCols := columns[name]
+		fk.ChildColumns = make([]*model.TableColumn, len(fkCols))
+		fk.Columns = fkCols
 		cnt := 0
-		for _, fkCol := range columns[fk.ConstraintName] {
+		for i, fkCol := range fkCols {
 			for _, col := range fk.Child.Columns {
 				if col.ColumnName == fkCol {
 					fk.ChildColumns[cnt] = col
 					cnt++
-					col.LookupTable = fk.Parent.TableName
-					if fk.LookupStyle == "D" {
-						col.InputType = "select"
+					// Only the last FK column carries the lookup binding; leading columns are ancestor scope.
+					if i == len(fkCols)-1 {
+						col.LookupTable = fk.Parent.TableName
+						if fk.LookupStyle == "D" {
+							col.InputType = "select"
+						}
+						col.LookupStyle = fk.LookupStyle
 					}
-					col.LookupStyle = fk.LookupStyle
 					break
 				}
 			}
