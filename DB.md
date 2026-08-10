@@ -175,7 +175,7 @@ flowchart BT
     end
 
     subgraph subscription["Subscription and Quota"]
-        direction TB
+        direction RL
         subscription_plan["subscription_plan"]
         subscription_plan_price["subscription_plan_price"]
         subscription_resource["subscription_resource"]
@@ -186,10 +186,10 @@ flowchart BT
         usage_ledger["usage_ledger"]
     end
 
-    subscription_plan_price --> subscription_plan
-    subscription_plan --> subscription_quota
-    subscription_resource --> subscription_quota
     partner_plan_subscription --> subscription_plan
+    subscription_plan_price --> subscription_plan
+    subscription_quota --> subscription_plan
+    subscription_quota --> subscription_resource
     partner_addon_subscription --> subscription_addon
 
     subgraph payment["Payment"]
@@ -227,7 +227,7 @@ flowchart BT
     subscription_invoice_line --> invoice_line
 
     subgraph agency["Agency"]
-        direction TB
+        direction RL
         agency_profile["agency_profile"]
         agency_client_invitation["agency_client_invitation"]
         agency_client_delegation["agency_client_delegation"]
