@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/port"
@@ -140,7 +141,7 @@ func TestPaymentIdentityPreferenceAndDescriptionLimit(t *testing.T) {
 	for range 201 {
 		long += "界"
 	}
-	if got := truncateRunes(long, 200); len([]rune(got)) != 200 {
+	if got := common.TruncateRunes(long, 200); len([]rune(got)) != 200 {
 		t.Fatalf("truncated description has %d runes, want 200", len([]rune(got)))
 	}
 }

@@ -245,7 +245,7 @@ func (s *BaseProvenanceRecorder) validatedLines(event *payment.PaymentEvent, cur
 	hasPositiveLine := false
 	for index := range lines {
 		line := &lines[index]
-		line.Description = truncateRunes(line.Description, 200)
+		line.Description = common.TruncateRunes(line.Description, 200)
 		if !line.ServiceTo.After(line.ServiceFrom) {
 			return nil, fmt.Errorf("%w: line %q has an invalid period", ErrIncompleteProviderInvoiceLines, line.ProviderLineID)
 		}
@@ -302,17 +302,6 @@ func paymentIdentity(event *payment.PaymentEvent) string {
 		}
 	}
 	return ""
-}
-
-func truncateRunes(value string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
 }
 
 func validateExistingInvoiceLine(ctx context.Context, tx port.TxQueryService, invoiceID int64, sequence int, expected payment.InvoiceLine, expectedAmount int64) error {

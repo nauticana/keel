@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v1.2.48",
+      "title": "export TruncateRunes function",
+      "tags": [
+        "additive"
+      ],
+      "summary": "common.TruncateRunes function is exported.",
+      "body_markdown": "common.TruncateRunes function is exported."
+    },
+    {
       "version": "v1.2.47",
       "title": "MCP server layer moved to scout",
       "tags": [

@@ -275,3 +275,14 @@ func MergeMaps[K comparable, V any](maps ...map[K]V) map[K]V {
 	}
 	return out
 }
+
+func TruncateRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
