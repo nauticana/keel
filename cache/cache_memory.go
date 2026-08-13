@@ -143,6 +143,10 @@ func (c *MemoryCacheService) Increment(ctx context.Context, key string) (int64, 
 }
 
 func (c *MemoryCacheService) IncrementWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	return c.IncrementByWithTTL(ctx, key, 1, ttl)
+}
+
+func (c *MemoryCacheService) IncrementByWithTTL(_ context.Context, key string, n int64, ttl time.Duration) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.kv[key]
@@ -150,13 +154,13 @@ func (c *MemoryCacheService) IncrementWithTTL(ctx context.Context, key string, t
 		ok = false
 	}
 	if !ok {
-		c.kv[key] = &kvEntry{value: "1", expires: time.Now().Add(ttl)}
-		return 1, nil
+		c.kv[key] = &kvEntry{value: strconv.FormatInt(n, 10), expires: time.Now().Add(ttl)}
+		return n, nil
 	}
-	n, _ := strconv.ParseInt(e.value, 10, 64)
-	n++
-	e.value = strconv.FormatInt(n, 10) // keep the existing window expiry
-	return n, nil
+	count, _ := strconv.ParseInt(e.value, 10, 64)
+	count += n
+	e.value = strconv.FormatInt(count, 10) // keep the existing window expiry
+	return count, nil
 }
 
 func (c *MemoryCacheService) RPush(ctx context.Context, key, value string) error {

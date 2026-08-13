@@ -253,3 +253,37 @@ func TestMemoryCache_SweeperDropsExpired(t *testing.T) {
 		t.Fatalf("expected sweep to drop expired key")
 	}
 }
+
+func TestMemoryCache_IncrementByWithTTLAddsInOneStep(t *testing.T) {
+	c := NewMemoryCacheService()
+	defer c.Close()
+	ctx := context.Background()
+
+	if n, err := c.IncrementByWithTTL(ctx, "k", 5, time.Minute); err != nil || n != 5 {
+		t.Fatalf("first = %d, %v", n, err)
+	}
+	if n, err := c.IncrementByWithTTL(ctx, "k", 3, time.Minute); err != nil || n != 8 {
+		t.Fatalf("second = %d, %v", n, err)
+	}
+	// The window expiry set on creation is preserved across batched adds.
+	c.mu.Lock()
+	expires := c.kv["k"].expires
+	c.mu.Unlock()
+	if expires.IsZero() {
+		t.Fatal("expected fixed-window expiry")
+	}
+}
+
+func TestMemoryCache_IncrementByWithTTLResetsAfterExpiry(t *testing.T) {
+	c := NewMemoryCacheService()
+	defer c.Close()
+	ctx := context.Background()
+
+	if _, err := c.IncrementByWithTTL(ctx, "k", 5, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n, err := c.IncrementByWithTTL(ctx, "k", 2, time.Minute); err != nil || n != 2 {
+		t.Fatalf("after expiry = %d, %v", n, err)
+	}
+}

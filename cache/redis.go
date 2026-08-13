@@ -129,19 +129,23 @@ func (s *CacheServiceImpl) Increment(ctx context.Context, key string) (int64, er
 	return s.client.Incr(ctx, key).Result()
 }
 
-// incrWithTTLScript atomically increments the key and sets the fixed-window TTL
-// on first creation — one round-trip, so there is no INCR/EXPIRE gap and the
+// incrWithTTLScript atomically adds ARGV[2] and sets the fixed-window TTL on
+// first creation — one round-trip, so there is no INCR/EXPIRE gap and the
 // counter value is never reset.
 var incrWithTTLScript = redis.NewScript(`
-local n = redis.call('INCR', KEYS[1])
-if n == 1 then
+local n = redis.call('INCRBY', KEYS[1], ARGV[2])
+if n == tonumber(ARGV[2]) then
   redis.call('PEXPIRE', KEYS[1], ARGV[1])
 end
 return n
 `)
 
 func (s *CacheServiceImpl) IncrementWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {
-	return incrWithTTLScript.Run(ctx, s.client, []string{key}, ttl.Milliseconds()).Int64()
+	return s.IncrementByWithTTL(ctx, key, 1, ttl)
+}
+
+func (s *CacheServiceImpl) IncrementByWithTTL(ctx context.Context, key string, n int64, ttl time.Duration) (int64, error) {
+	return incrWithTTLScript.Run(ctx, s.client, []string{key}, ttl.Milliseconds(), n).Int64()
 }
 
 func (s *CacheServiceImpl) RPush(ctx context.Context, key string, value string) error {

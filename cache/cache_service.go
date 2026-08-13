@@ -31,6 +31,9 @@ type CacheService interface {
 	// fixed-window TTL — without the Increment-then-Set race that can reset the
 	// counter. Use it for rate limiting (fixed window per key).
 	IncrementWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error)
+	// IncrementByWithTTL is IncrementWithTTL adding n at once, so coalesced
+	// batches (e.g. a distributed rate limiter) cost one round-trip.
+	IncrementByWithTTL(ctx context.Context, key string, n int64, ttl time.Duration) (int64, error)
 
 	RPush(ctx context.Context, key string, value string) error
 	LPopAll(ctx context.Context, key string) ([]string, error)
