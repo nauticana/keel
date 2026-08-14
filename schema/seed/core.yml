@@ -44,6 +44,7 @@ seeds:
       - [tls_cert, string, true, '', TLS certificate file path]
       - [tls_key, string, true, '', TLS private key file path]
       - [max_tls_version, string, true, none, 'TLS policy: none | tls10 | tls11 | tls12 | tls13']
+      - [metrics_addr, string, true, '', 'Prometheus /metrics listen address (host:port); empty disables metrics']
       - [hc_port, int, true, '0', Health check port override for workers (0 = worker default)]
       - [session_timeout, int, false, '300', Session timeout in seconds]
       - [otp_ttl_seconds, int, false, '300', OTP code time-to-live in seconds]

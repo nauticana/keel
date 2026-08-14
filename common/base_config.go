@@ -102,6 +102,7 @@ type BaseConfig struct {
 	TLSCert               string        // tls_cert                      ""                 TLS certificate file path
 	TLSKey                string        // tls_key                       ""                 TLS private key file path
 	MaxTLSVersion         string        // max_tls_version               none               TLS policy: none | tls10 | tls11 | tls12 | tls13
+	MetricsAddr           string        // metrics_addr                  ""                 Prometheus /metrics listen address; empty disables
 	SessionTimeout        int           // session_timeout               300                Session timeout in seconds
 	OTPTTLSeconds         int           // otp_ttl_seconds               300                OTP code time-to-live in seconds
 	MailMode              string        // mail_mode                     smtp               Mail delivery mode: smtp or api
@@ -226,6 +227,7 @@ const (
 	tls_cert                      = "tls_cert"
 	tls_key                       = "tls_key"
 	max_tls_version               = "max_tls_version"
+	metrics_addr                  = "metrics_addr"
 	session_timeout               = "session_timeout"
 	otp_ttl_seconds               = "otp_ttl_seconds"
 	mail_mode                     = "mail_mode"
@@ -353,7 +355,7 @@ func (c *BaseConfig) LoadValues(ctx context.Context, db port.DatabaseRepository)
 // baseFlagIDs is every framework flag ApplyBase expects in the catalog. A
 // missing row means an unseeded/stale catalog and aborts startup.
 var baseFlagIDs = []string{
-	http_api_port, https_port, tls_cert, tls_key, max_tls_version,
+	http_api_port, https_port, tls_cert, tls_key, max_tls_version, metrics_addr,
 	session_timeout, otp_ttl_seconds, mail_mode, smtp_host, smtp_port,
 	smtp_user, smtp_from, cors_origin, google_client_id, apple_client_id,
 	oauth_issuer, oauth_jwks_url, oauth_audience, oauth_resource,
@@ -416,6 +418,8 @@ func (c *BaseConfig) ApplyBase(m map[string]ConfigRow) error {
 			c.TLSKey = c.ParseValueS(r.Value, r.Default)
 		case max_tls_version:
 			c.MaxTLSVersion = c.ParseValueS(r.Value, r.Default)
+		case metrics_addr:
+			c.MetricsAddr = c.ParseValueS(r.Value, r.Default)
 		case session_timeout:
 			c.SessionTimeout = c.ParseValueI(r.Value, r.Default)
 		case otp_ttl_seconds:

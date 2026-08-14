@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.50",
+   "title": "metrics_addr framework flag, metrics.NewRecorderFromFlags, common.RedactForStorage",
+   "tags": [
+    "additive",
+    "breaking-for-deployments"
+   ],
+   "summary": "Three observability/safety primitives. (1) New framework flag `metrics_addr` on BaseConfig: the Prometheus /metrics listen address (host:port), empty disables metrics. **Breaking for deployments**: ApplyBase now requires the `metrics_addr` row in application_config_flag — reload the framework seed (schema/seed/core.yml) before deploying this version. (2) `metrics.NewRecorderFromFlags()` builds the process-wide recorder selected by the framework flags, once per process. Today's only backend is Prometheus: a PrometheusRecorder over the default registry with /metrics served on `metrics_addr`; an empty address returns a nil recorder that callers must treat as a no-op. (3) `common.RedactForStorage(text)` is the write-time redaction policy for durable operator-visible text: masks provider API keys, bearer tokens, `enc:v1:` ciphertexts, e-mail addresses, and card/phone digit runs.",
+   "body_markdown": "### Old → new\n\n| Old | New |\n|---|---|\n| app-local metrics listen address flag + hand-rolled promhttp listener | `metrics_addr` framework flag + `metrics.NewRecorderFromFlags()` |\n| app-local credential/PII scrubbing before persisting error texts or summaries | `common.RedactForStorage` |\n\n### Deployment gate\n\n`ApplyBase` aborts startup when the `metrics_addr` catalog row is missing. Apply the updated framework seed before rolling binaries.\n\n### Wiring\n\nCall `metrics.NewRecorderFromFlags()` once after configuration load (HTTP server startup, or a worker's LoadConfig hook) and inject the returned `port.MetricsRecorder`. A nil result means metrics are disabled and every recording call site must no-op. The scrape endpoint is an implementation detail of the Prometheus backend; future backends select through the same factory."
+  },
+  {
    "version": "v1.2.49",
    "title": "cache.CacheService.IncrementByWithTTL — batched fixed-window counter",
    "tags": [
