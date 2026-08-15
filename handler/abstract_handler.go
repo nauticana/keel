@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
@@ -150,12 +151,12 @@ func (h *AbstractHandler) RequirePartner(w http.ResponseWriter, r *http.Request)
 	return session.PartnerId, true
 }
 
-// ReadRequest reads the request body (capped at common.Config().MaxRequestSize) and
+// ReadRequest reads the request body (capped at config.Config().MaxRequestSize) and
 // JSON-unmarshals it into req. Writes 400 on read or unmarshal failure and
 // returns ok=false. Returns true with req populated on success. Use for
 // public endpoints that do not require an authenticated session.
 func (h *AbstractHandler) ReadRequest(w http.ResponseWriter, r *http.Request, req any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, common.Config().MaxRequestSize)
+	r.Body = http.MaxBytesReader(w, r.Body, config.Config().MaxRequestSize)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Failed to read request body")
@@ -193,7 +194,7 @@ func (h *AbstractHandler) ReadAuthRequest(w http.ResponseWriter, r *http.Request
 // is a nice-to-have, not a hot-path concern, and breaking client
 // compatibility on a typo would surface as a customer-visible bug.
 func (h *AbstractHandler) ReadStrictRequest(w http.ResponseWriter, r *http.Request, req any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, common.Config().MaxRequestSize)
+	r.Body = http.MaxBytesReader(w, r.Body, config.Config().MaxRequestSize)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(req); err != nil {

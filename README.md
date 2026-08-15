@@ -42,7 +42,8 @@ graph TD
 
 | Package | Description |
 |---------|-------------|
-| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), string/DB helpers (`NullIfEmpty`, `Slugify`, `GenerateNumericCode`, `ParseDBTimestamp`), email/URL domain helpers (`DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`), HTTP response utilities (`WriteJSON`, `WriteError`/`WriteJSONError`), shared HTTP client, bootstrap flag variables, and `BaseConfig` / `common.Config` — the DB-backed runtime configuration (see **Runtime Configuration**) |
+| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), string/DB helpers (`NullIfEmpty`, `Slugify`, `GenerateNumericCode`, `ParseDBTimestamp`), email/URL domain helpers (`DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`), HTTP response utilities (`WriteJSON`, `WriteError`/`WriteJSONError`), shared HTTP client, and bootstrap flag variables |
+| `config` | DB-backed composite runtime configuration, flag parsing helpers, and atomic reload (see **Runtime Configuration**) |
 | `model` | Domain-agnostic models: `TableDefinition`, `TableColumn`, `ForeignKey`, `UserSession`, `PasswordPolicy`, `QueryResult`, `AppError`, `UserMenu`, `DeviceToken`, `TableChangeLog` |
 | `port` | Interface definitions for all pluggable components — **including database access** (`DatabaseRepository`, `QueryService`, `TxQueryService`, `TableService`, `TxView`), plus auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger, `TrustGuard` admission checks. Depend on these, not on concrete `pgsql`/`data` types. |
 | `data` | `AbstractRepository`, `AbstractTableService` (embed-only bases that implement the `port` DB interfaces), file-based `TableLogger`, Snowflake bigint id generator |
@@ -75,8 +76,9 @@ graph TD
 ## Runtime Configuration
 
 Most runtime settings live in the database, not in flags or recompiled constants.
-`common.BaseConfig` is loaded once at startup from two basis tables and read
-everywhere as `common.Config`:
+`config.LoadRows` resolves the whole flag catalog from two basis tables in one
+query; each embedded config's `Apply` parses its own flags from that result.
+Keel's section is read as `config.Config()`:
 
 - **`application_config_flag`** — the flag catalog (framework-seeded): `id`,
   `data_type` (`string | int | int64 | float | duration` (seconds) `| bool`),
@@ -89,7 +91,7 @@ everywhere as `common.Config`:
   `-1` row, so a value identical across every node is written once instead of
   per node. Absent both, `application_config_flag.default_value` applies.
 
-`Load` resolves each flag **node row → `-1` shared row → `default_value`** (two
+`LoadRows` resolves each flag **node row → `-1` shared row → `default_value`** (two
 LEFT JOINs, `COALESCE` picking the precedence) so every catalogued flag
 resolves. `-1` is a config-only sentinel — it never seeds the id generator, so
 `--node_id` itself always stays a real writer id in `[0, 1023]`. **Only bootstrap settings stay as
@@ -99,58 +101,116 @@ here**; a flag like `oauth_signing_key_secret` holds a secret *name*, resolved
 through the `SecretProvider`.
 
 ```go
-// main.go — after the DB connection is up (from bootstrap flags + secrets):
-cfg := &BaseConfig{}                 // or your app's embedding type (below)
-if err := cfg.Load(ctx, db); err != nil { log.Fatal(err) } // fail loudly — never start on a partial config
-common.SetConfig(cfg)                // keel packages read common.Config().SmtpUser, etc.
+// Keel-only binary, after the DB connection is up:
+if err := config.LoadConfig(ctx, db, *common.NodeId); err != nil {
+    log.Fatal(err) // never start on a partial config
+}
 ```
 
-`Load` fails hard on any problem — DB error, an empty catalog, or a catalog
-missing framework flag rows — so a misconfigured node refuses to start instead
-of running on zero values.
+The loader fails hard on any DB, catalog, parsing, or validation problem, and
+nothing is published until every section applied cleanly — a failed load or
+reload leaves the prior configuration active.
 
-**Extending in a downstream app** — embed `BaseConfig` (no field name) and
-override `Load`, reusing the shared fetch so there's only one query:
+**Composing several repositories.** Each repository owns a config type that
+embeds `config.AbstractConfig` (the flag parser), an `Apply` method parsing its
+own flags — the `config.ApplicationConfig` interface — and an atomic reader:
 
 ```go
-type AppConfig struct {
-    common.BaseConfig
+// package scout
+type ScoutConfig struct {
+    config.AbstractConfig
+    Endpoint string
+}
+
+var _ config.ApplicationConfig = (*ScoutConfig)(nil)
+
+var activeConfig atomic.Pointer[ScoutConfig]
+
+func init() { activeConfig.Store(&ScoutConfig{}) }
+
+func Config() *ScoutConfig { return activeConfig.Load() }
+
+func SetConfig(c *ScoutConfig) { activeConfig.Store(c) }
+
+func (c *ScoutConfig) Apply(rows config.ConfigRows) error {
+    c.Endpoint = c.String(rows, "scout_endpoint")
+    return c.ParseErr()
+}
+```
+
+The `AbstractConfig` readers (`String`, `Int`, `Int64`, `Float`, `Bool`,
+`Duration`) resolve assigned value → catalog default, record a missing catalog
+row, and label malformed values with the flag id; `ParseErr` reports everything
+accumulated, so any missing or malformed flag aborts the load with every
+problem named at once.
+
+The deployable application defines its own section the same way. Its loader
+queries the catalog once, applies every section, and publishes each one only
+after all of them succeeded:
+
+```go
+// package seo
+type SeoConfig struct {
+    config.AbstractConfig
     FeatureX string
     MaxFoo   int
 }
 
-func (c *AppConfig) Load(ctx context.Context, db port.DatabaseRepository) error {
-    m, err := c.LoadValues(ctx, db) // one SELECT, shared
-    if err != nil { return err }
-    if err := c.ApplyBase(m); err != nil { return err } // framework flags
-    c.FeatureX = c.ParseValueS(m["feature_x"].Value, m["feature_x"].Default)
-    c.MaxFoo   = c.ParseValueI(m["max_foo"].Value, m["max_foo"].Default)
-    return c.ParseErr() // malformed app values abort the load too
+func (c *SeoConfig) Apply(rows config.ConfigRows) error {
+    c.FeatureX = c.String(rows, "feature_x")
+    c.MaxFoo = c.Int(rows, "max_foo")
+    return c.ParseErr()
 }
 
-// main.go:
-app := &AppConfig{}
-if err := app.Load(ctx, db); err != nil { log.Fatal(err) }
-common.SetConfig(&app.BaseConfig) // keel reads the embedded base…
-appPkg.Config  = app             // …your packages read app.FeatureX
+var activeConfig atomic.Pointer[SeoConfig]
+
+func init() { activeConfig.Store(&SeoConfig{}) }
+
+func Config() *SeoConfig { return activeConfig.Load() }
+
+func LoadConfig(ctx context.Context, db port.DatabaseRepository) error {
+    rows, err := config.LoadRows(ctx, db, *common.NodeId)
+    if err != nil {
+        return err
+    }
+    kc := &config.KeelConfig{}
+    sc := &scout.ScoutConfig{}
+    ec := &SeoConfig{}
+    for _, ac := range []config.ApplicationConfig{kc, sc, ec} {
+        if err := ac.Apply(rows); err != nil {
+            return err
+        }
+    }
+    config.SetConfig(kc)
+    scout.SetConfig(sc)
+    activeConfig.Store(ec)
+    return nil
+}
 ```
 
-Both handles point at the same embedded `BaseConfig`, so the framework view and
-the app view never diverge. Seed your own flags into `application_config_flag`
-alongside keel's.
+Keel code reads `config.Config()`, scout code `scout.Config()`, seo code
+`seo.Config()`. Seed every repository's owned flags into
+`application_config_flag` alongside keel's.
 
 **Runtime reload.** `application_config_flag` is exposed as a REST resource
 (with `application_config_value` nested as its child) under a `setup` menu item,
 and carries a non-record-specific **RELOAD** table action (`handler.ReloadConfig`,
-wired to `common.ReloadFunc`) that re-applies config live. Set `common.ReloadFunc`
-in `main` (see above) to enable it — build a fresh config, `Load` into it, and
-publish with `common.SetConfig`; never mutate the live instance. The catalog is
-seed-managed and display-only in the UI (`needs_restart` and `default_value` are
+wired to `config.ReloadFunc`) that re-applies config live. Enable it after the
+database is available:
+
+```go
+config.ReloadFunc = func(ctx context.Context) error {
+    return seo.LoadConfig(ctx, db)
+}
+```
+
+The catalog is seed-managed and display-only in the UI (`needs_restart` and `default_value` are
 marked read-only in `column_display_attribute`; `id` is the PK) — admins assign
 per-node `application_config_value` rows, which are full CRUD. `needs_restart`
 marks construction-captured settings (server wiring, provider selection,
 connection URLs, singleton clients) that a RELOAD cannot re-apply; everything
-else is read per request/call via `common.Config()` and takes effect on RELOAD.
+else is read per request/call through its repository's `Config()` and takes
+effect on RELOAD.
 The catalog's `default_value` is the only default — there are no compiled
 fallbacks, and a malformed value fails the load.
 
@@ -338,9 +398,9 @@ func main() {
 }
 ```
 
-`Run` builds the standard logger, secret provider, snowflake id generator, pgsql database, and `QuotaServiceDb`, loads the DB-backed runtime config into `common.Config` right after the database is up (set `LoadConfig` when the app embeds `BaseConfig` in its own config type; a load failure aborts startup), publishes the secret provider on `.Secret` before the loop, wires everything into a `JobExecutor`, and runs. The embedder implements only `GetOLTPQueries` plus **one processing contract** — `worker.JobWorker` (`ProcessQueue`, shown above) or `worker.QueueWorker` (`QueueQueries` + `HandleJob`, see the next section); `GetHealthcheckPort` comes from `AbstractWorker`. The `, w` is the concrete instance ("self") — Go has no virtual dispatch, so the embedded base can't reach the embedder's processing methods without it.
+`Run` builds the standard logger, secret provider, snowflake id generator, pgsql database, and `QuotaServiceDb`, then loads configuration after the database is up; a load failure aborts startup. Its default `config.LoadConfig` loads KeelConfig alone. Applications with a composite config set the worker's `LoadConfig` hook to construct and load a fresh composite instance. It then publishes the secret provider on `.Secret`, wires everything into a `JobExecutor`, and runs. The embedder implements only `GetOLTPQueries` plus **one processing contract** — `worker.JobWorker` (`ProcessQueue`, shown above) or `worker.QueueWorker` (`QueueQueries` + `HandleJob`, see the next section); `GetHealthcheckPort` comes from `AbstractWorker`. The `, w` is the concrete instance ("self") — Go has no virtual dispatch, so the embedded base can't reach the embedder's processing methods without it.
 
-For infrequent jobs driven by an external cron / systemd timer (weekly or monthly payouts), use `worker.RunOnce(ctx, loadConfig, pick)` instead of a daemon: it composes the same runtime pieces minus the healthcheck listener, registry heartbeat, and ticker loop, runs one `ProcessQueue` pass, and exits. `loadConfig` nil loads a plain `common.BaseConfig`; `pick` runs after config load so job selection can read config flags and returns the `JobWorker` plus the journal caption.
+For infrequent jobs driven by an external cron / systemd timer (weekly or monthly payouts), use `worker.RunOnce(ctx, loadConfig, pick)` instead of a daemon: it composes the same runtime pieces minus the healthcheck listener, registry heartbeat, and ticker loop, runs one `ProcessQueue` pass, and exits. A nil `loadConfig` loads KeelConfig alone; pass a hook for a composite config. `pick` runs after config load so job selection can read config flags and returns the `JobWorker` plus the journal caption.
 
 Use `JobExecutor` directly when you need to inject extra services or a non-default database flavor:
 
@@ -603,7 +663,7 @@ srv := service.HttpBackend{
     Journal:       journal,
     DB:            db,
     Secrets:       secrets,
-    Origin:        common.Config().CORSOrigin,
+    Origin:        config.Config().CORSOrigin,
     UserService:   userSvc,
     QuotaService:  quota,
     ApiKeyService: apiKeys,  // already constructed + Init'd
@@ -1857,7 +1917,7 @@ Selection is driven by flag variables:
 - `--log_type=local|gcp|aws|azure`
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
 - `storage_mode=s3|gcs|azure`
-  - Build a backend with `storage.New(ctx, common.Config().StorageMode)`; it is also wired onto `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.AbstractWorker.Run` when `storage_mode` is set), so app code calls `svc.Storage.Upload(...)` and `svc.Storage.PublicURL(...)`. Empty `storage_mode` disables storage (the field stays `nil`).
+  - Build a backend with `storage.New(ctx, config.Config().StorageMode)`; it is also wired onto `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.AbstractWorker.Run` when `storage_mode` is set), so app code calls `svc.Storage.Upload(...)` and `svc.Storage.PublicURL(...)`. Empty `storage_mode` disables storage (the field stays `nil`).
   - **Cloudflare R2 / S3-compatible**: use `s3` plus `s3_endpoint=https://<account>.r2.cloudflarestorage.com` (this switches the client to path-style addressing). `s3_endpoint` replaces the former `S3_ENDPOINT` env var. AWS/R2 credentials still resolve through the AWS SDK's own chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `AWS_REGION=auto` for R2) — that is the SDK's concern, not a keel knob.
   - **Public URLs**: `ObjectStorage.PublicURL(bucket, key)` returns a stable, non-expiring served URL (no signing, no API call) for publicly-readable buckets. GCS → `https://storage.googleapis.com/<bucket>/<key>`; S3/R2 → `<storage_public_base_url>/<key>` (set `storage_public_base_url` to an R2 custom domain or `*.r2.dev` host — the bucket is not in the path because the domain already maps to it; empty returns `""`); Azure → `<account-url>/<container>/<key>`. Use `GetSignedURL` instead when the bucket is private.
   - **Azure**: requires `storage_account_url=https://<account>.blob.core.windows.net/`; auth via `azidentity.DefaultAzureCredential`.
@@ -1900,12 +1960,12 @@ type Message struct {
 The factory dispatches on the `messaging_mode` flag:
 
 ```go
-pub, err := messaging.NewMessagePublisher(ctx, common.Config().MessagingMode, secrets)
+pub, err := messaging.NewMessagePublisher(ctx, config.Config().MessagingMode, secrets)
 if err != nil {
     journal.Error("publisher unavailable: " + err.Error())
 }
 
-sub, err := messaging.NewMessageSubscriber(ctx, common.Config().MessagingMode, secrets)
+sub, err := messaging.NewMessageSubscriber(ctx, config.Config().MessagingMode, secrets)
 ```
 
 Empty / unknown modes return an error — deployments fail fast on misconfiguration. Callers that want graceful degradation (e.g. notifications fall back to DB-only when publishing is unavailable) treat the error as "broker not configured" and continue without the publisher.
@@ -2113,7 +2173,7 @@ Keel keeps only **bootstrap** settings as command-line flags, declared in
 `common/variables.go`: what is needed before the database connection exists —
 the log sink, the secret provider, the DB coordinates, and `--node_id`. Every
 other runtime setting lives in the `application_config_*` tables and is read
-through `common.Config` (see **Runtime Configuration** above).
+through `config.Config()` (see **Runtime Configuration** above).
 
 > **Rule: flags or DB config, never environment variables.** `os.Getenv` is
 > NEVER used for configuration. Bootstrap knobs are `--flag=value`; everything
@@ -2290,7 +2350,7 @@ All methods are stateless — they only inspect the JWT or request context and w
 | `RequireSession(w, r) (*Session, bool)` | 401 if no session. Use when you need the full session. |
 | `RequireUser(w, r) (int, bool)` | 401 if no user id. |
 | `RequirePartner(w, r) (int64, bool)` | 401 if `partner_id < 0`. |
-| `ReadRequest(w, r, &req) bool` | `MaxBytesReader(common.Config().MaxRequestSize)` + JSON unmarshal; 400 on failure. Public endpoints. |
+| `ReadRequest(w, r, &req) bool` | `MaxBytesReader(config.Config().MaxRequestSize)` + JSON unmarshal; 400 on failure. Public endpoints. |
 | `ReadAuthRequest(w, r, &req) (*Session, bool)` | `RequireSession + ReadRequest` combined. Authenticated endpoints with a JSON body. |
 | `RequireMethod(w, r, methods...string) bool` | 405 + `Allow` header if `r.Method` doesn't match any of the allowed methods. One-line guard for HTTP-method-restricted handlers. |
 | `RequireQueryInt64(w, r, name string) (int64, bool)` | Reads `?name=<int>` from the URL, parses to int64. 400 on missing or unparseable value. |
@@ -2701,7 +2761,7 @@ sail with no compile-time signal, so the following are HARD constraints:
   webhook bodies — an unauthenticated attacker would otherwise fill the
   log table with garbage.
 - **Bound every external input.** `MaxBytesReader` for HTTP bodies
-  (`common.Config().MaxRequestSize` global cap; `MaxWebhookBodyBytes` tighter cap
+  (`config.Config().MaxRequestSize` global cap; `MaxWebhookBodyBytes` tighter cap
   for webhooks); `MaxSigHeaderBytes` for signature headers;
   `stripeMaxResponseBytes` for upstream responses. A missing bound is a
   DoS vector.

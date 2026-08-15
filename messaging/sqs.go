@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
 )
 
@@ -27,7 +27,7 @@ type SQSSubscriber struct {
 }
 
 func NewSQSSubscriber() (*SQSSubscriber, error) {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("sqs: load AWS config: %w", err)
 	}
@@ -62,8 +62,8 @@ func (s *SQSSubscriber) Subscribe(ctx context.Context, subscription string, hand
 		}
 		// Ack/Nack run on a detached ctx (P1-22) so parent cancellation during
 		// graceful shutdown can't leave in-flight messages unfinalized.
-		ackDeadline := common.Config().SqsAckDeadline
-		nackBackoff := int32(common.Config().SqsNackBackoffSeconds)
+		ackDeadline := config.Config().SqsAckDeadline
+		nackBackoff := int32(config.Config().SqsNackBackoffSeconds)
 		for _, m := range out.Messages {
 			attrs := make(map[string]string, len(m.MessageAttributes))
 			for k, v := range m.MessageAttributes {

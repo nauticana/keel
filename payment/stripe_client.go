@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/secret"
 )
 
@@ -302,7 +303,7 @@ func (c *StripeCheckoutClient) requestRaw(ctx context.Context, method, path, bod
 
 	var lastErr error
 	backoff := 200 * time.Millisecond
-	for attempt := 0; attempt <= common.Config().StripeMaxRetries; attempt++ {
+	for attempt := 0; attempt <= config.Config().StripeMaxRetries; attempt++ {
 		var bodyReader io.Reader
 		if body != "" {
 			bodyReader = strings.NewReader(body)

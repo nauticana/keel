@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/dispatcher"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
@@ -103,7 +104,7 @@ type otpSendResponse struct {
 }
 
 func makeOtpSendResponse(token string) otpSendResponse {
-	return otpSendResponse{OtpToken: token, ResendCountdownSec: common.Config().OTPTTLSeconds}
+	return otpSendResponse{OtpToken: token, ResendCountdownSec: config.Config().OTPTTLSeconds}
 }
 
 // otpTokenPrefix is the cache-key namespace for SendOTP-issued tokens.
@@ -129,7 +130,7 @@ func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel, purpose 
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	value := strconv.Itoa(userID) + ":" + channel + ":" + purpose
-	if err := h.Cache.Set(r.Context(), otpTokenPrefix+token, value, common.Config().OTPTokenTTL); err != nil {
+	if err := h.Cache.Set(r.Context(), otpTokenPrefix+token, value, config.Config().OTPTokenTTL); err != nil {
 		return "", fmt.Errorf("otp: cache set: %w", err)
 	}
 	return token, nil
@@ -524,7 +525,7 @@ func (h *OTPHandler) mintFakeOTPToken(r *http.Request, channel string) (string, 
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	if h.Cache != nil {
 		// userID=0 is intentional: VerifyOTP rejects it.
-		_ = h.Cache.Set(r.Context(), otpTokenPrefix+token, "0:"+channel, common.Config().OTPTokenTTL)
+		_ = h.Cache.Set(r.Context(), otpTokenPrefix+token, "0:"+channel, config.Config().OTPTokenTTL)
 	}
 	return token, nil
 }
@@ -638,7 +639,7 @@ func (h *OTPHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 	// Refresh the token TTL (preserving the channel suffix) so the
 	// legitimate user has the full Verify window after a resend.
 	if h.Cache != nil {
-		_ = h.Cache.Set(r.Context(), otpTokenPrefix+req.OTPToken, strconv.Itoa(userID)+":"+channel+":"+purpose, common.Config().OTPTokenTTL)
+		_ = h.Cache.Set(r.Context(), otpTokenPrefix+req.OTPToken, strconv.Itoa(userID)+":"+channel+":"+purpose, config.Config().OTPTokenTTL)
 	}
 
 	// Resend on the same channel SendOTP used. Channel was stored

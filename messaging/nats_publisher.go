@@ -10,7 +10,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/secret"
 )
 
@@ -27,7 +27,7 @@ const natsDefaultFetch = 16
 // Connect attempt is bounded by the nats_connect_timeout config so a hung server can't stall startup indefinitely (P2-14).
 // Once connected, the nats.MaxReconnects(-1) + nats.ReconnectWait(2s) options take over for runtime resilience.
 func NATSConnect(ctx context.Context, secrets secret.SecretProvider) (*nats.Conn, error) {
-	cfg := common.Config()
+	cfg := config.Config()
 	url := strings.TrimSpace(cfg.NatsURL)
 	if url == "" {
 		url = nats.DefaultURL

@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 
 	"github.com/nauticana/keel/port"
 )
@@ -234,7 +234,7 @@ func (s *SnowflakeGenerator) NextID() int64 {
 		// future so the on-disk value always exceeds every id minted since the
 		// last write. A crash + wall-clock rewind then resumes beyond all
 		// issued ids (no reuse), while we still write only ~once per window.
-		reserved := nowMs + common.Config().SnowflakeStatePersistMs
+		reserved := nowMs + config.Config().SnowflakeStatePersistMs
 		s.writeSnowflakeState(s.statePath, reserved)
 		s.lastPersistedMs = reserved
 	}

@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
 )
 
@@ -189,7 +190,7 @@ func (s *QuotaServiceDb) quotaItem(ctx context.Context, partnerID int64, quotaNa
 				fresh[resourceName] = QuotaItem{
 					Limit:     common.AsInt64(row[1]),
 					Period:    common.AsString(row[2]),
-					ExpiresAt: now.Add(common.Config().QuotaCacheTTL),
+					ExpiresAt: now.Add(config.Config().QuotaCacheTTL),
 				}
 			}
 			s.mu.Lock()

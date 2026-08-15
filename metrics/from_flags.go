@@ -8,7 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
 )
 
@@ -25,7 +25,7 @@ var (
 // metrics_addr disables metrics and returns nil; callers must treat a nil
 // recorder as a no-op. Call after the configuration is loaded.
 func NewRecorderFromFlags() port.MetricsRecorder {
-	cfg := common.Config()
+	cfg := config.Config()
 	if cfg == nil || cfg.MetricsAddr == "" {
 		return nil
 	}

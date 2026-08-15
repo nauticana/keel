@@ -6,6 +6,7 @@ import (
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
 )
 
@@ -74,14 +75,14 @@ func (h *SecurityHandler) rateLimitVerify2FA(r *http.Request) bool {
 		return false
 	}
 	key := "2fa_verify_ip:" + TrustedClientIP(r)
-	count, err := h.Cache.IncrementWithTTL(r.Context(), key, common.Config().Verify2FAWindow)
+	count, err := h.Cache.IncrementWithTTL(r.Context(), key, config.Config().Verify2FAWindow)
 	if err != nil {
 		if h.Journal != nil {
 			h.Journal.Error(fmt.Sprintf("2fa verify rate limit unavailable, allowing: %v", err))
 		}
 		return false
 	}
-	return count > int64(common.Config().Verify2FAPerIP)
+	return count > int64(config.Config().Verify2FAPerIP)
 }
 
 // GetPublicRoutes returns public (unauthenticated) security routes for login-time 2FA verification.

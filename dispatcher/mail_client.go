@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/secret"
 )
 
@@ -36,7 +37,7 @@ func (m *MailClient) SendEmail(ctx context.Context, subject string, body string,
 	if err := validateHeaders(headers); err != nil {
 		return err
 	}
-	switch common.Config().MailMode {
+	switch config.Config().MailMode {
 	case "api":
 		return m.sendViaAPI(ctx, subject, body, recipients, headers)
 	default:
@@ -86,7 +87,7 @@ func validateHeaders(headers map[string]string) error {
 }
 
 func (m *MailClient) SendEmailHTML(ctx context.Context, subject string, htmlBody string, recipients []string, attachmentName string, attachmentData []byte) error {
-	switch common.Config().MailMode {
+	switch config.Config().MailMode {
 	case "api":
 		return m.sendHTMLViaAPI(ctx, subject, htmlBody, recipients)
 	default:
@@ -136,9 +137,9 @@ func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body strin
 	if err != nil {
 		return fmt.Errorf("failed to get SMTP password: %w", err)
 	}
-	from := scrubMailHeader(common.Config().SmtpFrom)
-	host := common.Config().SmtpHost
-	port := common.Config().SmtpPort
+	from := scrubMailHeader(config.Config().SmtpFrom)
+	host := config.Config().SmtpHost
+	port := config.Config().SmtpPort
 	addr := host + ":" + strconv.Itoa(port)
 
 	cleanRcpts := scrubRecipients(recipients)
@@ -160,7 +161,7 @@ func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body strin
 	}
 	msg := hdr.String() + "\r\n" + body
 	pass := strings.TrimSpace(smtpPass)
-	return sendSMTPWithStartTLS(addr, host, common.Config().SmtpUser, pass, from, cleanRcpts, []byte(msg))
+	return sendSMTPWithStartTLS(addr, host, config.Config().SmtpUser, pass, from, cleanRcpts, []byte(msg))
 }
 
 // sendSMTPWithStartTLS dials the server, opportunistically upgrades
@@ -177,11 +178,11 @@ func sendSMTPWithStartTLS(addr, host, user, pass, from string, recipients []stri
 	// Bounded dial + overall deadline so a peer that accepts the TCP connection
 	// but stalls on the greeting/STARTTLS/DATA can't block the worker tick
 	// indefinitely (a synchronous dispatch would otherwise wedge the loop).
-	conn, err := net.DialTimeout("tcp", addr, common.Config().SmtpDialTimeout)
+	conn, err := net.DialTimeout("tcp", addr, config.Config().SmtpDialTimeout)
 	if err != nil {
 		return fmt.Errorf("smtp: dial %s: %w", addr, err)
 	}
-	_ = conn.SetDeadline(time.Now().Add(common.Config().SmtpDeadline))
+	_ = conn.SetDeadline(time.Now().Add(config.Config().SmtpDeadline))
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		conn.Close()
@@ -231,9 +232,9 @@ func (m *MailClient) sendHTMLViaSMTP(ctx context.Context, subject string, htmlBo
 	if err != nil {
 		return fmt.Errorf("failed to get SMTP password: %w", err)
 	}
-	from := scrubMailHeader(common.Config().SmtpFrom)
-	host := common.Config().SmtpHost
-	port := common.Config().SmtpPort
+	from := scrubMailHeader(config.Config().SmtpFrom)
+	host := config.Config().SmtpHost
+	port := config.Config().SmtpPort
 	addr := host + ":" + strconv.Itoa(port)
 
 	cleanRcpts := scrubRecipients(recipients)
@@ -295,7 +296,7 @@ func (m *MailClient) sendHTMLViaSMTP(ctx context.Context, subject string, htmlBo
 
 	msg := append(headers.Bytes(), body.Bytes()...)
 	pass := strings.TrimSpace(smtpPass)
-	return sendSMTPWithStartTLS(addr, host, common.Config().SmtpUser, pass, from, cleanRcpts, msg)
+	return sendSMTPWithStartTLS(addr, host, config.Config().SmtpUser, pass, from, cleanRcpts, msg)
 }
 
 // --- API mode ---
@@ -324,7 +325,7 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 	if err != nil {
 		return fmt.Errorf("failed to get mail API key: %w", err)
 	}
-	host := strings.TrimSpace(common.Config().SmtpHost)
+	host := strings.TrimSpace(config.Config().SmtpHost)
 	if host == "" {
 		return fmt.Errorf("smtp_host not configured")
 	}
@@ -346,7 +347,7 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 		}
 	}
 	payloadMap := map[string]interface{}{
-		"from":    common.Config().SmtpFrom,
+		"from":    config.Config().SmtpFrom,
 		"to":      recipients,
 		"subject": subject,
 		"body":    body,

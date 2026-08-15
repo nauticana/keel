@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS table_sequence_usage (
     PRIMARY KEY (table_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Catalog of runtime configuration flags loaded into common.BaseConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
+-- Catalog of runtime configuration flags loaded into config.KeelConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
 CREATE TABLE IF NOT EXISTS application_config_flag (
     id                                   VARCHAR(80)   NOT NULL,
     data_type                            VARCHAR(20)   NOT NULL DEFAULT 'string',

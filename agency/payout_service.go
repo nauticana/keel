@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/payout"
@@ -304,7 +305,7 @@ func (s *BaseAgencyPayoutService) RunCycle(ctx context.Context) error {
 }
 
 func (s *BaseAgencyPayoutService) buildPayouts(ctx context.Context, cutoff time.Time) error {
-	minimum := common.Config().AgencyPayoutMinMinor
+	minimum := config.Config().AgencyPayoutMinMinor
 	result, err := s.Query(ctx, qPayoutGroups, cutoff, s.Provider.Code())
 	if err != nil {
 		return err

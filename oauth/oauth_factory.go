@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/oauth/authserver"
 	"github.com/nauticana/keel/oauth/resource"
@@ -29,7 +30,7 @@ type Setup struct {
 //   - external: keel is resource-server only; validates the oauth_issuer IdP.
 //   - local (default): keel is its own AS, issuing + validating RS256 tokens.
 func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets secret.SecretProvider, httpc *http.Client, journal logger.ApplicationLogger) (*Setup, error) {
-	mode := common.Config().OAuthASMode
+	mode := config.Config().OAuthASMode
 	switch mode {
 	case "disabled":
 		return &Setup{Mode: mode}, nil
@@ -48,20 +49,20 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 		return &Setup{Mode: mode, Validator: v}, nil
 
 	case "local":
-		issuer := common.Config().OAuthIssuer
+		issuer := config.Config().OAuthIssuer
 		if issuer == "" {
 			return nil, fmt.Errorf("oauth: oauth_as_mode=local requires oauth_issuer (this AS's public base URL)")
 		}
 		// An empty scope allowlist would let open DCR register + mint any scope
 		// (e.g. admin). Require an explicit list so the clamp has teeth.
-		if len(common.SplitCSV(common.Config().OAuthScopesSupported)) == 0 {
+		if len(common.SplitCSV(config.Config().OAuthScopesSupported)) == 0 {
 			return nil, fmt.Errorf("oauth: oauth_as_mode=local requires a non-empty oauth_scopes_supported (the scope allowlist)")
 		}
 		signer, err := loadOrGenSigner(ctx, secrets, journal)
 		if err != nil {
 			return nil, err
 		}
-		aud := common.Config().OAuthAudience
+		aud := config.Config().OAuthAudience
 		if aud == "" {
 			aud = issuer
 		}
@@ -74,18 +75,18 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 		validator := authserver.NewLocalValidator(signer, issuer, aud)
 		// Valid token audiences = the multi-resource CSV plus the single PRM
 		// resource; DefaultAudience is always added in authserver.NewLocal.
-		resources := common.SplitCSV(common.Config().OAuthResources)
-		if common.Config().OAuthResource != "" {
-			resources = append(resources, common.Config().OAuthResource)
+		resources := common.SplitCSV(config.Config().OAuthResources)
+		if config.Config().OAuthResource != "" {
+			resources = append(resources, config.Config().OAuthResource)
 		}
 		cfg := authserver.Config{
 			Issuer:          issuer,
 			DefaultAudience: aud,
-			Scopes:          common.SplitCSV(common.Config().OAuthScopesSupported),
+			Scopes:          common.SplitCSV(config.Config().OAuthScopesSupported),
 			Resources:       resources,
-			AccessTTL:       common.Config().OAuthAccessTokenTTL,
-			RefreshTTL:      common.Config().OAuthRefreshTokenTTL,
-			CodeTTL:         common.Config().OAuthCodeTTL,
+			AccessTTL:       config.Config().OAuthAccessTokenTTL,
+			RefreshTTL:      config.Config().OAuthRefreshTokenTTL,
+			CodeTTL:         config.Config().OAuthCodeTTL,
 		}
 		as := authserver.NewLocal(signer, clients, codes, tokens, cfg)
 		// validator is the single-audience resource-server validator for the
@@ -99,7 +100,7 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 }
 
 func loadOrGenSigner(ctx context.Context, secrets secret.SecretProvider, journal logger.ApplicationLogger) (*authserver.RS256Signer, error) {
-	name := common.Config().OAuthSigningKeySecret
+	name := config.Config().OAuthSigningKeySecret
 	if name == "" {
 		if journal != nil {
 			journal.Error("oauth: oauth_signing_key_secret empty — using an EPHEMERAL signing key; tokens die on restart and differ per node (dev only)")

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/rest"
 	"github.com/nauticana/keel/secret"
 	"github.com/nauticana/keel/user"
@@ -129,7 +130,7 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		req.RedirectURI = "postmessage"
 	}
 
-	clientID := common.Config().GoogleClientID
+	clientID := config.Config().GoogleClientID
 	if clientID == "" {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "google_client_id flag is not configured")
 		return

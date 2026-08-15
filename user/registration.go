@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/keel/billing"
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/port"
@@ -330,7 +331,7 @@ func (r *RegistrationService) Register(ctx context.Context, email string, confir
 	// Validate confirmation code
 	email = normalizeEmail(email)
 	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	cutoff := time.Now().Add(-common.Config().RegistrationConfirmationTTL)
+	cutoff := time.Now().Add(-config.Config().RegistrationConfirmationTTL)
 	res, err := qs.Query(ctx, qGetUserRegistration, email, cutoff)
 	if err != nil {
 		return nil, err
@@ -343,7 +344,7 @@ func (r *RegistrationService) Register(ctx context.Context, email string, confir
 	}
 	expected := int(common.AsInt32(res.Rows[0][0]))
 	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= common.Config().MaxRegistrationAttempts {
+	if attempts >= config.Config().MaxRegistrationAttempts {
 		_, _ = qs.Query(ctx, qExpireRegistration, email)
 		return nil, fmt.Errorf("invalid or expired confirmation")
 	}
@@ -354,7 +355,7 @@ func (r *RegistrationService) Register(ctx context.Context, email string, confir
 		// against fresh `attempts` reads.
 		bumpRes, _ := qs.Query(ctx, qBumpRegistrationAttempts, email, expected)
 		if bumpRes != nil && len(bumpRes.Rows) > 0 {
-			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= common.Config().MaxRegistrationAttempts {
+			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= config.Config().MaxRegistrationAttempts {
 				_, _ = qs.Query(ctx, qExpireRegistration, email)
 			}
 		}
@@ -629,7 +630,7 @@ func (r *RegistrationService) SendPasswordChangeConfirmation(ctx context.Context
 func (r *RegistrationService) ConfirmPasswordChange(ctx context.Context, email string, confirmation int) error {
 	email = normalizeEmail(email)
 	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	cutoff := time.Now().Add(-common.Config().RegistrationConfirmationTTL)
+	cutoff := time.Now().Add(-config.Config().RegistrationConfirmationTTL)
 	res, err := qs.Query(ctx, qGetUserRegistration, email, cutoff)
 	if err != nil {
 		return err
@@ -639,14 +640,14 @@ func (r *RegistrationService) ConfirmPasswordChange(ctx context.Context, email s
 	}
 	expected := int(common.AsInt32(res.Rows[0][0]))
 	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= common.Config().MaxRegistrationAttempts {
+	if attempts >= config.Config().MaxRegistrationAttempts {
 		_, _ = qs.Query(ctx, qExpireRegistration, email)
 		return fmt.Errorf("invalid or expired confirmation")
 	}
 	if confirmation != expected {
 		bumpRes, _ := qs.Query(ctx, qBumpRegistrationAttempts, email, expected)
 		if bumpRes != nil && len(bumpRes.Rows) > 0 {
-			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= common.Config().MaxRegistrationAttempts {
+			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= config.Config().MaxRegistrationAttempts {
 				_, _ = qs.Query(ctx, qExpireRegistration, email)
 			}
 		}

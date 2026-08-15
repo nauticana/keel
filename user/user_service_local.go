@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 
@@ -590,7 +591,7 @@ DELETE FROM user_otp WHERE id = ?
 // sessionTimeout reads session_timeout per call so a config RELOAD applies
 // to the next session without a restart.
 func sessionTimeout() time.Duration {
-	return time.Duration(common.Config().SessionTimeout) * time.Second
+	return time.Duration(config.Config().SessionTimeout) * time.Second
 }
 
 type LocalUserService struct {
@@ -1664,7 +1665,7 @@ func (s *LocalUserService) GenerateOTP(userId int, purpose string) (string, erro
 		return "", fmt.Errorf("generate otp: %w", err)
 	}
 	otp := fmt.Sprintf("%06d", code.Int64()+100000)
-	_, err = s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose, common.Config().OTPTTLSeconds)
+	_, err = s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose, config.Config().OTPTTLSeconds)
 	if err != nil {
 		return "", err
 	}
@@ -1772,7 +1773,7 @@ func (s *LocalUserService) ConfirmContactChange(userID int, channel, newValue st
 		}
 		newValue = n
 	}
-	cutoff := time.Now().Add(-common.Config().RegistrationConfirmationTTL)
+	cutoff := time.Now().Add(-config.Config().RegistrationConfirmationTTL)
 	res, err := s.queryService.Query(ctx, qGetContactChange, newValue, userID, cutoff)
 	if err != nil {
 		return err
@@ -1783,7 +1784,7 @@ func (s *LocalUserService) ConfirmContactChange(userID int, channel, newValue st
 	expected := int(common.AsInt32(res.Rows[0][0]))
 	payload := common.AsString(res.Rows[0][1])
 	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= common.Config().MaxRegistrationAttempts {
+	if attempts >= config.Config().MaxRegistrationAttempts {
 		_, _ = s.queryService.Query(ctx, qExpireContactChange, newValue, userID)
 		return fmt.Errorf("invalid or expired confirmation")
 	}

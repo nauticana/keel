@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
@@ -74,7 +74,7 @@ func (d *smsDispatcher) Send(ctx context.Context, to, _, body string, data map[s
 // required credential/id is missing, so callers register the "sms" channel
 // only on success and cleanly run with SMS disabled otherwise.
 func NewSMSDispatcher(ctx context.Context, secrets secret.SecretProvider, users port.RecipientResolver, journal logger.ApplicationLogger) (port.MessageDispatcher, error) {
-	switch strings.ToLower(strings.TrimSpace(common.Config().SMSProvider)) {
+	switch strings.ToLower(strings.TrimSpace(config.Config().SMSProvider)) {
 	case "twilio":
 		return newTwilioSMSDispatcher(ctx, secrets, users, journal)
 	case "telnyx":
@@ -82,7 +82,7 @@ func NewSMSDispatcher(ctx context.Context, secrets secret.SecretProvider, users 
 	case "":
 		return nil, fmt.Errorf("sms: sms_provider not set")
 	default:
-		return nil, fmt.Errorf("sms: unknown sms_provider %q", common.Config().SMSProvider)
+		return nil, fmt.Errorf("sms: unknown sms_provider %q", config.Config().SMSProvider)
 	}
 }
 

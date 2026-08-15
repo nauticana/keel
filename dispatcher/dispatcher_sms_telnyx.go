@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
@@ -38,7 +38,7 @@ func newTelnyxSMSDispatcher(ctx context.Context, secrets secret.SecretProvider, 
 	if apiKey == "" {
 		return nil, fmt.Errorf("telnyx: sms_auth_token is empty")
 	}
-	profileID := strings.TrimSpace(common.Config().SMSServiceSID)
+	profileID := strings.TrimSpace(config.Config().SMSServiceSID)
 	if profileID == "" {
 		return nil, fmt.Errorf("telnyx: sms_service_sid not set")
 	}

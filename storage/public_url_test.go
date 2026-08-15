@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 )
 
 func TestS3PublicURL(t *testing.T) {
@@ -46,9 +46,9 @@ func TestFactoryUnknownMode(t *testing.T) {
 }
 
 func TestFactoryAzureRequiresAccountURL(t *testing.T) {
-	orig := common.Config().StorageAccountURL
-	t.Cleanup(func() { common.Config().StorageAccountURL = orig })
-	common.Config().StorageAccountURL = ""
+	orig := config.Config().StorageAccountURL
+	t.Cleanup(func() { config.Config().StorageAccountURL = orig })
+	config.Config().StorageAccountURL = ""
 	_, err := New(context.Background(), "azure")
 	if err == nil || !strings.Contains(err.Error(), "storage_account_url is required") {
 		t.Fatalf("expected storage_account_url error, got %v", err)

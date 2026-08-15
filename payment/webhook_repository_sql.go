@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
 )
 
@@ -21,9 +22,9 @@ const (
 
 // claimLeaseSeconds (DB clock, last_claimed_at) spaces replay attempts per
 // row and bounds how long a crashed claim blocks recovery. Sourced from the
-// webhook_claim_lease_seconds config flag; ApplyBase rejects non-positive
-// values.
-func claimLeaseSeconds() int { return common.Config().WebhookClaimLeaseSeconds }
+// webhook_claim_lease_seconds config flag; the config load rejects
+// non-positive values.
+func claimLeaseSeconds() int { return config.Config().WebhookClaimLeaseSeconds }
 
 const (
 	qLogWebhook           = "payment_log_webhook"

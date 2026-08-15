@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
@@ -30,9 +30,9 @@ func (f *rateResolverTx) Commit(context.Context) error                          
 func (f *rateResolverTx) Rollback(context.Context) error                           { return nil }
 
 func TestFrozenRateAllowsAgencyOverrideWhenProgramDefaultUnavailable(t *testing.T) {
-	previous := common.Config()
-	common.SetConfig(&common.BaseConfig{})
-	defer common.SetConfig(previous)
+	previous := config.Config().DefaultCommissionRateBP
+	config.Config().DefaultCommissionRateBP = 0
+	t.Cleanup(func() { config.Config().DefaultCommissionRateBP = previous })
 
 	rate, err := NewBaseFrozenRateResolver().Resolve(context.Background(), &rateResolverTx{}, 10, 20)
 	if err != nil {

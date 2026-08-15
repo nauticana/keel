@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/service"
 )
@@ -32,7 +32,7 @@ func NewBaseCommissionLedger(db port.DatabaseRepository) *BaseCommissionLedger {
 }
 
 func (s *BaseCommissionLedger) PromoteHeld(ctx context.Context) error {
-	holdDays := common.Config().CommissionHoldDays
+	holdDays := config.Config().CommissionHoldDays
 	cutoff := s.now().AddDate(0, 0, -holdDays)
 	if err := s.Exec(ctx, qPromoteHeld, cutoff); err != nil {
 		return fmt.Errorf("agency: promote held commissions: %w", err)

@@ -40,7 +40,7 @@ const (
 // Bootstrap flags only. Everything consumed before (or in order to get) the
 // DB connection stays a --flag: the log sink, the secret provider, the DB
 // itself, and --node_id. Every other runtime setting lives in the
-// application_config_* tables and is read via common.Config() (BaseConfig).
+// application_config_* tables and is read via config.Config() (KeelConfig).
 var (
 	LogType = flag.String("log_type", "local", "Log type: local, gcp, aws, or azure")
 	LogRoot = flag.String("log_root", "/opt/app/log", "Log folder")

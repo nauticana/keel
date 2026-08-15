@@ -3,17 +3,17 @@ package resource
 import (
 	"testing"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 )
 
 func TestNewJWTValidatorFromConfig(t *testing.T) {
-	i, j, a := common.Config().OAuthIssuer, common.Config().OAuthJWKSURL, common.Config().OAuthAudience
+	i, j, a := config.Config().OAuthIssuer, config.Config().OAuthJWKSURL, config.Config().OAuthAudience
 	t.Cleanup(func() {
-		common.Config().OAuthIssuer, common.Config().OAuthJWKSURL, common.Config().OAuthAudience = i, j, a
+		config.Config().OAuthIssuer, config.Config().OAuthJWKSURL, config.Config().OAuthAudience = i, j, a
 	})
 
 	set := func(issuer, jwks, aud string) {
-		common.Config().OAuthIssuer, common.Config().OAuthJWKSURL, common.Config().OAuthAudience = issuer, jwks, aud
+		config.Config().OAuthIssuer, config.Config().OAuthJWKSURL, config.Config().OAuthAudience = issuer, jwks, aud
 	}
 
 	t.Run("disabled when issuer empty", func(t *testing.T) {

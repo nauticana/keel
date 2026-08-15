@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/crypto"
 	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
@@ -26,7 +26,7 @@ var _ port.TokenValidator = (*JWTValidator)(nil)
 // protected-resource identifier access tokens must target; both are required.
 func NewJWTValidator(jwksURL, issuer, audience string, httpc *http.Client) *JWTValidator {
 	return &JWTValidator{
-		jwks:     crypto.NewJWKSProvider(jwksURL, common.Config().OAuthJWKSCacheTTL, httpc),
+		jwks:     crypto.NewJWKSProvider(jwksURL, config.Config().OAuthJWKSCacheTTL, httpc),
 		issuer:   issuer,
 		audience: audience,
 	}
@@ -37,13 +37,13 @@ func NewJWTValidator(jwksURL, issuer, audience string, httpc *http.Client) *JWTV
 // oauth_jwks_url or oauth_audience is empty (fail fast). Returns the
 // interface so the disabled case is a true nil a `!= nil` guard catches.
 func NewJWTValidatorFromConfig(httpc *http.Client) (port.TokenValidator, error) {
-	if common.Config().OAuthIssuer == "" {
+	if config.Config().OAuthIssuer == "" {
 		return nil, nil
 	}
-	if common.Config().OAuthJWKSURL == "" || common.Config().OAuthAudience == "" {
+	if config.Config().OAuthJWKSURL == "" || config.Config().OAuthAudience == "" {
 		return nil, fmt.Errorf("oauth: oauth_issuer is set but oauth_jwks_url or oauth_audience is empty")
 	}
-	return NewJWTValidator(common.Config().OAuthJWKSURL, common.Config().OAuthIssuer, common.Config().OAuthAudience, httpc), nil
+	return NewJWTValidator(config.Config().OAuthJWKSURL, config.Config().OAuthIssuer, config.Config().OAuthAudience, httpc), nil
 }
 
 func (v *JWTValidator) Validate(ctx context.Context, bearer string) (*port.Principal, error) {

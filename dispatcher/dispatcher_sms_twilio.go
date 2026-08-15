@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
@@ -44,7 +44,7 @@ func newTwilioSMSDispatcher(ctx context.Context, secrets secret.SecretProvider, 
 	if token == "" {
 		return nil, fmt.Errorf("twilio: sms_auth_token is empty")
 	}
-	msgSvc := strings.TrimSpace(common.Config().SMSServiceSID)
+	msgSvc := strings.TrimSpace(config.Config().SMSServiceSID)
 	if msgSvc == "" {
 		return nil, fmt.Errorf("twilio: sms_service_sid not set")
 	}

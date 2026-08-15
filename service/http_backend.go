@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
@@ -49,7 +50,7 @@ type HttpBackend struct {
 	// Storage is the optional object-storage backend (s3/R2, gcs, azure)
 	// selected by storage_mode. nil when storage is not configured;
 	// handlers that serve uploads should nil-check before use. Build it
-	// with storage.New(ctx, common.Config().StorageMode). Call svc.Storage.Upload
+	// with storage.New(ctx, config.Config().StorageMode). Call svc.Storage.Upload
 	// to store a blob and svc.Storage.PublicURL to get its served URL.
 	Storage storage.ObjectStorage
 
@@ -165,8 +166,8 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	// TLS but no cert is configured, fail fast — a mis-provisioned prod
 	// deploy would otherwise accept zero traffic silently.
 	policy := resolveTLSPolicy()
-	if policy.enforce && (common.Config().TLSCert == "" || common.Config().TLSKey == "") {
-		h.Journal.Fatal(fmt.Sprintf("max_tls_version=%s requires tls_cert and tls_key", common.Config().MaxTLSVersion))
+	if policy.enforce && (config.Config().TLSCert == "" || config.Config().TLSKey == "") {
+		h.Journal.Fatal(fmt.Sprintf("max_tls_version=%s requires tls_cert and tls_key", config.Config().MaxTLSVersion))
 		return
 	}
 
@@ -174,9 +175,9 @@ func (h *HttpBackend) Run(ctx context.Context) {
 		return &http.Server{
 			Addr:         fmt.Sprintf(":%d", port),
 			Handler:      h.handler,
-			ReadTimeout:  time.Duration(common.Config().HttpReadTimeout) * time.Second,
-			WriteTimeout: time.Duration(common.Config().HttpWriteTimeout) * time.Second,
-			IdleTimeout:  time.Duration(common.Config().HttpIdleTimeout) * time.Second,
+			ReadTimeout:  time.Duration(config.Config().HttpReadTimeout) * time.Second,
+			WriteTimeout: time.Duration(config.Config().HttpWriteTimeout) * time.Second,
+			IdleTimeout:  time.Duration(config.Config().HttpIdleTimeout) * time.Second,
 		}
 	}
 
@@ -186,8 +187,8 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	// permission for <1024) used to silently log + hang.
 	listenFail := make(chan error, 2)
 
-	plainServer := newServer(common.Config().HttpApiPort)
-	h.Journal.Info(fmt.Sprintf("starting http server on port %d (tls_policy=%s)", common.Config().HttpApiPort, common.Config().MaxTLSVersion))
+	plainServer := newServer(config.Config().HttpApiPort)
+	h.Journal.Info(fmt.Sprintf("starting http server on port %d (tls_policy=%s)", config.Config().HttpApiPort, config.Config().MaxTLSVersion))
 	go func() {
 		if err := plainServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			h.Journal.Error("http listener: " + err.Error())
@@ -196,14 +197,14 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	}()
 
 	var tlsServer *http.Server
-	if common.Config().TLSCert != "" && common.Config().TLSKey != "" {
-		tlsServer = newServer(common.Config().HTTPSPort)
+	if config.Config().TLSCert != "" && config.Config().TLSKey != "" {
+		tlsServer = newServer(config.Config().HTTPSPort)
 		if policy.enforce {
 			tlsServer.TLSConfig = &tls.Config{MinVersion: policy.minVersion}
 		}
-		h.Journal.Info(fmt.Sprintf("starting https server on port %d", common.Config().HTTPSPort))
+		h.Journal.Info(fmt.Sprintf("starting https server on port %d", config.Config().HTTPSPort))
 		go func() {
-			if err := tlsServer.ListenAndServeTLS(common.Config().TLSCert, common.Config().TLSKey); err != nil && err != http.ErrServerClosed {
+			if err := tlsServer.ListenAndServeTLS(config.Config().TLSCert, config.Config().TLSKey); err != nil && err != http.ErrServerClosed {
 				h.Journal.Error("tls listener: " + err.Error())
 				listenFail <- err
 			}
@@ -341,7 +342,7 @@ type tlsPolicy struct {
 // resolveTLSPolicy parses the max_tls_version flag. Unknown values
 // fall back to "none" with a one-time warning logged by the caller.
 func resolveTLSPolicy() tlsPolicy {
-	switch strings.ToLower(common.Config().MaxTLSVersion) {
+	switch strings.ToLower(config.Config().MaxTLSVersion) {
 	case "tls10":
 		return tlsPolicy{enforce: true, minVersion: tls.VersionTLS10}
 	case "tls11":

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/secret"
 )
 
@@ -101,7 +101,7 @@ func (v *StripeSignatureVerifier) Verify(ctx context.Context, sigHeader string, 
 
 	tolerance := v.Tolerance
 	if tolerance == 0 {
-		tolerance = common.Config().StripeWebhookTolerance
+		tolerance = config.Config().StripeWebhookTolerance
 	}
 	now := time.Now
 	if v.Now != nil {

@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/crypto"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/oauth/client"
@@ -236,7 +237,7 @@ func (s *CredentialStoreDB) ConsumeOAuthState(ctx context.Context, state, provid
 	if s.Nonce == nil {
 		return 0, nil, fmt.Errorf("connect: nonce store not configured")
 	}
-	raw, ok, err := s.Nonce.Consume(ctx, state, "oauth_state", common.Config().OAuthStateTTLSeconds)
+	raw, ok, err := s.Nonce.Consume(ctx, state, "oauth_state", config.Config().OAuthStateTTLSeconds)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -354,7 +355,7 @@ func (s *CredentialStoreDB) exchange(ctx context.Context, partnerID int64, provi
 // claim atomically leases the credential to this worker if it is still at
 // expectRev and unheld; returns the raw sealed cred_ref, or claimed=false.
 func (s *CredentialStoreDB) claim(ctx context.Context, partnerID int64, provider string, expectRev int) (string, bool, error) {
-	res, err := s.qs.Query(ctx, qClaim, common.Config().OAuthConnectLeaseSeconds, partnerID, client.EntityFromContext(ctx), provider, expectRev)
+	res, err := s.qs.Query(ctx, qClaim, config.Config().OAuthConnectLeaseSeconds, partnerID, client.EntityFromContext(ctx), provider, expectRev)
 	if err != nil {
 		return "", false, err
 	}

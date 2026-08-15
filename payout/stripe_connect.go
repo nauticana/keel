@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 )
 
@@ -564,7 +564,7 @@ func (p *StripeConnectProvider) VerifyAndParseWebhook(headers map[string][]strin
 	if err != nil {
 		return nil, fmt.Errorf("stripe connect: bad signature timestamp: %w", err)
 	}
-	tol := common.Config().StripeWebhookTolerance
+	tol := config.Config().StripeWebhookTolerance
 	if age := time.Since(time.Unix(tsUnix, 0)); age > tol || age < -tol {
 		return nil, fmt.Errorf("stripe connect: webhook timestamp outside tolerance")
 	}

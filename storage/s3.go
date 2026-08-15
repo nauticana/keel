@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -62,7 +62,7 @@ func newStorageS3(ctx context.Context, o *storageOptions) (*StorageS3, error) {
 		return nil, err
 	}
 	opts := []func(*s3.Options){}
-	if endpoint := strings.TrimSpace(common.Config().S3Endpoint); endpoint != "" {
+	if endpoint := strings.TrimSpace(config.Config().S3Endpoint); endpoint != "" {
 		opts = append(opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(endpoint)
 			// R2 and most non-AWS providers require path-style addressing
@@ -78,7 +78,7 @@ func newStorageS3(ctx context.Context, o *storageOptions) (*StorageS3, error) {
 		client:        client,
 		presignClient: s3.NewPresignClient(client),
 		uploader:      uploader,
-		publicBaseURL: strings.TrimRight(strings.TrimSpace(common.Config().StoragePublicBaseURL), "/"),
+		publicBaseURL: strings.TrimRight(strings.TrimSpace(config.Config().StoragePublicBaseURL), "/"),
 	}, nil
 }
 
@@ -98,10 +98,10 @@ func loadS3Config(ctx context.Context, o *storageOptions) (aws.Config, error) {
 		if strings.TrimSpace(id) == "" || strings.TrimSpace(key) == "" {
 			return aws.Config{}, fmt.Errorf("storage s3: credential injection requested but %q/%q are empty in the keystore", secretS3AccessKeyID, secretS3SecretAccessKey)
 		}
-		return config.LoadDefaultConfig(ctx,
-			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(id, key, "")))
+		return awsconfig.LoadDefaultConfig(ctx,
+			awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(id, key, "")))
 	}
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("storage s3: load AWS config: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
 )
 
@@ -55,7 +56,7 @@ func (s *BaseFrozenRateResolver) Resolve(ctx context.Context, tx port.TxQuerySer
 	if row != nil {
 		return checkedRate(common.AsInt64(row[0]))
 	}
-	programRate := int64(common.Config().DefaultCommissionRateBP)
+	programRate := int64(config.Config().DefaultCommissionRateBP)
 	row, err = queryFirst(ctx, qs, qRateInsert,
 		agencyPartnerID, clientPartnerID, programRate, agencyPartnerID)
 	if err != nil {

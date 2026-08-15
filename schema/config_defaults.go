@@ -4,7 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -13,13 +13,13 @@ var coreSeedYML []byte
 
 // ConfigDefaults returns the framework flag catalog from the embedded core
 // seed as flag_id -> ConfigRow (defaults only, no assigned values) — the same
-// shape BaseConfig.ApplyBase consumes.
-func ConfigDefaults() (map[string]common.ConfigRow, error) {
+// shape config.KeelConfig.Apply consumes.
+func ConfigDefaults() (config.ConfigRows, error) {
 	var sf SeedFile
 	if err := yaml.Unmarshal(coreSeedYML, &sf); err != nil {
 		return nil, fmt.Errorf("parse embedded core seed: %w", err)
 	}
-	m := make(map[string]common.ConfigRow)
+	m := make(config.ConfigRows)
 	for _, t := range sf.Seeds {
 		if t.Table != "application_config_flag" {
 			continue
@@ -37,7 +37,7 @@ func ConfigDefaults() (map[string]common.ConfigRow, error) {
 			return nil, fmt.Errorf("application_config_flag seed block lacks id/default_value columns")
 		}
 		for _, row := range t.Rows {
-			m[fmt.Sprint(row[idIdx])] = common.ConfigRow{Default: fmt.Sprint(row[defIdx])}
+			m[fmt.Sprint(row[idIdx])] = config.ConfigRow{Default: fmt.Sprint(row[defIdx])}
 		}
 	}
 	return m, nil
@@ -51,9 +51,9 @@ func LoadTestConfig() {
 	if err != nil {
 		panic(err)
 	}
-	cfg := &common.BaseConfig{}
-	if err := cfg.ApplyBase(m); err != nil {
+	c := &config.KeelConfig{}
+	if err := c.Apply(m); err != nil {
 		panic(err)
 	}
-	common.SetConfig(cfg)
+	config.SetConfig(c)
 }

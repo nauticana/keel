@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/nauticana/keel/config"
 	"golang.org/x/time/rate"
 )
 
@@ -34,17 +35,17 @@ var (
 func HTTPClient() *http.Client {
 	outboundOnce.Do(func() {
 		transport := http.DefaultTransport
-		if Config().OutboundMaxRPS > 0 {
+		if config.Config().OutboundMaxRPS > 0 {
 			transport = &rateLimitedTransport{
 				base:    http.DefaultTransport,
-				limiter: rate.NewLimiter(rate.Limit(Config().OutboundMaxRPS), burstFor(Config().OutboundMaxRPS)),
+				limiter: rate.NewLimiter(rate.Limit(config.Config().OutboundMaxRPS), burstFor(config.Config().OutboundMaxRPS)),
 			}
 		}
 		outboundClient = &http.Client{
 			// Read at construction (first outbound call, after config Load). The
 			// client is a cached singleton, so a later RELOAD won't rebuild it —
 			// changing the outbound timeout or RPS cap takes a restart.
-			Timeout:       Config().DefaultOutboundTimeout,
+			Timeout:       config.Config().DefaultOutboundTimeout,
 			Transport:     transport,
 			CheckRedirect: checkRedirect,
 		}
@@ -55,8 +56,8 @@ func HTTPClient() *http.Client {
 // checkRedirect caps redirect following and fails fast on a same-URL loop, so a
 // misbehaving peer can't bounce the client around forever.
 func checkRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= Config().OutboundMaxRedirects {
-		return fmt.Errorf("outbound: stopped after %d redirects (loop guard)", Config().OutboundMaxRedirects)
+	if len(via) >= config.Config().OutboundMaxRedirects {
+		return fmt.Errorf("outbound: stopped after %d redirects (loop guard)", config.Config().OutboundMaxRedirects)
 	}
 	for _, prev := range via {
 		if prev.URL.String() == req.URL.String() {

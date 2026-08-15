@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
@@ -53,11 +53,10 @@ type JobExecutor struct {
 	Interval int
 	Journal  logger.ApplicationLogger
 	Worker   Worker
-	// DB is the OLTP database. AbstractWorker.Run sets it (after loading
-	// common.Config from it via SetConfig); standalone constructions may leave it nil and
-	// supply NewDatabase instead — then the caller must load common.Config
-	// itself before Run, or DB-backed settings (hc_port, storage, tunables)
-	// read as zero.
+	// DB is the OLTP database. AbstractWorker.Run sets it after loading the
+	// configured application config; standalone constructions
+	// may leave it nil and supply NewDatabase instead — then the caller must load
+	// config.Config() itself before Run, or DB-backed settings read as zero.
 	DB          port.DatabaseRepository
 	NewDatabase func(ctx context.Context, sp secret.SecretProvider) (port.DatabaseRepository, error)
 	NewQuota    func(db port.DatabaseRepository) port.QuotaService
@@ -67,7 +66,7 @@ type JobExecutor struct {
 	// otherwise). ProcessQueue does not receive it as a parameter to keep
 	// the JobWorker interface stable; workers that need storage should hold
 	// a reference to their JobExecutor, or build their own via
-	// storage.New(ctx, common.Config().StorageMode).
+	// storage.New(ctx, config.Config().StorageMode).
 	Storage storage.ObjectStorage
 }
 
@@ -78,8 +77,8 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 	// errors are surfaced through the journal — previously they
 	// were silently dropped (P1-55).
 	hcPort := e.Worker.GetHealthcheckPort()
-	if common.Config().HCPort > 0 {
-		hcPort = common.Config().HCPort
+	if config.Config().HCPort > 0 {
+		hcPort = config.Config().HCPort
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/secret"
 )
 
@@ -30,13 +30,13 @@ func WithSecretProvider(sp secret.SecretProvider) Option {
 // s3_credential_mode (chain = ambient AWS chain/IAM, secret = keystore); gcs and
 // azure use their own ambient auth.
 func NewFromConfig(ctx context.Context, secrets secret.SecretProvider) (ObjectStorage, error) {
-	mode := strings.TrimSpace(common.Config().StorageMode)
+	mode := strings.TrimSpace(config.Config().StorageMode)
 	if mode == "" {
 		return nil, nil
 	}
 	var opts []Option
 	if mode == "s3" { // credential mode is S3-only; gcs/azure use their own ambient auth
-		switch common.Config().S3CredentialMode {
+		switch config.Config().S3CredentialMode {
 		case "secret":
 			if secrets == nil {
 				return nil, fmt.Errorf("s3_credential_mode=secret requires a secret provider, got nil")
@@ -45,14 +45,14 @@ func NewFromConfig(ctx context.Context, secrets secret.SecretProvider) (ObjectSt
 		case "chain":
 			// ambient AWS credential chain / IAM role
 		default:
-			return nil, fmt.Errorf("invalid s3_credential_mode %q (want chain or secret)", common.Config().S3CredentialMode)
+			return nil, fmt.Errorf("invalid s3_credential_mode %q (want chain or secret)", config.Config().S3CredentialMode)
 		}
 	}
 	return New(ctx, mode, opts...)
 }
 
 // New constructs the ObjectStorage backend named by mode, mirroring the
-// secret.NewSecretProvider factory pattern. Pass common.Config().StorageMode (the
+// secret.NewSecretProvider factory pattern. Pass config.Config().StorageMode (the
 // storage_mode flag) as mode.
 //
 //	s3    — AWS S3, or any S3-compatible provider via s3_endpoint
@@ -64,7 +64,7 @@ func NewFromConfig(ctx context.Context, secrets secret.SecretProvider) (ObjectSt
 //	        azidentity.DefaultAzureCredential.
 //
 // An empty mode is treated as a configuration error: callers that want
-// storage to be optional should check common.Config().StorageMode == "" themselves
+// storage to be optional should check config.Config().StorageMode == "" themselves
 // and skip wiring (AbstractWorker.Run does exactly this) rather than relying on
 // a nil backend.
 func New(ctx context.Context, mode string, opts ...Option) (ObjectStorage, error) {
@@ -78,7 +78,7 @@ func New(ctx context.Context, mode string, opts ...Option) (ObjectStorage, error
 	case "gcs":
 		return NewStorageGCS(ctx)
 	case "azure":
-		accountURL := strings.TrimSpace(common.Config().StorageAccountURL)
+		accountURL := strings.TrimSpace(config.Config().StorageAccountURL)
 		if accountURL == "" {
 			return nil, fmt.Errorf("storage: storage_account_url is required when storage_mode=azure")
 		}

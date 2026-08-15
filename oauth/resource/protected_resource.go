@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 )
 
 // ProtectedResourceMetadataPath is the well-known route for RFC 9728
@@ -26,14 +27,14 @@ type ProtectedResourceMetadata struct {
 // ProtectedResourceMetadataFromConfig builds the metadata from the --oauth_*
 // flags. Resource falls back to oauth_audience when oauth_resource is empty.
 func ProtectedResourceMetadataFromConfig() ProtectedResourceMetadata {
-	resource := common.Config().OAuthResource
+	resource := config.Config().OAuthResource
 	if resource == "" {
-		resource = common.Config().OAuthAudience
+		resource = config.Config().OAuthAudience
 	}
 	return ProtectedResourceMetadata{
 		Resource:             resource,
-		AuthorizationServers: []string{common.Config().OAuthIssuer},
-		ScopesSupported:      common.SplitCSV(common.Config().OAuthScopesSupported),
+		AuthorizationServers: []string{config.Config().OAuthIssuer},
+		ScopesSupported:      common.SplitCSV(config.Config().OAuthScopesSupported),
 	}
 }
 

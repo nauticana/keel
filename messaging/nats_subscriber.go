@@ -6,7 +6,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
 )
@@ -41,9 +41,9 @@ func (s *NATSSubscriber) Subscribe(ctx context.Context, subscription string, han
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:       subscription,
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       common.Config().NatsAckWait,
-		MaxDeliver:    common.Config().NatsMaxDeliver,
-		MaxAckPending: common.Config().NatsMaxAckPending,
+		AckWait:       config.Config().NatsAckWait,
+		MaxDeliver:    config.Config().NatsMaxDeliver,
+		MaxAckPending: config.Config().NatsMaxAckPending,
 	})
 	if err != nil {
 		return fmt.Errorf("nats: consumer %s: %w", subscription, err)
@@ -53,7 +53,7 @@ func (s *NATSSubscriber) Subscribe(ctx context.Context, subscription string, han
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		batch, err := cons.Fetch(natsDefaultFetch, jetstream.FetchMaxWait(common.Config().NatsFetchTimeout))
+		batch, err := cons.Fetch(natsDefaultFetch, jetstream.FetchMaxWait(config.Config().NatsFetchTimeout))
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -86,14 +86,14 @@ func (s *NATSSubscriber) dispatch(ctx context.Context, m jetstream.Msg, handler 
 		Data:       m.Data(),
 		Attributes: attrs,
 		Ack:        func() { _ = m.Ack() },
-		Nack:       func() { _ = m.NakWithDelay(common.Config().NatsBackoff) },
+		Nack:       func() { _ = m.NakWithDelay(config.Config().NatsBackoff) },
 	}
 	if err := safeHandle(ctx, handler, msg); err != nil {
 		// NakWithDelay tells JetStream to wait `nats_backoff` before
 		// re-delivering — the default Nak() retries immediately and
 		// turns a sustained handler failure into a tight loop that
 		// blocks all other in-flight messages (P1-20).
-		_ = m.NakWithDelay(common.Config().NatsBackoff)
+		_ = m.NakWithDelay(config.Config().NatsBackoff)
 		return
 	}
 	_ = m.Ack()

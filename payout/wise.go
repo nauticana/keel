@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 )
 
@@ -58,7 +58,7 @@ func NewWiseProvider(apiKey, webhookSecret string, journal logger.ApplicationLog
 	if apiKey == "" {
 		return nil, fmt.Errorf("wise: API key is required")
 	}
-	profileID := common.Config().WiseProfileID
+	profileID := config.Config().WiseProfileID
 	var profileNum int64
 	if profileID != "" {
 		n, err := strconv.ParseInt(profileID, 10, 64)
@@ -73,7 +73,7 @@ func NewWiseProvider(apiKey, webhookSecret string, journal logger.ApplicationLog
 			webhookSecret: webhookSecret,
 			journal:       journal,
 		},
-		apiBase:    common.Config().WiseAPIBase,
+		apiBase:    config.Config().WiseAPIBase,
 		profileID:  profileID,
 		profileNum: profileNum,
 		httpClient: &http.Client{Timeout: 15 * time.Second},

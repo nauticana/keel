@@ -1,5 +1,5 @@
 table: application_config_flag
-comment: Catalog of runtime configuration flags loaded into common.BaseConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
+comment: Catalog of runtime configuration flags loaded into config.KeelConfig at startup. Non-secret values only; store a secret NAME here, never secret material.
 columns:
   - name: id
     type: VARCHAR(80)

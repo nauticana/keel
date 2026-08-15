@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/pgsql"
@@ -26,9 +27,9 @@ type AbstractWorker struct {
 	Secret   secret.SecretProvider // set by Run before the loop; for AI/OAuth workers
 	Storage  storage.ObjectStorage // set by Run when storage_mode is set; nil otherwise
 	// LoadConfig loads the runtime configuration once the DB is up, before
-	// anything reads common.Config() (storage backend, HC port, tunables). Nil
-	// loads a plain common.BaseConfig into common.Config(); workers whose app
-	// embeds BaseConfig set this to load their own type.
+	// anything reads config.Config() (storage backend, HC port, tunables). Nil
+	// loads KeelConfig alone. Applications with a composite config set this to
+	// construct and load a fresh application config instance.
 	LoadConfig func(ctx context.Context, db port.DatabaseRepository) error
 }
 
@@ -56,7 +57,7 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 	}
 
 	// The DB comes up first: the runtime config lives in it, and everything
-	// below (storage backend, HC port, tunables) reads common.Config().
+	// below (storage backend, HC port, tunables) reads config.Config().
 	db, err := pgsql.NewPgSQLDatabase(ctx, secrets, gen)
 	if err != nil {
 		return fmt.Errorf("worker %q: database: %w", a.Caption, err)
@@ -64,12 +65,7 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 	loadConfig := a.LoadConfig
 	if loadConfig == nil {
 		loadConfig = func(ctx context.Context, db port.DatabaseRepository) error {
-			cfg := &common.BaseConfig{}
-			if err := cfg.Load(ctx, db); err != nil {
-				return err
-			}
-			common.SetConfig(cfg)
-			return nil
+			return config.LoadConfig(ctx, db, *common.NodeId)
 		}
 	}
 	if err := loadConfig(ctx, db); err != nil {

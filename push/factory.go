@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
@@ -17,12 +17,12 @@ import (
 // "noop" returns a provider that silently discards dispatches — the
 // default for non-mobile consumers.
 func NewPushProvider(ctx context.Context, users user.UserService, journal logger.ApplicationLogger) (port.MessageDispatcher, error) {
-	switch common.Config().PushMode {
+	switch config.Config().PushMode {
 	case "fcm":
 		return New(ctx, users, journal)
 	case "noop", "":
 		return NoOpPushProvider{}, nil
 	default:
-		return nil, fmt.Errorf("unknown push_mode: %s", common.Config().PushMode)
+		return nil, fmt.Errorf("unknown push_mode: %s", config.Config().PushMode)
 	}
 }

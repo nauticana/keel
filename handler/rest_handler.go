@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/rest"
@@ -137,7 +138,7 @@ func takeReserved(filter map[string]string, aliases ...string) (string, bool) {
 // and removes the keys from the filter map so they don't leak into the SQL
 // WHERE clause downstream.
 func extractPagination(filter map[string]string) (limit, offset int) {
-	limit = common.Config().DefaultListPageSize
+	limit = config.Config().DefaultListPageSize
 	offset = 0
 	if v, ok := takeReserved(filter, "limit", "_limit"); ok {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -149,7 +150,7 @@ func extractPagination(filter map[string]string) (limit, offset int) {
 			offset = n
 		}
 	}
-	if m := common.Config().MaxListPageSize; limit > m {
+	if m := config.Config().MaxListPageSize; limit > m {
 		limit = m
 	}
 	return limit, offset
@@ -298,7 +299,7 @@ func (h *RestHandler) Post(w http.ResponseWriter, r *http.Request) {
 		// The write already committed, so detach from request cancellation (a client
 		// disconnect must not skip cache invalidation) but bound it with a deadline so
 		// a hung hook can't hold back the 201 indefinitely.
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), common.Config().PostWriteTimeout)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), config.Config().PostWriteTimeout)
 		defer cancel()
 		if err := h.PostWrite(ctx, session.PartnerId, h.Api.GetTable().TableName, items); err != nil && h.Journal != nil {
 			h.Journal.Error(fmt.Sprintf("post-write hook for %s failed: %v", h.Api.GetTable().TableName, err))

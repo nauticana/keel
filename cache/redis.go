@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/secret"
 	"github.com/redis/go-redis/v9"
 )
@@ -45,8 +45,8 @@ type CacheServiceImpl struct {
 // Passwords MUST NOT be embedded in the URL. They are pulled from the
 // secret provider so they can be rotated without redeploying.
 func NewCacheService(ctx context.Context, secrets secret.SecretProvider) (CacheService, error) {
-	valkeyAddr := strings.TrimSpace(common.Config().ValkeyURL)
-	redisAddr := strings.TrimSpace(common.Config().RedisURL)
+	valkeyAddr := strings.TrimSpace(config.Config().ValkeyURL)
+	redisAddr := strings.TrimSpace(config.Config().RedisURL)
 
 	if valkeyAddr != "" && redisAddr != "" {
 		return nil, fmt.Errorf("cache: valkey_url and redis_url are mutually exclusive — set exactly one")
@@ -54,7 +54,7 @@ func NewCacheService(ctx context.Context, secrets secret.SecretProvider) (CacheS
 
 	if valkeyAddr != "" {
 		password, _ := secrets.GetSecret(ctx, "valkey_password")
-		return newValkeyClient(valkeyAddr, strings.TrimSpace(password), common.Config().ValkeyCluster), nil
+		return newValkeyClient(valkeyAddr, strings.TrimSpace(password), config.Config().ValkeyCluster), nil
 	}
 	if redisAddr != "" {
 		password, _ := secrets.GetSecret(ctx, "redis_password")

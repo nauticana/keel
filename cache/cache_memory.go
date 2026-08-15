@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 )
 
 // MemoryCacheService is a process-local CacheService implementation
@@ -65,7 +65,7 @@ func NewMemoryCacheService() *MemoryCacheService {
 }
 
 func (c *MemoryCacheService) sweepLoop() {
-	t := time.NewTicker(common.Config().MemoryCacheSweepInterval)
+	t := time.NewTicker(config.Config().MemoryCacheSweepInterval)
 	defer t.Stop()
 	for {
 		select {

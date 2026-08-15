@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/pgsql"
@@ -26,8 +27,8 @@ import (
 // service, logger) minus the daemon-only pieces — healthcheck listener,
 // service-registry heartbeat, and the ticker loop.
 //
-// loadConfig loads the runtime configuration once the DB is up; nil
-// loads a plain common.BaseConfig (same default as AbstractWorker).
+// loadConfig loads the runtime configuration once the DB is up; nil loads
+// KeelConfig alone. Applications with a composite config provide this hook.
 // pick runs after config is loaded so job selection can read config
 // flags; it returns the worker and the journal caption.
 func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.DatabaseRepository) error, pick func() (JobWorker, string, error)) error {
@@ -48,12 +49,7 @@ func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.D
 	}
 	if loadConfig == nil {
 		loadConfig = func(ctx context.Context, db port.DatabaseRepository) error {
-			cfg := &common.BaseConfig{}
-			if err := cfg.Load(ctx, db); err != nil {
-				return err
-			}
-			common.SetConfig(cfg)
-			return nil
+			return config.LoadConfig(ctx, db, *common.NodeId)
 		}
 	}
 	if err := loadConfig(ctx, db); err != nil {

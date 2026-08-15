@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/user"
 )
 
@@ -43,14 +44,14 @@ var (
 
 func getGoogleJWKs() *jwksProvider {
 	googleJWKsOnce.Do(func() {
-		googleJWKs = newJWKsProvider(googleJWKsURL, common.Config().SocialJWKSCacheTTL, common.HTTPClient())
+		googleJWKs = newJWKsProvider(googleJWKsURL, config.Config().SocialJWKSCacheTTL, common.HTTPClient())
 	})
 	return googleJWKs
 }
 
 func getAppleJWKs() *jwksProvider {
 	appleJWKsOnce.Do(func() {
-		appleJWKs = newJWKsProvider(appleJWKsURL, common.Config().SocialJWKSCacheTTL, common.HTTPClient())
+		appleJWKs = newJWKsProvider(appleJWKsURL, config.Config().SocialJWKSCacheTTL, common.HTTPClient())
 	})
 	return appleJWKs
 }
@@ -145,14 +146,14 @@ func (h *SocialLoginHandler) issueSocialNonce(w http.ResponseWriter, r *http.Req
 	nonce := hex.EncodeToString(b)
 	// Store -1 so the first consume's INCR yields exactly 0; a never-issued nonce
 	// starts absent (INCR → 1) and can never reach 0, closing the replay/guess gap.
-	if err := h.NonceCache.Set(r.Context(), socialNonceKey+nonce, "-1", common.Config().SocialNonceTTL); err != nil {
+	if err := h.NonceCache.Set(r.Context(), socialNonceKey+nonce, "-1", config.Config().SocialNonceTTL); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to store nonce")
 		return
 	}
 	// Google echoes the raw nonce in the id_token, Apple its SHA-256 — store
 	// both keys so LoginSocial matches whichever the provider returns.
 	sum := sha256.Sum256([]byte(nonce))
-	if err := h.NonceCache.Set(r.Context(), socialNonceKey+hex.EncodeToString(sum[:]), "-1", common.Config().SocialNonceTTL); err != nil {
+	if err := h.NonceCache.Set(r.Context(), socialNonceKey+hex.EncodeToString(sum[:]), "-1", config.Config().SocialNonceTTL); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to store nonce")
 		return
 	}
@@ -168,7 +169,7 @@ func (h *SocialLoginHandler) consumeSocialNonce(ctx context.Context, nonce strin
 	if nonce == "" {
 		return false
 	}
-	n, err := h.NonceCache.IncrementWithTTL(ctx, socialNonceKey+nonce, common.Config().SocialNonceTTL)
+	n, err := h.NonceCache.IncrementWithTTL(ctx, socialNonceKey+nonce, config.Config().SocialNonceTTL)
 	return err == nil && n == 0
 }
 
@@ -260,7 +261,7 @@ func TrustedClientIP(r *http.Request) string {
 // zero nets (typo'd entries, empty fields after splitting), since
 // that's behaviorally identical to "empty" at runtime.
 func RequireTrustedProxyCIDR() error {
-	cfg := strings.TrimSpace(common.Config().TrustedProxyCIDR)
+	cfg := strings.TrimSpace(config.Config().TrustedProxyCIDR)
 	if cfg == "" {
 		return fmt.Errorf("trusted_proxy_cidr must be set when mounting public IP-attributing endpoints; received empty value")
 	}
@@ -309,7 +310,7 @@ func isTrustedProxy(ipStr string) bool {
 	if ipStr == "" {
 		return false
 	}
-	cfg := common.Config().TrustedProxyCIDR
+	cfg := config.Config().TrustedProxyCIDR
 	if cfg == "" {
 		return false
 	}
@@ -382,7 +383,7 @@ func verifySocialToken(ctx context.Context, provider, token string) (email, firs
 // Google's email_verified claim arrives as either a JSON bool or a
 // JSON string; both shapes are accepted.
 func verifyGoogleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
-	aud := common.Config().GoogleClientID
+	aud := config.Config().GoogleClientID
 	if aud == "" {
 		return "", "", "", false, "", "", fmt.Errorf("google_client_id is not configured")
 	}
@@ -422,7 +423,7 @@ func verifyGoogleToken(ctx context.Context, token string) (email, firstName, las
 // used to link to existing password-account emails. That policy lives
 // in GetOrCreateUserFromSocial.
 func verifyAppleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
-	aud := common.Config().AppleClientID
+	aud := config.Config().AppleClientID
 	if aud == "" {
 		return "", "", "", false, "", "", fmt.Errorf("apple_client_id is not configured")
 	}

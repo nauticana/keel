@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 )
 
@@ -60,10 +60,10 @@ func NewAirwallexProvider(apiKey, webhookSecret string, journal logger.Applicati
 			webhookSecret: webhookSecret,
 			journal:       journal,
 		},
-		apiBase:        common.Config().AirwallexAPIBase,
+		apiBase:        config.Config().AirwallexAPIBase,
 		httpClient:     &http.Client{Timeout: 15 * time.Second},
-		transferMethod: firstNonEmpty(common.Config().AirwallexXferMethod, airwallexDefaultMethod),
-		transferReason: firstNonEmpty(common.Config().AirwallexXferReason, airwallexDefaultReason),
+		transferMethod: firstNonEmpty(config.Config().AirwallexXferMethod, airwallexDefaultMethod),
+		transferReason: firstNonEmpty(config.Config().AirwallexXferReason, airwallexDefaultReason),
 	}, nil
 }
 
@@ -168,7 +168,7 @@ func (p *AirwallexProvider) VerifyAndParseWebhook(headers map[string][]string, r
 	if err != nil {
 		return nil, fmt.Errorf("airwallex webhook: bad timestamp: %w", err)
 	}
-	tol := common.Config().StripeWebhookTolerance
+	tol := config.Config().StripeWebhookTolerance
 	if age := time.Since(when); age > tol || age < -tol {
 		return nil, fmt.Errorf("airwallex webhook: timestamp outside tolerance")
 	}

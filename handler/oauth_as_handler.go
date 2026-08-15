@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/oauth/authserver"
 	"github.com/nauticana/keel/port"
@@ -282,7 +282,7 @@ func (h *OAuthASHandler) redirectToLogin(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
 		return
 	}
-	if n := authRetryCount(r); n >= common.Config().OAuthMaxAuthRedirects {
+	if n := authRetryCount(r); n >= config.Config().OAuthMaxAuthRedirects {
 		http.Error(w, "login did not establish a session at the authorization endpoint after "+strconv.Itoa(n)+
 			" attempts — the session must be a cookie sent on this domain, not a localStorage bearer", http.StatusLoopDetected)
 		return
