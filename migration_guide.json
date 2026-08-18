@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.53",
+   "title": "IsPublicDomain covers the major consumer mailboxes; HostFromURL trims the trailing dot",
+   "tags": [
+    "behavioral"
+   ],
+   "summary": "common.IsPublicDomain knew only gmail.com and googlemail.com, so it accepted Outlook, Yahoo, iCloud, Proton and the rest as custom-domain addresses — leaving every consumer that cares about domain ownership to keep its own longer list. The set now covers 25 well-known free providers. Separately, HostFromURL now trims a fully-qualified trailing dot, so \"example.com.\" normalizes to \"example.com\" and DomainsMatch no longer returns false for that pair. Callers that maintain a local provider list should delete it in favour of IsPublicDomain. No DDL or seed change.",
+   "body_markdown": "## What changed\n\n| | Before | After |\n|---|---|---|\n| `IsPublicDomain` | `gmail.com`, `googlemail.com` | 25 providers — Yahoo (4 TLDs), Outlook/Hotmail/Live/MSN, AOL, iCloud/me/mac, Zoho, Proton, Yandex, GMX, Tutanota, Fastmail, Hey, mail.com |\n| `HostFromURL` | left a fully-qualified trailing dot in place | trims it, so `example.com.` and `example.com` compare equal |\n\n## Why\n\n`IsPublicDomain` exists so a consumer can refuse a free mailbox where custom-domain ownership is the point — business signup, domain-ownership proof, B2B gating. With two entries it accepted every Outlook, Yahoo and iCloud address as if it proved ownership, which meant consumers kept their own longer lists and the shared helper went unused. The list is now complete enough to depend on.\n\nThe trailing dot is the same fix seen from the other side: `example.com.` is the fully-qualified form of `example.com`, but it defeated both `publicsuffix.EffectiveTLDPlusOne` and plain string equality, so `DomainsMatch(\"example.com.\", \"example.com\")` was false.\n\n## Action required\n\nNone to compile. Two behavioral notes:\n\n- A signup form that only rejected Gmail now also rejects the other 24 providers. If your product intends to accept consumer mailboxes, do not call `IsPublicDomain` — the change makes the helper stricter, not more permissive.\n- If you maintain a local public-provider list, delete it and call `IsPublicDomain`. Anything in your list that is missing here belongs upstream — send it rather than keeping the local copy.\n\nNo DDL or seed change."
+  },
+  {
    "version": "v1.2.52",
    "title": "consent clears the SSO partner gate — common.IsPartnerOptional",
    "tags": [

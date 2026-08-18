@@ -9,8 +9,13 @@ import (
 // publicEmailDomains are free consumer mailboxes — a login from one proves no
 // custom-domain ownership. Extend as needed.
 var publicEmailDomains = map[string]bool{
-	"gmail.com":      true,
-	"googlemail.com": true,
+	"gmail.com": true, "googlemail.com": true,
+	"yahoo.com": true, "yahoo.co.uk": true, "yahoo.co.in": true, "yahoo.ca": true,
+	"hotmail.com": true, "outlook.com": true, "live.com": true, "msn.com": true,
+	"aol.com": true, "icloud.com": true, "me.com": true, "mac.com": true,
+	"mail.com": true, "zoho.com": true, "protonmail.com": true, "proton.me": true,
+	"yandex.com": true, "yandex.ru": true, "gmx.com": true, "gmx.net": true,
+	"tutanota.com": true, "fastmail.com": true, "hey.com": true,
 }
 
 // DomainFromEmail returns the lowercased domain part of an email, or "".
@@ -38,7 +43,9 @@ func HostFromURL(raw string) string {
 	if i := strings.IndexByte(s, ':'); i >= 0 {
 		s = s[:i]
 	}
-	return s
+	// "example.com." is the same host in fully-qualified form; the publicsuffix
+	// lookup and plain equality both need it gone.
+	return strings.TrimSuffix(s, ".")
 }
 
 // RegistrableDomain returns the eTLD+1 of a host/URL (shop.example.co.uk → example.co.uk).
