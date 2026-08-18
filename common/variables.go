@@ -35,7 +35,26 @@ const (
 	// uniformly across X-API-Key, JWT, and OAuth requests.
 	Subject       ContextKey = "subject"
 	AuthPrincipal ContextKey = "authPrincipal"
+	// ConsentRoute is keel's consent surface. Declared here rather than in
+	// handler so the route mount and the SSO partner gate cannot drift apart
+	// (service cannot import handler).
+	ConsentRoute = RestPrefix + "/user/consent"
 )
+
+// partnerOptionalRoutes are keel-owned authenticated routes that stay reachable
+// before a session has a partner: consent is recorded during signup, which
+// necessarily precedes the partner it would be scoped to.
+var partnerOptionalRoutes = map[string]struct{}{
+	ConsentRoute: {},
+}
+
+// IsPartnerOptional reports whether path is exempt from SSOMiddleware's partner
+// gate. Authentication is unaffected — an exempt route still requires a valid
+// session.
+func IsPartnerOptional(path string) bool {
+	_, ok := partnerOptionalRoutes[path]
+	return ok
+}
 
 // Bootstrap flags only. Everything consumed before (or in order to get) the
 // DB connection stays a --flag: the log sink, the secret provider, the DB

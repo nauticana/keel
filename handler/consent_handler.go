@@ -24,7 +24,7 @@ type ConsentHandler struct {
 
 func (h *ConsentHandler) GetAuthRoutes() map[string]func(w http.ResponseWriter, r *http.Request) {
 	return map[string]func(w http.ResponseWriter, r *http.Request){
-		common.RestPrefix + "/user/consent": h.ServeConsent,
+		common.ConsentRoute: h.ServeConsent,
 	}
 }
 

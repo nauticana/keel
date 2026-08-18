@@ -425,6 +425,10 @@ func (h *HttpBackend) SecurityHeadersMiddleware(next http.Handler) http.Handler 
 //   - PartnerId == 0 (unassigned) is also unauthorized; the old <0
 //     check accepted partnerId=0 silently.
 //
+// The partner gate skips common.IsPartnerOptional paths — keel routes that
+// must work before a partner exists (consent is recorded during signup).
+// Those still require a valid token; only partner scoping is relaxed.
+//
 // Bearer-prefix matching is case-insensitive per RFC 7235; a client
 // sending "bearer <tok>" should not be rejected just on case.
 func (h *HttpBackend) SSOMiddleware(next http.Handler) http.Handler {
@@ -458,7 +462,7 @@ func (h *HttpBackend) SSOMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "Invalid authentication token", http.StatusUnauthorized)
 			return
 		}
-		if session.PartnerId <= 0 {
+		if session.PartnerId <= 0 && !common.IsPartnerOptional(r.URL.Path) {
 			http.Error(w, "User account is not associated with a business partner", http.StatusForbidden)
 			return
 		}
