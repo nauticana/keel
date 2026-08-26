@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -79,7 +80,7 @@ func (l *TableLoggerFile) dateDir() (string, error) {
 	return dir, nil
 }
 
-func (l *TableLoggerFile) LogChange(change *model.TableChangeLog) error {
+func (l *TableLoggerFile) LogChange(ctx context.Context, change *model.TableChangeLog) error {
 	change.ID = l.nextID()
 	if change.DataHash == "" && change.OldData != nil {
 		bytes, err := json.Marshal(change.OldData)
@@ -109,7 +110,7 @@ func (l *TableLoggerFile) LogChange(change *model.TableChangeLog) error {
 // partition in case the caller's id isn't from the current day.
 // Acceptable cost for the file logger's expected workload (low
 // volume + operator-driven reads).
-func (l *TableLoggerFile) GetChange(id int64) (*model.TableChangeLog, error) {
+func (l *TableLoggerFile) GetChange(ctx context.Context, id int64, partnerID int64, ownerID int) (*model.TableChangeLog, error) {
 	target := fmt.Sprintf("%d.json", id)
 	entries, err := os.ReadDir(l.RootPath)
 	if err != nil {
@@ -125,16 +126,19 @@ func (l *TableLoggerFile) GetChange(id int64) (*model.TableChangeLog, error) {
 			if err := json.Unmarshal(data, change); err != nil {
 				return nil, err
 			}
+			if !change.InScope(partnerID, ownerID) {
+				return nil, port.ErrChangeNotFound
+			}
 			return change, nil
 		}
 	}
-	return nil, fmt.Errorf("file table logger: change %d not found", id)
+	return nil, port.ErrChangeNotFound
 }
 
 // FindChanges returns ErrFindChangesUnsupported. The file logger is
 // not the right tool for query-style audit reads; consumers needing
 // that should plug a DB-backed TableLogger.
-func (l *TableLoggerFile) FindChanges(tableName string, userId int, key string, action string, begda time.Time, endda time.Time) ([]*model.TableChangeLog, error) {
+func (l *TableLoggerFile) FindChanges(ctx context.Context, filter port.ChangeFilter, partnerID int64, ownerID int) ([]*model.TableChangeLog, error) {
 	return nil, ErrFindChangesUnsupported
 }
 

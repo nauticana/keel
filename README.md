@@ -1974,6 +1974,42 @@ Empty / unknown modes return an error — deployments fail fast on misconfigurat
 
 `messaging.NATSConnect(ctx, secrets)` returns a raw `*nats.Conn` for callers that need plain NATS (e.g. WebSocket fan-out hubs that want low-latency core pub/sub without JetStream overhead). It honors the same `nats_url` / `nats_name` / `nats_creds_secret` configuration used by the JetStream publisher and subscriber, so a single deployment configures all three from one set of values.
 
+## Table Change Log
+
+`port.TableLogger` ([port/table_logger.go](port/table_logger.go)) is the audit store for row changes. `data.TableLoggerFile` is the bundled implementation (one JSON file per row under `<RootPath>/YYYYMMDD/`, reads by id only); a database-backed logger is a downstream concern.
+
+```go
+type TableLogger interface {
+    Init() error
+    LogChange(ctx context.Context, change *model.TableChangeLog) error
+    GetChange(ctx context.Context, id int64, partnerID int64, ownerID int) (*model.TableChangeLog, error)
+    FindChanges(ctx context.Context, filter port.ChangeFilter, partnerID int64, ownerID int) ([]*model.TableChangeLog, error)
+    Close()
+}
+```
+
+### Scope is snapshotted on write, enforced on read
+
+A log row carries the full `OldData` of the changed row, so it is as sensitive as the row itself — and the row may be deleted or re-homed by the time the log is read, so ownership cannot be re-derived by joining back. `model.TableChangeLog` therefore stores it:
+
+| Field | Set by the writer from |
+|---|---|
+| `PartnerID` | the row's `partner_id` — or the resolved parent's, for a child table marked `PartnerSpecific` through its FK chain. `0` on global tables. |
+| `OwnerUserID` | the row's `user_id` when the table is `UserSpecific`. `0` otherwise. |
+
+Every read takes `partnerID` / `ownerID` with **`0` meaning unrestricted** — the same convention as `port.TableService`. The logger applies them as mandatory filters (`model.TableChangeLog.InScope`) and does not resolve roles itself; the table service that calls it collapses the role decision exactly as `planSelect` does for CRUD:
+
+| Caller | `partnerID` | `ownerID` |
+|---|---|---|
+| Partner user on a `PartnerSpecific` table | `session.PartnerId` | `session.Id` if `UserSpecific` and the grant is broad (`ownScope`), else `0` |
+| `GlobalRoleIDs` holder or `bypass_scope` grant | `0` | `0` |
+| Any caller on a non-`PartnerSpecific` table | `0` | as above |
+| Worker / job with no session | `0` | `0` |
+
+Handlers never call the logger with raw session values; one service method makes the collapse so no read path can skip it. A `GetChange` outside the caller's scope returns `port.ErrChangeNotFound`, identical to a missing id, so ids are not an oracle for other partners' history. Do **not** widen the filter to `partner_id = $1 OR partner_id = 0` to let partner users see global-table rows — pass `0` for non-partner tables instead, or a partner-table row whose snapshot happened to be `0` leaks.
+
+Pass `OldData` through `common.RedactForStorage` before `LogChange` so secret-bearing columns never reach the audit trail.
+
 ## Bigint ID Generation
 
 Primary-key ids on tables are minted one of two ways:
