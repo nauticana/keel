@@ -280,6 +280,23 @@ func TestUpdate_UserSpecific_ForcesOwnUserId(t *testing.T) {
 	}
 }
 
+func TestUpdate_PartnerUserScopedGuardsMembership(t *testing.T) {
+	auth := &stubAuthQuery{permRows: wildcardSelectGrant(), globalRows: nil}
+	s, qc := newService(t, userAccountTable(true), auth)
+
+	const partnerID int64 = 42
+	item := map[string]any{"Id": int64(999), "Name": "foreign user"}
+	if err := s.Update(context.Background(), partnerID, 7, item); !errors.Is(err, errSentinel) {
+		t.Fatalf("Update returned %v, want sentinel", err)
+	}
+	if !strings.Contains(qc.sql, `"id" IN (SELECT user_id FROM "partner_user" WHERE partner_id = $`) {
+		t.Fatalf("update SQL missing partner-user scope: %s", qc.sql)
+	}
+	if last := qc.args[len(qc.args)-1]; last != partnerID {
+		t.Fatalf("partner predicate bound to %v, want %d", last, partnerID)
+	}
+}
+
 // TestGet_PartnerAdmin_InjectsPartnerUserScope verifies that a Get
 // against the user_account table by a partner-scoped role appends the
 // `id IN (SELECT user_id FROM partner_user WHERE partner_id = $N)`

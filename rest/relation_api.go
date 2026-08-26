@@ -181,6 +181,10 @@ func (s *RelationAPI) Update(ctx context.Context, partnerID int64, userID int, d
 	return s.DataService.Update(ctx, partnerID, userID, data)
 }
 
+func (s *RelationAPI) Patch(ctx context.Context, partnerID int64, userID int, key map[string]any, changes map[string]any) error {
+	return s.DataService.Patch(ctx, partnerID, userID, key, changes)
+}
+
 func (s *RelationAPI) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {
 	return s.DataService.Delete(ctx, partnerID, userID, where)
 }

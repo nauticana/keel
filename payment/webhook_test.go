@@ -83,7 +83,7 @@ func (r *memRepo) Log(_ context.Context, provider, eventID, eventType, requestID
 	if r.logged[key] {
 		// Mirror the SQLSTATE 23505 unique-violation that the real
 		// pgsql repo returns when (provider, event_id) collides.
-		// WebhookProcessor.Process detects this via isUniqueViolation
+		// WebhookProcessor.Process detects this via pgsql.IsUniqueViolation
 		// and treats it as "already-seen" — the charge-twice race
 		// guard validated in TestProcess_ConcurrentDeliveriesChargeOnce.
 		return 0, &pgconn.PgError{Code: "23505", Message: "duplicate key (provider, event_id)"}
@@ -772,7 +772,7 @@ func (h *countingHandler) OnPaymentEvent(_ context.Context, _ *PaymentEvent) err
 // closely enough that both pass the Exists() short-circuit before
 // either reaches the Log() write. The unique constraint on
 // (provider, event_id) makes one of the inserts fail with SQLSTATE
-// 23505; isUniqueViolation translates that into "already-seen" so
+// 23505; pgsql.IsUniqueViolation translates that into "already-seen" so
 // Process returns nil and the handler runs exactly once.
 //
 // Why it matters: a real Stripe retry storm during a slow handler

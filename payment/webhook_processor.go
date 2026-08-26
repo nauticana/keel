@@ -8,9 +8,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
 )
 
@@ -271,7 +271,7 @@ func (p *WebhookProcessor) Process(
 	// duplicate and exit cleanly.
 	logID, err := p.Repo.Log(ctx, provider.Name(), eventID, eventType, common.RequestIDFromContext(ctx), body)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if pgsql.IsUniqueViolation(err) {
 			outcome = webhookOutcomeDuplicate
 			return nil
 		}
@@ -556,26 +556,6 @@ func (p *WebhookProcessor) recordWebhookMetrics(
 	if err := errors.Join(counterErr, durationErr); err != nil {
 		p.logError(ctx, "payment metrics: %v", err)
 	}
-}
-
-// isUniqueViolation reports whether err is a Postgres unique-index
-// violation. Uses a typed errors.As against pgconn.PgError + the
-// canonical SQLSTATE code 23505 (MAJOR 11). The previous substring
-// match on "duplicate"/"unique" could false-positive on a domain
-// trigger raising `RAISE EXCEPTION 'duplicate ...'`, silently
-// skipping a real failure as an "already-seen" idempotent webhook.
-//
-// MySQL / SQLite consumers can layer their own driver-specific
-// detection on top — keel is pgsql-only at the data layer.
-func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
 }
 
 func (p *WebhookProcessor) logError(ctx context.Context, format string, args ...any) {

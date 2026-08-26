@@ -681,7 +681,9 @@ func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID 
 	// Tenant/owner scoping mirrors Get/Delete: append partner_id / user_id
 	// predicates so a caller who knows a foreign PK gets ROW_COUNT=0. Global
 	// roles and trusted system callers (no user, no partner) bypass.
-	applyPartner := s.Table.PartnerSpecific && !(userID <= 0 && partnerID <= 0) && !s.IsGlobalRole(ctx, userID)
+	globalRole := s.IsGlobalRole(ctx, userID)
+	applyPartner := s.Table.PartnerSpecific && !(userID <= 0 && partnerID <= 0) && !globalRole
+	applyPartnerUserScope := s.Table.PartnerUserScoped && userID > 0 && !globalRole
 	useUserGuard := s.Table.UserSpecific && userID > 0
 	vals := make([]any, 0, len(s.Table.Columns))
 	for _, col := range s.Table.Columns {
@@ -730,12 +732,115 @@ func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID 
 		sqlText += " AND " + quoteIdent("partner_id") + " = " + s.Placeholder(len(vals)+1)
 		vals = append(vals, partnerID)
 	}
+	if applyPartnerUserScope {
+		keyCol := s.Table.Keys[0].ColumnName
+		sqlText += fmt.Sprintf(" AND %s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
+			quoteIdent(keyCol), quoteIdent("partner_user"), s.Placeholder(len(vals)+1))
+		vals = append(vals, partnerID)
+	}
 	if useUserGuard {
 		sqlText += " AND " + quoteIdent("user_id") + " = " + s.Placeholder(len(vals)+1)
 		vals = append(vals, userID)
 	}
 	_, err := s.Client.Exec(ctx, sqlText, vals...)
 	return err
+}
+
+func (s *TableServicePgsql) Patch(ctx context.Context, partnerID int64, userID int, key map[string]any, changes map[string]any) error {
+	allowed, _ := s.CheckPermission(ctx, userID, "UPDATE")
+	if !allowed {
+		return model.NewForbidden(fmt.Sprintf("No authorization for UPDATE on %s", s.Table.TableName))
+	}
+	globalRole := s.IsGlobalRole(ctx, userID)
+	applyPartner := s.Table.PartnerSpecific && !(userID <= 0 && partnerID <= 0) && !globalRole
+	applyPartnerUserScope := s.Table.PartnerUserScoped && userID > 0 && !globalRole
+	useUserGuard := s.Table.UserSpecific && userID > 0
+	var set []string
+	vals := make([]any, 0, len(changes)+len(s.Table.Keys)+2)
+	named := 0
+	for _, col := range s.Table.Columns {
+		if s.isKeyColumn(col.ColumnName) {
+			continue
+		}
+		listed := hasColumn(changes, col)
+		if listed {
+			named++
+		}
+		// Same rules as Update: scope columns and R/H/I/S never move; U stamps
+		// are keel-set on every write whether or not the caller listed them.
+		if (s.Table.UserSpecific && col.ColumnName == "user_id") || (s.Table.PartnerSpecific && col.ColumnName == "partner_id") || skipUpdateCol(col) {
+			if listed {
+				return fmt.Errorf("column %s.%s is not updatable", s.Table.TableName, col.ColumnName)
+			}
+			continue
+		}
+		switch updateStampKind(col) {
+		case stampNow:
+			set = append(set, quoteIdent(col.ColumnName)+" = now()")
+			continue
+		case stampUser:
+			vals = append(vals, userID)
+			set = append(set, quoteIdent(col.ColumnName)+" = "+s.Placeholder(len(vals)))
+			continue
+		}
+		if !listed {
+			continue
+		}
+		vals = append(vals, s.ExtractValue(changes, col))
+		set = append(set, quoteIdent(col.ColumnName)+" = "+s.Placeholder(len(vals)))
+	}
+	if named == 0 {
+		return fmt.Errorf("patch on %s names no updatable column", s.Table.TableName)
+	}
+	if named != len(changes) {
+		return fmt.Errorf("patch on %s names unknown columns", s.Table.TableName)
+	}
+	if len(key) != len(s.Table.Keys) {
+		return fmt.Errorf("patch on %s requires exactly %d key columns", s.Table.TableName, len(s.Table.Keys))
+	}
+	var where []string
+	for _, id := range s.Table.Keys {
+		keyCol := &model.TableColumn{ColumnName: id.ColumnName, PascalName: id.PascalName}
+		if !hasColumn(key, keyCol) {
+			return fmt.Errorf("patch on %s: missing key %s", s.Table.TableName, id.ColumnName)
+		}
+		vals = append(vals, s.ExtractValue(key, keyCol))
+		where = append(where, quoteIdent(id.ColumnName)+" = "+s.Placeholder(len(vals)))
+	}
+	if applyPartner {
+		vals = append(vals, partnerID)
+		where = append(where, quoteIdent("partner_id")+" = "+s.Placeholder(len(vals)))
+	}
+	if applyPartnerUserScope {
+		keyCol := s.Table.Keys[0].ColumnName
+		vals = append(vals, partnerID)
+		where = append(where, fmt.Sprintf("%s IN (SELECT user_id FROM %s WHERE partner_id = %s)",
+			quoteIdent(keyCol), quoteIdent("partner_user"), s.Placeholder(len(vals))))
+	}
+	if useUserGuard {
+		vals = append(vals, userID)
+		where = append(where, quoteIdent("user_id")+" = "+s.Placeholder(len(vals)))
+	}
+	sqlText := "UPDATE " + s.quotedTable() + " SET " + strings.Join(set, ", ") + " WHERE " + strings.Join(where, " AND ")
+	_, err := s.Client.Exec(ctx, sqlText, vals...)
+	return err
+}
+
+func (s *TableServicePgsql) isKeyColumn(name string) bool {
+	for _, id := range s.Table.Keys {
+		if id.ColumnName == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasColumn(m map[string]any, col *model.TableColumn) bool {
+	if _, ok := m[col.ColumnName]; ok {
+		return true
+	}
+	_, ok := m[col.PascalName]
+	return ok
 }
 
 func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {

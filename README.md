@@ -400,7 +400,7 @@ func main() {
 
 `Run` builds the standard logger, secret provider, snowflake id generator, pgsql database, and `QuotaServiceDb`, then loads configuration after the database is up; a load failure aborts startup. Its default `config.LoadConfig` loads KeelConfig alone. Applications with a composite config set the worker's `LoadConfig` hook to construct and load a fresh composite instance. It then publishes the secret provider on `.Secret`, wires everything into a `JobExecutor`, and runs. The embedder implements only `GetOLTPQueries` plus **one processing contract** — `worker.JobWorker` (`ProcessQueue`, shown above) or `worker.QueueWorker` (`QueueQueries` + `HandleJob`, see the next section); `GetHealthcheckPort` comes from `AbstractWorker`. The `, w` is the concrete instance ("self") — Go has no virtual dispatch, so the embedded base can't reach the embedder's processing methods without it.
 
-For infrequent jobs driven by an external cron / systemd timer (weekly or monthly payouts), use `worker.RunOnce(ctx, loadConfig, pick)` instead of a daemon: it composes the same runtime pieces minus the healthcheck listener, registry heartbeat, and ticker loop, runs one `ProcessQueue` pass, and exits. A nil `loadConfig` loads KeelConfig alone; pass a hook for a composite config. `pick` runs after config load so job selection can read config flags and returns the `JobWorker` plus the journal caption.
+For infrequent jobs driven by an external cron / systemd timer (weekly or monthly payouts), use `worker.RunOnce(ctx, loadConfig, pick)` instead of a daemon: it composes the same runtime pieces minus the healthcheck listener, registry heartbeat, and ticker loop, runs one `ProcessQueue` pass, and exits. A nil `loadConfig` loads KeelConfig alone; pass a hook for a composite config. `pick` runs after config load with the resolved `DatabaseRepository`, so job selection can read config flags and open a second query catalog or a `QuotaService` on the same database; it returns the `JobWorker` plus the journal caption.
 
 Use `JobExecutor` directly when you need to inject extra services or a non-default database flavor:
 
@@ -2693,7 +2693,18 @@ read will be rejected.
   registered once per package (see
   [payment/webhook_repository_sql.go](payment/webhook_repository_sql.go) for
   the canonical shape). The placeholder rewriter handles `?` → `$N` per
-  driver.
+  driver. It does not coerce argument types: pgx cannot bind a Go integer to
+  a text-typed parameter, so a `?::text` placeholder that receives an `int`
+  fails at run time — cast in SQL instead (`?::bigint::text`).
+- **`TableService.Update` is full-row.** A map that omits a column writes NULL
+  to it. To change a subset of columns call
+  `TableService.Patch(ctx, partnerID, userID, key, changes)`: only the listed
+  columns move, `U` stamps are applied, and naming a key, scope, or
+  read-only column is an error.
+- **Typed constraint errors.** `pgsql.IsUniqueViolation(err)` /
+  `pgsql.IsForeignKeyViolation(err)` detect SQLSTATE 23505 / 23503 through
+  the wrap chain; map them to a sentinel in the service, never substring-match
+  the message.
 - **Cache the QueryService** with `sync.Once` at the struct level
   (see `SQLWebhookRepository`). Re-rewriting the same query map per call
   burns CPU on the hot webhook path.

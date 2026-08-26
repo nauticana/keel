@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.54",
+   "title": "TableService.Patch, pgsql SQLSTATE helpers, RunOnce pick receives the database, integer widths in common.As*OK",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "port.TableService gains Patch (column-subset update; Update stays full-row). pgsql.IsUniqueViolation / IsForeignKeyViolation replace substring matching on 23505 / 23503. worker.RunOnce's pick callback now receives the resolved port.DatabaseRepository (breaking signature). common.AsInt64OK / AsInt32OK / AsFloat64OK recognise every Go integer width, so SMALLINT columns (scanned by pgx as int16) no longer fall to the -1 sentinel.",
+   "body_markdown": "## What changed\n\n| | Before | After |\n|---|---|---|\n| `port.TableService` | `Update` only (full-row) | + `Patch(ctx, partnerID, userID, key, changes map[string]any) error` |\n| `pgsql` | no SQLSTATE helpers | `IsUniqueViolation(err)`, `IsForeignKeyViolation(err)` |\n| `worker.RunOnce` | `pick func() (JobWorker, string, error)` | `pick func(db port.DatabaseRepository) (JobWorker, string, error)` |\n| `common.AsInt64OK` / `AsInt32OK` / `AsFloat64OK` | `int`, `int32`, `int64`, `float64` (`float32` on AsFloat64OK) | every signed and unsigned integer width plus both floats |\n\n## Why\n\n- `TableService.Update` binds every updatable column, so a partial map nulled the rest and every consumer that wanted a targeted change had to read-modify-write. `Patch` writes only the named columns, stamps `U` columns like `Update` does, applies the same partner / user scoping, and rejects a key, scope, or read-only column by name.\n- A unique-constraint trip is the normal way to detect a concurrent duplicate, but consumers had to substring-match `\"23505\"` / `\"duplicate key\"`. The typed check already existed privately in `payment`; it is now exported and `payment` uses it.\n- `RunOnce` resolved the database before calling `pick` but did not hand it over, so a job needing a second query catalog or a `QuotaService` had to open its own connection.\n- pgx scans `SMALLINT` as `int16`; the coercers only knew four types, so every SMALLINT read through a named query silently yielded `-1`.\n\n## Action required\n\n1. **`worker.RunOnce` callers** — add the parameter: `func(db port.DatabaseRepository) (worker.JobWorker, string, error)`. Ignore it if unused.\n2. **Custom `port.TableService` implementations** — add `Patch`. `rest.RestAPI` and `rest.RelationAPI` forward it; `pgsql.TableServicePgsql` implements it.\n3. Replace local `errors.As(*pgconn.PgError)` / message matching with `pgsql.IsUniqueViolation` / `pgsql.IsForeignKeyViolation`.\n4. Delete `::int` casts added to SMALLINT columns purely to dodge the `-1` sentinel; delete read-modify-write wrappers that exist only to emulate a column-subset update.\n\n## Not changed\n\n`Update` stays full-row. Argument coercion for `?::text` placeholders is not done by the rewriter — pgx cannot bind a Go integer to a text parameter; cast in SQL (`?::bigint::text`).\n\nNo DDL or seed change."
+  },
+  {
    "version": "v1.2.53",
    "title": "IsPublicDomain covers the major consumer mailboxes; HostFromURL trims the trailing dot",
    "tags": [

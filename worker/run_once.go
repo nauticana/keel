@@ -29,9 +29,10 @@ import (
 //
 // loadConfig loads the runtime configuration once the DB is up; nil loads
 // KeelConfig alone. Applications with a composite config provide this hook.
-// pick runs after config is loaded so job selection can read config
-// flags; it returns the worker and the journal caption.
-func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.DatabaseRepository) error, pick func() (JobWorker, string, error)) error {
+// pick runs after config is loaded, with the resolved database, so job
+// selection can read config flags or open extra services on the same DB;
+// it returns the worker and the journal caption.
+func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.DatabaseRepository) error, pick func(db port.DatabaseRepository) (JobWorker, string, error)) error {
 	if !flag.Parsed() {
 		flag.Parse()
 	}
@@ -56,7 +57,7 @@ func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.D
 		return fmt.Errorf("RunOnce: config: %w", err)
 	}
 
-	w, caption, err := pick()
+	w, caption, err := pick(db)
 	if err != nil {
 		return err
 	}

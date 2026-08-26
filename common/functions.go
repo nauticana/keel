@@ -30,20 +30,24 @@ func AsFloat64(v any) float64 {
 // value — the sentinel-based AsFloat64 conflates "NULL row" with
 // "actual -1".
 func AsFloat64OK(v any) (float64, bool) {
-	if v == nil {
-		return 0, false
-	}
 	switch n := v.(type) {
-	case int:
-		return float64(n), true
-	case int32:
-		return float64(n), true
-	case int64:
-		return float64(n), true
 	case float64:
 		return n, true
 	case float32:
 		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	}
+	if i, ok := asInt64(v); ok {
+		return float64(i), true
 	}
 	return 0, false
 }
@@ -58,18 +62,8 @@ func AsInt32(v any) int32 {
 // AsInt32OK is the explicit-result sibling of AsInt32. Same
 // motivation as AsFloat64OK: distinguish "NULL" from "actual -1".
 func AsInt32OK(v any) (int32, bool) {
-	if v == nil {
-		return 0, false
-	}
-	switch n := v.(type) {
-	case int:
-		return int32(n), true
-	case int32:
-		return n, true
-	case int64:
-		return int32(n), true
-	case float64:
-		return int32(n), true
+	if i, ok := AsInt64OK(v); ok {
+		return int32(i), true
 	}
 	return 0, false
 }
@@ -86,17 +80,46 @@ func AsInt64(v any) int64 {
 // NULL columns from actual -1 values (relevant in quota /
 // "unlimited" sentinels).
 func AsInt64OK(v any) (int64, bool) {
-	if v == nil {
-		return 0, false
+	if i, ok := asInt64(v); ok {
+		return i, true
 	}
 	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case float32:
+		return int64(n), true
+	}
+	return 0, false
+}
+
+// asInt64 covers every Go integer width; pgx scans SMALLINT as int16.
+func asInt64(v any) (int64, bool) {
+	switch n := v.(type) {
 	case int:
+		return int64(n), true
+	case int8:
+		return int64(n), true
+	case int16:
 		return int64(n), true
 	case int32:
 		return int64(n), true
 	case int64:
 		return n, true
-	case float64:
+	case uint:
+		if uint64(n) > uint64(1<<63-1) {
+			return 0, false
+		}
+		return int64(n), true
+	case uint8:
+		return int64(n), true
+	case uint16:
+		return int64(n), true
+	case uint32:
+		return int64(n), true
+	case uint64:
+		if n > uint64(1<<63-1) {
+			return 0, false
+		}
 		return int64(n), true
 	}
 	return 0, false

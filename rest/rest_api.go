@@ -41,6 +41,10 @@ func (s *RestAPI) Update(ctx context.Context, partnerID int64, userID int, data 
 	return s.Relations.Update(ctx, partnerID, userID, data)
 }
 
+func (s *RestAPI) Patch(ctx context.Context, partnerID int64, userID int, key map[string]any, changes map[string]any) error {
+	return s.Relations.Patch(ctx, partnerID, userID, key, changes)
+}
+
 func (s *RestAPI) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {
 	return s.Relations.Delete(ctx, partnerID, userID, where)
 }
