@@ -116,6 +116,10 @@ type PaymentEvent struct {
 	// RawPayload to correlate refunds or disputes.
 	ChargeID  string
 	DisputeID string
+	RefundID  string
+	// RefundCumulative distinguishes a cumulative refunded total from one
+	// refund's delta in MinorUnits.
+	RefundCumulative bool
 
 	// InvoiceLines is the provider-neutral, pagination-complete line list for
 	// invoice events. InvoiceLinesComplete distinguishes a genuinely complete

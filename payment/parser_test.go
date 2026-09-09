@@ -129,6 +129,19 @@ func TestStripeParser_RefundUsesReferencedChargeIdentity(t *testing.T) {
 	if e.ChargeID != "ch_1" {
 		t.Fatalf("charge=%q, want ch_1 (not refund id)", e.ChargeID)
 	}
+	if e.RefundID != "re_1" || e.MinorUnits != -599 || e.RefundCumulative {
+		t.Fatalf("refund=%q amount=%d cumulative=%v", e.RefundID, e.MinorUnits, e.RefundCumulative)
+	}
+}
+
+func TestStripeParser_ChargeRefundedIsCumulative(t *testing.T) {
+	e, err := NewStripeEventParser().Parse([]byte(`{"id":"evt","type":"charge.refunded","data":{"object":{"id":"ch_1","amount_refunded":700,"currency":"usd"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.MinorUnits != -700 || !e.RefundCumulative {
+		t.Fatalf("amount=%d cumulative=%v", e.MinorUnits, e.RefundCumulative)
+	}
 }
 
 // v0.5.1-D: setup-mode checkout.session.completed pre-extracts Mode,

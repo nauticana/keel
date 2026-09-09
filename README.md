@@ -68,7 +68,9 @@ graph TD
 | `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
 | `agency` | Agency/reseller lifecycle, frozen per-client percentage rates, append-only commission/reversal ledger, and monthly payout state machine over billing provenance |
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
-| `push` | `port.MessageDispatcher` push implementations — FCM (Firebase Cloud Messaging, covers iOS via APNs + Android + Web) + NoOp fallback + factory |
+| `push` | `port.MessageDispatcher` push implementations — FCM, native APNs, per-platform router, NoOp fallback + factory |
+| `recording` | Consent-gated capture sessions: participants, `Start` fails closed unless every party's current session-scoped consent is affirmative, capture tokens with renewal, media stored by object reference, signed read URLs for participants |
+| `realtime` | WebSocket hub (`port.WebSocketHub`): per-user sockets, channel subscribe/unsubscribe protocol, cache-backed relay so workers and other pods deliver to a connected user (`PublishUser` / `PublishChannel`) |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
@@ -1244,6 +1246,10 @@ Nil-safe: with `Consent` unset both routes return **503**.
 
 Consumers may record additional custom types just by passing their own string — keel does not enforce the label set.
 
+### Session-scoped consent — `LatestConsentFor`
+
+`LatestConsent` answers per user and consent type. Session-sensitive checks record with `ConsentRequest.PolicyID` + `EventRef` (resolve the id once with `ResolvePolicyID`) and read back with `LatestConsentFor(ctx, userID, consentType, eventRef, policyID)`, so another session or policy version cannot authorize the action.
+
 ### Spoof-safe client IP — `bcommon.TrustedClientIP(r)`
 
 The `client_ip` column on `consent_event` is part of the regulator-visible audit trail; it must reflect the real caller, not whatever an attacker types into `X-Forwarded-For`. Keel ships `common.TrustedClientIP(r *http.Request) string` (in `handler` until v1.2.56) that honors `X-Forwarded-For` / `X-Real-IP` **only** when the inbound socket address falls inside `trusted_proxy_cidr`. With an empty CIDR config the helper returns `RemoteAddr`'s host part — a fail-closed default per P0-15. `common.RemoteHost(remoteAddr)` is the bare host-part strip, for callers that only need the socket peer.
@@ -1342,6 +1348,97 @@ Stale tokens (FCM `registration-token-not-registered`, APNs `410 Unregistered` /
 ### device_token table
 
 Columns: `id`, `user_id` (FK → user_account), `platform` (`CHAR(1)` — I=iOS, A=Android, W=Web), `token` (TEXT — FCM or raw APNs token), `app_version`, `device_model`, `is_active`, `created_at`, `updated_at`, `last_seen_at`. Unique index on `(user_id, token)` to keep re-registration idempotent. `DeleteAccount` cascades to deactivate every token for the user.
+
+## Recording Sessions (consent-gated capture)
+
+`recording.Service` orchestrates a capture session over an application context. Keel enforces that every required participant has a current, session-scoped consent before capture is authorized, tracks the session state, bounds capture with a renewable token, and stores media by object reference through `storage.ObjectStorage`. The camera runs on the client or a capture provider; keel never claims capture is happening until the client acknowledges it.
+
+```go
+rec := &recording.Service{DB: db, Consents: consentSvc, Storage: objectStore, Bucket: "recordings", CaptureTTL: 15 * time.Minute, MaxMediaBytes: 100 << 20, AllowedContentType: map[string]bool{"video/mp4": true}}
+
+s, _ := rec.CreateSession(ctx, partnerID, "order:42", user.ConsentTypeVideoSession,
+    user.ConsentPolicyRef{Type: "video", Region: "US", Version: "2026-09", Language: "en"}, actorID,
+    []recording.Participant{{UserID: 7, Role: "customer"}, {UserID: 9, Role: "provider"}})
+_ = rec.Decide(ctx, s.ID, 7, true, user.ConsentRequest{PolicyType: "video", PolicyVersion: "2026-09"})
+_ = rec.Decide(ctx, s.ID, 9, true, user.ConsentRequest{PolicyType: "video", PolicyVersion: "2026-09"})
+token, expires, err := rec.Start(ctx, s.ID, 9)          // ErrConsentMissing until both decided yes
+_ = rec.Acknowledge(ctx, s.ID, actorID, token)            // client confirms capture is running
+media, _ := rec.Upload(ctx, s.ID, actorID, token, "clip1.mp4", "video/mp4", body)
+_ = rec.Stop(ctx, s.ID, 9)                                // finalizing → ready once media is stored
+url, _ := rec.MediaURL(ctx, s.ID, 7, media.ID, 300)       // participants only, ready media only
+```
+
+| State | Meaning |
+|---|---|
+| `W` awaiting consent | created; participants deciding |
+| `A` authorized | every participant consented; capture token issued |
+| `R` recording | client acknowledged capture with the token |
+| `F` finalizing | stopped; waiting for media |
+| `D` ready | no upload pending and at least one object is ready; a failed clip stays failed and can be retried by key |
+| `S` stopped | stopped before capture ever ran |
+| `X` failed | reserved for application-marked failures |
+
+- Consent is scoped to the session and resolved policy ID: `Decide` records with `ConsentRequest.PolicyID` and `EventRef`. `Start` locks the session while checking every participant.
+- The creator need not be a participant (a dispatcher or system job may open a session); only participants may decide, start, stop, upload or read media. Re-creating a context with different consent terms returns `ErrConflict`.
+- `Acknowledge`, `Renew`, and `Upload` require both a participant ID and the expiring capture token.
+- Uploads require an allowed content type and size limit, use a session-prefixed object key, and may retry a failed media row by the same key.
+- Typed errors let downstream handlers map failures without HTTP logic in the service.
+
+The application owns: mapping its aggregate to `context_ref` with its own FK, deriving participants and roles, deciding which contexts are eligible, retention and deletion, and the client capture and upload implementation. Schema group `recording` (`recording_session`, `recording_participant`, `recording_media`) depends on `core` and `tenant_management`.
+
+## Realtime WebSocket Hub
+
+`realtime.Hub` holds the live sockets of one process and implements `port.WebSocketHub`. Keel owns the transport: authentication on the handshake, one registry of sockets per user, a subscribe / unsubscribe protocol over named channels, keepalive pings, and a relay through the cache service so a worker or another pod can deliver to a connected user. Everything on top is the downstream's: channel names, event payloads, who may subscribe to what, and what an inbound application frame means.
+
+### Wiring
+
+```go
+hub := &realtime.Hub{
+    Cache:   cacheSvc, // optional; enables cross-pod / cross-process delivery
+    Journal: journal,
+    CanSubscribe: func(ctx context.Context, userID int, channel string) (bool, error) {
+        return myAccess.MayWatch(ctx, userID, channel)
+    },
+    OnMessage: func(ctx context.Context, userID int, msg []byte) error {
+        return myInbound.Handle(ctx, userID, msg)
+    },
+}
+if hub.Cache != nil {
+    if err := hub.Run(ctx); err != nil { log.Fatal(err) }
+}
+srv.Handle((&handler.WebSocketHandler{
+    AbstractHandler: handler.AbstractHandler{UserService: userSvc},
+    Hub:             hub,
+}).GetPublicRoutes()) // GET /public/ws — JWT via Authorization or ?token= (browsers cannot set headers on the handshake)
+```
+
+The socket lives under `/public` so the SSO middleware does not gate the handshake; the handler validates the JWT itself. Upgrades honor the `cors_origin` allowlist (override with `Hub.CheckOrigin`); a missing `Origin` header, as native apps send, is accepted.
+
+`CanSubscribe` is required for channel subscriptions; nil denies them. An empty `cors_origin` permits native clients without `Origin` and enforces same-origin browser handshakes.
+
+### Wire protocol
+
+| Direction | Frame | Meaning |
+|---|---|---|
+| client → server | `{"op":"subscribe","channel":"order:42"}` | join a channel; answered by `{"op":"subscribed","channel":…}` or `{"op":"error","channel":…,"reason":"forbidden"}` |
+| client → server | `{"op":"unsubscribe","channel":"order:42"}` | leave; answered by `{"op":"unsubscribed",…}` |
+| client → server | anything else | passed to `OnMessage` unchanged |
+| server → client | `{"channel":"order:42","data":{…}}` | a `Broadcast` / `PublishChannel` payload |
+| server → client | `{…}` | a `SendToUser` / `PublishUser` payload, delivered raw |
+
+Channel names are opaque strings to keel; choose them per aggregate (`order:42`, `conversation:9`). A socket's subscriptions end with the socket. Frames are capped at 64 KiB; the server pings every 30 s and drops a socket that does not answer within 60 s.
+
+### Delivering
+
+- From the process that holds the hub: `hub.SendToUser(userID, payload)` and `hub.Broadcast(channel, payload)`. With `Cache` set both go through the relay so every pod delivers to its own sockets; without it they reach local sockets only, and `SendToUser` errors when the user is not connected.
+- From a worker or any other process: `realtime.PublishUser(ctx, cacheSvc, userID, payload)` and `realtime.PublishChannel(ctx, cacheSvc, channel, payload)`. Relay delivery is fire-and-forget; a user with no live socket is not an error, so keep a REST read path for state a client may have missed.
+
+### What the downstream owns
+
+- Producers: the service that changes an aggregate publishes its event on that aggregate's channel.
+- Authorization: `CanSubscribe` decides who may watch a channel.
+- Inbound frames: `OnMessage` parses and validates application messages; the authenticated `userID` is the only trusted identity in them.
+- Payload schema and event names.
 
 ## Notifications & Messaging
 
@@ -1663,6 +1760,22 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 Setup mode returns the same `{ "checkoutUrl": "..." }` shape; Stripe persists a SetupIntent on the resulting session that consumers can read from `setup_intent.succeeded` webhooks. The handler enforces the `mode` allowlist (one of the three values above) before reaching the port — unknown modes fail with 400, not a downstream Stripe 502.
 
 **`AllowedRedirectHosts` matching (v0.4.7+):** an entry without a colon matches the URL's hostname port-insensitively, so listing `"app.example"` accepts both `https://app.example/` and `https://app.example:8443/`. An entry containing a colon (e.g. `"app.example:8443"`) stays port-strict — useful when you intentionally want to gate by exact `host:port`. Pre-v0.4.7 matched against the raw `host:port` pair, which silently 400'd legitimate non-default ports.
+
+### Refunds — `payment.RefundClient`
+
+`StripeChargeClient.CreateRefund` refunds part or all of a captured payment:
+
+```go
+res, err := chargeClient.CreateRefund(ctx, payment.RefundRequest{
+    PaymentID: "pi_…", AmountMinor: 500, Currency: "USD",
+    IdempotencyKey: "refund-<your request id>", Reason: "requested_by_customer",
+})
+// res.RefundID, res.Status (pending | succeeded | failed), res.AmountMinor, res.Currency
+```
+
+The idempotency key is required so a retried request cannot refund twice. The payment's currency is read from the provider before the refund is posted. If the provider reports a different amount than requested, the result is returned together with `ErrRefundAmountMismatch`: the refund exists and must be reconciled, not retried. A currency that does not match the payment's is rejected before any ledger effect. Whether a refund is owed, who approves it, and who bears it are application decisions; persist the authorized request before calling the provider and reconcile the outcome by refund id.
+
+**Sign rule for inbound refund events.** Refund amounts are negative. `charge.refunded` sets `RefundCumulative=true` and carries the cumulative total; `charge.refund.updated` carries one refund delta and its `RefundID`. Consumers must deduplicate by provider identity and must not negate the amount again.
 
 ### Native payment sheet intents
 

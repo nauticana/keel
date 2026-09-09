@@ -1,0 +1,21 @@
+table: recording_participant
+comment: Parties whose current consent a session requires before capture starts.
+columns:
+  - name: session_id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: role
+    type: VARCHAR(20)
+primary_key: [session_id, user_id]
+foreign_keys:
+  - name: recording_participant_session
+    columns: [session_id]
+    references:
+      table: recording_session
+      columns: [id]
+  - name: recording_participant_user
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

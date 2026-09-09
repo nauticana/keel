@@ -1,0 +1,26 @@
+comment: Recording seed data
+order: 190
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [recording_session_status, Recording Session Status]
+      - [recording_media_status, Recording Media Status]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [recording_session_status, W, Awaiting consent]
+      - [recording_session_status, A, Authorized]
+      - [recording_session_status, R, Recording]
+      - [recording_session_status, F, Finalizing]
+      - [recording_session_status, D, Ready]
+      - [recording_session_status, S, Stopped without media]
+      - [recording_session_status, X, Failed]
+      - [recording_media_status, P, Pending upload]
+      - [recording_media_status, U, Ready]
+      - [recording_media_status, X, Failed]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [recording_session_status, recording_session, status]
+      - [recording_media_status, recording_media, status]

@@ -81,3 +81,9 @@ groups:
     seed: seed/agency.yml
     depends_on: [core, tenant_management, payout, billing]
     seed_depends_on: [core]
+
+  - name: recording
+    path: recording
+    seed: seed/recording.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: [core]

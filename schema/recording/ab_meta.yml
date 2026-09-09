@@ -1,0 +1,4 @@
+tables:
+  - recording_session
+  - recording_participant
+  - recording_media

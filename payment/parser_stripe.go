@@ -121,6 +121,10 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 		event.PaymentID = s
 	}
 	event.ChargeID, event.DisputeID = stripeFinancialIdentities(raw.Type, obj)
+	if strings.HasPrefix(raw.Type, "charge.refund.") {
+		event.RefundID, _ = obj["id"].(string)
+	}
+	event.RefundCumulative = raw.Type == "charge.refunded"
 	if event.PaymentID == "" {
 		event.PaymentID = event.ChargeID
 	}
@@ -245,8 +249,15 @@ func stripeAmountCents(eventType string, obj map[string]any) int64 {
 	// Refund-class events: amount_refunded is authoritative; flip the
 	// sign so consumers can sum across rows.
 	switch eventType {
-	case "charge.refunded", "charge.refund.updated":
+	case "charge.refunded":
 		if raw, ok := obj["amount_refunded"]; ok {
+			if cents, ok := asInt64(raw); ok {
+				return -cents
+			}
+		}
+		return 0
+	case "charge.refund.updated":
+		if raw, ok := obj["amount"]; ok {
 			if cents, ok := asInt64(raw); ok {
 				return -cents
 			}

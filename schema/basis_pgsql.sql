@@ -1157,6 +1157,56 @@ CREATE TABLE IF NOT EXISTS agency_payout_line (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS agency_payout_line_live_uq ON agency_payout_line(commission_id) WHERE released_at IS NULL;
 
+-- Consent-gated capture session over an application-defined context.
+-- status W=awaiting consent, A=authorized, R=recording (capture acknowledged),
+-- F=finalizing, D=ready, S=stopped without media, X=failed.
+CREATE TABLE IF NOT EXISTS recording_session (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    context_ref                          VARCHAR(64)   NOT NULL,
+    consent_type                         VARCHAR(30)   NOT NULL,
+    policy_id                            BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'W',
+    capture_token_hash                   VARCHAR(64)  ,
+    capture_expires_at                   TIMESTAMP    ,
+    created_by                           BIGINT        NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT recording_session_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS recording_session_context_uq ON recording_session(partner_id, context_ref);
+
+CREATE SEQUENCE IF NOT EXISTS recording_session_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('recording_session', 'id', 'recording_session_seq') ON CONFLICT DO NOTHING;
+
+-- Parties whose current consent a session requires before capture starts.
+CREATE TABLE IF NOT EXISTS recording_participant (
+    session_id                           BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    role                                 VARCHAR(20)   NOT NULL,
+    CONSTRAINT recording_participant_pk PRIMARY KEY (session_id, user_id)
+);
+
+-- Stored objects of a session, by object reference only. status P=pending
+-- upload, U=uploaded and ready, X=failed.
+CREATE TABLE IF NOT EXISTS recording_media (
+    id                                   BIGINT        NOT NULL,
+    session_id                           BIGINT        NOT NULL,
+    bucket                               VARCHAR(100)  NOT NULL,
+    object_key                           VARCHAR(255)  NOT NULL,
+    content_type                         VARCHAR(100)  NOT NULL,
+    size_bytes                           BIGINT        NOT NULL DEFAULT 0,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    uploaded_by                          BIGINT        NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at                         TIMESTAMP    ,
+    CONSTRAINT recording_media_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS recording_media_key_uq ON recording_media(session_id, object_key);
+
+CREATE SEQUENCE IF NOT EXISTS recording_media_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('recording_media', 'id', 'recording_media_seq') ON CONFLICT DO NOTHING;
+
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
 BEGIN
@@ -1885,5 +1935,68 @@ BEGIN
      WHERE constraint_name = 'payout_line_commission' AND table_name = 'agency_payout_line'
   ) THEN
     ALTER TABLE agency_payout_line ADD CONSTRAINT payout_line_commission FOREIGN KEY (commission_id) REFERENCES agency_commission(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_session_partner' AND table_name = 'recording_session'
+  ) THEN
+    ALTER TABLE recording_session ADD CONSTRAINT recording_session_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_session_creator' AND table_name = 'recording_session'
+  ) THEN
+    ALTER TABLE recording_session ADD CONSTRAINT recording_session_creator FOREIGN KEY (created_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_session_policy' AND table_name = 'recording_session'
+  ) THEN
+    ALTER TABLE recording_session ADD CONSTRAINT recording_session_policy FOREIGN KEY (policy_id) REFERENCES consent_policy(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_participant_session' AND table_name = 'recording_participant'
+  ) THEN
+    ALTER TABLE recording_participant ADD CONSTRAINT recording_participant_session FOREIGN KEY (session_id) REFERENCES recording_session(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_participant_user' AND table_name = 'recording_participant'
+  ) THEN
+    ALTER TABLE recording_participant ADD CONSTRAINT recording_participant_user FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_media_session' AND table_name = 'recording_media'
+  ) THEN
+    ALTER TABLE recording_media ADD CONSTRAINT recording_media_session FOREIGN KEY (session_id) REFERENCES recording_session(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_media_uploader' AND table_name = 'recording_media'
+  ) THEN
+    ALTER TABLE recording_media ADD CONSTRAINT recording_media_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id);
   END IF;
 END $$;

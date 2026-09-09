@@ -31,6 +31,7 @@ type ConsentRequest struct {
 	PolicyVersion   string
 	PolicyLanguage  string
 	EventRef        string // optional: reference to a domain object (e.g. ride_id for video_session)
+	PolicyID        int64  // optional: pre-resolved consent_policy id; skips the Policy* lookup
 	Region          string
 	ClientIP        string
 	ClientUserAgent string
@@ -78,6 +79,13 @@ type ConsentEvent struct {
 	CreatedAt       time.Time
 }
 
+type ConsentPolicyRef struct {
+	Type     string
+	Region   string
+	Version  string
+	Language string
+}
+
 // ConsentService records and queries the consent audit trail backed by
 // the consent_policy and consent_event tables. Optional on LocalUserService:
 // when registered and a SignupConsent is passed, signup flows record
@@ -87,6 +95,11 @@ type ConsentService interface {
 	Record(ctx context.Context, req ConsentRequest) error
 	RecordSignupConsents(ctx context.Context, userID int, email string, consents map[string]bool, meta ConsentRequest) error
 	LatestConsent(ctx context.Context, userID int, email, consentType string) (consented bool, found bool, err error)
+	// LatestConsentFor returns the user's most recent decision for one
+	// consent_type + event_ref pair, e.g. a single recording session.
+	LatestConsentFor(ctx context.Context, userID int, consentType, eventRef string, policyID int64) (consented bool, found bool, err error)
+	// ResolvePolicyID returns the consent_policy id for a policy reference.
+	ResolvePolicyID(ctx context.Context, policy ConsentPolicyRef) (int64, error)
 	// Withdraw records a first-class opt-out (Consented=false) for a consent
 	// type — the STOP/revocation half of the audit lifecycle. req carries the
 	// same identity + policy metadata as Record.

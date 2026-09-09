@@ -1167,3 +1167,54 @@ CREATE TABLE IF NOT EXISTS agency_payout_line (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- agency_payout_line_live_uq is a partial index on PostgreSQL (WHERE released_at IS NULL); MySQL cannot enforce it — service-enforced
 CREATE INDEX agency_payout_line_live_uq ON agency_payout_line(commission_id);
+
+-- Consent-gated capture session over an application-defined context.
+-- status W=awaiting consent, A=authorized, R=recording (capture acknowledged),
+-- F=finalizing, D=ready, S=stopped without media, X=failed.
+CREATE TABLE IF NOT EXISTS recording_session (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    context_ref                          VARCHAR(64)   NOT NULL,
+    consent_type                         VARCHAR(30)   NOT NULL,
+    policy_id                            BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'W',
+    capture_token_hash                   VARCHAR(64)  ,
+    capture_expires_at                   DATETIME     ,
+    created_by                           BIGINT        NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT recording_session_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT recording_session_creator FOREIGN KEY (created_by) REFERENCES user_account(id),
+    CONSTRAINT recording_session_policy FOREIGN KEY (policy_id) REFERENCES consent_policy(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX recording_session_context_uq ON recording_session(partner_id, context_ref);
+
+-- Parties whose current consent a session requires before capture starts.
+CREATE TABLE IF NOT EXISTS recording_participant (
+    session_id                           BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    role                                 VARCHAR(20)   NOT NULL,
+    PRIMARY KEY (session_id, user_id),
+    CONSTRAINT recording_participant_session FOREIGN KEY (session_id) REFERENCES recording_session(id),
+    CONSTRAINT recording_participant_user FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Stored objects of a session, by object reference only. status P=pending
+-- upload, U=uploaded and ready, X=failed.
+CREATE TABLE IF NOT EXISTS recording_media (
+    id                                   BIGINT        NOT NULL,
+    session_id                           BIGINT        NOT NULL,
+    bucket                               VARCHAR(100)  NOT NULL,
+    object_key                           VARCHAR(255)  NOT NULL,
+    content_type                         VARCHAR(100)  NOT NULL,
+    size_bytes                           BIGINT        NOT NULL DEFAULT 0,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    uploaded_by                          BIGINT        NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at                         DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT recording_media_session FOREIGN KEY (session_id) REFERENCES recording_session(id),
+    CONSTRAINT recording_media_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX recording_media_key_uq ON recording_media(session_id, object_key);

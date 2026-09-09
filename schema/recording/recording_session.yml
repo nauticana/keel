@@ -1,0 +1,57 @@
+table: recording_session
+comment: |
+  Consent-gated capture session over an application-defined context.
+  status W=awaiting consent, A=authorized, R=recording (capture acknowledged),
+  F=finalizing, D=ready, S=stopped without media, X=failed.
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: context_ref
+    type: VARCHAR(64)
+  - name: consent_type
+    type: VARCHAR(30)
+  - name: policy_id
+    type: BIGINT
+  - name: status
+    type: CHAR(1)
+    default: W
+  - name: capture_token_hash
+    type: VARCHAR(64)
+    nullable: true
+  - name: capture_expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_by
+    type: BIGINT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: recording_session_seq
+  column: id
+indexes:
+  - name: recording_session_context_uq
+    columns: [partner_id, context_ref]
+    unique: true
+foreign_keys:
+  - name: recording_session_partner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: recording_session_creator
+    columns: [created_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: recording_session_policy
+    columns: [policy_id]
+    references:
+      table: consent_policy
+      columns: [id]

@@ -1,0 +1,48 @@
+table: recording_media
+comment: |
+  Stored objects of a session, by object reference only. status P=pending
+  upload, U=uploaded and ready, X=failed.
+columns:
+  - name: id
+    type: BIGINT
+  - name: session_id
+    type: BIGINT
+  - name: bucket
+    type: VARCHAR(100)
+  - name: object_key
+    type: VARCHAR(255)
+  - name: content_type
+    type: VARCHAR(100)
+  - name: size_bytes
+    type: BIGINT
+    default: 0
+  - name: status
+    type: CHAR(1)
+    default: P
+  - name: uploaded_by
+    type: BIGINT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: recording_media_seq
+  column: id
+indexes:
+  - name: recording_media_key_uq
+    columns: [session_id, object_key]
+    unique: true
+foreign_keys:
+  - name: recording_media_session
+    columns: [session_id]
+    references:
+      table: recording_session
+      columns: [id]
+  - name: recording_media_uploader
+    columns: [uploaded_by]
+    references:
+      table: user_account
+      columns: [id]

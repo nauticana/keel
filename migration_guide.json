@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.58",
+   "title": "Realtime WebSocket hub, consent-gated recording sessions, Stripe refunds, session-scoped consent",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "Adds a generic authenticated WebSocket hub and cache relay, Stripe refund creation with preflight currency validation, policy-scoped recording consent and bounded retryable media uploads.",
+   "body_markdown": "## Changes\n\n- `realtime.Hub` implements `port.WebSocketHub` with authorized channel subscriptions, keepalive, origin checks, and cache-backed `PublishUser` / `PublishChannel`. Mount `handler.WebSocketHandler` at `/public/ws`. `CanSubscribe` is required; nil denies subscriptions.\n- `payment.RefundClient` is implemented by `StripeChargeClient`. Refunds require a positive minor-unit amount, ISO currency, and stable idempotency key. Stripe currency is checked before the refund call; a provider amount that differs from the request returns the result with `ErrRefundAmountMismatch`. Refund events expose `RefundID` and `RefundCumulative`; amounts remain negative.\n- `recording.Service` creates policy-bound sessions (any actor may create; only participants act on them; different terms on the same context return `ErrConflict`), serializes consent decisions with start, requires participant identity plus an expiring token, bounds content type and size, namespaces object keys, retries failed media rows by key, and marks ready once no upload is pending and at least one object is stored.\n- The `recording` schema group adds session, participant, and media tables.\n\n## Adoption\n\n1. Replace downstream socket hubs with `realtime.Hub`, supply `CanSubscribe`, and adapt clients to the documented `op/channel` protocol.\n2. Persist refund requests before `CreateRefund`; reconcile by refund ID and distinguish cumulative events from deltas.\n3. Regenerate the recording schema, resolve a `ConsentPolicyRef` when creating each session, derive participants in the application service, and supply media limits.\n4. Custom `ConsentService` implementations add `LatestConsentFor` and `ResolvePolicyID`; `ConsentRequest.PolicyID` carries a pre-resolved policy through `Record` / `Withdraw`.\n\n## Breaking risk\n\n`ConsentService` gains `LatestConsentFor` and `ResolvePolicyID` (compile break for custom implementations only). The remaining APIs are additive."
+  },
+  {
    "version": "v1.2.57",
    "title": "Refresh tokens on every login, native payment-sheet intents, --print_config",
    "tags": [
