@@ -74,7 +74,7 @@ func (h *SecurityHandler) rateLimitVerify2FA(r *http.Request) bool {
 	if h.Cache == nil {
 		return false
 	}
-	key := "2fa_verify_ip:" + TrustedClientIP(r)
+	key := "2fa_verify_ip:" + common.TrustedClientIP(r)
 	count, err := h.Cache.IncrementWithTTL(r.Context(), key, config.Config().Verify2FAWindow)
 	if err != nil {
 		if h.Journal != nil {

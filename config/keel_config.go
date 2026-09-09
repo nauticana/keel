@@ -53,6 +53,12 @@ const (
 	http_idle_timeout             = "http_idle_timeout"
 	hc_port                       = "hc_port"
 	push_mode                     = "push_mode"
+	apns_key_id                   = "apns_key_id"
+	apns_team_id                  = "apns_team_id"
+	apns_bundle_id                = "apns_bundle_id"
+	apns_key_secret               = "apns_key_secret"
+	apns_sandbox                  = "apns_sandbox"
+	apns_token_ttl                = "apns_token_ttl"
 	redis_url                     = "redis_url"
 	valkey_url                    = "valkey_url"
 	valkey_cluster                = "valkey_cluster"
@@ -147,13 +153,19 @@ type KeelConfig struct {
 	S3CredentialMode            string        // s3_credential_mode            chain              Worker storage S3/R2 credential source: chain | secret
 	StoragePublicBaseURL        string        // storage_public_base_url       ""                 Public base URL for ObjectStorage.PublicURL
 	StorageAccountURL           string        // storage_account_url           ""                 Azure Blob service endpoint
-	MessagingMode               string        // messaging_mode                ""                 Messaging: gcp or aws
+	MessagingMode               string        // messaging_mode                ""                 Messaging: noop, gcp, aws or nats (empty = error)
 	MaxRequestSize              int64         // max_request_size              16777216           Maximum request body size (bytes)
 	HttpReadTimeout             int           // http_read_timeout             15                 HTTP read timeout in seconds
 	HttpWriteTimeout            int           // http_write_timeout            30                 HTTP write timeout in seconds
 	HttpIdleTimeout             int           // http_idle_timeout             120                HTTP idle timeout in seconds
 	HCPort                      int           // hc_port                       0                  Health check port override for workers
-	PushMode                    string        // push_mode                     noop               Push provider: fcm or noop
+	PushMode                    string        // push_mode                     noop               Push provider: noop, fcm, apns or fcm,apns
+	APNsKeyID                   string        // apns_key_id                   ""                 APNs auth key id (.p8 key)
+	APNsTeamID                  string        // apns_team_id                  ""                 Apple developer team id
+	APNsBundleID                string        // apns_bundle_id                ""                 iOS app bundle id (apns-topic)
+	APNsKeySecret               string        // apns_key_secret               apns_key           Secret name holding the .p8 PEM
+	APNsSandbox                 bool          // apns_sandbox                  false              Use the APNs sandbox host
+	APNsTokenTTL                time.Duration // apns_token_ttl                3000               APNs provider-token reuse window (seconds, Apple caps at 3600)
 	RedisURL                    string        // redis_url                     ""                 Single-node Redis connection (password in redis_password secret)
 	ValkeyURL                   string        // valkey_url                    ""                 Valkey connection (password in valkey_password secret)
 	ValkeyCluster               bool          // valkey_cluster                false              Use Redis-Cluster protocol
@@ -251,6 +263,12 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.HttpIdleTimeout = c.Int(m, http_idle_timeout)
 	c.HCPort = c.Int(m, hc_port)
 	c.PushMode = c.String(m, push_mode)
+	c.APNsKeyID = c.String(m, apns_key_id)
+	c.APNsTeamID = c.String(m, apns_team_id)
+	c.APNsBundleID = c.String(m, apns_bundle_id)
+	c.APNsKeySecret = c.String(m, apns_key_secret)
+	c.APNsSandbox = c.Bool(m, apns_sandbox)
+	c.APNsTokenTTL = c.Duration(m, apns_token_ttl)
 	c.RedisURL = c.String(m, redis_url)
 	c.ValkeyURL = c.String(m, valkey_url)
 	c.ValkeyCluster = c.Bool(m, valkey_cluster)

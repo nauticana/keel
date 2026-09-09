@@ -125,6 +125,7 @@ func (h *HttpBackend) Handle(functions map[string]func(w http.ResponseWriter, r 
 		// SecurityHeaders wraps the outer chain so hardening headers land on
 		// every response, including short-circuited middleware errors.
 		h.handler = h.SecurityHeadersMiddleware(h.handler)
+		h.handler = h.AccessLogMiddleware(h.handler)
 	}
 	if h.registered == nil {
 		h.registered = map[string]struct{}{}
@@ -371,13 +372,19 @@ func (h *HttpBackend) PlainHTTPGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
+		if isProbePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Set("Upgrade", "TLS/1.2, HTTP/1.1")
 		http.Error(w, `{"error":"HTTPS required"}`, http.StatusUpgradeRequired)
 	})
+}
+
+// isProbePath reports the VPC-internal health-check paths that bypass the
+// TLS guard and are kept out of the access log unless they fail.
+func isProbePath(path string) bool {
+	return path == "/health" || path == "/ready"
 }
 
 // SecurityHeadersMiddleware sets hardening headers on every response.

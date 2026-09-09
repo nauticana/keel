@@ -83,7 +83,7 @@ func (h *ConsentHandler) Record(w http.ResponseWriter, r *http.Request) {
 		PolicyLanguage:  req.PolicyLanguage,
 		Region:          req.Region,
 		EventRef:        req.EventRef,
-		ClientIP:        TrustedClientIP(r),
+		ClientIP:        common.TrustedClientIP(r),
 		ClientUserAgent: r.UserAgent(),
 	})
 	if err != nil {

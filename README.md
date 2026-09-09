@@ -290,8 +290,11 @@ import (
     "github.com/nauticana/keel/rest"
 )
 
-// Initialize REST service — reads API definitions from DB
-restService := &rest.RestService{}
+// Initialize REST service — reads API definitions from DB. Journal enables the
+// startup grant audit: a TABLE grant with no generic CRUD route (no active
+// rest_api_header row) and a mounted master table no role can reach are each
+// logged as a Warning.
+restService := &rest.RestService{Journal: journal}
 apis, reports, _ := restService.Init(ctx, db)
 
 // Optional: validate a generic CRUD batch after all parent/child writes are
@@ -342,9 +345,16 @@ This is different from `handler.RestHandler.PostWrite`: `PostWrite` runs after
 commit and is appropriate for cache invalidation or notifications, never for
 validation that must roll back the write.
 
+**List envelope.** `RestHandler.List` never answers with a bare JSON array:
+successful responses have the shape
+`{"data":{"items":[],"limit":50,"offset":0,"total":0},"meta":{...}}`.
+Decode rows from `data.items` (or `items` after your HTTP client unwraps `data`).
+Decoding directly into an array is incorrect; the resulting error or empty
+state depends on the client's decoder.
+
 **List pagination.** `RestHandler.List` takes `?limit=` / `?offset=` (default
 `default_list_page_size`, hard-capped at `max_list_page_size`) and `?order=`,
-and answers with `{items, limit, offset, total}` where `total` is the unpaged
+and fills `data` with `{items, limit, offset, total}` where `total` is the unpaged
 count. The bounds reach SQL as `LIMIT` / `OFFSET` when the bound table service
 implements the optional `port.PagedTableService` — PostgreSQL's does — so the
 response cap is also a read cap rather than a slice taken after a full-table
@@ -938,6 +948,39 @@ if err := userSvc.SetSingleDevicePolicy(driverUserID, true); err != nil { ... }
 
 When the bit is on, every call to `CreateRefreshToken(userID)` first revokes all prior active refresh tokens for that user. The device that most recently authenticated is the device that stays signed in. Riders, regular users — default off, normal multi-device behavior.
 
+### Registering Public Routes
+
+`PublicHandler.GetPublicRoutes()` returns the unauthenticated login, registration and password routes so a downstream mounts them in one call instead of listing each path. Routes whose handler needs `Secrets` (Google login) or `RegisterService` (registration, password forgot/change/reset, plans) are only included when that field is set, so a partially wired handler never mounts a route that would panic:
+
+```go
+publicHandler := handler.PublicHandler{
+    AbstractHandler: handler.AbstractHandler{UserService: userSvc},
+    RegisterService: registerSvc,
+    Secrets: secrets, // Google OAuth client-secret provider
+}
+srv.Handle(publicHandler.GetPublicRoutes())
+```
+
+| Method | Route | Handler | Description |
+|--------|-------|---------|-------------|
+| POST | `/public/login/local` | `LoginLocal` | Username / password login |
+| POST | `/public/login/gmail` | `LoginGoogle` | Google OAuth code login |
+| POST | `/public/register` | `AddRegistrationRequest` | Start registration, emails the confirmation code |
+| GET | `/public/register/confirm` | `ConfirmRegistration` | `?email=&code=` completes registration |
+| GET | `/public/password/policy` | `GetPasswordPolicy` | Password rules for pre-submit validation |
+| POST | `/public/password/forgot` | `ChangePassword` | `{username}` — emails a reset code; 200 whether or not the user exists |
+| POST | `/public/password/change` | `ChangePassword` | `{username, old_password, new_password}` — change after checking the old password |
+| POST | `/public/password/reset` | `ConfirmPasswordChange` | `{username, code, new_password}` — completes the reset; `code` is a JSON string |
+| GET | `/public/plans` | `ListPublicPlans` | Public plan catalog |
+
+`forgot` and `change` share one handler: an empty `old_password` selects the reset-by-email path. Public routes sit under `/public`, outside the `/api` prefix that `SSOMiddleware` gates — a client calling `/api/v1/public/...` hits the bearer check, not the route.
+
+This is an opt-in route map over existing handlers; it does not change their
+request contracts. In particular, `{email}` on `forgot` and `{token, new_password}`
+on `reset` are not supported by these handlers. Clients must use the documented
+username/code flow or retain their application-specific adapter. Keep custom
+routes instead of replacing them wholesale when their contracts differ.
+
 ### Registering Security Routes
 
 `SecurityHandler` provides `GetPublicRoutes()` and `GetAuthRoutes()` methods that return route maps. Any project using keel can register them:
@@ -1171,18 +1214,18 @@ Nil-safe: with `Consent` unset both routes return **503**.
 
 Consumers may record additional custom types just by passing their own string — keel does not enforce the label set.
 
-### Spoof-safe client IP — `bhandler.TrustedClientIP(r)`
+### Spoof-safe client IP — `bcommon.TrustedClientIP(r)`
 
-The `client_ip` column on `consent_event` is part of the regulator-visible audit trail; it must reflect the real caller, not whatever an attacker types into `X-Forwarded-For`. Keel ships `handler.TrustedClientIP(r *http.Request) string` (exported in v0.4.7) that honors `X-Forwarded-For` / `X-Real-IP` **only** when the inbound socket address falls inside `trusted_proxy_cidr`. With an empty CIDR config the helper returns `RemoteAddr`'s host part — a fail-closed default per P0-15.
+The `client_ip` column on `consent_event` is part of the regulator-visible audit trail; it must reflect the real caller, not whatever an attacker types into `X-Forwarded-For`. Keel ships `common.TrustedClientIP(r *http.Request) string` (in `handler` until v1.2.56) that honors `X-Forwarded-For` / `X-Real-IP` **only** when the inbound socket address falls inside `trusted_proxy_cidr`. With an empty CIDR config the helper returns `RemoteAddr`'s host part — a fail-closed default per P0-15. `common.RemoteHost(remoteAddr)` is the bare host-part strip, for callers that only need the socket peer.
 
 Use this helper anywhere a downstream consumer would otherwise reach for `r.RemoteAddr` or read forwarding headers directly:
 
 ```go
-import "github.com/nauticana/keel/handler"
+import "github.com/nauticana/keel/common"
 
 func (h *MyHandler) Register(w http.ResponseWriter, r *http.Request) {
     consent := &port.SignupConsent{
-        ClientIP:        handler.TrustedClientIP(r), // gated; safe behind a trusted proxy
+        ClientIP:        common.TrustedClientIP(r), // gated; safe behind a trusted proxy
         ClientUserAgent: r.UserAgent(),
         // …
     }
@@ -1195,22 +1238,29 @@ Keel's own consent-capturing handlers (`SocialLoginHandler.LoginSocial`, the OTP
 
 ```go
 flag.Parse()
-handler.MustRequireTrustedProxyCIDR() // log.Fatalf if trusted_proxy_cidr is empty / all-invalid
+common.MustRequireTrustedProxyCIDR() // log.Fatalf if trusted_proxy_cidr is empty / all-invalid
 ```
 
-(Or the error-returning variant `handler.RequireTrustedProxyCIDR()` if you prefer to handle the failure yourself.) This converts the silently-broken-attribution failure mode into a deploy-time crash. The validator parses the CIDR list with the same logic the runtime uses — a config that splits to zero valid nets fails too, since that's behaviorally identical to "empty" at request time. Skip the helper for unit tests, localhost-only deployments, or consumers that genuinely do not record client IPs.
+(Or the error-returning variant `common.RequireTrustedProxyCIDR()` if you prefer to handle the failure yourself.) This converts the silently-broken-attribution failure mode into a deploy-time crash. The validator parses the CIDR list with the same logic the runtime uses — a config that splits to zero valid nets fails too, since that's behaviorally identical to "empty" at request time. Skip the helper for unit tests, localhost-only deployments, or consumers that genuinely do not record client IPs.
 
-## Push Notifications (FCM)
+## Push Notifications (FCM, APNs)
 
-Keel ships a push-notification subsystem behind `port.MessageDispatcher` (legacy alias `port.PushProvider`). The `device_token` table stores per-user FCM tokens (iOS devices use Firebase's APNs integration, so one provider covers both platforms). Non-mobile consumers get a NoOp provider by default and are unaffected.
+Keel ships a push-notification subsystem behind `port.MessageDispatcher` (legacy alias `port.PushProvider`). The `device_token` table stores per-user tokens with their platform; FCM covers Android, web and Firebase-integrated iOS builds, and a native APNs provider covers iOS apps that ship without the Firebase SDK and can only offer a raw APNs token. Non-mobile consumers get a NoOp provider by default and are unaffected.
 
 ### Wiring
 
-Select the provider via `push_mode=fcm|noop` (default `noop`):
+Select the provider via `push_mode` (default `noop`):
+
+| `push_mode` | Provider | Notes |
+|---|---|---|
+| `noop` / empty | `NoOpPushProvider` | dispatches are discarded |
+| `fcm` | `FCMPushProvider` | every active token goes through FCM |
+| `apns` | `APNsPushProvider` | every active token goes to APNs over HTTP/2 with token-based auth |
+| `fcm,apns` | `PlatformRouter` | rows with `platform = I` go to APNs, all other rows to FCM; `Send` picks APNs for a 64-hex token, FCM otherwise |
 
 ```go
 // In main.go, after UserService is constructed:
-pushProvider, err := push.NewPushProvider(ctx, userSvc, journal)
+pushProvider, err := push.NewPushProvider(ctx, secrets, userSvc, journal)
 if err != nil { ... }
 
 // Register the mobile-facing endpoints on SecurityHandler or a dedicated PushHandler:
@@ -1226,12 +1276,25 @@ FCM mode resolves credentials via Google's Application Default Credentials. Thre
 2. **Workload Identity Federation on AWS/other** — set `GOOGLE_APPLICATION_CREDENTIALS` to a credential-config JSON that exchanges the local-cloud OIDC token for a GCP access token. No static key on disk.
 3. **Static service-account key (legacy)** — set `GOOGLE_APPLICATION_CREDENTIALS` to a downloaded Firebase Admin SDK private-key JSON. Works everywhere but you own the rotation; GCP org policies increasingly force short key lifetimes (~14 days) making this unsustainable. Prefer (1) or (2).
 
+APNs mode authenticates with an Apple auth key (`.p8`). The PEM lives in the secret store under the name in `apns_key_secret`; the ids come from config:
+
+| Config | Default | Meaning |
+|---|---|---|
+| `apns_key_id` | `` | Key id shown next to the `.p8` in the Apple developer portal |
+| `apns_team_id` | `` | Apple developer team id (JWT `iss`) |
+| `apns_bundle_id` | `` | App bundle id, sent as `apns-topic` |
+| `apns_key_secret` | `apns_key` | Secret name holding the `.p8` PEM |
+| `apns_sandbox` | `false` | Use `api.sandbox.push.apple.com` (development builds) |
+| `apns_token_ttl` | `3000` | Seconds a minted provider token is reused; Apple rejects tokens older than an hour |
+
+The provider JWT (ES256) is minted once and reused for `apns_token_ttl` seconds. Payloads are `{"aps":{"alert":{"title","body"},"sound":"default"}, …data}`, so the app reads custom keys from `userInfo` at the top level. A `410 Unregistered`, `BadDeviceToken` or `DeviceTokenNotForTopic` response marks the row `is_active=false`; any other non-200 surfaces as the `Dispatch` error without revoking.
+
 ### Device-token endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/push/register` | Idempotent upsert. Body: `{ "platform": "I\|A\|W", "token": "<fcm token>", "appVersion": "1.2.3", "deviceModel": "iPhone 15" }`. Called by the mobile SDK after each login + on token-refresh events. |
-| POST | `/api/push/revoke` | Mark a token inactive. Body: `{ "token": "<fcm token>" }`. Called on explicit logout. |
+| POST | `/api/push/register` | Idempotent upsert. Body: `{ "platform": "I\|A\|W", "token": "<fcm or apns token>", "appVersion": "1.2.3", "deviceModel": "iPhone 15" }`. Called by the mobile SDK after each login + on token-refresh events. In `fcm,apns` mode the `platform` value decides the provider, so an iOS build registering a raw APNs token must send `I`. |
+| POST | `/api/push/revoke` | Mark a token inactive. Body: `{ "token": "<token>" }`. Called on explicit logout. |
 
 ### Dispatch
 
@@ -1244,11 +1307,11 @@ err := pushProvider.Dispatch(ctx, userID, "Order shipped", "Your order is on the
 })
 ```
 
-FCM-reported stale tokens (the `registration-token-not-registered` error) are automatically marked `is_active=false` so subsequent dispatches skip them. `Dispatch` against a user with zero active devices is a silent no-op, not an error.
+Stale tokens (FCM `registration-token-not-registered`, APNs `410 Unregistered` / `BadDeviceToken`) are automatically marked `is_active=false` so subsequent dispatches skip them. `Dispatch` against a user with zero active devices is a silent no-op, not an error.
 
 ### device_token table
 
-Columns: `id`, `user_id` (FK → user_account), `platform` (`CHAR(1)` — I=iOS, A=Android, W=Web), `token` (TEXT — FCM token), `app_version`, `device_model`, `is_active`, `created_at`, `updated_at`, `last_seen_at`. Unique index on `(user_id, token)` to keep re-registration idempotent. `DeleteAccount` cascades to deactivate every token for the user.
+Columns: `id`, `user_id` (FK → user_account), `platform` (`CHAR(1)` — I=iOS, A=Android, W=Web), `token` (TEXT — FCM or raw APNs token), `app_version`, `device_model`, `is_active`, `created_at`, `updated_at`, `last_seen_at`. Unique index on `(user_id, token)` to keep re-registration idempotent. `DeleteAccount` cascades to deactivate every token for the user.
 
 ## Notifications & Messaging
 
@@ -1915,13 +1978,14 @@ Selection is driven by flag variables:
   - `azure` reads from Azure Key Vault; set `--azure_keyvault_url=https://<vault>.vault.azure.net/`. Auth uses `azidentity.DefaultAzureCredential` (managed identity on Azure VM/AKS, or the `AZURE_*` env fallback), so no secret material passes through the process config.
   - `infisical` reads from [Infisical](https://infisical.com) — the production-grade option for deployments **not** on AWS/GCP/Azure (so they need not fall back to the local `secrets.json` file). Set `--infisical_project_id`, `--infisical_environment` (default `prod`), and `--infisical_host` (default `https://app.infisical.com`; override for a self-hosted instance). Auth uses an Infisical **machine identity** via Universal Auth: the SDK reads `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` / `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` from the environment, so — like the gsm/aws/azure backends — the credential is owned by the vendor SDK's chain and never passes through a keel flag. Universal Auth is chosen because it is platform-agnostic; the native AWS/Azure/GCP/Kubernetes machine-identity methods only apply when running on that platform.
 - `--log_type=local|gcp|aws|azure`
+  - `HttpBackend` writes one access record per request through `ApplicationLogger.Access` — `METHOD /path STATUS BYTES MILLIS CLIENT_IP` — as the outermost middleware, so rejections from CORS, TLS guard, API-key and SSO layers are recorded too, and a handler panic is recorded as 500 before it propagates. Query strings are excluded because public confirmation URLs can contain credentials. `CLIENT_IP` comes from `common.TrustedClientIP`, so forwarding headers are honored only behind `trusted_proxy_cidr`. `/health` and `/ready` are logged only when they fail (status ≥ 400). A nil `Journal` leaves requests unchanged. `local` lands it in `<name>_access_<date>.log`; `gcp` and `azure` route it to the `<name>_access` log name; `aws` writes it to the same CloudWatch stream as server records with an `[ACCESS]` prefix.
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
 - `storage_mode=s3|gcs|azure`
   - Build a backend with `storage.New(ctx, config.Config().StorageMode)`; it is also wired onto `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.AbstractWorker.Run` when `storage_mode` is set), so app code calls `svc.Storage.Upload(...)` and `svc.Storage.PublicURL(...)`. Empty `storage_mode` disables storage (the field stays `nil`).
   - **Cloudflare R2 / S3-compatible**: use `s3` plus `s3_endpoint=https://<account>.r2.cloudflarestorage.com` (this switches the client to path-style addressing). `s3_endpoint` replaces the former `S3_ENDPOINT` env var. AWS/R2 credentials still resolve through the AWS SDK's own chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `AWS_REGION=auto` for R2) — that is the SDK's concern, not a keel knob.
   - **Public URLs**: `ObjectStorage.PublicURL(bucket, key)` returns a stable, non-expiring served URL (no signing, no API call) for publicly-readable buckets. GCS → `https://storage.googleapis.com/<bucket>/<key>`; S3/R2 → `<storage_public_base_url>/<key>` (set `storage_public_base_url` to an R2 custom domain or `*.r2.dev` host — the bucket is not in the path because the domain already maps to it; empty returns `""`); Azure → `<account-url>/<container>/<key>`. Use `GetSignedURL` instead when the bucket is private.
   - **Azure**: requires `storage_account_url=https://<account>.blob.core.windows.net/`; auth via `azidentity.DefaultAzureCredential`.
-- `messaging_mode=gcp|aws|nats`
+- `messaging_mode=noop|gcp|aws|nats` (empty = error)
 
 ## Messaging (publisher / subscriber)
 
@@ -1953,6 +2017,7 @@ type Message struct {
 
 | Mode | Publisher | Subscriber | Config |
 |------|-----------|------------|--------|
+| `noop` | `NoOpPublisher` (drops every message) | — (error) | none |
 | `gcp` | `PubSubPublisher` (Cloud Pub/Sub) | `PubSubSubscriber` | `--gcp_project_id` |
 | `aws` | `SNSPublisher` (looks up topic ARN by name) | `SQSSubscriber` (long-poll, ack via `DeleteMessage`, nack via `ChangeMessageVisibility(0)`) | Standard AWS SDK credentials chain |
 | `nats` | `NATSPublisher` (JetStream, work-queue retention, lazy stream creation) | `NATSSubscriber` (durable pull consumer; `MaxDeliver=3`, `AckWait=30s`) | `nats_url`; optional `nats_name` config + `nats_creds_secret` (secret NAME holding the .creds content) |
@@ -1968,7 +2033,7 @@ if err != nil {
 sub, err := messaging.NewMessageSubscriber(ctx, config.Config().MessagingMode, secrets)
 ```
 
-Empty / unknown modes return an error — deployments fail fast on misconfiguration. Callers that want graceful degradation (e.g. notifications fall back to DB-only when publishing is unavailable) treat the error as "broker not configured" and continue without the publisher.
+The explicit `noop` mode returns `messaging.NoOpPublisher`, so a brokerless deployment (local development, single-node) holds a usable publisher and never a nil — but only when an operator wrote `noop` into the config. Empty and unknown modes still return an error, and provider initialization failures (`gcp` without a project) do too, so a missing config row cannot silently drop traffic. Check the error before using the returned value; the factory returns `(nil, err)`. `NewMessageSubscriber` has no no-op form: a worker that subscribes without a broker cannot do its job, so `noop` errors there.
 
 ### NATS direct connection
 
@@ -2711,7 +2776,7 @@ Rules:
   user-facing help; the Go doc-comment is the engineering reference.
 - Add a corresponding row to the **Flag Variables** table in this README
   so downstream consumers can `Cmd-F` for it.
-- Validate combinations at startup, not at first-use. `handler.MustRequireTrustedProxyCIDR`
+- Validate combinations at startup, not at first-use. `common.MustRequireTrustedProxyCIDR`
   is the pattern: fail fast in `main`, not on the first signed-in user.
 
 **Flags, never environment variables.** keel does NOT read `os.Getenv` for

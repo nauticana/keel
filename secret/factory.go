@@ -35,7 +35,7 @@ func NewSecretProvider(ctx context.Context) (SecretProvider, error) {
 //	if err != nil { log.Fatalf(...) }
 //
 // for those values; this helper dedups the pattern and matches the
-// existing handler.MustRequireTrustedProxyCIDR precedent (downstream
+// existing common.MustRequireTrustedProxyCIDR precedent (downstream
 // feedback v0.5.1-G).
 //
 // NEVER call MustGet from a hot request path. A transient secret-

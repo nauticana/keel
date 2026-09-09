@@ -228,7 +228,7 @@ func buildOTPSignupConsent(r *http.Request, req *otpSendRequest) *user.SignupCon
 		PolicyRegion:    req.PolicyRegion,
 		PolicyLanguage:  req.PolicyLanguage,
 		Region:          req.Region,
-		ClientIP:        TrustedClientIP(r),
+		ClientIP:        common.TrustedClientIP(r),
 		ClientUserAgent: r.UserAgent(),
 		Phone:           phone,
 		Consents:        req.Consents,
@@ -295,7 +295,7 @@ func (h *OTPHandler) rateLimitOTP(w http.ResponseWriter, r *http.Request, contac
 	}
 	// Per-IP cap prevents pumping attacks that enumerate contacts
 	// (each under the per-contact limit) from a single origin.
-	ipKey := "otp_rate_ip:" + TrustedClientIP(r)
+	ipKey := "otp_rate_ip:" + common.TrustedClientIP(r)
 	ipCount, err := h.Cache.Increment(r.Context(), ipKey)
 	if err != nil {
 		return h.rateLimitUnavailable(w, r, "per-IP OTP counter", err)

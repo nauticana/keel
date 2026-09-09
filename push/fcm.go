@@ -9,6 +9,7 @@ import (
 	"firebase.google.com/go/v4/messaging"
 
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
@@ -57,10 +58,13 @@ func (p *FCMPushProvider) Dispatch(ctx context.Context, userID int, title, body 
 	if err != nil {
 		return fmt.Errorf("push: list tokens for user %d: %w", userID, err)
 	}
+	return p.sendTokens(ctx, userID, devices, title, body, data)
+}
+
+func (p *FCMPushProvider) sendTokens(ctx context.Context, userID int, devices []model.DeviceToken, title, body string, data map[string]string) error {
 	if len(devices) == 0 {
 		return nil
 	}
-
 	tokens := make([]string, len(devices))
 	for i, d := range devices {
 		tokens[i] = d.Token
@@ -134,4 +138,7 @@ func (p *FCMPushProvider) Send(ctx context.Context, to, title, body string, data
 	return nil
 }
 
-var _ port.MessageDispatcher = (*FCMPushProvider)(nil)
+var (
+	_ port.MessageDispatcher = (*FCMPushProvider)(nil)
+	_ tokenSender            = (*FCMPushProvider)(nil)
+)

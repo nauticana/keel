@@ -23,6 +23,29 @@ type PublicHandler struct {
 	FolderHTML      string
 }
 
+// GetPublicRoutes returns the unauthenticated routes served by PublicHandler.
+// Routes whose handler needs Secrets or RegisterService are only mounted when
+// that dependency is set. password/forgot and password/change share
+// ChangePassword: an empty old_password selects the reset-by-email path.
+func (h *PublicHandler) GetPublicRoutes() map[string]func(w http.ResponseWriter, r *http.Request) {
+	routes := map[string]func(w http.ResponseWriter, r *http.Request){
+		common.PublicPrefix + "/login/local":     h.LoginLocal,
+		common.PublicPrefix + "/password/policy": h.GetPasswordPolicy,
+	}
+	if h.Secrets != nil {
+		routes[common.PublicPrefix+"/login/gmail"] = h.LoginGoogle
+	}
+	if h.RegisterService != nil {
+		routes[common.PublicPrefix+"/register"] = h.AddRegistrationRequest
+		routes[common.PublicPrefix+"/register/confirm"] = h.ConfirmRegistration
+		routes[common.PublicPrefix+"/password/forgot"] = h.ChangePassword
+		routes[common.PublicPrefix+"/password/change"] = h.ChangePassword
+		routes[common.PublicPrefix+"/password/reset"] = h.ConfirmPasswordChange
+		routes[common.PublicPrefix+"/plans"] = h.ListPublicPlans
+	}
+	return routes
+}
+
 func (h *PublicHandler) GetRoot(w http.ResponseWriter, r *http.Request) {
 	if h.FolderHTML != "" {
 		http.FileServer(http.Dir(h.FolderHTML)).ServeHTTP(w, r)
@@ -223,7 +246,7 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 	}
 	// GetUserByEmail no longer logs a phantom Login row (P0-17). Issue the
 	// real activity entry now that we're committing to a JWT for this user.
-	_ = h.UserService.AddUserHistory(session.Id, 0, TrustedClientIP(r), "L", "A", "google")
+	_ = h.UserService.AddUserHistory(session.Id, 0, common.TrustedClientIP(r), "L", "A", "google")
 
 	if session.TwoFactorEnabled {
 		trusted := false

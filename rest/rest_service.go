@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
@@ -24,6 +25,7 @@ const (
 	qRestReportHeader  = "rest_report_header"
 	qRestReportParam   = "rest_report_param"
 	qTableAction       = "table_action"
+	qTableGrants       = "table_grants"
 )
 
 var restQueries = map[string]string{
@@ -44,6 +46,11 @@ SELECT authorization_object_id, action, low_limit, high_limit
 	qConstantLookup:   "SELECT table_name, column_name, constant_id FROM constant_lookup",
 	qRestApiHeader:    "SELECT id, version, master_table FROM rest_api_header where is_active IS TRUE",
 	qRestApiChild:     "SELECT api_id, seq, parent_seq, constraint_name FROM rest_api_child ORDER BY api_id, seq",
+	qTableGrants: `
+SELECT DISTINCT low_limit
+  FROM authorization_role_permission
+ WHERE authorization_object_id = 'TABLE'
+   AND is_active IS TRUE`,
 	qRestReportHeader: "SELECT id, version, query_name, description FROM rest_report_header WHERE is_active IS TRUE",
 	qRestReportParam:  "SELECT report_id, seq, param_name, data_type, constant_id FROM rest_report_param ORDER BY report_id, seq",
 	qTableAction: `
@@ -101,8 +108,11 @@ type RestReport struct {
 type RestService struct {
 	RestApis    map[string]*RestAPI
 	RestReports map[string]*RestReport
-	db          port.DatabaseRepository
-	qs          port.QueryService
+	// Journal receives the startup audit of TABLE grants versus mounted
+	// generic-CRUD tables (auditGrants). nil skips the audit.
+	Journal logger.ApplicationLogger
+	db      port.DatabaseRepository
+	qs      port.QueryService
 
 	// cacheMu guards reads of the four lazily-populated caches below.
 	// Population goes through cacheLoad (singleflight): concurrent
@@ -235,6 +245,10 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase port.DatabaseReposi
 	for apiID, nodes := range byAPI {
 		linkChildRelations(s.RestApis[apiID].Relations.ChildServices, nodes)
 	}
+	// Diagnostic failures must not prevent otherwise valid routes from starting.
+	if err := s.auditGrants(ctx); err != nil {
+		s.Journal.Warning("REST grant audit failed: " + err.Error())
+	}
 
 	// Table actions — populate TableDefinition.Actions from the basis
 	// table_action rows. Each row becomes one button surfaced in sail's
@@ -278,6 +292,51 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase port.DatabaseReposi
 	}
 
 	return s.RestApis, s.RestReports, nil
+}
+
+// auditGrants warns per TABLE grant not reachable through an active
+// rest_api_header and per mounted master table no role can reach.
+// A '*' grant covers every mounted table.
+func (s *RestService) auditGrants(ctx context.Context) error {
+	if s.Journal == nil {
+		return nil
+	}
+	res, err := s.qs.Query(ctx, qTableGrants)
+	if err != nil {
+		return err
+	}
+	granted := make(map[string]struct{}, len(res.Rows))
+	for _, row := range res.Rows {
+		granted[common.AsString(row[0])] = struct{}{}
+	}
+	_, wildcard := granted["*"]
+
+	mounted := make(map[string]struct{}, len(s.RestApis))
+	for _, api := range s.RestApis {
+		collectMountedTables(api.Relations, mounted)
+	}
+	for table := range granted {
+		if _, ok := mounted[table]; !ok && table != "*" {
+			s.Journal.Warning("TABLE grant on " + table + " has no generic CRUD route (no active rest_api_header)")
+		}
+	}
+	if wildcard {
+		return nil
+	}
+	for _, api := range s.RestApis {
+		table := api.Relations.DataService.GetTable().TableName
+		if _, ok := granted[table]; !ok {
+			s.Journal.Warning("rest_api_header " + api.APIName + " exposes " + table + " but no active role permission grants TABLE access to it")
+		}
+	}
+	return nil
+}
+
+func collectMountedTables(rel RelationAPI, out map[string]struct{}) {
+	out[rel.DataService.GetTable().TableName] = struct{}{}
+	for _, child := range rel.ChildServices {
+		collectMountedTables(child, out)
+	}
 }
 
 func (s *RestService) GetPermission(ctx context.Context, userId int) ([]*Permission, error) {

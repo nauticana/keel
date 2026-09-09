@@ -6,10 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 
 	"github.com/nauticana/keel/cache"
@@ -202,155 +199,10 @@ func buildSignupConsent(r *http.Request, req *socialLoginRequest) *user.SignupCo
 		PolicyRegion:    req.PolicyRegion,
 		PolicyLanguage:  req.PolicyLanguage,
 		Region:          req.Region,
-		ClientIP:        TrustedClientIP(r),
+		ClientIP:        common.TrustedClientIP(r),
 		ClientUserAgent: r.UserAgent(),
 		Consents:        req.Consents,
 	}
-}
-
-// TrustedClientIP returns the caller's source IP, honoring
-// X-Forwarded-For and X-Real-IP only when the inbound socket address
-// is in the configured trusted-proxy CIDR set (trusted_proxy_cidr).
-// Without that gate, any client could spoof its own IP for rate-
-// limiting and consent-audit purposes by setting either header. Empty
-// CIDR config = trust nothing = always return RemoteAddr's host part.
-//
-// Exported so downstream consumers (consent capture, rate-limit keys,
-// security event logs) can share keel's gated implementation instead
-// of re-implementing a header-trusting clientIP and silently
-// reintroducing the spoof vector. Use this helper anywhere you would
-// otherwise reach for r.RemoteAddr / r.Header.Get("X-Forwarded-For").
-//
-// CIDR list is parsed once on first call and cached; subsequent calls
-// are O(N) over the (typically very small) set of trusted ranges.
-func TrustedClientIP(r *http.Request) string {
-	remote := remoteHost(r.RemoteAddr)
-	if !isTrustedProxy(remote) {
-		return remote
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// XFF semantics: leftmost entry is the original client; right-
-		// most is the closest proxy (= our peer). Prefer leftmost.
-		if comma := strings.IndexByte(xff, ','); comma >= 0 {
-			return strings.TrimSpace(xff[:comma])
-		}
-		return strings.TrimSpace(xff)
-	}
-	if real := r.Header.Get("X-Real-IP"); real != "" {
-		return strings.TrimSpace(real)
-	}
-	return remote
-}
-
-// RequireTrustedProxyCIDR returns nil when trusted_proxy_cidr is set
-// to a CSV containing at least one parseable CIDR entry, and an error
-// otherwise. Call it from main() after the config Load in any deployment
-// that mounts public, IP-attributing endpoints (keel's social-login,
-// OTP, and register paths all write client_ip into consent_event).
-//
-// Without a populated CIDR list, every audit row attributes traffic
-// to the LB / proxy peer IP; the spoof-gated TrustedClientIP refuses
-// to promote XFF because nothing's trusted to forward, so it returns
-// the peer. The empty-config default is intentionally retained at
-// the library layer so unit tests, single-binary localhost
-// deployments, and consumers that do not record IPs can still run
-// unmodified — this helper is the production-required opt-in that
-// turns the safe default into a deploy-time failure.
-//
-// Validation also rejects configs that look populated but parse to
-// zero nets (typo'd entries, empty fields after splitting), since
-// that's behaviorally identical to "empty" at runtime.
-func RequireTrustedProxyCIDR() error {
-	cfg := strings.TrimSpace(config.Config().TrustedProxyCIDR)
-	if cfg == "" {
-		return fmt.Errorf("trusted_proxy_cidr must be set when mounting public IP-attributing endpoints; received empty value")
-	}
-	if len(getTrustedProxyNets(cfg)) == 0 {
-		return fmt.Errorf("trusted_proxy_cidr=%q parsed to zero valid CIDR entries", cfg)
-	}
-	return nil
-}
-
-// MustRequireTrustedProxyCIDR is the log.Fatalf-on-error wrapper
-// around RequireTrustedProxyCIDR. Intended for direct use in main()
-// right after the config Load so a misconfigured production binary
-// fails to start instead of silently mis-attributing every audit row.
-func MustRequireTrustedProxyCIDR() {
-	if err := RequireTrustedProxyCIDR(); err != nil {
-		log.Fatalf("trusted-proxy config: %v", err)
-	}
-}
-
-// remoteHost strips the port off a "host:port" RemoteAddr so callers
-// see a bare IP. IPv6 addresses arrive with brackets ("[::1]:54321")
-// which net.SplitHostPort handles transparently.
-func remoteHost(remoteAddr string) string {
-	if remoteAddr == "" {
-		return ""
-	}
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return remoteAddr
-	}
-	return host
-}
-
-// trustedProxyState is a process-scoped cache of the parsed CIDR list.
-// Re-parsed lazily when trusted_proxy_cidr changes (rare; usually
-// only at startup or a config RELOAD, but tests swap values too).
-var (
-	trustedProxyMu   sync.Mutex
-	trustedProxyKey  string
-	trustedProxyNets []*net.IPNet
-)
-
-// isTrustedProxy reports whether ipStr falls inside any configured
-// trusted-proxy CIDR. Empty config returns false unconditionally.
-func isTrustedProxy(ipStr string) bool {
-	if ipStr == "" {
-		return false
-	}
-	cfg := config.Config().TrustedProxyCIDR
-	if cfg == "" {
-		return false
-	}
-	nets := getTrustedProxyNets(cfg)
-	if len(nets) == 0 {
-		return false
-	}
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return false
-	}
-	for _, n := range nets {
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// getTrustedProxyNets returns the parsed CIDR set, re-parsing only when
-// the flag value changes.
-func getTrustedProxyNets(cfg string) []*net.IPNet {
-	trustedProxyMu.Lock()
-	defer trustedProxyMu.Unlock()
-	if cfg == trustedProxyKey {
-		return trustedProxyNets
-	}
-	var nets []*net.IPNet
-	for _, raw := range strings.Split(cfg, ",") {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		if _, n, err := net.ParseCIDR(raw); err == nil && n != nil {
-			nets = append(nets, n)
-		}
-	}
-	trustedProxyKey = cfg
-	trustedProxyNets = nets
-	return nets
 }
 
 // verifySocialToken validates the provider's ID token signature against

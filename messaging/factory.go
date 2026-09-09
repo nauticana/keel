@@ -12,6 +12,7 @@ import (
 // NewMessagePublisher returns the publisher implementation for the given
 // messaging mode. Supported modes:
 //
+//	"noop"  — NoOpPublisher; every Publish is dropped.
 //	"gcp"   — Google Cloud Pub/Sub (PubSubPublisher). Requires --gcp_project_id.
 //	"aws"   — Amazon SNS (SNSPublisher). Loads AWS credentials via the
 //	          standard SDK chain.
@@ -19,10 +20,11 @@ import (
 //	          nats_creds_secret config; creds material comes from the secret provider.
 //
 // Empty or unknown modes return an error so deployments fail fast on
-// misconfiguration. Callers that want graceful degradation should treat
-// the error as "publisher unavailable" and fall back to a DB-only path.
+// misconfiguration; disabling messaging takes the explicit "noop".
 func NewMessagePublisher(ctx context.Context, mode string, secrets secret.SecretProvider) (port.MessagePublisher, error) {
 	switch mode {
+	case "noop":
+		return NoOpPublisher{}, nil
 	case "gcp":
 		return NewPubSubPublisher()
 	case "aws":
@@ -30,7 +32,7 @@ func NewMessagePublisher(ctx context.Context, mode string, secrets secret.Secret
 	case "nats":
 		return NewNATSPublisher(ctx, secrets)
 	default:
-		return nil, fmt.Errorf("messaging: unknown publisher mode %q (supported: gcp, aws, nats)", mode)
+		return nil, fmt.Errorf("messaging: unknown publisher mode %q (supported: noop, gcp, aws, nats)", mode)
 	}
 }
 
