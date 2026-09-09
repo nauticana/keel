@@ -31,8 +31,8 @@ func TestPublicRoutesGatedByDependencies(t *testing.T) {
 		}
 	}
 	full := (&PublicHandler{RegisterService: &user.RegistrationService{}, Secrets: publicRouteSecrets{}}).GetPublicRoutes()
-	if len(full) != 9 {
-		t.Fatalf("expected 9 routes, got %d", len(full))
+	if len(full) != 11 {
+		t.Fatalf("expected 11 routes, got %d", len(full))
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 // these tests with a missing-flag error.
 var keelTestFlagIDs = []string{
 	http_api_port, https_port, tls_cert, tls_key, max_tls_version, metrics_addr,
-	session_timeout, otp_ttl_seconds, mail_mode, smtp_host, smtp_port,
+	session_timeout, refresh_token_ttl, otp_ttl_seconds, mail_mode, smtp_host, smtp_port,
 	smtp_user, smtp_from, cors_origin, google_client_id, apple_client_id,
 	oauth_issuer, oauth_jwks_url, oauth_audience, oauth_resource,
 	oauth_resources, oauth_scopes_supported, oauth_as_mode,
@@ -45,6 +45,7 @@ func keelRows() ConfigRows {
 		m[id] = ConfigRow{}
 	}
 	m[default_commission_rate_bp] = ConfigRow{Default: "2000"}
+	m[refresh_token_ttl] = ConfigRow{Default: "2592000"}
 	m[commission_hold_days] = ConfigRow{Default: "14"}
 	m[agency_payout_min_minor] = ConfigRow{Default: "2500"}
 	m[webhook_claim_lease_seconds] = ConfigRow{Default: "900"}
@@ -120,6 +121,15 @@ func TestApplyKeel_InvalidAgencyValuesFailLoudly(t *testing.T) {
 		if !strings.Contains(err.Error(), flag) {
 			t.Errorf("error should mention %q; got %v", flag, err)
 		}
+	}
+}
+
+func TestApplyKeel_RefreshTokenTTLIsPositive(t *testing.T) {
+	m := keelRows()
+	m[refresh_token_ttl] = ConfigRow{Value: "0"}
+	err := applyKeelForTest(&KeelConfig{}, m)
+	if err == nil || !strings.Contains(err.Error(), refresh_token_ttl) {
+		t.Fatalf("want %s validation error, got %v", refresh_token_ttl, err)
 	}
 }
 

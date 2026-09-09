@@ -583,17 +583,12 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.UserService.CreateJWT(session)
+	resp, err := h.SessionTokens(session)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create token")
 		return
 	}
-
-	common.WriteJSON(w, http.StatusOK, map[string]any{
-		"token":     token,
-		"userId":    session.Id,
-		"partnerId": session.PartnerId,
-	})
+	common.WriteJSON(w, http.StatusOK, resp)
 }
 
 // ResendOTP regenerates the OTP for an existing send-flow.

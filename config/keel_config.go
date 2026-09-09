@@ -13,6 +13,7 @@ const (
 	max_tls_version               = "max_tls_version"
 	metrics_addr                  = "metrics_addr"
 	session_timeout               = "session_timeout"
+	refresh_token_ttl             = "refresh_token_ttl"
 	otp_ttl_seconds               = "otp_ttl_seconds"
 	mail_mode                     = "mail_mode"
 	smtp_host                     = "smtp_host"
@@ -120,6 +121,7 @@ type KeelConfig struct {
 	MaxTLSVersion               string        // max_tls_version               none               TLS policy: none | tls10 | tls11 | tls12 | tls13
 	MetricsAddr                 string        // metrics_addr                  ""                 Prometheus /metrics listen address; empty disables
 	SessionTimeout              int           // session_timeout               300                Session timeout in seconds
+	RefreshTokenTTL             time.Duration // refresh_token_ttl             2592000            Login refresh-token lifetime (seconds)
 	OTPTTLSeconds               int           // otp_ttl_seconds               300                OTP code time-to-live in seconds
 	MailMode                    string        // mail_mode                     smtp               Mail delivery mode: smtp or api
 	SmtpHost                    string        // smtp_host                     smtp.gmail.com     SMTP server host
@@ -223,6 +225,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.MaxTLSVersion = c.String(m, max_tls_version)
 	c.MetricsAddr = c.String(m, metrics_addr)
 	c.SessionTimeout = c.Int(m, session_timeout)
+	c.RefreshTokenTTL = c.Duration(m, refresh_token_ttl)
 	c.OTPTTLSeconds = c.Int(m, otp_ttl_seconds)
 	c.MailMode = c.String(m, mail_mode)
 	c.SmtpHost = c.String(m, smtp_host)
@@ -316,6 +319,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.CommissionHoldDays = c.Int(m, commission_hold_days)
 	c.AgencyPayoutMinMinor = c.Int64(m, agency_payout_min_minor)
 
+	if c.RefreshTokenTTL <= 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", refresh_token_ttl))
+	}
 	if c.DefaultCommissionRateBP <= 0 || c.DefaultCommissionRateBP > 10000 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 1 and 10000", default_commission_rate_bp))
 	}

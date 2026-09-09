@@ -102,10 +102,25 @@ through the `SecretProvider`.
 
 ```go
 // Keel-only binary, after the DB connection is up:
-if err := config.LoadConfig(ctx, db, *common.NodeId); err != nil {
-    log.Fatal(err) // never start on a partial config
+rows, err := config.LoadRows(ctx, db, *common.NodeId)
+if err != nil {
+    log.Fatal(err)
+}
+if err := config.ApplyRows(rows); err != nil {
+    log.Fatal(err) // never start or print from a partial config
+}
+if *common.PrintConfig {
+    if err := config.Print(os.Stdout, rows); err != nil {
+        log.Fatal(err)
+    }
+    return
 }
 ```
+
+`config.Print` lists each `--flag` with `(set)` or `(default)`. Each catalog
+entry reports its exact source as `(node)`, `(shared)`, or `(default)` and shows
+the catalog default beside an assignment. Values whose key contains `password`,
+`secret`, `credential`, or `private` print as `***` (`*_mode` keys excepted).
 
 The loader fails hard on any DB, catalog, parsing, or validation problem, and
 nothing is published until every section applied cleanly — a failed load or
@@ -879,13 +894,26 @@ POST /public/login/local   (or /public/login/gmail)
   Request: { "username": "...", "password": "..." }
 
   // If 2FA NOT enabled (or keel_td cookie maps to a trusted row):
-  Response: { "token": "jwt...", "userId": 1, "partnerId": 1, "menu": [...], "twoFactorRequired": false }
+  Response: { "token": "jwt...", "refreshToken": "…", "userId": 1, "partnerId": 1, "menu": [...], "twoFactorRequired": false }
 
   // If 2FA enabled AND device NOT trusted:
   Response: { "twoFactorRequired": true, "loginToken": "12345678" }
 ```
 
 When `twoFactorRequired` is `true`, the frontend redirects to a 2FA verification page and submits the code via the public verify endpoint. The verify request opts into device trust with `trustDevice:true` + an optional human-readable `deviceName`; on success the server sets the `keel_td` cookie.
+
+### Refresh tokens
+
+Every login path (`LoginLocal`, `LoginGoogle`, `VerifyOTP`, `LoginSocial`, `Verify2FA`, `VerifyBackupCode`) answers with an access `token` (JWT, `session_timeout` seconds) and a `refreshToken` (`refresh_token_ttl` seconds, default 30 days). Downstream login handlers mint the same pair with `AbstractHandler.SessionTokens(session)` and add their own fields to the returned map.
+
+```
+POST /public/token/refresh  { "refreshToken": "…" }
+  200 { "token": "jwt...", "refreshToken": "<rotated>", "userId": 1, "partnerId": 1 }
+  401 revoked, expired, or already rotated — log in again
+POST /public/logout         { "refreshToken": "…" }   → 200, token revoked
+```
+
+Refresh rotates: the presented token is revoked and the response carries its replacement, so a replayed token fails. `/api/user/logout-everywhere`, 2FA changes, and password changes revoke every refresh token for the user; the access token stays valid until its own expiry.
 
 ### Migration from v0.8 trusted-device API (breaking)
 
@@ -968,6 +996,8 @@ srv.Handle(publicHandler.GetPublicRoutes())
 | POST | `/public/register` | `AddRegistrationRequest` | Start registration, emails the confirmation code |
 | GET | `/public/register/confirm` | `ConfirmRegistration` | `?email=&code=` completes registration |
 | GET | `/public/password/policy` | `GetPasswordPolicy` | Password rules for pre-submit validation |
+| POST | `/public/token/refresh` | `RefreshToken` | `{refreshToken}` — rotates and returns a new pair; 401 on reuse |
+| POST | `/public/logout` | `Logout` | `{refreshToken}` — revokes the token |
 | POST | `/public/password/forgot` | `ChangePassword` | `{username}` — emails a reset code; 200 whether or not the user exists |
 | POST | `/public/password/change` | `ChangePassword` | `{username, old_password, new_password}` — change after checking the old password |
 | POST | `/public/password/reset` | `ConfirmPasswordChange` | `{username, code, new_password}` — completes the reset; `code` is a JSON string |
@@ -1633,6 +1663,20 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 Setup mode returns the same `{ "checkoutUrl": "..." }` shape; Stripe persists a SetupIntent on the resulting session that consumers can read from `setup_intent.succeeded` webhooks. The handler enforces the `mode` allowlist (one of the three values above) before reaching the port — unknown modes fail with 400, not a downstream Stripe 502.
 
 **`AllowedRedirectHosts` matching (v0.4.7+):** an entry without a colon matches the URL's hostname port-insensitively, so listing `"app.example"` accepts both `https://app.example/` and `https://app.example:8443/`. An entry containing a colon (e.g. `"app.example:8443"`) stays port-strict — useful when you intentionally want to gate by exact `host:port`. Pre-v0.4.7 matched against the raw `host:port` pair, which silently 400'd legitimate non-default ports.
+
+### Native payment sheet intents
+
+Mobile apps that confirm on-device need a client secret rather than a hosted checkout URL. `payment.IntentClient` (implemented by `StripeCheckoutClient`) creates the Stripe customer when none is given, mints the customer-scoped ephemeral key the mobile SDK requires, and returns the intent's client secret:
+
+```go
+type IntentClient interface {
+    CreateSetupIntent(ctx, IntentRequest) (*IntentResult, error)   // save a card, usage=off_session
+    CreatePaymentIntent(ctx, IntentRequest) (*IntentResult, error) // Amount (minor units) + Currency
+}
+// IntentResult{IntentID, ClientSecret, CustomerID, EphemeralKey}
+```
+
+Set `AbstractPaymentHandler.Intents` and mount `CreateSetupIntent`, by convention at `POST /api/billing/setup-intent`. It is always JWT-gated, takes no body, derives the email and `metadata[user_id]` from the authenticated session, and answers `{setupIntentId, clientSecret, customerId, ephemeralKey}` with `Cache-Control: no-store`. It never accepts a caller-supplied provider customer ID: set `AbstractPaymentHandler.CustomerID` to a lookup of the customer id your app stored for the user (from the first response or the `setup_intent.succeeded` webhook), otherwise every call creates a new provider customer. Payment intents carry an amount, so there is no HTTP route for them: the service that knows the price calls `CreatePaymentIntent` and hands the client secret to the app only when Stripe reports `requires_action` (3DS). `StripeCheckoutClient.APIVersion` pins the `Stripe-Version` header used to create ephemeral keys; other Stripe calls retain the account's configured API version.
 
 ### What each project still owns
 
@@ -2304,6 +2348,7 @@ through `config.Config()` (see **Runtime Configuration** above).
 | `--db_schema` | `public` | Database schema |
 | `--db_sslmode` | `disable` | SSL mode |
 | `--db_pool_max` | `4` | Maximum database pool connections |
+| `--print_config` | `false` | Print effective flags and application config with sensitive values masked, then exit (`config.Print`) |
 | `--node_id` | `0` | Identifies this runtime node/process: seeds the bigint ID generator (assign distinct values per writer in federated deployments) and selects this node's `application_config_value` rows, which fall back to the shared `node_id = -1` bucket then the catalog default. Must stay in `[0, 1023]` for the id generator — `-1` is a config-only sentinel, never a valid `--node_id` |
 
 ## Cache Service

@@ -31,8 +31,9 @@ import (
 // collision and route the user to a "an account with this contact already
 // exists — sign in instead?" flow rather than retrying the create.
 var (
-	ErrDuplicateEmail = errors.New("user_account.user_email already exists")
-	ErrDuplicatePhone = errors.New("user_account.phone already exists")
+	ErrDuplicateEmail      = errors.New("user_account.user_email already exists")
+	ErrDuplicatePhone      = errors.New("user_account.phone already exists")
+	ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
 )
 
 // classifyUniqueViolation maps a pgx unique-index error from user_account
@@ -384,7 +385,7 @@ DELETE FROM user_registration
 
 	qInsertRefreshToken: `
 INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at)
-VALUES (nextval('user_refresh_token_seq'), ?, ?, CURRENT_TIMESTAMP + INTERVAL '30 days')
+VALUES (nextval('user_refresh_token_seq'), ?, ?, ?)
 `,
 
 	qGetRefreshToken: `
@@ -395,6 +396,7 @@ SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_ena
    AND t.expires_at > CURRENT_TIMESTAMP
    AND U.id = t.user_id
    AND p.user_id = U.id
+ FOR UPDATE OF t
 `,
 
 	qRevokeRefreshToken: `
@@ -592,6 +594,10 @@ DELETE FROM user_otp WHERE id = ?
 // to the next session without a restart.
 func sessionTimeout() time.Duration {
 	return time.Duration(config.Config().SessionTimeout) * time.Second
+}
+
+func refreshTokenExpiry() time.Time {
+	return time.Now().Add(config.Config().RefreshTokenTTL)
 }
 
 type LocalUserService struct {
@@ -1095,21 +1101,35 @@ func (s *LocalUserService) ParseJWT(tokenString string) (*model.UserSession, err
 
 func (s *LocalUserService) CreateRefreshToken(userID int) (string, error) {
 	ctx := s.ctx()
-	// Enforce single-device policy: if the bit is set on user_account, this
-	// revokes every prior active refresh token for the user before we issue
-	// a new one. When the bit is off the UPDATE is a no-op (EXISTS clause
-	// matches nothing). Keeps the fast path a single round-trip.
-	if _, err := s.queryService.Query(ctx, qRevokePriorOnSingleDevicePolicy, userID, userID); err != nil {
-		return "", err
-	}
 	raw, err := generateRandomToken(48)
 	if err != nil {
 		return "", err
 	}
-	hash := sha256Hex(raw)
-	if _, err := s.queryService.Query(ctx, qInsertRefreshToken, userID, hash); err != nil {
-		return "", err
+	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
+	if err != nil {
+		return "", fmt.Errorf("create refresh token: begin transaction: %w", err)
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = port.RollbackDetached(tx)
+		}
+	}()
+	// Enforce single-device policy: if the bit is set on user_account, this
+	// revokes every prior active refresh token for the user before we issue
+	// a new one. Both writes commit together, so an insert failure cannot
+	// leave a single-device user logged out everywhere.
+	if _, err := tx.Query(ctx, qRevokePriorOnSingleDevicePolicy, userID, userID); err != nil {
+		return "", fmt.Errorf("create refresh token: revoke prior tokens: %w", err)
+	}
+	hash := sha256Hex(raw)
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, hash, refreshTokenExpiry()); err != nil {
+		return "", fmt.Errorf("create refresh token: insert: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("create refresh token: commit: %w", err)
+	}
+	committed = true
 	return raw, nil
 }
 
@@ -1179,19 +1199,34 @@ func (s *LocalUserService) SetSingleDevicePolicy(userID int, on bool) error {
 // with NewRefreshToken on the returned session — sticking with the
 // old token will fail on the next refresh.
 //
-// Rotation closes the long-lived-stolen-token threat: a stolen
-// refresh token has the same TTL as the active access token (a few
-// minutes), and re-using it after a legitimate rotation is detected
-// as a replay (the row is already revoked).
+// Rotation limits replay of a long-lived stolen token: after either holder
+// rotates it, the other holder cannot reuse the presented value.
 func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSession, error) {
+	if token == "" {
+		return nil, ErrInvalidRefreshToken
+	}
 	ctx := s.ctx()
 	hash := sha256Hex(token)
-	res, err := s.queryService.Query(ctx, qGetRefreshToken, hash)
+	rotated, err := generateRandomToken(48)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("rotate refresh token: %w", err)
+	}
+	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
+	if err != nil {
+		return nil, fmt.Errorf("rotate refresh token: begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = port.RollbackDetached(tx)
+		}
+	}()
+	res, err := tx.Query(ctx, qGetRefreshToken, hash)
+	if err != nil {
+		return nil, fmt.Errorf("rotate refresh token: lookup: %w", err)
 	}
 	if len(res.Rows) == 0 {
-		return nil, fmt.Errorf("invalid or expired refresh token")
+		return nil, ErrInvalidRefreshToken
 	}
 	row := res.Rows[0]
 	userID := int(common.AsInt64(row[0]))
@@ -1204,38 +1239,26 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 		TwoFactorEnabled: common.AsBool(row[5]),
 		PartnerId:        common.AsInt64(row[6]),
 		Issuer:           s.Issuer,
-		ExpiresAt:        time.Now().Add(15 * time.Minute).Unix(),
+		ExpiresAt:        time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:         time.Now().Unix(),
 	}
 
-	// Issue a fresh refresh token, then revoke the presented one. The
-	// order matters: a transient failure between mint and revoke leaves
-	// the user holding two valid tokens (which is benign), whereas the
-	// reverse order would leave the user with NO refresh token if the
-	// mint failed mid-step. The new token is returned via the session's
-	// NewRefreshToken field; clients overwrite their stored value.
-	rotated, err := generateRandomToken(48)
-	if err != nil {
-		return nil, fmt.Errorf("rotate refresh token: %w", err)
-	}
+	// The lookup locks the presented row. Inserting the replacement and
+	// revoking the old token in the same transaction makes concurrent reuse
+	// deterministic: only one caller can rotate a token successfully.
 	rotatedHash := sha256Hex(rotated)
-	if _, err := s.queryService.Query(ctx, qInsertRefreshToken, userID, rotatedHash); err != nil {
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, rotatedHash, refreshTokenExpiry()); err != nil {
 		return nil, fmt.Errorf("rotate refresh token: %w", err)
 	}
-	if _, err := s.queryService.Query(ctx, qRevokeRefreshToken, hash); err != nil {
-		// Already minted; leave the new token in place and let the old
-		// one age out naturally. Caller still gets a usable session.
-		s.logRotationFailure(userID, err)
+	if _, err := tx.Query(ctx, qRevokeRefreshToken, hash); err != nil {
+		return nil, fmt.Errorf("rotate refresh token: revoke: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("rotate refresh token: commit: %w", err)
+	}
+	committed = true
 	session.NewRefreshToken = rotated
 	return session, nil
-}
-
-// logRotationFailure is a small hook so a future structured logger can
-// record refresh-token rotation cleanup misses. Today it's a no-op so
-// the rotation path doesn't require an injected logger.
-func (s *LocalUserService) logRotationFailure(userID int, _ error) {
-	_ = userID
 }
 
 func (s *LocalUserService) RevokeRefreshToken(token string) error {

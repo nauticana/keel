@@ -49,6 +49,7 @@ type StripeCheckoutClient struct {
 	SecretName string       // default: "stripe_secret_key"
 	BaseURL    string       // default: stripeAPIBase
 	HTTPClient *http.Client // default: common.HTTPClient()
+	APIVersion string       // Stripe-Version for ephemeral keys; default stripeAPIVersion
 }
 
 func NewStripeCheckoutClient(secrets secret.SecretProvider) *StripeCheckoutClient {
@@ -67,6 +68,13 @@ func (c *StripeCheckoutClient) httpClient() *http.Client {
 		return c.HTTPClient
 	}
 	return common.HTTPClient()
+}
+
+func (c *StripeCheckoutClient) apiVersion() string {
+	if c.APIVersion != "" {
+		return c.APIVersion
+	}
+	return stripeAPIVersion
 }
 
 func (c *StripeCheckoutClient) secretName() string {
@@ -261,7 +269,7 @@ func (c *StripeCheckoutClient) Get(ctx context.Context, path string, params url.
 // strings.NewReader without depending on whether the underlying reader
 // is rewindable. Empty string for GETs (no body).
 func (c *StripeCheckoutClient) request(ctx context.Context, method, path, body string) ([]byte, error) {
-	status, respBody, err := c.requestRaw(ctx, method, path, body, "")
+	status, respBody, err := c.requestRawWithHeaders(ctx, method, path, body, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +297,10 @@ func (c *StripeCheckoutClient) request(ctx context.Context, method, path, body s
 // dunning passes — MUST pass a stable, operation-scoped key so Stripe collapses
 // the retry onto the original charge instead of creating a second one.
 func (c *StripeCheckoutClient) requestRaw(ctx context.Context, method, path, body, idemKey string) (int, []byte, error) {
+	return c.requestRawWithHeaders(ctx, method, path, body, idemKey, nil)
+}
+
+func (c *StripeCheckoutClient) requestRawWithHeaders(ctx context.Context, method, path, body, idemKey string, headers http.Header) (int, []byte, error) {
 	secretValue, err := c.Secrets.GetSecret(ctx, c.secretName())
 	if err != nil {
 		return 0, nil, fmt.Errorf("stripe: get secret: %w", err)
@@ -313,6 +325,11 @@ func (c *StripeCheckoutClient) requestRaw(ctx context.Context, method, path, bod
 			return 0, nil, fmt.Errorf("stripe: build request: %w", err)
 		}
 		req.SetBasicAuth(secretValue, "")
+		for name, values := range headers {
+			for _, value := range values {
+				req.Header.Add(name, value)
+			}
+		}
 		if method == http.MethodPost {
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			req.Header.Set("Idempotency-Key", idempotencyKey)

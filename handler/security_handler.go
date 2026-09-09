@@ -208,19 +208,14 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		token, err := h.UserService.CreateJWT(session)
+		resp, err := h.SessionTokens(session)
 		if err != nil {
 			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue token")
 			return
 		}
-
-		common.WriteJSON(w, http.StatusOK, map[string]any{
-			"valid":     true,
-			"token":     token,
-			"userId":    session.Id,
-			"partnerId": session.PartnerId,
-			"menu":      menu,
-		})
+		resp["valid"] = true
+		resp["menu"] = menu
+		common.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -282,19 +277,14 @@ func (h *SecurityHandler) VerifyBackupCode(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	token, err := h.UserService.CreateJWT(session)
+	resp, err := h.SessionTokens(session)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue token")
 		return
 	}
-
-	common.WriteJSON(w, http.StatusOK, map[string]any{
-		"valid":     true,
-		"token":     token,
-		"userId":    session.Id,
-		"partnerId": session.PartnerId,
-		"menu":      menu,
-	})
+	resp["valid"] = true
+	resp["menu"] = menu
+	common.WriteJSON(w, http.StatusOK, resp)
 }
 
 // Disable2FA removes the user's TOTP seed and backup codes. Gated by

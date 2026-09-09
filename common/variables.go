@@ -87,14 +87,15 @@ var (
 	AWSRegion = flag.String("aws_region", "", "AWS region for Secrets Manager")
 	// NodeId identifies this runtime node/process. It seeds the bigint ID
 	// generator and selects this node's application_config_value rows.
-	NodeId    = flag.Int("node_id", 0, "Node ID for the bigint ID generator and per-node config rows")
-	DBhost    = flag.String("db_host", "localhost", "Database hostname")
-	DBport    = flag.Int("db_port", 5432, "Database port number")
-	DBname    = flag.String("db_name", "app", "Database name")
-	DBuser    = flag.String("db_user", "app", "Database user")
-	DBschema  = flag.String("db_schema", "public", "Database schema name")
-	DBsslmode = flag.String("db_sslmode", "disable", "Database SSL mode (disable, require, verify-ca, verify-full)")
-	DBPoolMax = flag.Int("db_pool_max", 4, "Maximum database pool connections")
+	NodeId      = flag.Int("node_id", 0, "Node ID for the bigint ID generator and per-node config rows")
+	PrintConfig = flag.Bool("print_config", false, "Print effective flags and application config (sensitive values masked), then exit")
+	DBhost      = flag.String("db_host", "localhost", "Database hostname")
+	DBport      = flag.Int("db_port", 5432, "Database port number")
+	DBname      = flag.String("db_name", "app", "Database name")
+	DBuser      = flag.String("db_user", "app", "Database user")
+	DBschema    = flag.String("db_schema", "public", "Database schema name")
+	DBsslmode   = flag.String("db_sslmode", "disable", "Database SSL mode (disable, require, verify-ca, verify-full)")
+	DBPoolMax   = flag.Int("db_pool_max", 4, "Maximum database pool connections")
 
 	SecretMode = flag.String("secret_mode", "local", "Secret provider: local, gsm, aws, azure, or infisical")
 	// ProjectID is the GCP project consulted by the GSM secret provider

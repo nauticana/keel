@@ -4,6 +4,7 @@ package config
 type ConfigRow struct {
 	Value   string
 	Default string
+	Source  string
 }
 
 // ConfigRows is the resolved flag catalog keyed by flag ID.

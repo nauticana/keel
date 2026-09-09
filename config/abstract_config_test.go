@@ -30,7 +30,7 @@ func (d *configTestDatabase) GetQueryService(context.Context, map[string]string)
 }
 
 func TestLoadRowsUsesExplicitNodeID(t *testing.T) {
-	queryService := &configTestQueryService{rows: [][]any{{"value", "assigned", "default"}}}
+	queryService := &configTestQueryService{rows: [][]any{{"value", "assigned", "default", "node"}}}
 	database := &configTestDatabase{queryService: queryService}
 
 	rows, err := LoadRows(context.Background(), database, 37)
@@ -40,7 +40,7 @@ func TestLoadRowsUsesExplicitNodeID(t *testing.T) {
 	if len(queryService.args) != 1 || queryService.args[0] != 37 {
 		t.Fatalf("query args = %#v, want [37]", queryService.args)
 	}
-	if got := rows["value"]; got != (ConfigRow{Value: "assigned", Default: "default"}) {
+	if got := rows["value"]; got != (ConfigRow{Value: "assigned", Default: "default", Source: "node"}) {
 		t.Fatalf("rows[value] = %#v", got)
 	}
 }

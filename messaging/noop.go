@@ -12,6 +12,6 @@ import (
 type NoOpPublisher struct{}
 
 func (NoOpPublisher) Publish(context.Context, string, []byte, map[string]string) error { return nil }
-func (NoOpPublisher) Close() error                                                    { return nil }
+func (NoOpPublisher) Close() error                                                     { return nil }
 
 var _ port.MessagePublisher = NoOpPublisher{}

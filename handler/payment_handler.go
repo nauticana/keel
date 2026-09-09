@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -45,7 +46,11 @@ type AbstractPaymentHandler struct {
 	Processor *payment.WebhookProcessor
 	Handler   payment.PaymentEventHandler
 	Checkout  payment.CheckoutClient
-	Journal   logger.ApplicationLogger
+	Intents   payment.IntentClient // optional; enables CreateSetupIntent
+	// CustomerID returns the provider customer already stored for a user, or
+	// "" to let the provider create one. nil creates a customer per call.
+	CustomerID func(ctx context.Context, userID int) (string, error)
+	Journal    logger.ApplicationLogger
 
 	AllowedRedirectHosts []string
 	AllowedPriceIDs      []string
@@ -236,6 +241,56 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]string{"checkoutUrl": url})
+}
+
+// CreateSetupIntent returns the client secret a native payment sheet needs
+// to save a card. Always JWT-gated; payment intents carry an amount and are
+// created server-side through IntentClient, never from a client request.
+//
+// POST /api/billing/setup-intent  (no body)
+func (h *AbstractPaymentHandler) CreateSetupIntent(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if h.Intents == nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "intent client not configured")
+		return
+	}
+	session, ok := h.RequireSession(w, r)
+	if !ok {
+		return
+	}
+	customerID := ""
+	if h.CustomerID != nil {
+		id, err := h.CustomerID(r.Context(), session.Id)
+		if err != nil {
+			h.logError("setup intent: resolve customer: %v", err)
+			h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", "failed to resolve customer")
+			return
+		}
+		customerID = id
+	}
+	res, err := h.Intents.CreateSetupIntent(r.Context(), payment.IntentRequest{
+		CustomerID: customerID,
+		Email:      session.Email,
+		Metadata:   map[string]string{"user_id": strconv.Itoa(session.Id)},
+	})
+	if err != nil {
+		h.logError("setup intent: %v", err)
+		h.WriteError(w, http.StatusBadGateway, "Bad Gateway", "setup intent failed")
+		return
+	}
+	if res == nil || res.ClientSecret == "" || res.CustomerID == "" || res.EphemeralKey == "" {
+		h.WriteRequestError(r, w, http.StatusBadGateway, "Bad Gateway", "setup intent returned an incomplete response")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	common.WriteJSON(w, http.StatusOK, map[string]string{
+		"setupIntentId": res.IntentID,
+		"clientSecret":  res.ClientSecret,
+		"customerId":    res.CustomerID,
+		"ephemeralKey":  res.EphemeralKey,
+	})
 }
 
 // priceAllowed reports whether priceID is in the configured allowlist.

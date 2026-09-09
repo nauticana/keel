@@ -12,7 +12,14 @@ const qNodeConfigs = "node_configs"
 
 var acQueries = map[string]string{
 	qNodeConfigs: `
-SELECT a.id, COALESCE(n.assigned_value, s.assigned_value), a.default_value
+SELECT a.id,
+       COALESCE(n.assigned_value, s.assigned_value, a.default_value),
+       a.default_value,
+       CASE
+         WHEN n.flag_id IS NOT NULL THEN 'node'
+         WHEN s.flag_id IS NOT NULL THEN 'shared'
+         ELSE 'default'
+       END
   FROM application_config_flag a
   LEFT JOIN application_config_value n
     ON a.id = n.flag_id AND n.node_id = ?

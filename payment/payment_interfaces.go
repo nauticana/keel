@@ -246,6 +246,30 @@ type WebhookDelivery struct {
 	DeadLettered   bool // true when the claim terminalized an already-exhausted F row without dispatch
 }
 
+// IntentRequest creates a provider intent for a native payment sheet.
+// An empty CustomerID creates a customer from Email and Metadata.
+type IntentRequest struct {
+	CustomerID string
+	Email      string
+	Amount     int64  // minor units; payment intents only
+	Currency   string // ISO 4217; payment intents only
+	Metadata   map[string]string
+}
+
+type IntentResult struct {
+	IntentID     string
+	ClientSecret string
+	CustomerID   string
+	EphemeralKey string // customer-scoped key the mobile SDK needs
+}
+
+// IntentClient is the client-secret counterpart of CheckoutClient for apps
+// that confirm on-device instead of through a hosted checkout page.
+type IntentClient interface {
+	CreateSetupIntent(ctx context.Context, req IntentRequest) (*IntentResult, error)
+	CreatePaymentIntent(ctx context.Context, req IntentRequest) (*IntentResult, error)
+}
+
 // CheckoutClient abstracts outbound calls to a payment provider's
 // checkout / billing-portal API. Stripe, LemonSqueezy, etc. each get an
 // implementation; projects inject whichever they need.

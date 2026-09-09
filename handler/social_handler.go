@@ -112,18 +112,13 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	token, err := h.UserService.CreateJWT(session)
+	resp, err := h.SessionTokens(session)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create token")
 		return
 	}
-
-	common.WriteJSON(w, http.StatusOK, map[string]any{
-		"token":     token,
-		"userId":    session.Id,
-		"partnerId": session.PartnerId,
-		"isNewUser": isNewUser,
-	})
+	resp["isNewUser"] = isNewUser
+	common.WriteJSON(w, http.StatusOK, resp)
 }
 
 // issueSocialNonce returns a single-use nonce the client feeds to the provider

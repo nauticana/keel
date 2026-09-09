@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -31,6 +32,8 @@ func (h *PublicHandler) GetPublicRoutes() map[string]func(w http.ResponseWriter,
 	routes := map[string]func(w http.ResponseWriter, r *http.Request){
 		common.PublicPrefix + "/login/local":     h.LoginLocal,
 		common.PublicPrefix + "/password/policy": h.GetPasswordPolicy,
+		common.PublicPrefix + "/token/refresh":   h.RefreshToken,
+		common.PublicPrefix + "/logout":          h.Logout,
 	}
 	if h.Secrets != nil {
 		routes[common.PublicPrefix+"/login/gmail"] = h.LoginGoogle
@@ -44,6 +47,59 @@ func (h *PublicHandler) GetPublicRoutes() map[string]func(w http.ResponseWriter,
 		routes[common.PublicPrefix+"/plans"] = h.ListPublicPlans
 	}
 	return routes
+}
+
+// RefreshToken rotates the presented refresh token and returns a new pair.
+// A revoked, reused or expired token is 401; the client must log in again.
+func (h *PublicHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if !h.ReadRequest(w, r, &req) || !h.RequireFields(w, map[string]string{"refreshToken": req.RefreshToken}) {
+		return
+	}
+	session, err := h.UserService.ValidateRefreshToken(req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, user.ErrInvalidRefreshToken) {
+			h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired refresh token")
+			return
+		}
+		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		return
+	}
+	token, err := h.UserService.CreateJWT(session)
+	if err != nil {
+		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]any{
+		"token":        token,
+		"refreshToken": session.NewRefreshToken,
+		"userId":       session.Id,
+		"partnerId":    session.PartnerId,
+	})
+}
+
+// Logout revokes the presented refresh token. Always 200: an unknown token
+// is already logged out.
+func (h *PublicHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if !h.ReadRequest(w, r, &req) || !h.RequireFields(w, map[string]string{"refreshToken": req.RefreshToken}) {
+		return
+	}
+	if err := h.UserService.RevokeRefreshToken(req.RefreshToken); err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to revoke token")
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]string{"message": "Logged out"})
 }
 
 func (h *PublicHandler) GetRoot(w http.ResponseWriter, r *http.Request) {
@@ -118,19 +174,14 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.UserService.CreateJWT(session)
+	resp, err := h.SessionTokens(session)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
 		return
 	}
-
-	common.WriteJSON(w, http.StatusOK, map[string]any{
-		"token":             token,
-		"userId":            session.Id,
-		"partnerId":         session.PartnerId,
-		"menu":              menu,
-		"twoFactorRequired": false,
-	})
+	resp["menu"] = menu
+	resp["twoFactorRequired"] = false
+	common.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
@@ -273,19 +324,14 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.UserService.CreateJWT(session)
+	resp, err := h.SessionTokens(session)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
 		return
 	}
-
-	common.WriteJSON(w, http.StatusOK, map[string]any{
-		"token":             token,
-		"userId":            session.Id,
-		"partnerId":         session.PartnerId,
-		"menu":              menu,
-		"twoFactorRequired": false,
-	})
+	resp["menu"] = menu
+	resp["twoFactorRequired"] = false
+	common.WriteJSON(w, http.StatusOK, resp)
 }
 
 // ChangePassword serves both the reset-by-email request flow (no
