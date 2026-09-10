@@ -2458,6 +2458,7 @@ through `config.Config()` (see **Runtime Configuration** above).
 | `--db_port` | `5432` | PostgreSQL port |
 | `--db_name` | `app` | Database name |
 | `--db_user` | `app` | Database user |
+| `--db_secret` | `` | Secret name holding the database password; empty falls back to `--db_user`. Lets one secret manager serve several regional databases |
 | `--db_schema` | `public` | Database schema |
 | `--db_sslmode` | `disable` | SSL mode |
 | `--db_pool_max` | `4` | Maximum database pool connections |

@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.59",
+   "title": "--db_secret",
+   "tags": [
+    "additive"
+   ],
+   "summary": "The database password secret name is configurable so one secret manager can serve several regional databases with different passwords.",
+   "body_markdown": "## Changes\n\n- New flag `--db_secret` names the secret that `pgsql.RepositoryPgsql.Connect` reads for the database password. Empty keeps the previous behavior of reading the secret named after `--db_user`.\n\n## Adoption\n\nNo change required. Deployments sharing one secret manager across regions set `--db_secret=<region>_db_password` (or any name) per instance and store one secret per database."
+  },
+  {
    "version": "v1.2.58",
    "title": "Realtime WebSocket hub, consent-gated recording sessions, Stripe refunds, session-scoped consent",
    "tags": [

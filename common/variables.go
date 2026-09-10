@@ -93,6 +93,7 @@ var (
 	DBport      = flag.Int("db_port", 5432, "Database port number")
 	DBname      = flag.String("db_name", "app", "Database name")
 	DBuser      = flag.String("db_user", "app", "Database user")
+	DBSecret    = flag.String("db_secret", "", "Secret name for the database password (default: --db_user)")
 	DBschema    = flag.String("db_schema", "public", "Database schema name")
 	DBsslmode   = flag.String("db_sslmode", "disable", "Database SSL mode (disable, require, verify-ca, verify-full)")
 	DBPoolMax   = flag.Int("db_pool_max", 4, "Maximum database pool connections")

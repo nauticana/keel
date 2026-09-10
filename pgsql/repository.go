@@ -82,7 +82,11 @@ type RepositoryPgsql struct {
 }
 
 func (r *RepositoryPgsql) Connect(ctx context.Context) error {
-	password, err := r.Secrets.GetSecret(ctx, *common.DBuser)
+	secretName := *common.DBSecret
+	if secretName == "" {
+		secretName = *common.DBuser
+	}
+	password, err := r.Secrets.GetSecret(ctx, secretName)
 	if err != nil {
 		return fmt.Errorf("failed to get secret: %w", err)
 	}
