@@ -120,8 +120,8 @@ func NewProviderSubscriptionEventHandler(life SubscriptionLifecycle, store Provi
 			if err := store.RecordProviderInvoice(ctx, partnerID, e); err != nil {
 				return err
 			}
-			// no-op unless the sub is trialing — first paid invoice converts it.
-			if err := life.ConvertTrial(ctx, partnerID); err != nil {
+			// no-op unless the sub is trialing or past due — a paid invoice activates it.
+			if err := life.ConvertTrial(ctx, partnerID, e.SubscriptionID); err != nil {
 				return err
 			}
 			if opts.RecordPayment != nil {
@@ -135,7 +135,7 @@ func NewProviderSubscriptionEventHandler(life SubscriptionLifecycle, store Provi
 			if err != nil {
 				return err
 			}
-			return life.SetDunningState(ctx, partnerID, "X")
+			return life.SetDunningState(ctx, partnerID, e.SubscriptionID, "X")
 		},
 
 		OnSubscriptionUpdated: opts.OnSubscriptionUpdated,

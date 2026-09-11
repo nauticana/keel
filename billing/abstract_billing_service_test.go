@@ -2,7 +2,9 @@ package billing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,5 +301,15 @@ func TestListPaymentMethods(t *testing.T) {
 	}
 	if got[1].ID != "2" || got[1].IsDefault || got[1].MethodType != "card" {
 		t.Fatalf("row1 mismatch: %+v", got[1])
+	}
+}
+
+func TestInvoiceIDSerializesAsString(t *testing.T) {
+	b, err := json.Marshal(Invoice{ID: 1<<60 + 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"id":"1152921504606846977"`) {
+		t.Fatalf("invoice json = %s", b)
 	}
 }

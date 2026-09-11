@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.60",
+   "title": "Paid invoices clear past-due; invoice ids serialize as strings; table cache tolerates stale lookups",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "ConvertTrial now flips a past-due ('X') subscription back to active and provider invoice transitions are scoped by subscription id, billing.Invoice.ID is emitted as a JSON string, and RestService.GetTableCache skips a foreign_key_lookup row whose constraint does not exist instead of panicking.",
+   "body_markdown": "### Changes\n\n| Area | Before | After |\n|---|---|---|\n| `AbstractBillingService.ConvertTrial` | flips `T` → `A` by partner | flips `T` or `X` → `A`, scoped by partner and provider subscription id |\n| `AbstractBillingService.SetDunningState` | updates by partner | updates by partner and provider subscription id |\n| `billing.Invoice.ID` JSON | number | string (`json:\"id,string\"`) |\n| `RestService.GetTableCache` | nil-pointer panic on an unknown `foreign_key_lookup` constraint | skips the row and logs a warning via `Journal` or the standard logger fallback |\n\n### Why\n\n- `ProviderSubscriptionEventHandler` maps `invoice_payment_failed` to `SetDunningState(\"X\")` but a later `invoice_paid` only called `ConvertTrial`, so a recovered subscription stayed past due forever. Both transitions now use the event's provider subscription id so delayed events cannot mutate another subscription belonging to the same partner.\n- Invoice ids are bigint; above 2^53 a JSON number loses precision in JavaScript clients.\n- A stale lookup row (a renamed or dropped FK) took down `/api/config/appdata` for every user.\n\n### Migration steps for downstream consumers\n\n1. Update custom `SubscriptionLifecycle` implementations and direct calls: `ConvertTrial` and `SetDunningState` now require the provider subscription id before the status argument. Recovered payments now reactivate only the matching subscription.\n2. Clients reading `Invoice.id` as a number must read a string (sail's `Invoice.id` is already `string`).\n3. Watch the new warning to find stale `foreign_key_lookup` rows and delete them.\n"
+  },
+  {
    "version": "v1.2.59",
    "title": "--db_secret",
    "tags": [

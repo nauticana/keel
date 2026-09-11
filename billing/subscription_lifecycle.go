@@ -21,14 +21,14 @@ type SubscriptionLifecycle interface {
 	// ChangePlan atomically closes the current active/trial row and opens a fresh one.
 	ChangePlan(ctx context.Context, partnerID int64, newPlanID string, terms BillingTerms) error
 	Reactivate(ctx context.Context, partnerID int64, planID string) error
-	ConvertTrial(ctx context.Context, partnerID int64) error
+	ConvertTrial(ctx context.Context, partnerID int64, providerSubID string) error
 	SetSeats(ctx context.Context, partnerID int64, planID string, seats int64) error
 	// CancelByPartner cancels immediately (C) or at period end (effective_cancel_date).
 	CancelByPartner(ctx context.Context, partnerID int64, mode CancelMode) error
 	// CancelByProviderSubID is the webhook path; returns rows affected (0 → no local row).
 	CancelByProviderSubID(ctx context.Context, providerSubID string, mode CancelMode) (int, error)
 	// SetDunningState moves the CHAR(1) status (e.g. "X" past-due, "A" active).
-	SetDunningState(ctx context.Context, partnerID int64, status string) error
+	SetDunningState(ctx context.Context, partnerID int64, providerSubID, status string) error
 }
 
 // ActivationMode is subscription_plan.activation_mode (SUBSCRIPTION_ACTIVATION_MODE
@@ -93,18 +93,19 @@ UPDATE partner_plan_subscription
        amount_minor = ?, renewal_date = ?, next_charge_date = ?
  WHERE partner_id = ? AND plan_id = ? AND status = 'P'`,
 
-	// Trial: dates anchored at trial_end (paid term starts then), so ConvertTrial
-	// only flips T→A.
+	// Trial dates are anchored at trial_end (the paid term starts then).
 	qLcStartTrial: `
 INSERT INTO partner_plan_subscription
   (partner_id, plan_id, begda, monthly_cost, currency, status, billing_cycle,
    term_count, term_type, amount_minor, trial_end, renewal_date, next_charge_date, provider_subscription_id, seats)
 VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, 'T', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
+	// A paid invoice activates a trialing sub and clears the past-due state
+	// SetDunningState set on a failed one.
 	qLcConvertTrial: `
 UPDATE partner_plan_subscription
    SET status = 'A', trial_end = NULL
- WHERE partner_id = ? AND status = 'T'`,
+ WHERE partner_id = ? AND provider_subscription_id = ? AND status IN ('T', 'X')`,
 
 	// change-plan step 1: close the current active/trial row.
 	qLcChangePlanClose: `
@@ -146,7 +147,7 @@ UPDATE partner_plan_subscription
 	qLcSetDunning: `
 UPDATE partner_plan_subscription
    SET status = ?
- WHERE partner_id = ? AND status IN ('A', 'T', 'P', 'X')`,
+ WHERE partner_id = ? AND provider_subscription_id = ? AND status IN ('A', 'T', 'P', 'X')`,
 }
 
 // seatsArg binds seats<=0 as NULL.
@@ -307,9 +308,9 @@ func (s *AbstractBillingService) Reactivate(ctx context.Context, partnerID int64
 	return err
 }
 
-func (s *AbstractBillingService) ConvertTrial(ctx context.Context, partnerID int64) error {
+func (s *AbstractBillingService) ConvertTrial(ctx context.Context, partnerID int64, providerSubID string) error {
 	s.init(ctx)
-	_, err := s.qs.Query(ctx, qLcConvertTrial, partnerID)
+	_, err := s.qs.Query(ctx, qLcConvertTrial, partnerID, providerSubID)
 	return err
 }
 
@@ -342,9 +343,9 @@ func (s *AbstractBillingService) CancelByProviderSubID(ctx context.Context, prov
 	return len(res.Rows), nil
 }
 
-func (s *AbstractBillingService) SetDunningState(ctx context.Context, partnerID int64, status string) error {
+func (s *AbstractBillingService) SetDunningState(ctx context.Context, partnerID int64, providerSubID, status string) error {
 	s.init(ctx)
-	_, err := s.qs.Query(ctx, qLcSetDunning, status, partnerID)
+	_, err := s.qs.Query(ctx, qLcSetDunning, status, partnerID, providerSubID)
 	return err
 }
 

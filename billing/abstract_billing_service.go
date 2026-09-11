@@ -36,7 +36,7 @@ type Subscription struct {
 
 // Invoice is one billing invoice row (provider-issued or self-scheduled).
 type Invoice struct {
-	ID       int64   `json:"id"`
+	ID       int64   `json:"id,string"` // bigint ids exceed JS number precision
 	Number   string  `json:"number"`
 	Status   string  `json:"status"`
 	Total    float64 `json:"total"`

@@ -1,6 +1,63 @@
 package billing
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/nauticana/keel/payment"
+)
+
+func TestProviderSubscriptionEventHandlerScopesInvoiceTransitions(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		eventKind  string
+		queryName  string
+		wantArgs   []any
+		invoiceID  string
+		minorUnits int64
+	}{
+		{
+			name:       "paid",
+			eventKind:  payment.KindInvoicePaid,
+			queryName:  qLcConvertTrial,
+			wantArgs:   []any{int64(42), "sub_current"},
+			invoiceID:  "in_paid",
+			minorUnits: 1999,
+		},
+		{
+			name:      "failed",
+			eventKind: payment.KindInvoicePaymentFailed,
+			queryName: qLcSetDunning,
+			wantArgs:  []any{"X", int64(42), "sub_current"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, qs := newSvc(nil)
+			handler := NewProviderSubscriptionEventHandler(svc, svc, SubscriptionHandlerOptions{})
+			err := handler.OnPaymentEvent(ctx, &payment.PaymentEvent{
+				EventKind:      tc.eventKind,
+				InvoiceID:      tc.invoiceID,
+				SubscriptionID: "sub_current",
+				MinorUnits:     tc.minorUnits,
+				Currency:       "USD",
+				Metadata:       map[string]string{"partner_id": "42"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := lastCall(t, qs, tc.queryName)
+			if len(call.args) != len(tc.wantArgs) {
+				t.Fatalf("%s args = %v, want %v", tc.queryName, call.args, tc.wantArgs)
+			}
+			for i := range tc.wantArgs {
+				if call.args[i] != tc.wantArgs[i] {
+					t.Fatalf("%s args = %v, want %v", tc.queryName, call.args, tc.wantArgs)
+				}
+			}
+		})
+	}
+}
 
 // termsFrom is the seam that lets a fixed-interval product (e.g. annual-only)
 // resolve the right offer without threading term metadata through every

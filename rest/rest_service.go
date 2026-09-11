@@ -3,6 +3,7 @@ package rest
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -393,7 +394,17 @@ func (s *RestService) GetTableCache(ctx context.Context) (map[string]map[string]
 		lookupStyle := common.AsString(row[1])
 		displayColumn := common.AsString(row[2])
 		if lookupStyle == "D" {
-			table := s.db.GetForeignKey(constraintName).Parent
+			fk := s.db.GetForeignKey(constraintName)
+			if fk == nil {
+				warning := "foreign_key_lookup names unknown constraint " + constraintName + "; dropdown skipped"
+				if s.Journal != nil {
+					s.Journal.Warning(warning)
+				} else {
+					log.Print(warning)
+				}
+				continue
+			}
+			table := fk.Parent
 			if table.TableName == "" {
 				continue
 			}
