@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"strconv"
 	"sync"
@@ -96,6 +97,8 @@ const (
 	qBillCustomerToken   = "bill_customer_token"
 	qBillPartnerByCust   = "bill_partner_by_customer"
 	qBillListMethods     = "bill_list_payment_methods"
+	qBillActiveProvSub   = "bill_active_provider_subscription"
+	qBillProviderPrice   = "bill_provider_price"
 )
 
 // defaultBillingQueries is pgsql; a mysql consumer overrides affected entries via Queries.
@@ -122,7 +125,7 @@ VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, 'A', ?, ?, ?, ?, ?, ?)`,
 	qBillCancelSub: `
 UPDATE partner_plan_subscription
    SET status = 'C', cancelled_at = CURRENT_TIMESTAMP, auto_renew = FALSE
- WHERE partner_id = ? AND status IN ('A', 'T')
+ WHERE partner_id = ? AND status IN ('A', 'T', 'X')
    AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 
 	qBillGetInvoices: `
@@ -172,6 +175,20 @@ SELECT partner_id FROM partner_billing_customer
 	qBillListMethods: `
 SELECT id, provider, method_type, is_default FROM payment_method
  WHERE partner_id = ? ORDER BY is_default DESC, id`,
+
+	qBillActiveProvSub: `
+SELECT COALESCE(provider_subscription_id, ''), plan_id, billing_cycle, term_type, term_count
+  FROM partner_plan_subscription
+ WHERE partner_id = ? AND status IN ('A', 'T', 'X')
+   AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
+ ORDER BY begda DESC
+ LIMIT 1`,
+
+	qBillProviderPrice: `
+SELECT COALESCE(pp.provider_price_id, '')
+  FROM subscription_plan_price pp
+  JOIN subscription_plan sp ON sp.id = pp.plan_id AND sp.is_active = TRUE
+ WHERE pp.plan_id = ? AND pp.billing_cycle = ? AND pp.term_type = ? AND pp.term_count = ?`,
 }
 
 // AbstractBillingService is the default BillingService over the basis tables.
@@ -426,3 +443,46 @@ func (s *AbstractBillingService) ListPaymentMethods(ctx context.Context, partner
 
 var _ BillingService = (*AbstractBillingService)(nil)
 var _ ProviderBillingStore = (*AbstractBillingService)(nil)
+
+// ActiveProviderSubscription returns ErrNoSubscription when the partner has no
+// active subscription, and nil when that subscription has no provider id.
+func (s *AbstractBillingService) ActiveProviderSubscription(ctx context.Context, partnerID int64) (*ProviderSubscription, error) {
+	s.init(ctx)
+	res, err := s.qs.Query(ctx, qBillActiveProvSub, partnerID)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Rows) == 0 {
+		return nil, ErrNoSubscription
+	}
+	row := res.Rows[0]
+	id := common.AsString(row[0])
+	if id == "" {
+		return nil, nil
+	}
+	return &ProviderSubscription{
+		ID:     id,
+		PlanID: common.AsString(row[1]),
+		Terms: BillingTerms{
+			BillingCycle: ParseBillingPeriod(common.AsString(row[2])),
+			TermType:     ParseBillingPeriod(common.AsString(row[3])),
+			TermCount:    int(common.AsInt64(row[4])),
+		},
+	}, nil
+}
+
+// ProviderPriceID returns ErrPriceNotFound when the plan has no provider price on these terms.
+func (s *AbstractBillingService) ProviderPriceID(ctx context.Context, planID string, terms BillingTerms) (string, error) {
+	s.init(ctx)
+	terms = terms.normalized()
+	res, err := s.qs.Query(ctx, qBillProviderPrice, planID, terms.BillingCycle.Code(), terms.TermType.Code(), terms.TermCount)
+	if err != nil {
+		return "", err
+	}
+	if len(res.Rows) == 0 || common.AsString(res.Rows[0][0]) == "" {
+		return "", fmt.Errorf("%w: plan %s has no provider price", ErrPriceNotFound, planID)
+	}
+	return common.AsString(res.Rows[0][0]), nil
+}
+
+var _ ProviderSubscriptionStore = (*AbstractBillingService)(nil)

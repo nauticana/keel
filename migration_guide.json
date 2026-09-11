@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.61",
+   "title": "Billing HTTP handler and provider-backed cancel / plan change",
+   "tags": [
+    "additive"
+   ],
+   "summary": "handler.BillingHandler serves sail's BillingService paths over billing.BillingService, and billing.ProviderSubscriptionService cancels at period end and changes plans at the payment provider before updating the local subscription. ChangePlan keeps the provider subscription id, rejects inactive plans, handles past-due rows, and remains retry-safe and portable.",
+   "body_markdown": "### New\n\n| Symbol | Purpose |\n|---|---|\n| `handler.BillingHandler` + `Routes()` | `GET /public/plans`, `GET /api/billing/subscription`, `GET /api/billing/invoices`; with `Subscriptions` set also `POST /api/billing/subscription/cancel`, `POST /api/billing/subscription/change` (`{\"planId\"}`), `POST /api/billing/portal` |\n| `billing.SubscriptionManager` | `CancelAtPeriodEnd`, `ChangePlan`, `PortalURL` |\n| `billing.ProviderSubscriptionService` | provider first, then `SubscriptionLifecycle`; a provider error leaves local state untouched |\n| `billing.ProviderSubscriptionStore` | `CustomerToken`, `ActiveProviderSubscription`, `ProviderPriceID` (implemented by `AbstractBillingService`) |\n| `payment.SubscriptionClient` | `CancelSubscriptionAtPeriodEnd`, `ChangeSubscriptionPrice` (implemented by `StripeCheckoutClient`) |\n| `billing.ErrNoProviderSubscription`, `billing.ErrNoProviderCustomer` | mapped to 409 by the handler |\n\n### Behavior change\n\n`ChangePlan` / `ChangePlanTx` lock and read the current row before closing it, then copy its `provider_subscription_id` onto the new row so a later `customer.subscription.deleted` still finds the subscription. The separate `SELECT ... FOR UPDATE` and `UPDATE` work on PostgreSQL and MySQL without an `UPDATE ... RETURNING` override. Active, trialing, and past-due (`A`/`T`/`X`) subscriptions now follow the same cancel/change lifecycle. Inactive target plans are rejected even when an old price row remains. Stripe plan changes recognize an already-applied target price, allowing a retry to finish the local transaction after a provider-first partial success.\n\n### Migration steps for downstream consumers\n\n1. Replace an app-local billing handler with `handler.BillingHandler{AbstractHandler: handler.AbstractHandler{UserService: users, Journal: journal}, Billing: billingService, Subscriptions: subscriptionManager}` and mount `Routes()`.\n2. Wire `Subscriptions` as `&billing.ProviderSubscriptionService{Store: svc, Lifecycle: svc, Client: stripe, Portal: stripe, Provider: payment.ProviderStripe, ProrationBehavior: \"always_invoice\", PortalReturnURL: ...}`.\n3. Stripe restricted keys need **Subscriptions: Write** for cancel and plan change, and **Customer Portal: Write** for the portal.\n"
+  },
+  {
    "version": "v1.2.60",
    "title": "Paid invoices clear past-due; invoice ids serialize as strings; table cache tolerates stale lookups",
    "tags": [

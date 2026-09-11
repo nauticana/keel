@@ -57,6 +57,7 @@ const (
 	qLcFlipPending            = "lc_flip_pending"
 	qLcStartTrial             = "lc_start_trial"
 	qLcConvertTrial           = "lc_convert_trial"
+	qLcChangePlanCurrent      = "lc_change_plan_current"
 	qLcChangePlanClose        = "lc_change_plan_close"
 	qLcReactivate             = "lc_reactivate"
 	qLcSetSeats               = "lc_set_seats"
@@ -107,11 +108,22 @@ UPDATE partner_plan_subscription
    SET status = 'A', trial_end = NULL
  WHERE partner_id = ? AND provider_subscription_id = ? AND status IN ('T', 'X')`,
 
-	// change-plan step 1: close the current active/trial row.
+	// Lock and read the current row before closing it. Keeping this separate
+	// from UPDATE makes the transaction portable to databases without RETURNING.
+	qLcChangePlanCurrent: `
+SELECT COALESCE(provider_subscription_id, '')
+  FROM partner_plan_subscription
+ WHERE partner_id = ? AND status IN ('A', 'T', 'X')
+   AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
+ ORDER BY begda DESC
+ LIMIT 1
+ FOR UPDATE`,
+
+	// change-plan step 2: close the current active/trial/past-due row.
 	qLcChangePlanClose: `
 UPDATE partner_plan_subscription
    SET status = 'C', endda = CURRENT_TIMESTAMP, cancelled_at = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND status IN ('A', 'T')
+ WHERE partner_id = ? AND status IN ('A', 'T', 'X')
    AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 
 	qLcReactivate: `
@@ -128,20 +140,20 @@ UPDATE partner_plan_subscription
 	qLcCancelPartnerPeriodEnd: `
 UPDATE partner_plan_subscription
    SET effective_cancel_date = COALESCE(renewal_date, trial_end), auto_renew = FALSE
- WHERE partner_id = ? AND status IN ('A', 'T')
+ WHERE partner_id = ? AND status IN ('A', 'T', 'X')
    AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 
 	// RETURNING so len(Rows) is the affected count (mysql override: ROW_COUNT()).
 	qLcCancelSubIDImmediate: `
 UPDATE partner_plan_subscription
    SET status = 'C', cancelled_at = CURRENT_TIMESTAMP, auto_renew = FALSE
- WHERE provider_subscription_id = ? AND status IN ('A', 'T')
+ WHERE provider_subscription_id = ? AND status IN ('A', 'T', 'X')
  RETURNING partner_id`,
 
 	qLcCancelSubIDPeriodEnd: `
 UPDATE partner_plan_subscription
    SET effective_cancel_date = COALESCE(renewal_date, trial_end), auto_renew = FALSE
- WHERE provider_subscription_id = ? AND status IN ('A', 'T')
+ WHERE provider_subscription_id = ? AND status IN ('A', 'T', 'X')
  RETURNING partner_id`,
 
 	qLcSetDunning: `
@@ -281,17 +293,28 @@ func (s *AbstractBillingService) ChangePlan(ctx context.Context, partnerID int64
 // TxQueries() entries.
 func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQueryService, partnerID int64, newPlanID string, terms BillingTerms) error {
 	s.init(ctx)
+	if _, err := s.loadPlanPolicy(ctx, newPlanID); err != nil {
+		return err
+	}
 	now := s.now()
 	pc, err := s.loadPlanCharge(ctx, newPlanID, terms, now)
 	if err != nil {
 		return err
+	}
+	current, err := tx.Query(ctx, qLcChangePlanCurrent, partnerID)
+	if err != nil {
+		return err
+	}
+	providerSubID := ""
+	if len(current.Rows) > 0 {
+		providerSubID = common.AsString(current.Rows[0][0])
 	}
 	if _, err := tx.Query(ctx, qLcChangePlanClose, partnerID); err != nil {
 		return err
 	}
 	_, err = tx.Query(ctx, qLcInsertActive,
 		partnerID, newPlanID, pc.perChargeMajor, pc.currency, pc.billingCycle,
-		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now, "", nil)
+		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now, providerSubID, nil)
 	return err
 }
 

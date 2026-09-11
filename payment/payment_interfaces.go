@@ -277,6 +277,14 @@ type IntentClient interface {
 // CheckoutClient abstracts outbound calls to a payment provider's
 // checkout / billing-portal API. Stripe, LemonSqueezy, etc. each get an
 // implementation; projects inject whichever they need.
+// SubscriptionClient changes a provider-managed subscription.
+type SubscriptionClient interface {
+	// CancelSubscriptionAtPeriodEnd stops renewal; the provider ends the subscription at period end.
+	CancelSubscriptionAtPeriodEnd(ctx context.Context, subscriptionID string) error
+	// ChangeSubscriptionPrice moves the item billed at fromPriceID (or the only item) to toPriceID.
+	ChangeSubscriptionPrice(ctx context.Context, subscriptionID, fromPriceID, toPriceID, prorationBehavior string) error
+}
+
 type CheckoutClient interface {
 	CreateCheckoutSession(ctx context.Context, req CheckoutRequest) (url string, err error)
 	CreatePortalSession(ctx context.Context, customerID, returnURL string) (url string, err error)
