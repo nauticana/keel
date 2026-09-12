@@ -17,7 +17,6 @@ import (
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
-	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
 
@@ -240,7 +239,7 @@ func (h *AbstractHandler) HasScope(r *http.Request, scope string) bool {
 	if scope == "" {
 		return false
 	}
-	if p, ok := r.Context().Value(common.AuthPrincipal).(*port.Principal); ok && p != nil {
+	if p, ok := r.Context().Value(common.AuthPrincipal).(*model.TokenPrincipal); ok && p != nil {
 		for _, s := range p.Scopes {
 			if s == scope {
 				return true

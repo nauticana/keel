@@ -265,7 +265,7 @@ type selectPlan struct {
 func (s *TableServicePgsql) planSelect(ctx context.Context, partnerID int64, userID int, where map[string]any) (*selectPlan, error) {
 	allowed, ownScope := false, false
 	if userID > 0 {
-		allowed, ownScope = s.CheckPermission(ctx, userID, "SELECT")
+		allowed, ownScope = s.CheckPermission(ctx, model.UserPrincipal(userID), "SELECT")
 		if !allowed {
 			return nil, model.NewForbidden(fmt.Sprintf("No authorization for SELECT on %s", s.Table.TableName))
 		}
@@ -469,7 +469,7 @@ func (s *TableServicePgsql) Get(ctx context.Context, partnerID int64, userID int
 
 // GetPage pushes the page bounds into SQL and reports the unpaged total, so a
 // bounded response costs a bounded read instead of a full-table scan.
-func (s *TableServicePgsql) GetPage(ctx context.Context, partnerID int64, userID int, where map[string]any, page port.PageRequest) ([]any, int, error) {
+func (s *TableServicePgsql) GetPage(ctx context.Context, partnerID int64, userID int, where map[string]any, page model.PageRequest) ([]any, int, error) {
 	plan, err := s.planSelect(ctx, partnerID, userID, where)
 	if err != nil {
 		return nil, 0, err
@@ -628,7 +628,7 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 // callers can distinguish "row inserted, no id" from "row inserted
 // with an int64 id".
 func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID int, item any) ([]int64, error) {
-	allowed, _ := s.CheckPermission(ctx, userID, "INSERT")
+	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "INSERT")
 	if !allowed {
 		return nil, model.NewForbidden(fmt.Sprintf("No authorization for INSERT on %s", s.Table.TableName))
 	}
@@ -671,7 +671,7 @@ func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID 
 }
 
 func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID int, item any) error {
-	allowed, _ := s.CheckPermission(ctx, userID, "UPDATE")
+	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "UPDATE")
 	if !allowed {
 		return model.NewForbidden(fmt.Sprintf("No authorization for UPDATE on %s", s.Table.TableName))
 	}
@@ -747,7 +747,7 @@ func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID 
 }
 
 func (s *TableServicePgsql) Patch(ctx context.Context, partnerID int64, userID int, key map[string]any, changes map[string]any) error {
-	allowed, _ := s.CheckPermission(ctx, userID, "UPDATE")
+	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "UPDATE")
 	if !allowed {
 		return model.NewForbidden(fmt.Sprintf("No authorization for UPDATE on %s", s.Table.TableName))
 	}
@@ -844,7 +844,7 @@ func hasColumn(m map[string]any, col *model.TableColumn) bool {
 }
 
 func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {
-	allowed, _ := s.CheckPermission(ctx, userID, "DELETE")
+	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "DELETE")
 	if !allowed {
 		return model.NewForbidden(fmt.Sprintf("No authorization for DELETE on %s", s.Table.TableName))
 	}

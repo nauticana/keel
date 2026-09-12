@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/port"
 )
@@ -125,7 +126,7 @@ func (s *BaseProvenanceReverser) reverse(ctx context.Context, lookup, provider, 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	result, err := tx.Query(ctx, lookup, provider, identity)

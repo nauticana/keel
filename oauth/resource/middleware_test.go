@@ -10,15 +10,15 @@ import (
 	"testing"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/model"
 )
 
 type stubValidator struct {
-	principal *port.Principal
+	principal *model.TokenPrincipal
 	err       error
 }
 
-func (s stubValidator) Validate(context.Context, string) (*port.Principal, error) {
+func (s stubValidator) Validate(context.Context, string) (*model.TokenPrincipal, error) {
 	return s.principal, s.err
 }
 
@@ -59,13 +59,13 @@ func TestOAuthResourceMiddleware_InvalidToken(t *testing.T) {
 }
 
 func TestOAuthResourceMiddleware_ValidInjectsContext(t *testing.T) {
-	principal := &port.Principal{Subject: "sub-1", Scopes: []string{"read", "write"}}
-	resolve := func(context.Context, *port.Principal) (int64, error) { return 42, nil }
+	principal := &model.TokenPrincipal{Subject: "sub-1", Scopes: []string{"read", "write"}}
+	resolve := func(context.Context, *model.TokenPrincipal) (int64, error) { return 42, nil }
 	mw := Middleware(stubValidator{principal: principal}, "", nil, resolve)
 
 	var gotPartner int64
 	var gotScopes string
-	var gotPrincipal *port.Principal
+	var gotPrincipal *model.TokenPrincipal
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPartner, _ = r.Context().Value(common.PartnerID).(int64)
 		gotScopes, _ = r.Context().Value(common.Scopes).(string)

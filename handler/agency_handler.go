@@ -5,6 +5,7 @@ import (
 	"net/url"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
@@ -127,7 +128,7 @@ func (h *AgencyHandler) Clients(w http.ResponseWriter, r *http.Request) {
 		common.WriteJSON(w, http.StatusOK, map[string]any{"items": clients, "activeClients": active})
 	case http.MethodPost:
 		var request struct {
-			Clients []port.AgencyClientInput `json:"clients"`
+			Clients []model.AgencyClientInput `json:"clients"`
 		}
 		if !h.ReadRequest(w, r, &request) {
 			return

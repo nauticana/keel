@@ -1,9 +1,6 @@
 package port
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
 // MetricKind identifies how a MetricsRecorder aggregates one measurement.
 type MetricKind string
@@ -27,10 +24,4 @@ type MetricMeasurement struct {
 // services. Implementations must be safe for concurrent use.
 type MetricsRecorder interface {
 	RecordMetric(ctx context.Context, measurement MetricMeasurement) error
-}
-
-// DurationSeconds converts a duration to the unit used by Prometheus duration
-// histograms.
-func DurationSeconds(duration time.Duration) float64 {
-	return duration.Seconds()
 }

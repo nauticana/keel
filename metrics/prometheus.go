@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nauticana/keel/common"
@@ -149,3 +150,8 @@ func (r *PrometheusRecorder) collector(measurement port.MetricMeasurement, label
 }
 
 var _ port.MetricsRecorder = (*PrometheusRecorder)(nil)
+
+// DurationSeconds converts a duration to the unit used by duration histograms.
+func DurationSeconds(duration time.Duration) float64 {
+	return duration.Seconds()
+}

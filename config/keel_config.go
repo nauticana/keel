@@ -103,6 +103,7 @@ const (
 	default_outbound_timeout      = "default_outbound_timeout"
 	snowflake_state_persist_ms    = "snowflake_state_persist_ms"
 	memory_cache_sweep_interval   = "memory_cache_sweep_interval"
+	memory_cache_max_entries      = "memory_cache_max_entries"
 	default_commission_rate_bp    = "default_commission_rate_bp"
 	commission_hold_days          = "commission_hold_days"
 	agency_payout_min_minor       = "agency_payout_min_minor"
@@ -211,6 +212,7 @@ type KeelConfig struct {
 	DefaultOutboundTimeout      time.Duration // default_outbound_timeout      30                 Default outbound HTTP client timeout
 	SnowflakeStatePersistMs     int64         // snowflake_state_persist_ms    1000               Snowflake state-persist cadence (ms)
 	MemoryCacheSweepInterval    time.Duration // memory_cache_sweep_interval   60                 In-memory cache expiry sweep interval
+	MemoryCacheMaxEntries       int           // memory_cache_max_entries      100000             In-memory cache key cap; 0 disables the cap. Once full the least-recently-used key is evicted
 	DefaultCommissionRateBP     int           // default_commission_rate_bp    2000               Program agency commission rate (2000 = 20.00%)
 	CommissionHoldDays          int           // commission_hold_days          14                 Refund/dispute hold before an earning becomes payable
 	AgencyPayoutMinMinor        int64         // agency_payout_min_minor       2500               Minimum net agency payout; smaller balances roll forward
@@ -315,6 +317,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.DefaultOutboundTimeout = c.Duration(m, default_outbound_timeout)
 	c.SnowflakeStatePersistMs = c.Int64(m, snowflake_state_persist_ms)
 	c.MemoryCacheSweepInterval = c.Duration(m, memory_cache_sweep_interval)
+	c.MemoryCacheMaxEntries = c.Int(m, memory_cache_max_entries)
 	c.DefaultCommissionRateBP = c.Int(m, default_commission_rate_bp)
 	c.CommissionHoldDays = c.Int(m, commission_hold_days)
 	c.AgencyPayoutMinMinor = c.Int64(m, agency_payout_min_minor)
@@ -330,6 +333,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.AgencyPayoutMinMinor < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", agency_payout_min_minor))
+	}
+	if c.MemoryCacheMaxEntries < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", memory_cache_max_entries))
 	}
 	if c.WebhookClaimLeaseSeconds <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive — a zero lease makes every webhook claim instantly stealable", webhook_claim_lease_seconds))

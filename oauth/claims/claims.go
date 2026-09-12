@@ -8,17 +8,17 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/model"
 )
 
-// Principal builds a keel Principal from decoded JWT claims; a sub is required.
-func Principal(m map[string]any) (*port.Principal, error) {
+// TokenPrincipal builds a keel Principal from decoded JWT claims; a sub is required.
+func TokenPrincipal(m map[string]any) (*model.TokenPrincipal, error) {
 	sub, _ := m["sub"].(string)
 	if sub == "" {
 		return nil, fmt.Errorf("oauth: token missing sub claim")
 	}
 	iss, _ := m["iss"].(string)
-	return &port.Principal{
+	return &model.TokenPrincipal{
 		Subject:  sub,
 		Issuer:   iss,
 		Audience: Audience(m["aud"]),

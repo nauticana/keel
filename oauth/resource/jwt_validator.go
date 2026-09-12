@@ -7,6 +7,7 @@ import (
 
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/crypto"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
@@ -46,7 +47,7 @@ func NewJWTValidatorFromConfig(httpc *http.Client) (port.TokenValidator, error) 
 	return NewJWTValidator(config.Config().OAuthJWKSURL, config.Config().OAuthIssuer, config.Config().OAuthAudience, httpc), nil
 }
 
-func (v *JWTValidator) Validate(ctx context.Context, bearer string) (*port.Principal, error) {
+func (v *JWTValidator) Validate(ctx context.Context, bearer string) (*model.TokenPrincipal, error) {
 	// Issuer is a required control (NewJWTValidator doc); fail closed rather
 	// than let an empty issuer silently skip iss validation in VerifyRS256.
 	if v.issuer == "" {
@@ -56,5 +57,5 @@ func (v *JWTValidator) Validate(ctx context.Context, bearer string) (*port.Princ
 	if err != nil {
 		return nil, err
 	}
-	return claims.Principal(mc)
+	return claims.TokenPrincipal(mc)
 }

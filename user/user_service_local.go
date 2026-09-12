@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 
@@ -1112,7 +1113,7 @@ func (s *LocalUserService) CreateRefreshToken(userID int) (string, error) {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	// Enforce single-device policy: if the bit is set on user_account, this
@@ -1218,7 +1219,7 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	res, err := tx.Query(ctx, qGetRefreshToken, hash)

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/port"
 )
@@ -137,7 +138,7 @@ func (s *BaseProvenanceRecorder) RecordPayment(ctx context.Context, partnerID in
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 

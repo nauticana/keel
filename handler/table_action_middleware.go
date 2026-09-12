@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
@@ -45,7 +46,7 @@ func WrapTableAction(db port.DatabaseRepository, userSvc user.UserService, authO
 		if !ok {
 			return
 		}
-		allowed, _ := db.CheckActionPermission(r.Context(), session.Id, authObject, action, scope)
+		allowed, _ := db.CheckActionPermission(r.Context(), model.UserPrincipal(session.Id), authObject, action, scope)
 		if !allowed {
 			h.WriteError(w, http.StatusForbidden, "Forbidden",
 				"missing permission "+authObject+"/"+action+" on "+scope)

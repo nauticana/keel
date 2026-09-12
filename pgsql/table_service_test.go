@@ -44,18 +44,18 @@ func (q *captureQuerier) QueryRow(_ context.Context, sql string, args ...any) pg
 }
 
 // stubAuthQuery satisfies data.QueryService for the two queries the
-// TableServicePgsql calls: QCheckAuthorization (CheckPermission) and
-// QCheckGlobalRole (IsGlobalRole). Each instance is configured per-test
+// TableServicePgsql calls: the user kind's grant lookup (CheckPermission)
+// and QCheckGlobalRole (IsGlobalRole). Each instance is configured per-test
 // with the rows it should return for either lookup.
 type stubAuthQuery struct {
-	permRows   [][]any // result for QCheckAuthorization
+	permRows   [][]any // result for the grant lookup
 	globalRows [][]any // result for QCheckGlobalRole — 1 row = global; 0 rows = not global
 }
 
 func (s *stubAuthQuery) GenID() int64 { return 0 }
 func (s *stubAuthQuery) Query(_ context.Context, queryName string, _ ...any) (*model.QueryResult, error) {
 	switch queryName {
-	case data.QCheckAuthorization:
+	case data.DefaultGrantCatalog.CheckQuery(model.PrincipalUser):
 		return &model.QueryResult{Rows: s.permRows}, nil
 	case data.QCheckGlobalRole:
 		return &model.QueryResult{Rows: s.globalRows}, nil
@@ -101,7 +101,7 @@ func newService(t *testing.T, table *model.TableDefinition, auth *stubAuthQuery)
 // wildcardSelectGrant returns the [low_limit, high_limit, bypass_scope]
 // row a SUPER (or any wildcard-grant) holder would have in
 // user_permission × authorization_role_permission for TABLE SELECT
-// user_account. The third column mirrors the real QCheckAuthorization
+// user_account. The third column mirrors the real grant-query
 // projection (`a.bypass_scope`), which CheckPermission reads at rec[2].
 func wildcardSelectGrant() [][]any {
 	return [][]any{{"*", "", false}}
@@ -416,14 +416,13 @@ func TestDelete_PartnerAdmin_InjectsPartnerUserScope(t *testing.T) {
 }
 
 // TestIsGlobalRole_QueryShape verifies that QCheckGlobalRole's SQL
-// embeds the configured role-id allowlist as inlined literals. The
-// query is built once at package init from data.GlobalRoleIDs; this
-// asserts the wiring rather than re-testing buildGlobalRoleQuery (which
-// has its own unit test next door).
+// embeds the configured role-id allowlist as inlined literals, asserting
+// the wiring rather than re-testing buildGlobalRoleQuery (which has its
+// own unit test next door).
 func TestIsGlobalRole_QueryShape(t *testing.T) {
-	sql, ok := data.AuthorizationQueries[data.QCheckGlobalRole]
+	sql, ok := data.DefaultGrantCatalog.Queries()[data.QCheckGlobalRole]
 	if !ok {
-		t.Fatal("QCheckGlobalRole missing from AuthorizationQueries")
+		t.Fatal("QCheckGlobalRole missing from the catalog")
 	}
 	for _, role := range data.GlobalRoleIDs {
 		if !strings.Contains(sql, "'"+role+"'") {

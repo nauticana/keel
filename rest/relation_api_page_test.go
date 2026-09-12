@@ -2,6 +2,7 @@ package rest
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/nauticana/keel/model"
@@ -47,11 +48,11 @@ func (s *legacyTableService) Get(_ context.Context, _ int64, _ int, _ map[string
 // pagedTableService also implements the optional capability.
 type pagedTableService struct {
 	legacyTableService
-	gotPage port.PageRequest
+	gotPage model.PageRequest
 	total   int
 }
 
-func (s *pagedTableService) GetPage(_ context.Context, _ int64, _ int, _ map[string]any, page port.PageRequest) ([]any, int, error) {
+func (s *pagedTableService) GetPage(_ context.Context, _ int64, _ int, _ map[string]any, page model.PageRequest) ([]any, int, error) {
 	s.gotPage = page
 	return s.rows, s.total, nil
 }
@@ -64,7 +65,7 @@ func TestListPage_FallsBackForTableServiceWithoutCapability(t *testing.T) {
 	api := &RelationAPI{DataService: svc}
 
 	items, total, err := api.ListPage(context.Background(), 1, 2, nil,
-		port.PageRequest{Limit: 10, Offset: 20, OrderBy: "id"})
+		model.PageRequest{Limit: 10, Offset: 20, OrderBy: "id"})
 	if err != nil {
 		t.Fatalf("ListPage: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestListPage_FallbackImposesTotalOrder(t *testing.T) {
 			svc := &legacyTableService{table: pageTable(), rows: records(3)}
 			api := &RelationAPI{DataService: svc}
 			if _, _, err := api.ListPage(context.Background(), 1, 2, nil,
-				port.PageRequest{Limit: 2, OrderBy: c.order}); err != nil {
+				model.PageRequest{Limit: 2, OrderBy: c.order}); err != nil {
 				t.Fatalf("ListPage: %v", err)
 			}
 			if svc.order != c.want {
@@ -117,7 +118,7 @@ func TestListPage_FallbackImposesTotalOrder(t *testing.T) {
 func TestListPage_FallbackWithoutTableDefinition(t *testing.T) {
 	svc := &legacyTableService{table: nil, rows: records(2)}
 	api := &RelationAPI{DataService: svc}
-	items, total, err := api.ListPage(context.Background(), 1, 2, nil, port.PageRequest{Limit: 5})
+	items, total, err := api.ListPage(context.Background(), 1, 2, nil, model.PageRequest{Limit: 5})
 	if err != nil {
 		t.Fatalf("ListPage: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestListPage_UsesCapabilityWhenAvailable(t *testing.T) {
 	}
 	api := &RelationAPI{DataService: svc}
 
-	page := port.PageRequest{Limit: 10, Offset: 30, OrderBy: "id DESC"}
+	page := model.PageRequest{Limit: 10, Offset: 30, OrderBy: "id DESC"}
 	items, total, err := api.ListPage(context.Background(), 1, 2, nil, page)
 	if err != nil {
 		t.Fatalf("ListPage: %v", err)
@@ -160,15 +161,16 @@ func TestListPage_UsesCapabilityWhenAvailable(t *testing.T) {
 func TestPageRequestSlice(t *testing.T) {
 	items := records(5)
 	cases := []struct {
-		page port.PageRequest
+		page model.PageRequest
 		want int
 	}{
-		{page: port.PageRequest{Limit: 2, Offset: 0}, want: 2},
-		{page: port.PageRequest{Limit: 2, Offset: 4}, want: 1},
-		{page: port.PageRequest{Limit: 2, Offset: 5}, want: 0},
-		{page: port.PageRequest{Limit: 2, Offset: 99}, want: 0},
-		{page: port.PageRequest{Limit: 0, Offset: 1}, want: 4},
-		{page: port.PageRequest{Limit: 10, Offset: -3}, want: 5},
+		{page: model.PageRequest{Limit: 2, Offset: 0}, want: 2},
+		{page: model.PageRequest{Limit: 2, Offset: 4}, want: 1},
+		{page: model.PageRequest{Limit: 2, Offset: 5}, want: 0},
+		{page: model.PageRequest{Limit: 2, Offset: 99}, want: 0},
+		{page: model.PageRequest{Limit: 0, Offset: 1}, want: 4},
+		{page: model.PageRequest{Limit: 10, Offset: -3}, want: 5},
+		{page: model.PageRequest{Limit: math.MaxInt, Offset: 1}, want: 4},
 	}
 	for _, c := range cases {
 		if got := len(c.page.Slice(items)); got != c.want {

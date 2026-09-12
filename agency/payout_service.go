@@ -9,6 +9,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/payout"
@@ -346,7 +347,7 @@ func (s *BaseAgencyPayoutService) reserveGroup(ctx context.Context, agencyID, ba
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	destination, err := tx.Query(ctx, qPayoutDestinationLock,
@@ -531,7 +532,7 @@ func (s *BaseAgencyPayoutService) markPaid(ctx context.Context, payoutID int64) 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	result, err := tx.Query(ctx, qPayoutMarkPaid, payoutID)
@@ -559,7 +560,7 @@ func (s *BaseAgencyPayoutService) release(ctx context.Context, payoutID int64, s
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	query := qPayoutMarkReturned

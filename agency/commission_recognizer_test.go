@@ -43,7 +43,7 @@ func TestRecognizeApportionsBeforeReferralFilter(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	tx := &recognizerTx{start: start}
 	recognizer := NewBaseCommissionRecognizer(nil)
-	err := recognizer.Recognize(context.Background(), tx, port.AgencyCommissionSource{
+	err := recognizer.Recognize(context.Background(), tx, model.AgencyCommissionSource{
 		InvoiceLinePaymentID: 5,
 		ClientPartnerID:      6,
 		PeriodStart:          start,

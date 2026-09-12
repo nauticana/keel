@@ -39,8 +39,8 @@ func IsReservedActionName(actionName string) bool {
 // the {action_name} segment of the URL (useful for routing two tables'
 // actions through a single shared handler).
 type TableAction struct {
-	TableName       string `json:"-"`              // for index keying only — not serialised to the wire
-	ActionName      string `json:"action"`         // lowercase action_name
+	TableName       string `json:"-"`      // for index keying only — not serialised to the wire
+	ActionName      string `json:"action"` // lowercase action_name
 	Caption         string `json:"caption"`
 	Icon            string `json:"icon,omitempty"` // Material icon name; empty → label-only
 	RecordSpecific  bool   `json:"recordSpecific"` // TRUE: per-row button; FALSE: table-level

@@ -33,6 +33,10 @@ columns:
   - name: last_error
     type: TEXT
     nullable: true
+  - name: dispatched_at
+    type: TIMESTAMP
+    nullable: true
+    comment: When dispatch succeeded; NULL until then, so a row referencing this event can prove delivery
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP

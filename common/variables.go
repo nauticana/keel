@@ -29,7 +29,7 @@ const (
 	RequestID ContextKey = "requestID"
 	// Subject and AuthPrincipal carry the OAuth 2.1 access-token identity
 	// injected by oauth/resource.Middleware. Subject is the `sub`
-	// string; AuthPrincipal holds the full *port.Principal. The same
+	// string; AuthPrincipal holds the full *model.TokenPrincipal. The same
 	// middleware also sets Scopes (space-delimited) and PartnerID (when a
 	// resolver maps the subject), so HasScope / partner helpers work
 	// uniformly across X-API-Key, JWT, and OAuth requests.

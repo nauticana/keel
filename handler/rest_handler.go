@@ -13,7 +13,6 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
-	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/rest"
 )
 
@@ -221,7 +220,7 @@ func (h *RestHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, total, err := h.Api.ListPage(r.Context(), session.PartnerId, session.Id, filter,
-		port.PageRequest{Limit: limit, Offset: offset, OrderBy: order})
+		model.PageRequest{Limit: limit, Offset: offset, OrderBy: order})
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return

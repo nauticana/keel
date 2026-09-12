@@ -26,10 +26,10 @@ type BaseProvider struct {
 	ConnType     string                   // defaults to ConnTypeOAuth
 	Journal      logger.ApplicationLogger // optional; logs provider-side failures (e.g. GBP discovery 429/403) instead of swallowing them
 
-	ClientID        string
-	SecretName      string
-	Endpoint        oauth2.Endpoint
-	Scopes          []string
+	ClientID          string
+	SecretName        string
+	Endpoint          oauth2.Endpoint
+	Scopes            []string
 	AuthCodeOptions   []oauth2.AuthCodeOption
 	RequireRefresh    bool // fail Callback when the exchange returns no refresh token
 	UsePKCE           bool // RFC 7636: engine handles the verifier/challenge (Twitter/X and any PKCE-required provider)

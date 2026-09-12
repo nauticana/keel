@@ -51,14 +51,14 @@ func TestPartnerID(t *testing.T) {
 }
 
 func TestPrincipal(t *testing.T) {
-	p, err := Principal(map[string]any{"sub": "user:1", "iss": "https://as", "aud": "https://r", "scope": "read write"})
+	p, err := TokenPrincipal(map[string]any{"sub": "user:1", "iss": "https://as", "aud": "https://r", "scope": "read write"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Subject != "user:1" || p.Issuer != "https://as" || len(p.Audience) != 1 || strings.Join(p.Scopes, ",") != "read,write" {
 		t.Fatalf("principal: %+v", p)
 	}
-	if _, err := Principal(map[string]any{"iss": "https://as"}); err == nil {
+	if _, err := TokenPrincipal(map[string]any{"iss": "https://as"}); err == nil {
 		t.Fatal("missing sub must error")
 	}
 }

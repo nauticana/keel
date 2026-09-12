@@ -54,6 +54,7 @@ graph TD
 | `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
 | `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `ConsentHandler` (record a consent + export consent history), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
+| `clock` | Injectable time: `Clock` interface, real `System`, and `Fake` for tests that advance time instead of sleeping |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected. See **Trust Guards** below. |
@@ -734,7 +735,7 @@ validator, err := resource.NewJWTValidatorFromConfig(common.HTTPClient())
 if err != nil { log.Fatal(err) }
 
 // 2. Optional account-linking: map token subject → keel partner id (0 = unlinked).
-resolve := func(ctx context.Context, p *port.Principal) (int64, error) {
+resolve := func(ctx context.Context, p *port.TokenPrincipal) (int64, error) {
     return myDirectory.PartnerForSubject(ctx, p.Issuer, p.Subject)
 }
 
@@ -823,6 +824,18 @@ mux.Handle("/api/v1/widget", h.JSON("POST", func(ctx context.Context, s *model.U
 }))
 
 mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, _ json.RawMessage) (any, error) { ... }))
+```
+
+### `clock` — injectable time
+
+Services take a `clock.Clock` instead of calling `time.Now` / `time.After`, so tests advance time rather than wait for it. It covers waiting as well as reading: injecting only `Now` still leaves a service that sleeps for a real second. Production passes `clock.System{}`; tests pass `clock.NewFake(time.Time{})` and call `Advance`.
+
+### `handler.HeaderCarrier` — errors that carry response headers
+
+Any error in the chain implementing `ErrorHeaders() http.Header` has those headers written on the error response, so retry advice survives the status+message mapping.
+
+```go
+return nil, handler.NewAPIError(http.StatusTooManyRequests, "rate limited").WithHeader("Retry-After", "30")
 ```
 
 ### `handler.CSRF` — double-submit-cookie helper
@@ -2037,7 +2050,7 @@ Each table that owns custom actions registers its **own** `authorization_object`
     - [APP_USER, USER_PAYMENT_METHOD, SET_DEFAULT, "user_payment_method"]
 ```
 
-The `low_limit` column carries the table_name (lowercase), matched the same way as standard `TABLE` CRUD grants: an **exact** scope match or a literal `'*'` grants access (KR-003). Glob patterns other than `'*'` and `low_limit`/`high_limit` ranges are **not** evaluated — `QCheckAuthorization` filters them out, so a grant whose `low_limit` is neither the exact value nor `'*'` silently denies. Use one grant row per scope, or `'*'` for all.
+The `low_limit` column carries the table_name (lowercase), matched the same way as standard `TABLE` CRUD grants: an **exact** scope match or a literal `'*'` grants access (KR-003). Glob patterns other than `'*'` and `low_limit`/`high_limit` ranges are **not** evaluated — the generated grant query filters them out, so a grant whose `low_limit` is neither the exact value nor `'*'` silently denies. Use one grant row per scope, or `'*'` for all.
 
 ### URL convention
 
@@ -2493,6 +2506,23 @@ It is **not** correct when multiple non-sticky processes serve `/public/otp/send
 
 Rate-limit caps multiply by process count. With the OTP send cap of `3/contact` and 4 instances, an attacker hitting all four can send `12/contact` per window. Still bounded; tune the per-handler cap if a tighter ceiling matters.
 
+The KV half is capped at `memory_cache_max_entries` (default 100000; 0 disables it) and evicts the least-recently-used key once full. Eviction can drop a live rate-limit counter and reset that window — one more reason a multi-instance deploy belongs on Valkey. Lists are uncapped. Tests can inject time with `NewMemoryCacheServiceWithClock`.
+
+### Multi-scope admission
+
+`MultiScopeAdmitter` charges several fixed-window counters as **one all-or-nothing decision** — a tenant quota and a fleet quota in a single round trip. Both backends implement it (Lua on Redis/Valkey, one lock in memory); it is separate from `CacheService` because adding a method there would break every external implementation.
+
+```go
+if admitter, ok := cacheSvc.(cache.MultiScopeAdmitter); ok {
+    res, err := admitter.Admit(ctx,
+        cache.AdmissionScope{Key: "{t42}:rpm", Limit: 600, Window: time.Minute},
+        cache.AdmissionScope{Key: "{t42}:fleet", Limit: 10000, Window: time.Minute})
+    // res.Admitted, res.RejectedKey, res.RetryAfter
+}
+```
+
+Per-scope `IncrementWithTTL` is not equivalent: a later scope's rejection leaves the earlier ones charged, and compensating still exposes the count to concurrent callers, so the wider scope over-admits. On Redis Cluster all keys in one call must share a hash tag (`{tenant:42}`).
+
 ### Connection string forms
 
 - `host:port` — plain, no TLS
@@ -2675,7 +2705,8 @@ keel/
 ├── worker/                    # JobExecutor + AbstractWorker one-call bootstrap
 ├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault / Infisical + factory
 ├── logger/                    # File / GCP Cloud Logging / AWS CloudWatch / Azure Monitor Logs + factory
-├── cache/                     # Redis / Valkey single-node + cluster + NoOp fallback
+├── clock/                     # Injectable time: Clock, System, Fake
+├── cache/                     # Redis / Valkey single-node + cluster + bounded memory fallback
 ├── storage/                   # S3 (AWS + Cloudflare R2) / GCS / Azure Blob
 ├── messaging/                 # GCP Pub/Sub + AWS SNS+SQS + NATS JetStream + factory
 ├── payment/                   # Stripe + LemonSqueezy webhook processor, signatures, parsers,
@@ -2692,6 +2723,30 @@ A = Access    S = Select    I = Insert    U = Update    D = Delete
 ```
 
 Keel defines 6 shared roles. Projects may add domain-specific roles (e.g., SEO_ADMIN, SEO_OPER).
+
+### Principals — who a grant is evaluated for
+
+Every permission check takes a `model.Principal` — `{Kind, ID, Scope}` — not a user id. `model.UserPrincipal(id)` is the built-in human subject, granted out of `user_permission`. The zero `Principal` is never authorized.
+
+To authorize non-human subjects (agents, service accounts, workloads), register where their grants live before repository `Init`, and inject the catalog:
+
+```go
+grants := data.NewGrantCatalog()
+grants.Register("agent", data.GrantSource{
+    Table:   "agent_permission",    // must carry role_id, begda, endda
+    Subject: "agent_id",
+    Filters: []string{"tenant_id"}, // bound from Principal.Scope, in order
+})
+repo.GrantCatalog = grants          // nil uses data.DefaultGrantCatalog
+
+allowed, ownScope := db.CheckActionPermission(ctx,
+    model.Principal{Kind: "agent", ID: agentID, Scope: []any{tenantID}},
+    "REPORT", "RUN", "monthly_revenue")
+```
+
+keel generates each kind's SQL from its `GrantSource`, so effective dating, the `low_limit` exact-or-`'*'` rule and `bypass_scope` cannot drift between kinds. A scope-arity mismatch fails closed; table and column names are validated as SQL identifiers at registration.
+
+Non-human principals draw on the *same* roles and matrix below, out of their own assignment table. `IsGlobalRole(ctx, userID int)` stays user-specific: it decides row scoping beside the id used as the row filter, not who is acting.
 
 | Type | Object | SUPER | APP_ADMIN | SECURITY_ADMIN | SECURITY_OPER | BUSINESS_ADMIN | PARTNER_ADMIN |
 |------|--------|-------|-----------|----------------|---------------|----------------|---------------|

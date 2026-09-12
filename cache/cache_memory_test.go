@@ -267,7 +267,7 @@ func TestMemoryCache_IncrementByWithTTLAddsInOneStep(t *testing.T) {
 	}
 	// The window expiry set on creation is preserved across batched adds.
 	c.mu.Lock()
-	expires := c.kv["k"].expires
+	expires := c.kv["k"].Value.(*kvEntry).expires
 	c.mu.Unlock()
 	if expires.IsZero() {
 		t.Fatal("expected fixed-window expiry")

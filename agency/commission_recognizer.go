@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/port"
 )
@@ -59,7 +60,7 @@ func NewBaseCommissionRecognizer(rates port.AgencyRateResolver) *BaseCommissionR
 	return &BaseCommissionRecognizer{Rates: rates}
 }
 
-func (s *BaseCommissionRecognizer) Recognize(ctx context.Context, tx port.TxQueryService, source port.AgencyCommissionSource) error {
+func (s *BaseCommissionRecognizer) Recognize(ctx context.Context, tx port.TxQueryService, source model.AgencyCommissionSource) error {
 	source.Currency = strings.ToUpper(strings.TrimSpace(source.Currency))
 	if source.InvoiceLinePaymentID <= 0 || source.ClientPartnerID <= 0 ||
 		source.GrossAmountMinor <= 0 || len(source.Currency) != 3 ||

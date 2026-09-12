@@ -35,7 +35,8 @@ var keelTestFlagIDs = []string{
 	default_list_page_size, post_write_timeout, stripe_webhook_tolerance,
 	stripe_max_retries, webhook_claim_lease_seconds,
 	default_outbound_timeout, snowflake_state_persist_ms,
-	memory_cache_sweep_interval, default_commission_rate_bp,
+	memory_cache_sweep_interval, memory_cache_max_entries,
+	default_commission_rate_bp,
 	commission_hold_days, agency_payout_min_minor,
 }
 
@@ -121,6 +122,15 @@ func TestApplyKeel_InvalidAgencyValuesFailLoudly(t *testing.T) {
 		if !strings.Contains(err.Error(), flag) {
 			t.Errorf("error should mention %q; got %v", flag, err)
 		}
+	}
+}
+
+func TestApplyKeel_RejectsNegativeMemoryCacheCapacity(t *testing.T) {
+	m := keelRows()
+	m[memory_cache_max_entries] = ConfigRow{Value: "-1"}
+	err := applyKeelForTest(&KeelConfig{}, m)
+	if err == nil || !strings.Contains(err.Error(), memory_cache_max_entries) {
+		t.Fatalf("want %s validation error, got %v", memory_cache_max_entries, err)
 	}
 }
 

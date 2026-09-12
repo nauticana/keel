@@ -27,8 +27,8 @@ type DatabaseRepository interface {
 	// table-bound TableService.CheckPermission helper so custom action
 	// middleware (TableAction buttons, report dispatchers, etc.) can
 	// gate any object/action — not just "TABLE"/CRUD. Returns false
-	// when userID < 0 or the auth query is unwired.
-	CheckActionPermission(ctx context.Context, userID int, authObject, action, scope string) (bool, bool)
+	// when the principal's kind is unregistered or the auth query is unwired.
+	CheckActionPermission(ctx context.Context, principal model.Principal, authObject, action, scope string) (bool, bool)
 
 	// RunInTx executes fn inside a database transaction. fn receives a
 	// TxView that yields TableService instances bound to the in-flight

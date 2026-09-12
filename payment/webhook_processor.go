@@ -10,6 +10,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/metrics"
 	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
 )
@@ -550,7 +551,7 @@ func (p *WebhookProcessor) recordWebhookMetrics(
 		Name:   webhookMetricDuration,
 		Help:   "Payment webhook lifecycle duration in seconds.",
 		Kind:   port.MetricHistogram,
-		Value:  port.DurationSeconds(duration),
+		Value:  metrics.DurationSeconds(duration),
 		Labels: labels,
 	})
 	if err := errors.Join(counterErr, durationErr); err != nil {

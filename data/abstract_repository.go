@@ -12,96 +12,22 @@ import (
 )
 
 const (
-	QGetColumns         = "get_columns"
-	QGetPrimaryKeys     = "get_primary_keys"
-	QGetForeignKeys     = "get_foreign_keys"
-	QGetFkLookupStyles  = "get_fk_lookup_styles"
-	QGetColumnDisplay   = "get_column_display"
-	QGetSequenceUsage   = "get_sequence_usage"
-	QCheckAuthorization = "check_permission"
-	// QCheckGlobalRole returns 1 row when the caller holds any role
-	// listed in the SQL's IN-clause — framework roles whose mandate is
-	// to manage cross-partner data. Drives the bypass on partner-scoped
-	// row filters (e.g. user_account: PartnerUserScoped). Membership is
-	// inlined as SQL literals because role ids are framework constants
-	// that never originate from user input, and the IN list must be
-	// portable across DB drivers (`?` placeholders can't expand to
-	// variable-length IN lists without per-driver shimming).
-	QCheckGlobalRole = "check_global_role"
+	QGetColumns        = "get_columns"
+	QGetPrimaryKeys    = "get_primary_keys"
+	QGetForeignKeys    = "get_foreign_keys"
+	QGetFkLookupStyles = "get_fk_lookup_styles"
+	QGetColumnDisplay  = "get_column_display"
+	QGetSequenceUsage  = "get_sequence_usage"
 )
-
-// GlobalRoleIDs names the roles whose mandate is cross-partner data
-// management. Used by QCheckGlobalRole to gate partner-scoped row
-// filters: SUPER / BUSINESS_ADMIN / SECURITY_ADMIN / SECURITY_OPER /
-// APP_ADMIN bypass the partner_user JOIN scope on `user_account` etc.
-//
-// Downstream projects that add their own cross-partner role can append
-// to this slice at boot before AbstractRepository.Init runs and re-build
-// the QCheckGlobalRole SQL via buildGlobalRoleQuery. The default set
-// matches the framework roles seeded by schema/seed/core.yml.
-var GlobalRoleIDs = []string{
-	"SUPER",
-	"BUSINESS_ADMIN",
-	"SECURITY_ADMIN",
-	"SECURITY_OPER",
-	"APP_ADMIN",
-}
-
-// AuthorizationQueries are the SQL templates the data layer registers
-// with each connection's QueryService. QCheckGlobalRole is built once at
-// package init from GlobalRoleIDs so a downstream that overrides the
-// list before importing this package picks up the modified set.
-var AuthorizationQueries = map[string]string{
-	QCheckAuthorization: `
-SELECT a.low_limit, a.high_limit, a.bypass_scope
-  FROM user_permission p, authorization_role_permission a
- WHERE p.role_id = a.role_id
-   AND p.begda <= CURRENT_TIMESTAMP
-   AND (p.endda IS NULL OR p.endda >= CURRENT_TIMESTAMP)
-   AND a.is_active IS TRUE
-   AND a.authorization_object_id = ?
-   AND a.action = ?
-   AND p.user_id = ?
-   AND (a.low_limit = ? OR a.low_limit = '*')
-`,
-	QCheckGlobalRole: buildGlobalRoleQuery(GlobalRoleIDs),
-}
-
-// buildGlobalRoleQuery splices the role-id allowlist into a single
-// inlined IN-clause. Role ids are framework constants (never user
-// input), so embedding them as quoted literals is safe and produces a
-// portable SQL string that doesn't need driver-specific IN-expansion.
-func buildGlobalRoleQuery(roles []string) string {
-	if len(roles) == 0 {
-		// Empty role set → query that never matches. Keeps callers safe
-		// when a downstream blanks out GlobalRoleIDs (every user is then
-		// treated as partner-scoped).
-		return `SELECT 1 WHERE FALSE`
-	}
-	quoted := make([]string, len(roles))
-	for i, r := range roles {
-		// Single-quote literals; defend against an accidentally
-		// embedded `'` even though role ids are caller-controlled
-		// constants by convention.
-		quoted[i] = "'" + strings.ReplaceAll(r, "'", "''") + "'"
-	}
-	return `
-SELECT 1
-  FROM user_permission
- WHERE user_id = ?
-   AND role_id IN (` + strings.Join(quoted, ",") + `)
-   AND begda <= CURRENT_TIMESTAMP
-   AND (endda IS NULL OR endda >= CURRENT_TIMESTAMP)
- LIMIT 1
-`
-}
 
 type AbstractRepository struct {
 	TableServices    map[string]port.TableService
 	TableDefinitions map[string]*model.TableDefinition
 	ForeignKeys      map[string]*model.ForeignKey
 	QuerySvc         port.QueryService
-	// AuthQuery carries the QCheckAuthorization template. Populated by
+	// GrantCatalog resolves each principal kind's grant SQL; nil uses DefaultGrantCatalog.
+	GrantCatalog port.GrantCatalog
+	// AuthQuery carries the generated authorization templates. Populated by
 	// concrete repository Init (pgsql/repository.go) so CheckActionPermission
 	// can reuse it across calls. Equivalent to the AuthQuery each
 	// AbstractTableService is given; promoted to the repository layer
@@ -132,6 +58,14 @@ type AbstractRepository struct {
 	UserTableName string
 }
 
+// Grants returns the injected catalog, or the process default.
+func (r *AbstractRepository) Grants() port.GrantCatalog {
+	if r.GrantCatalog == nil {
+		return DefaultGrantCatalog
+	}
+	return r.GrantCatalog
+}
+
 // partnerTable returns the configured tenant-root table name,
 // defaulting to "business_partner" when unset.
 func (r *AbstractRepository) partnerTable() string {
@@ -158,6 +92,9 @@ func (r *AbstractRepository) userTable() string {
 // Returns false on any error (query failure, missing AuthQuery, invalid
 // userID) — fail-closed so a broken permission lookup applies the
 // stricter scope rather than silently granting cross-partner read.
+//
+// Takes a user id rather than a Principal: it decides row scoping next to the
+// same id used as the row filter itself, not who the acting subject is.
 func (r *AbstractRepository) IsGlobalRole(ctx context.Context, userID int) bool {
 	if userID <= 0 || r.AuthQuery == nil {
 		return false
@@ -172,7 +109,7 @@ func (r *AbstractRepository) IsGlobalRole(ctx context.Context, userID int) bool 
 // CheckActionPermission generalises the table-bound CheckPermission
 // helper on AbstractTableService: any (authObject, action) pair scoped
 // to the given `scope` string (typically a table_name or "*") is
-// checked via the same QCheckAuthorization query.
+// checked against the grant table registered for the principal's kind.
 //
 // Used by TableAction middleware to gate per-table custom actions —
 // see keel/handler/WrapTableAction. authObject + action are the
@@ -182,20 +119,26 @@ func (r *AbstractRepository) IsGlobalRole(ctx context.Context, userID int) bool 
 // Scope semantics mirror AbstractTableService.CheckPermission: an exact
 // `low_limit == scope` grant returns ownScope=false; a '*' grant returns
 // ownScope=true. Only exact + '*' are honored (KR-003).
-func (r *AbstractRepository) CheckActionPermission(ctx context.Context, userID int, authObject, action, scope string) (bool, bool) {
-	if userID < 0 || authObject == "" || action == "" || r.AuthQuery == nil {
+func (r *AbstractRepository) CheckActionPermission(ctx context.Context, principal model.Principal, authObject, action, scope string) (bool, bool) {
+	if authObject == "" || action == "" || r.AuthQuery == nil {
 		return false, false
 	}
-	res, err := r.AuthQuery.Query(ctx, QCheckAuthorization, authObject, action, userID, scope)
+	catalog := r.Grants()
+	args, err := catalog.Args(principal)
+	if err != nil {
+		return false, false
+	}
+	args = append([]any{authObject, action}, append(args, scope)...)
+	res, err := r.AuthQuery.Query(ctx, catalog.CheckQuery(principal.Kind), args...)
 	if err != nil || len(res.Rows) == 0 {
 		return false, false
 	}
 	wildcardMatched := false
 	for _, rec := range res.Rows {
 		lowLimit := common.AsString(rec[0])
-		// Exact + '*' only, matching CheckPermission and the
-		// QCheckAuthorization filter (KR-003). An exact scope grant is
-		// owner-scoped (ownScope=false); a '*' grant is broad (ownScope=true).
+		// Exact + '*' only, matching CheckPermission and the generated
+		// grant query (KR-003). An exact scope grant is owner-scoped
+		// (ownScope=false); a '*' grant is broad (ownScope=true).
 		if lowLimit == scope {
 			return true, false
 		}

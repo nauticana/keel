@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/service"
 )
@@ -287,7 +289,7 @@ func NewBaseAgencyService(db port.DatabaseRepository, opts BaseAgencyServiceOpti
 	}
 }
 
-func (s *BaseAgencyService) AddClients(ctx context.Context, agencyPartnerID int64, clients []port.AgencyClientInput) (int, error) {
+func (s *BaseAgencyService) AddClients(ctx context.Context, agencyPartnerID int64, clients []model.AgencyClientInput) (int, error) {
 	if err := s.requireActive(ctx, agencyPartnerID); err != nil {
 		return 0, err
 	}
@@ -298,7 +300,7 @@ func (s *BaseAgencyService) AddClients(ctx context.Context, agencyPartnerID int6
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 
@@ -323,14 +325,14 @@ func (s *BaseAgencyService) AddClients(ctx context.Context, agencyPartnerID int6
 	return added, nil
 }
 
-func (s *BaseAgencyService) ListClients(ctx context.Context, agencyPartnerID int64) ([]port.AgencyClient, error) {
+func (s *BaseAgencyService) ListClients(ctx context.Context, agencyPartnerID int64) ([]model.AgencyClient, error) {
 	rows, err := s.QueryRows(ctx, qListClients, agencyPartnerID)
 	if err != nil {
 		return nil, fmt.Errorf("agency: list clients: %w", err)
 	}
-	out := make([]port.AgencyClient, 0, len(rows))
+	out := make([]model.AgencyClient, 0, len(rows))
 	for _, row := range rows {
-		client := port.AgencyClient{
+		client := model.AgencyClient{
 			ID:              common.AsInt64(row[0]),
 			Name:            common.AsString(row[1]),
 			Email:           common.AsString(row[2]),
@@ -384,7 +386,7 @@ func (s *BaseAgencyService) CancelClient(ctx context.Context, agencyPartnerID, i
 	return nil
 }
 
-func (s *BaseAgencyService) InviteInfo(ctx context.Context, token string) (*port.AgencyInvite, error) {
+func (s *BaseAgencyService) InviteInfo(ctx context.Context, token string) (*model.AgencyInvite, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, port.ErrAgencyNotFound
 	}
@@ -395,7 +397,7 @@ func (s *BaseAgencyService) InviteInfo(ctx context.Context, token string) (*port
 	if row == nil {
 		return nil, port.ErrAgencyNotFound
 	}
-	return &port.AgencyInvite{
+	return &model.AgencyInvite{
 		InvitationID: common.AsInt64(row[0]),
 		AgencyName:   common.AsString(row[1]),
 		ClientName:   common.AsString(row[2]),
@@ -415,7 +417,7 @@ func (s *BaseAgencyService) AcceptInvite(ctx context.Context, token string, user
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 
@@ -482,7 +484,7 @@ func (s *BaseAgencyService) AcceptInvite(ctx context.Context, token string, user
 	return nil
 }
 
-func (s *BaseAgencyService) ClientDelegation(ctx context.Context, clientPartnerID int64) (*port.AgencyDelegation, error) {
+func (s *BaseAgencyService) ClientDelegation(ctx context.Context, clientPartnerID int64) (*model.AgencyDelegation, error) {
 	row, err := s.QueryFirst(ctx, qClientDelegation, clientPartnerID)
 	if err != nil {
 		return nil, fmt.Errorf("agency: client delegation: %w", err)
@@ -490,7 +492,7 @@ func (s *BaseAgencyService) ClientDelegation(ctx context.Context, clientPartnerI
 	if row == nil {
 		return nil, nil
 	}
-	return &port.AgencyDelegation{
+	return &model.AgencyDelegation{
 		ID:              common.AsInt64(row[0]),
 		ClientPartnerID: common.AsInt64(row[1]),
 		ClientName:      common.AsString(row[2]),
@@ -509,7 +511,7 @@ func (s *BaseAgencyService) RevokeDelegation(ctx context.Context, clientPartnerI
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	if _, err = tx.Query(ctx, qClientPartnerLock, clientPartnerID); err != nil {
@@ -554,7 +556,7 @@ func (s *BaseAgencyService) SetBillingModel(ctx context.Context, agencyPartnerID
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	delegation, err := tx.Query(ctx, qBillingDelegationLock, agencyPartnerID, clientPartnerID)
@@ -616,7 +618,7 @@ func (s *BaseAgencyService) Enroll(ctx context.Context, agencyPartnerID, userID 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	if _, err = tx.Query(ctx, qInsertProfile, agencyPartnerID); err != nil {
@@ -632,7 +634,7 @@ func (s *BaseAgencyService) Enroll(ctx context.Context, agencyPartnerID, userID 
 	return nil
 }
 
-func (s *BaseAgencyService) Profile(ctx context.Context, agencyPartnerID int64) (*port.AgencyProfile, error) {
+func (s *BaseAgencyService) Profile(ctx context.Context, agencyPartnerID int64) (*model.AgencyProfile, error) {
 	row, err := s.QueryFirst(ctx, qProfile, agencyPartnerID)
 	if err != nil {
 		return nil, fmt.Errorf("agency: profile: %w", err)
@@ -640,7 +642,7 @@ func (s *BaseAgencyService) Profile(ctx context.Context, agencyPartnerID int64) 
 	if row == nil {
 		return nil, nil
 	}
-	profile := &port.AgencyProfile{
+	profile := &model.AgencyProfile{
 		AgencyPartnerID:  common.AsInt64(row[0]),
 		WholesaleAllowed: common.AsBool(row[1]),
 		DefaultRateBP:    int(common.AsInt64(row[2])),
@@ -663,18 +665,18 @@ func (s *BaseAgencyService) Approve(ctx context.Context, agencyPartnerID int64) 
 	return nil
 }
 
-func (s *BaseAgencyService) Earnings(ctx context.Context, agencyPartnerID int64) (*port.AgencyEarnings, error) {
-	out := &port.AgencyEarnings{
-		Balances: []port.AgencyEarningsBalance{},
-		Entries:  []port.AgencyEarningEntry{},
-		Payouts:  []port.AgencyPayout{},
+func (s *BaseAgencyService) Earnings(ctx context.Context, agencyPartnerID int64) (*model.AgencyEarnings, error) {
+	out := &model.AgencyEarnings{
+		Balances: []model.AgencyEarningsBalance{},
+		Entries:  []model.AgencyEarningEntry{},
+		Payouts:  []model.AgencyPayout{},
 	}
 	rows, err := s.QueryRows(ctx, qEarningsBalances, agencyPartnerID)
 	if err != nil {
 		return nil, fmt.Errorf("agency: earnings balances: %w", err)
 	}
 	for _, row := range rows {
-		out.Balances = append(out.Balances, port.AgencyEarningsBalance{
+		out.Balances = append(out.Balances, model.AgencyEarningsBalance{
 			Currency:  common.AsString(row[0]),
 			HeldMinor: common.AsInt64(row[1]),
 			DueMinor:  common.AsInt64(row[2]),
@@ -686,7 +688,7 @@ func (s *BaseAgencyService) Earnings(ctx context.Context, agencyPartnerID int64)
 		return nil, fmt.Errorf("agency: earnings entries: %w", err)
 	}
 	for _, row := range rows {
-		out.Entries = append(out.Entries, port.AgencyEarningEntry{
+		out.Entries = append(out.Entries, model.AgencyEarningEntry{
 			ID:          common.AsInt64(row[0]),
 			ClientName:  common.AsString(row[1]),
 			PeriodStart: common.AsTime(row[2]),
@@ -703,7 +705,7 @@ func (s *BaseAgencyService) Earnings(ctx context.Context, agencyPartnerID int64)
 		return nil, fmt.Errorf("agency: earnings payouts: %w", err)
 	}
 	for _, row := range rows {
-		payout := port.AgencyPayout{
+		payout := model.AgencyPayout{
 			ID:          common.AsInt64(row[0]),
 			AmountMinor: common.AsInt64(row[1]),
 			Currency:    common.AsString(row[2]),
@@ -723,17 +725,17 @@ func (s *BaseAgencyService) Earnings(ctx context.Context, agencyPartnerID int64)
 	return out, nil
 }
 
-func (s *BaseAgencyService) PayoutProfile(ctx context.Context, agencyPartnerID, userID int64) (*port.AgencyPayoutProfile, []port.AgencyPayoutDestination, error) {
+func (s *BaseAgencyService) PayoutProfile(ctx context.Context, agencyPartnerID, userID int64) (*model.AgencyPayoutProfile, []model.AgencyPayoutDestination, error) {
 	if err := s.requireActive(ctx, agencyPartnerID); err != nil {
 		return nil, nil, err
 	}
-	var profile *port.AgencyPayoutProfile
+	var profile *model.AgencyPayoutProfile
 	row, err := s.QueryFirst(ctx, qPayoutProfile, agencyPartnerID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("agency: payout profile: %w", err)
 	}
 	if row != nil {
-		profile = &port.AgencyPayoutProfile{
+		profile = &model.AgencyPayoutProfile{
 			AgencyPartnerID:   common.AsInt64(row[0]),
 			UserBankInfoID:    common.AsInt64(row[1]),
 			CountryCode:       common.AsString(row[2]),
@@ -747,9 +749,9 @@ func (s *BaseAgencyService) PayoutProfile(ctx context.Context, agencyPartnerID, 
 	if err != nil {
 		return nil, nil, fmt.Errorf("agency: payout destinations: %w", err)
 	}
-	destinations := make([]port.AgencyPayoutDestination, 0, len(rows))
+	destinations := make([]model.AgencyPayoutDestination, 0, len(rows))
 	for _, destinationRow := range rows {
-		destinations = append(destinations, port.AgencyPayoutDestination{
+		destinations = append(destinations, model.AgencyPayoutDestination{
 			UserBankInfoID:    common.AsInt64(destinationRow[0]),
 			CountryCode:       common.AsString(destinationRow[1]),
 			Currency:          common.AsString(destinationRow[2]),

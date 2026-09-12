@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/model"
 )
 
 func TestHasScope(t *testing.T) {
@@ -18,7 +18,7 @@ func TestHasScope(t *testing.T) {
 
 	t.Run("oauth principal scopes", func(t *testing.T) {
 		ctx := context.WithValue(context.Background(), common.AuthPrincipal,
-			&port.Principal{Scopes: []string{"read", "write"}})
+			&model.TokenPrincipal{Scopes: []string{"read", "write"}})
 		if !h.HasScope(req(ctx), "write") {
 			t.Fatal("want write present")
 		}

@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
-	"github.com/nauticana/keel/port"
 )
 
 // fakeRows serves a fixed result set so GetPage can run to completion and the
@@ -123,7 +122,7 @@ func TestGetPage_PushesBoundsAndCountsUnpagedTotal(t *testing.T) {
 	s := newPagedService(t, partnerSpecificTable(), q)
 
 	items, total, err := s.GetPage(context.Background(), 42, 7, nil,
-		port.PageRequest{Limit: 2, Offset: 10})
+		model.PageRequest{Limit: 2, Offset: 10})
 	if err != nil {
 		t.Fatalf("GetPage: %v", err)
 	}
@@ -165,7 +164,7 @@ func TestGetPage_AppendsPrimaryKeyForStableOrder(t *testing.T) {
 	s := newPagedService(t, partnerSpecificTable(), q)
 
 	if _, _, err := s.GetPage(context.Background(), 42, 7, nil,
-		port.PageRequest{Limit: 5, OrderBy: "amount DESC"}); err != nil {
+		model.PageRequest{Limit: 5, OrderBy: "amount DESC"}); err != nil {
 		t.Fatalf("GetPage: %v", err)
 	}
 	if want := `ORDER BY "amount" DESC, "id"`; !strings.Contains(q.statements[0], want) {
@@ -179,7 +178,7 @@ func TestGetPage_ShortFirstPageSkipsCount(t *testing.T) {
 	q := &pageQuerier{pageRows: [][]any{row(1), row(2)}, total: 999}
 	s := newPagedService(t, partnerSpecificTable(), q)
 
-	_, total, err := s.GetPage(context.Background(), 42, 7, nil, port.PageRequest{Limit: 10})
+	_, total, err := s.GetPage(context.Background(), 42, 7, nil, model.PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("GetPage: %v", err)
 	}
@@ -198,7 +197,7 @@ func TestGetPage_ByKeyPathSkipsBounds(t *testing.T) {
 	s := newPagedService(t, userAccountTable(false), q)
 
 	_, total, err := s.GetPage(context.Background(), 42, 7,
-		map[string]any{"id": int64(1)}, port.PageRequest{Limit: 10})
+		map[string]any{"id": int64(1)}, model.PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("GetPage: %v", err)
 	}
@@ -217,7 +216,7 @@ func TestGetPage_InheritsPartnerScopeCoercion(t *testing.T) {
 	s := newPagedService(t, partnerSpecificTable(), q)
 
 	if _, _, err := s.GetPage(context.Background(), 42, 7,
-		map[string]any{"partner_id": int64(999)}, port.PageRequest{Limit: 5}); err != nil {
+		map[string]any{"partner_id": int64(999)}, model.PageRequest{Limit: 5}); err != nil {
 		t.Fatalf("GetPage: %v", err)
 	}
 	if got := q.args[0]; len(got) == 0 || got[0] != int64(42) {

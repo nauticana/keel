@@ -8,13 +8,14 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
 // PartnerResolver maps a validated OAuth principal to a keel partner id
 // (account linking). Return 0 when the subject isn't linked to a partner.
 // Optional — pass nil to inject the principal/scopes without a partner id.
-type PartnerResolver func(ctx context.Context, p *port.Principal) (int64, error)
+type PartnerResolver func(ctx context.Context, p *model.TokenPrincipal) (int64, error)
 
 // Middleware authenticates requests with an OAuth 2.1 bearer
 // access token (resource-server role). It validates the token via validator,
@@ -72,8 +73,8 @@ func Middleware(validator port.TokenValidator, metadataURL string, journal logge
 
 // PrincipalFromContext returns the OAuth principal injected by
 // Middleware, or nil for non-OAuth requests.
-func PrincipalFromContext(ctx context.Context) *port.Principal {
-	p, _ := ctx.Value(common.AuthPrincipal).(*port.Principal)
+func PrincipalFromContext(ctx context.Context) *model.TokenPrincipal {
+	p, _ := ctx.Value(common.AuthPrincipal).(*model.TokenPrincipal)
 	return p
 }
 

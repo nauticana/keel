@@ -139,7 +139,7 @@ func (r *RepositoryPgsql) Connect(ctx context.Context) error {
 	// middleware. Per-TableService AuthQuery wires its own copy too;
 	// keeping them separate is cheap and avoids cross-binding queries
 	// from different intent.
-	r.AuthQuery = r.GetQueryService(ctx, data.AuthorizationQueries)
+	r.AuthQuery = r.GetQueryService(ctx, r.Grants().Queries())
 	return nil
 }
 
@@ -368,8 +368,9 @@ func (r *RepositoryPgsql) CreateTableService(ctx context.Context, table *model.T
 	return &TableServicePgsql{
 		AbstractTableService: data.AbstractTableService{
 			Table:       table,
-			AuthQuery:   r.GetQueryService(ctx, data.AuthorizationQueries),
+			AuthQuery:   r.GetQueryService(ctx, r.Grants().Queries()),
 			IdGenerator: r.IdGenerator,
+			Grants:      r.Grants(),
 		},
 		Schema: *common.DBschema,
 		Client: r.Client,
@@ -551,3 +552,4 @@ func NewPgSQLDatabase(ctx context.Context, secretProvider secret.SecretProvider,
 }
 
 var _ port.DatabaseRepository = (*RepositoryPgsql)(nil)
+var _ port.GrantCatalogProvider = (*RepositoryPgsql)(nil)

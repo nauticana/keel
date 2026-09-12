@@ -142,7 +142,7 @@ func (s *RelationAPI) List(ctx context.Context, partnerID int64, userID int, whe
 // Both paths order by the primary key, so paging is deterministic whichever one
 // runs. The fallback expresses that as comma-separated order terms, so a custom
 // TableService.Get must accept the ?order= grammar to page correctly.
-func (s *RelationAPI) ListPage(ctx context.Context, partnerID int64, userID int, where map[string]any, page port.PageRequest) ([]any, int, error) {
+func (s *RelationAPI) ListPage(ctx context.Context, partnerID int64, userID int, where map[string]any, page model.PageRequest) ([]any, int, error) {
 	pager, ok := s.DataService.(port.PagedTableService)
 	if !ok {
 		records, err := s.List(ctx, partnerID, userID, where, page.StableOrderBy(s.keyColumns()))

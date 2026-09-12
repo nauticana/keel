@@ -1,11 +1,14 @@
 package cache
 
 import (
+	"container/list"
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/nauticana/keel/clock"
 	"github.com/nauticana/keel/config"
 )
 
@@ -34,16 +37,28 @@ import (
 //  4. Publish is fan-out to in-process subscribers ONLY. Cross-process
 //     messaging silently does not work. None of the keel-shipped
 //     handlers use pub/sub today, so this is forward-looking guidance.
+//  5. The KV half is capped at memory_cache_max_entries and evicts the
+//     least-recently-used key once full. Eviction can drop a live
+//     rate-limit counter and reset that window — one more reason a
+//     multi-instance deploy belongs on Valkey. Lists are uncapped:
+//     they are caller-drained queues.
 type MemoryCacheService struct {
-	mu     sync.Mutex
-	kv     map[string]*kvEntry
-	lists  map[string][]string
-	pubsub map[string][]chan string
-	stop   chan struct{}
-	closed bool
+	// clock is set at construction: the sweeper goroutine reads it unlocked, so
+	// a later assignment would race. Inject with NewMemoryCacheServiceWithClock.
+	clock clock.Clock
+	mu    sync.Mutex
+	kv    map[string]*list.Element
+	// lru orders kv by recency, most recent at the front.
+	lru      *list.List
+	capacity int
+	lists    map[string][]string
+	pubsub   map[string][]chan string
+	stop     chan struct{}
+	closed   bool
 }
 
 type kvEntry struct {
+	key     string
 	value   string
 	expires time.Time // zero = no expiry
 }
@@ -54,14 +69,72 @@ type kvEntry struct {
 // lazily on Get/Increment so memory only grows between sweeps and the
 // caller never sees a stale value.
 func NewMemoryCacheService() *MemoryCacheService {
+	return NewMemoryCacheServiceWithClock(clock.System{})
+}
+
+// NewMemoryCacheServiceWithClock creates a cache with the given time source.
+func NewMemoryCacheServiceWithClock(timeSource clock.Clock) *MemoryCacheService {
+	if timeSource == nil {
+		timeSource = clock.System{}
+	}
 	c := &MemoryCacheService{
-		kv:     make(map[string]*kvEntry),
-		lists:  make(map[string][]string),
-		pubsub: make(map[string][]chan string),
-		stop:   make(chan struct{}),
+		clock:    timeSource,
+		kv:       make(map[string]*list.Element),
+		lru:      list.New(),
+		capacity: config.Config().MemoryCacheMaxEntries,
+		lists:    make(map[string][]string),
+		pubsub:   make(map[string][]chan string),
+		stop:     make(chan struct{}),
 	}
 	go c.sweepLoop()
 	return c
+}
+
+func (c *MemoryCacheService) now() time.Time {
+	if c.clock == nil {
+		return time.Now()
+	}
+	return c.clock.Now()
+}
+
+// entry returns the live entry for key, dropping it if expired. Callers hold c.mu.
+func (c *MemoryCacheService) entry(key string, touch bool) (*kvEntry, bool) {
+	el, ok := c.kv[key]
+	if !ok {
+		return nil, false
+	}
+	e := el.Value.(*kvEntry)
+	if !e.expires.IsZero() && !c.now().Before(e.expires) {
+		c.remove(el)
+		return nil, false
+	}
+	if touch {
+		c.lru.MoveToFront(el)
+	}
+	return e, true
+}
+
+// store inserts or replaces key, evicting LRU entries over capacity. Callers hold c.mu.
+func (c *MemoryCacheService) store(e *kvEntry) {
+	if el, ok := c.kv[e.key]; ok {
+		el.Value = e
+		c.lru.MoveToFront(el)
+		return
+	}
+	c.kv[e.key] = c.lru.PushFront(e)
+	for c.capacity > 0 && c.lru.Len() > c.capacity {
+		oldest := c.lru.Back()
+		if oldest == nil {
+			return
+		}
+		c.remove(oldest)
+	}
+}
+
+// remove drops an element from the map and the recency list. Callers hold c.mu.
+func (c *MemoryCacheService) remove(el *list.Element) {
+	delete(c.kv, el.Value.(*kvEntry).key)
+	c.lru.Remove(el)
 }
 
 func (c *MemoryCacheService) sweepLoop() {
@@ -78,44 +151,44 @@ func (c *MemoryCacheService) sweepLoop() {
 }
 
 func (c *MemoryCacheService) sweep() {
-	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for k, e := range c.kv {
-		if !e.expires.IsZero() && now.After(e.expires) {
-			delete(c.kv, k)
+	now := c.now()
+	for el := c.lru.Front(); el != nil; {
+		next := el.Next()
+		if e := el.Value.(*kvEntry); !e.expires.IsZero() && !now.Before(e.expires) {
+			c.remove(el)
 		}
+		el = next
 	}
 }
 
 func (c *MemoryCacheService) Get(ctx context.Context, key string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.kv[key]
+	e, ok := c.entry(key, true)
 	if !ok {
-		return "", ErrCacheMiss
-	}
-	if !e.expires.IsZero() && time.Now().After(e.expires) {
-		delete(c.kv, key)
 		return "", ErrCacheMiss
 	}
 	return e.value, nil
 }
 
 func (c *MemoryCacheService) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	c.mu.Lock()
 	var expires time.Time
 	if ttl > 0 {
-		expires = time.Now().Add(ttl)
+		expires = c.now().Add(ttl)
 	}
-	c.mu.Lock()
-	c.kv[key] = &kvEntry{value: value, expires: expires}
+	c.store(&kvEntry{key: key, value: value, expires: expires})
 	c.mu.Unlock()
 	return nil
 }
 
 func (c *MemoryCacheService) Delete(ctx context.Context, key string) error {
 	c.mu.Lock()
-	delete(c.kv, key)
+	if el, ok := c.kv[key]; ok {
+		c.remove(el)
+	}
 	c.mu.Unlock()
 	return nil
 }
@@ -128,12 +201,9 @@ func (c *MemoryCacheService) Delete(ctx context.Context, key string) error {
 func (c *MemoryCacheService) Increment(ctx context.Context, key string) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.kv[key]
-	if ok && !e.expires.IsZero() && time.Now().After(e.expires) {
-		ok = false
-	}
+	e, ok := c.entry(key, true)
 	if !ok {
-		c.kv[key] = &kvEntry{value: "1"}
+		c.store(&kvEntry{key: key, value: "1"})
 		return 1, nil
 	}
 	n, _ := strconv.ParseInt(e.value, 10, 64)
@@ -149,18 +219,63 @@ func (c *MemoryCacheService) IncrementWithTTL(ctx context.Context, key string, t
 func (c *MemoryCacheService) IncrementByWithTTL(_ context.Context, key string, n int64, ttl time.Duration) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.kv[key]
-	if ok && !e.expires.IsZero() && time.Now().After(e.expires) {
-		ok = false
-	}
+	e, ok := c.entry(key, true)
 	if !ok {
-		c.kv[key] = &kvEntry{value: strconv.FormatInt(n, 10), expires: time.Now().Add(ttl)}
+		c.store(&kvEntry{key: key, value: strconv.FormatInt(n, 10), expires: c.now().Add(ttl)})
 		return n, nil
 	}
 	count, _ := strconv.ParseInt(e.value, 10, 64)
 	count += n
 	e.value = strconv.FormatInt(count, 10) // keep the existing window expiry
 	return count, nil
+}
+
+var _ MultiScopeAdmitter = (*MemoryCacheService)(nil)
+
+// Admit charges every scope under one lock. Process-local like the rest of
+// MemoryCacheService: N instances admit N times the configured limit.
+func (c *MemoryCacheService) Admit(_ context.Context, scopes ...AdmissionScope) (AdmissionResult, error) {
+	if len(scopes) == 0 {
+		return AdmissionResult{Admitted: true}, nil
+	}
+	normalized, err := normalizeAdmissionScopes(scopes)
+	if err != nil {
+		return AdmissionResult{}, err
+	}
+	if c.capacity > 0 && len(normalized) > c.capacity {
+		return AdmissionResult{}, fmt.Errorf("cache: %d admission scopes exceed memory capacity %d", len(normalized), c.capacity)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	for _, scope := range normalized {
+		used := int64(0)
+		if e, ok := c.entry(scope.Key, false); ok {
+			used, _ = strconv.ParseInt(e.value, 10, 64)
+		}
+		if used+scope.Cost > scope.Limit {
+			retry := time.Duration(0)
+			if e, ok := c.entry(scope.Key, false); ok && !e.expires.IsZero() {
+				retry = e.expires.Sub(now)
+			}
+			return AdmissionResult{RejectedKey: scope.Key, RetryAfter: max(retry, 0)}, nil
+		}
+	}
+	counts := make([]int64, len(normalized))
+	for i, scope := range normalized {
+		e, ok := c.entry(scope.Key, true)
+		if !ok {
+			counts[i] = scope.Cost
+			c.store(&kvEntry{key: scope.Key, value: strconv.FormatInt(scope.Cost, 10), expires: now.Add(scope.Window)})
+			continue
+		}
+		n, _ := strconv.ParseInt(e.value, 10, 64)
+		n += scope.Cost
+		e.value = strconv.FormatInt(n, 10) // keep the existing window expiry
+		counts[i] = n
+	}
+	return AdmissionResult{Admitted: true, Counts: counts}, nil
 }
 
 func (c *MemoryCacheService) RPush(ctx context.Context, key, value string) error {

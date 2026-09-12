@@ -3,10 +3,10 @@ package model
 import "fmt"
 
 type TableDefinition struct {
-	TableName          string
-	PascalName         string
-	Caption            string
-	PartnerSpecific    bool
+	TableName       string
+	PascalName      string
+	Caption         string
+	PartnerSpecific bool
 	// UserSpecific is set when the table has a column literally named
 	// `user_id` whose FK references the user_account table. The CRUD
 	// path (Get/Insert/Update/Delete) auto-injects user_id = <auth user>
@@ -30,7 +30,7 @@ type TableDefinition struct {
 	//
 	// Auto-set in AbstractRepository.Init on the table whose name matches
 	// AbstractRepository.UserTableName.
-	PartnerUserScoped bool
+	PartnerUserScoped  bool
 	QuotaResource      string
 	QuotaPartnerColumn string
 	QuotaStringColumn  string

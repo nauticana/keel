@@ -13,6 +13,16 @@ type AbstractTableService struct {
 	Table       *model.TableDefinition
 	AuthQuery   port.QueryService
 	IdGenerator port.BigintGenerator
+	// Grants resolves each principal kind's grant SQL; nil uses DefaultGrantCatalog.
+	Grants port.GrantCatalog
+}
+
+// grants returns the injected catalog, or the process default.
+func (s *AbstractTableService) grants() port.GrantCatalog {
+	if s.Grants == nil {
+		return DefaultGrantCatalog
+	}
+	return s.Grants
 }
 
 func (s *AbstractTableService) GetTable() *model.TableDefinition {
@@ -40,11 +50,17 @@ func (s *AbstractTableService) IsGlobalRole(ctx context.Context, userID int) boo
 }
 
 // CheckPermission returns (allowed, ownScope). ownScope=true tells the SQL layer to auto-inject the UserSpecific / PartnerSpecific row filter. A matching grant with bypass_scope=TRUE returns ownScope=false (admin opt-in for cross-user audit / review).
-func (s *AbstractTableService) CheckPermission(ctx context.Context, userID int, action string) (bool, bool) {
-	if s.AuthQuery == nil || userID < 0 || action == "" {
+func (s *AbstractTableService) CheckPermission(ctx context.Context, principal model.Principal, action string) (bool, bool) {
+	if s.AuthQuery == nil || action == "" {
 		return false, false
 	}
-	res, err := s.AuthQuery.Query(ctx, QCheckAuthorization, "TABLE", action, userID, s.Table.TableName)
+	catalog := s.grants()
+	args, err := catalog.Args(principal)
+	if err != nil {
+		return false, false
+	}
+	args = append([]any{"TABLE", action}, append(args, s.Table.TableName)...)
+	res, err := s.AuthQuery.Query(ctx, catalog.CheckQuery(principal.Kind), args...)
 	if err != nil {
 		return false, false
 	}
@@ -56,12 +72,12 @@ func (s *AbstractTableService) CheckPermission(ctx context.Context, userID int, 
 	for _, rec := range res.Rows {
 		lowLimit := common.AsString(rec[0])
 		rowBypass := common.AsBool(rec[2])
-		// QCheckAuthorization filters low_limit to the exact table name or
-		// '*', so those are the only two grant shapes that reach here.
-		// Glob/range low_limit values are NOT surfaced by the query and so
-		// are deliberately unsupported — see KR-003 / the README permission
-		// notes. The explicit check also fails safe if the query is ever
-		// widened: a stray non-matching row can never grant access.
+		// The generated grant query filters low_limit to the exact table
+		// name or '*', so those are the only two grant shapes that reach
+		// here. Glob/range low_limit values are NOT surfaced by the query
+		// and so are deliberately unsupported — see KR-003 / the README
+		// permission notes. The explicit check also fails safe if the query
+		// is ever widened: a stray non-matching row can never grant access.
 		if lowLimit == s.Table.TableName || lowLimit == "*" {
 			allowed = true
 			if rowBypass {

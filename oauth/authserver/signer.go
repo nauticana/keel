@@ -13,6 +13,7 @@ import (
 	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
@@ -96,7 +97,7 @@ func NewLocalValidatorMulti(signer *RS256Signer, issuer string, audiences []stri
 	return &LocalValidator{signer: signer, issuer: issuer, audiences: audiences}
 }
 
-func (v *LocalValidator) Validate(_ context.Context, bearer string) (*port.Principal, error) {
+func (v *LocalValidator) Validate(_ context.Context, bearer string) (*model.TokenPrincipal, error) {
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"RS256"}),
 		jwt.WithExpirationRequired(),
@@ -118,7 +119,7 @@ func (v *LocalValidator) Validate(_ context.Context, bearer string) (*port.Princ
 	if len(v.audiences) > 1 && !audienceAllowed(mc["aud"], v.audiences) {
 		return nil, fmt.Errorf("oauth: token audience not in allowed set")
 	}
-	return claims.Principal(mc)
+	return claims.TokenPrincipal(mc)
 }
 
 // audienceAllowed reports whether the token's aud claim intersects allowed.

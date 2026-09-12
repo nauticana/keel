@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/storage"
 	"github.com/nauticana/keel/user"
@@ -181,7 +182,7 @@ func (s *Service) CreateSession(ctx context.Context, partnerID int64, contextRef
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	id := tx.GenID()
@@ -226,7 +227,7 @@ func (s *Service) Decide(ctx context.Context, sessionID int64, actorID int, cons
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
@@ -282,7 +283,7 @@ func (s *Service) Start(ctx context.Context, sessionID int64, actorID int) (toke
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
@@ -357,7 +358,7 @@ func (s *Service) Stop(ctx context.Context, sessionID int64, actorID int) error 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
@@ -490,7 +491,7 @@ func (s *Service) withCapture(ctx context.Context, sessionID int64, actorID int,
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
@@ -521,7 +522,7 @@ func (s *Service) promoteIfFinalizing(ctx context.Context, sessionID int64) erro
 	committed := false
 	defer func() {
 		if !committed {
-			_ = port.RollbackDetached(tx)
+			_ = data.RollbackDetached(tx)
 		}
 	}()
 	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)

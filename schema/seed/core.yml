@@ -136,6 +136,7 @@ seeds:
       - [default_outbound_timeout, duration, true, '30', Default outbound HTTP client timeout]
       - [snowflake_state_persist_ms, int64, false, '1000', Snowflake state-persist cadence (ms)]
       - [memory_cache_sweep_interval, duration, true, '60', In-memory cache expiry sweep interval]
+      - [memory_cache_max_entries, int, true, '100000', In-memory cache key cap; the least-recently-used key is evicted once full (0 disables the cap)]
       - [default_commission_rate_bp, int, false, '2000', Program default agency commission rate in basis points (2000 = 20.00%); frozen per client at first earning unless the agency profile overrides it]
       - [commission_hold_days, int, false, '14', Refund/dispute hold in days before an agency earning becomes payable]
       - [agency_payout_min_minor, int64, false, '2500', Minimum netted agency payout in minor units; smaller balances roll to the next cycle]

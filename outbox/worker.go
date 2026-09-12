@@ -81,7 +81,7 @@ func (w *Worker) GetOLTPQueries() map[string]string {
 			RETURNING id`,
 		// RETURNING id so a zero-row result (lease lost to a reclaim) is detectable
 		// rather than silently logged as success.
-		qDone: `UPDATE outbox_event SET status = 'D', lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
+		qDone: `UPDATE outbox_event SET status = 'D', lease_token = NULL, lease_until = NULL, dispatched_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 			 WHERE id = ? AND lease_token = ? RETURNING id`,
 		qRetry: `UPDATE outbox_event
 			   SET status = 'P', attempts = attempts + 1, lease_token = NULL, lease_until = NULL,

@@ -194,3 +194,66 @@ func (s *CacheServiceImpl) Subscribe(ctx context.Context, channel string) (<-cha
 }
 
 var _ CacheService = (*CacheServiceImpl)(nil)
+
+var _ MultiScopeAdmitter = (*CacheServiceImpl)(nil)
+
+// admitScript checks every scope before charging any. Returns
+// {1, 0, 0, counts...} on admission, {0, rejectedIndex, ttl_ms} on rejection.
+var admitScript = redis.NewScript(`
+for i = 1, #KEYS do
+  local limit = tonumber(ARGV[(i-1)*3 + 1])
+  local cost  = tonumber(ARGV[(i-1)*3 + 2])
+  local used  = tonumber(redis.call('GET', KEYS[i]) or '0')
+  if used + cost > limit then
+    local pttl = redis.call('PTTL', KEYS[i])
+    if pttl < 0 then pttl = 0 end
+    return {0, i, pttl}
+  end
+end
+local out = {1, 0, 0}
+for i = 1, #KEYS do
+  local cost = tonumber(ARGV[(i-1)*3 + 2])
+  local ttl  = tonumber(ARGV[(i-1)*3 + 3])
+  local n = redis.call('INCRBY', KEYS[i], cost)
+  if n == cost then
+    redis.call('PEXPIRE', KEYS[i], ttl)
+  end
+  out[#out+1] = n
+end
+return out
+`)
+
+func (s *CacheServiceImpl) Admit(ctx context.Context, scopes ...AdmissionScope) (AdmissionResult, error) {
+	if len(scopes) == 0 {
+		return AdmissionResult{Admitted: true}, nil
+	}
+	normalized, err := normalizeAdmissionScopes(scopes)
+	if err != nil {
+		return AdmissionResult{}, err
+	}
+	keys := make([]string, len(normalized))
+	args := make([]any, 0, len(normalized)*3)
+	for i, scope := range normalized {
+		keys[i] = scope.Key
+		ttlMillis := scope.Window / time.Millisecond
+		if scope.Window%time.Millisecond != 0 {
+			ttlMillis++
+		}
+		args = append(args, scope.Limit, scope.Cost, ttlMillis)
+	}
+	raw, err := admitScript.Run(ctx, s.client, keys, args...).Int64Slice()
+	if err != nil {
+		return AdmissionResult{}, err
+	}
+	if len(raw) < 3 {
+		return AdmissionResult{}, fmt.Errorf("cache: malformed admission reply")
+	}
+	if raw[0] == 0 {
+		idx := int(raw[1]) - 1
+		if idx < 0 || idx >= len(scopes) {
+			return AdmissionResult{}, fmt.Errorf("cache: admission reply names scope %d of %d", raw[1], len(scopes))
+		}
+		return AdmissionResult{RejectedKey: scopes[idx].Key, RetryAfter: time.Duration(raw[2]) * time.Millisecond}, nil
+	}
+	return AdmissionResult{Admitted: true, Counts: raw[3:]}, nil
+}

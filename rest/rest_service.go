@@ -4,43 +4,33 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"strings"
 	"sync"
 
 	"golang.org/x/sync/singleflight"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
 const (
-	qReadAuthorization = "read_authorization"
-	qConstantHeader    = "constant_header"
-	qConstantValue     = "constant_value"
-	qConstantLookup    = "constant_lookup"
-	qForeignKeyLookup  = "foreign_key_lookup"
-	qRestApiHeader     = "rest_api_header"
-	qRestApiChild      = "rest_api_child"
-	qRestReportHeader  = "rest_report_header"
-	qRestReportParam   = "rest_report_param"
-	qTableAction       = "table_action"
-	qTableGrants       = "table_grants"
+	qConstantHeader   = "constant_header"
+	qConstantValue    = "constant_value"
+	qConstantLookup   = "constant_lookup"
+	qForeignKeyLookup = "foreign_key_lookup"
+	qRestApiHeader    = "rest_api_header"
+	qRestApiChild     = "rest_api_child"
+	qRestReportHeader = "rest_report_header"
+	qRestReportParam  = "rest_report_param"
+	qTableAction      = "table_action"
+	qTableGrants      = "table_grants"
 )
 
 var restQueries = map[string]string{
-	qReadAuthorization: `
-SELECT authorization_object_id, action, low_limit, high_limit
-  FROM authorization_role_permission
- WHERE role_id in (
-       SELECT role_id
-         FROM user_permission
-        WHERE user_id = ?
-          AND begda <= CURRENT_TIMESTAMP
-          AND (endda IS NULL OR endda >= CURRENT_TIMESTAMP) )
-   AND is_active IS TRUE
-`,
 	qConstantHeader:   "SELECT id, caption FROM constant_header",
 	qConstantValue:    "SELECT constant_id, value, caption FROM constant_value",
 	qForeignKeyLookup: "SELECT constraint_name, lookup_style, display_column FROM foreign_key_lookup",
@@ -112,8 +102,11 @@ type RestService struct {
 	// Journal receives the startup audit of TABLE grants versus mounted
 	// generic-CRUD tables (auditGrants). nil skips the audit.
 	Journal logger.ApplicationLogger
-	db      port.DatabaseRepository
-	qs      port.QueryService
+	// GrantCatalog resolves each principal kind's grant SQL; nil uses
+	// data.DefaultGrantCatalog.
+	GrantCatalog port.GrantCatalog
+	db           port.DatabaseRepository
+	qs           port.QueryService
 
 	// cacheMu guards reads of the four lazily-populated caches below.
 	// Population goes through cacheLoad (singleflight): concurrent
@@ -157,7 +150,17 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase port.DatabaseReposi
 		return nil, nil, fmt.Errorf("database repository is required for REST services")
 	}
 	s.db = oltpDatabase
-	s.qs = oltpDatabase.GetQueryService(ctx, restQueries)
+	if s.GrantCatalog == nil {
+		if provider, ok := oltpDatabase.(port.GrantCatalogProvider); ok {
+			s.GrantCatalog = provider.Grants()
+		}
+	}
+	// Grant SQL is generated per principal kind, so it is merged in here rather
+	// than declared with the rest engine's own.
+	queries := make(map[string]string, len(restQueries)+4)
+	maps.Copy(queries, restQueries)
+	maps.Copy(queries, s.grants().Queries())
+	s.qs = oltpDatabase.GetQueryService(ctx, queries)
 
 	res, err := s.qs.Query(ctx, qConstantLookup)
 	if err != nil {
@@ -340,11 +343,24 @@ func collectMountedTables(rel RelationAPI, out map[string]struct{}) {
 	}
 }
 
-func (s *RestService) GetPermission(ctx context.Context, userId int) ([]*Permission, error) {
-	if s.qs == nil || userId < 0 {
+// grants returns the injected catalog, or the process default.
+func (s *RestService) grants() port.GrantCatalog {
+	if s.GrantCatalog == nil {
+		return data.DefaultGrantCatalog
+	}
+	return s.GrantCatalog
+}
+
+func (s *RestService) GetPermission(ctx context.Context, principal model.Principal) ([]*Permission, error) {
+	if s.qs == nil {
 		return nil, fmt.Errorf("permission query service is not initialized")
 	}
-	res, err := s.qs.Query(ctx, qReadAuthorization, userId)
+	catalog := s.grants()
+	args, err := catalog.Args(principal)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.qs.Query(ctx, catalog.ReadQuery(principal.Kind), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +508,7 @@ func (s *RestService) GetClientCache(ctx context.Context, userId int) (map[strin
 	}
 	s.ensureCacheApis()
 
-	permissions, err := s.GetPermission(ctx, userId)
+	permissions, err := s.GetPermission(ctx, model.UserPrincipal(userId))
 	if err != nil {
 		return nil, err
 	}

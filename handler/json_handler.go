@@ -16,12 +16,53 @@ import (
 type APIError struct {
 	Status int
 	Msg    string
+	Header http.Header // response headers the error implies, e.g. Retry-After
 }
 
 func (e *APIError) Error() string { return e.Msg }
 
+func (e *APIError) ErrorHeaders() http.Header { return e.Header }
+
+var _ HeaderCarrier = (*APIError)(nil)
+
 // NewAPIError is a convenience constructor — APIErr(http.StatusConflict, "...").
 func NewAPIError(status int, msg string) *APIError { return &APIError{Status: status, Msg: msg} }
+
+// WithHeader adds a response header and returns the error, so it can be built
+// in one expression.
+func (e *APIError) WithHeader(key, value string) *APIError {
+	if e.Header == nil {
+		e.Header = http.Header{}
+	}
+	e.Header.Add(key, value)
+	return e
+}
+
+// HeaderCarrier lets a typed error carry Retry-After or Location through the
+// handler boundary instead of losing it to the status+message mapping. Any
+// error in the chain may implement it.
+type HeaderCarrier interface {
+	ErrorHeaders() http.Header
+}
+
+func writeErrorHeaders(w http.ResponseWriter, err error) {
+	if carrier, ok := err.(HeaderCarrier); ok {
+		for key, values := range carrier.ErrorHeaders() {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			writeErrorHeaders(w, child)
+		}
+		return
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		writeErrorHeaders(w, wrapped.Unwrap())
+	}
+}
 
 // JSONFunc is the signature of an authenticated JSON business function.
 // body is nil when the request had no body.
@@ -82,6 +123,7 @@ func readJSONBody(h *AbstractHandler, w http.ResponseWriter, r *http.Request) (j
 
 func writeResult(h *AbstractHandler, w http.ResponseWriter, result any, err error) {
 	if err != nil {
+		writeErrorHeaders(w, err)
 		var ae *APIError
 		if errors.As(err, &ae) {
 			h.WriteError(w, ae.Status, http.StatusText(ae.Status), ae.Msg)
