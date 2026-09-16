@@ -828,6 +828,7 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     lease_until                          DATETIME     ,
     lease_token                          BIGINT       ,
     last_error                           TEXT         ,
+    dispatched_at                        DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -835,6 +836,19 @@ CREATE TABLE IF NOT EXISTS outbox_event (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_outbox_drain ON outbox_event(status, available_at);
 CREATE INDEX idx_outbox_aggregate ON outbox_event(aggregate_type, aggregate_id);
+
+-- Replay-safe record of mutating operations by caller-namespaced key; I in flight, C completed with result, U outcome unknown
+CREATE TABLE IF NOT EXISTS idempotency_ledger (
+    ledger_key                           VARCHAR(200)  NOT NULL,
+    state_code                           CHAR(1)       NOT NULL,
+    fence                                CHAR(32)      NOT NULL,
+    result                               BLOB         ,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ledger_key),
+    CONSTRAINT idempotency_ledger_state_ck CHECK (state_code IN ('I', 'C', 'U')),
+    CONSTRAINT idempotency_ledger_result_ck CHECK ((state_code = 'C' AND result IS NOT NULL) OR (state_code IN ('I', 'U') AND result IS NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idempotency_ledger_state_ix ON idempotency_ledger(state_code, updated_at);
 
 -- Billing invoices per partner (provider-issued or self-scheduled)
 CREATE TABLE IF NOT EXISTS invoice (

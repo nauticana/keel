@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.64",
+   "title": "Idempotency ledger, caller session, table-logger read split",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "port.TableLogger no longer carries FindChanges; that is the optional port.ChangeQuerier capability, and the file logger's unsupported-error stub is gone. Adds port.IdempotencyLedger with memory and pgsql implementations over a new idempotency_ledger table, common.CallerSession to read and bind the authenticated caller anywhere a context flows, common.Period for effective dating, and a credential key=value rule to write-time redaction.",
+   "body_markdown": "### Breaking\n\n| Old | New |\n|---|---|\n| `port.TableLogger.FindChanges` | `port.ChangeQuerier.FindChanges` — assert `logger.(port.ChangeQuerier)` at composition |\n| `data.ErrFindChangesUnsupported` | removed; the file logger simply does not implement `ChangeQuerier` |\n\n### New\n\n| Symbol | Purpose |\n|---|---|\n| `port.IdempotencyLedger`, `model.LedgerEntry`, `model.LedgerState` | begin / complete / release / mark-unknown by key; `Begin` returns the prior entry |\n| `idempotency.MemoryLedger`, `idempotency.PgsqlLedger` | implementations; `Begin` grants a fence, `Renew` keeps a live claim, a `Lease` lets an un-renewed in-flight claim be taken over under a new fence (pgsql decides on the database clock). The fence protects the ledger only — make the side effect idempotent under the stable ledger key, arrange for its target to reject superseded fences, or keep the lease at zero |\n| schema module `idempotency` (`idempotency_ledger`) | register it in `dependency.yml` consumers that install keel schema |\n| `common.CallerSession`, `CallerSessionFromContext`, `WithCallerSession`, `ErrUnauthenticated`, `ErrCallerIdentityConflict` | the authenticated caller out of, and into, a context, with conflicting principal/subject identities rejected |\n| `common.Period` | half-open instant range: `From` inclusive, `To` exclusive, zero `To` open-ended |\n| `common.RedactForStorage` | now also masks `password=…`, `secret: …`, `token=…`, `api_key=…`, `authorization: …`, `client_secret=…` |\n\nKeys are caller-namespaced strings; scope them by partner in the key when the operation is partner-bound. Completed results are stored as bytes and must be non-nil.\n"
+  },
+  {
    "version": "v1.2.63",
    "title": "Admission limiters, typed in-process LRU caches and currency exponents",
    "tags": [

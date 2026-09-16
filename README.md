@@ -54,6 +54,7 @@ graph TD
 | `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
 | `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `ConsentHandler` (record a consent + export consent history), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
+| `idempotency` | `port.IdempotencyLedger` implementations: `MemoryLedger` and `PgsqlLedger` over `idempotency_ledger` — replay a completed key, refuse a live claim, and block on an unknown outcome until reconciliation |
 | `limiter` | Admission control: `FairSlotLimiter` (weighted, per-partner round-robin concurrency), `LocalRateLimiter` (per-partner + fleet token buckets per lane), `DistributedRateLimiter` (partner×fleet fixed windows charged atomically through `cache.MultiScopeAdmitter`, local fallback while the store is down), `LimitError` with `Retry-After` |
 | `clock` | Injectable time: `Clock` interface, real `System`, and `Fake` for tests that advance time instead of sleeping |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
@@ -847,6 +848,18 @@ mux.Handle("/api/v1/widget", h.JSON("POST", func(ctx context.Context, s *model.U
 
 mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, _ json.RawMessage) (any, error) { ... }))
 ```
+
+### `common.CallerSession` — who is calling, anywhere a context flows
+
+`CallerSessionFromContext(ctx)` reads what keel's OAuth, API-key and request-id middlewares bound — principal, subject, partner, key, scopes, request id — and fails closed on an unauthenticated context. `WithCallerSession` is the inverse for workers acting on a claimed job, so a background task carries the same identity a request would.
+
+### `common.Period` — effective dating in Go
+
+`Period{From, To}` is the `begda`/`endda` convention: `From` inclusive, `To` exclusive, zero `To` open-ended. `Contains(t)` and `Ordered()` replace the per-project copies of the same three lines.
+
+### `idempotency` — replay-safe mutating operations
+
+`port.IdempotencyLedger` records a key as in flight, completed with a non-nil opaque result, or unknown. `Begin` returns the prior entry so a replay hands back the stored result, a concurrent caller sees the claim, and an unknown outcome blocks retries until reconciled. A granted claim carries a fence that every later write must present. With a `Lease`, an in-flight claim not `Renew`ed within it is taken over under a new fence and the previous holder's ledger writes fail. The fence protects the ledger, not the side effect: a merely slow worker still finishes its external call, so a caller that enables takeover must make that call idempotent under the stable ledger key, arrange for its target to reject superseded fences, or leave the lease at zero and reconcile stuck keys explicitly. `PgsqlLedger` decides lease expiry on the database's own clock, so skew between worker nodes cannot cause a premature takeover. `MemoryLedger` is for one process.
 
 ### `clock` — injectable time
 
@@ -2233,6 +2246,8 @@ The explicit `noop` mode returns `messaging.NoOpPublisher`, so a brokerless depl
 
 ## Table Change Log
 
+`port.TableLogger` writes and reads one row by id; query-style reads (`FindChanges`) are the optional `port.ChangeQuerier` capability, which the file logger does not implement — assert for it at composition time.
+
 `port.TableLogger` ([port/table_logger.go](port/table_logger.go)) is the audit store for row changes. `data.TableLoggerFile` is the bundled implementation (one JSON file per row under `<RootPath>/YYYYMMDD/`, reads by id only); a database-backed logger is a downstream concern.
 
 ```go
@@ -2380,7 +2395,7 @@ the repository has one database-diagram source of truth.
 
 ### Table Summary
 
-All 74 tables emitted by `schema/basis_pgsql.sql` are listed individually so
+All 78 tables emitted by `schema/basis_pgsql.sql` are listed individually so
 this summary can be checked directly against the generated schema.
 
 | Table | Purpose |
@@ -2448,6 +2463,7 @@ this summary can be checked directly against the generated schema.
 | `invoice_line_payment` | Durable payment/refund allocation to an invoice line |
 | `payout_webhook_log` | Raw payout-provider account/transfer events with idempotency + audit |
 | `outbox_event` | Transactional outbox records for asynchronous delivery |
+| `idempotency_ledger` | Replay-safe record of mutating operations by key: in flight, completed with result, or unknown |
 | `application_config_flag` | Non-secret runtime configuration catalogue and defaults |
 | `application_config_value` | Per-node/shared overrides for configuration flags |
 | `agency_profile` | Agency approval, suspension, wholesale permission, and default rate override |

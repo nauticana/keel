@@ -828,6 +828,7 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     lease_until                          TIMESTAMP    ,
     lease_token                          BIGINT       ,
     last_error                           TEXT         ,
+    dispatched_at                        TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT outbox_event_pk PRIMARY KEY (id)
@@ -837,6 +838,19 @@ CREATE INDEX IF NOT EXISTS idx_outbox_aggregate ON outbox_event(aggregate_type, 
 
 CREATE SEQUENCE IF NOT EXISTS outbox_event_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('outbox_event', 'id', 'outbox_event_seq') ON CONFLICT DO NOTHING;
+
+-- Replay-safe record of mutating operations by caller-namespaced key; I in flight, C completed with result, U outcome unknown
+CREATE TABLE IF NOT EXISTS idempotency_ledger (
+    ledger_key                           VARCHAR(200)  NOT NULL,
+    state_code                           CHAR(1)       NOT NULL,
+    fence                                CHAR(32)      NOT NULL,
+    result                               BYTEA        ,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT idempotency_ledger_pk PRIMARY KEY (ledger_key),
+    CONSTRAINT idempotency_ledger_state_ck CHECK (state_code IN ('I', 'C', 'U')),
+    CONSTRAINT idempotency_ledger_result_ck CHECK ((state_code = 'C' AND result IS NOT NULL) OR (state_code IN ('I', 'U') AND result IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idempotency_ledger_state_ix ON idempotency_ledger(state_code, updated_at);
 
 -- Billing invoices per partner (provider-issued or self-scheduled)
 CREATE TABLE IF NOT EXISTS invoice (

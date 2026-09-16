@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,16 +14,6 @@ import (
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
-
-// ErrFindChangesUnsupported is returned by TableLoggerFile.FindChanges
-// to make the gap visible to callers. The previous stub returned
-// (nil, nil) which was indistinguishable from "no matching rows" and
-// silently produced false negatives.
-//
-// Consumers that need queryable change history should swap in a
-// database-backed TableLogger; the file impl is meant for low-volume
-// audit / forensic scenarios where reads are operator-driven.
-var ErrFindChangesUnsupported = errors.New("file table logger: FindChanges is not implemented; use a database-backed TableLogger for queryable change history")
 
 // TableLoggerFile writes one JSON file per change-log row. Used in
 // dev / single-host deployments where standing up an audit-DB schema
@@ -133,13 +122,6 @@ func (l *TableLoggerFile) GetChange(ctx context.Context, id int64, partnerID int
 		}
 	}
 	return nil, port.ErrChangeNotFound
-}
-
-// FindChanges returns ErrFindChangesUnsupported. The file logger is
-// not the right tool for query-style audit reads; consumers needing
-// that should plug a DB-backed TableLogger.
-func (l *TableLoggerFile) FindChanges(ctx context.Context, filter port.ChangeFilter, partnerID int64, ownerID int) ([]*model.TableChangeLog, error) {
-	return nil, ErrFindChangesUnsupported
 }
 
 func (l *TableLoggerFile) Close() {}

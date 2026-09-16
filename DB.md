@@ -210,6 +210,11 @@ flowchart BT
         outbox_event["outbox_event"]
     end
 
+    subgraph idempotency["Idempotency"]
+        direction TB
+        idempotency_ledger["idempotency_ledger"]
+    end
+
     subgraph billing["Billing"]
         direction TB
         invoice["invoice"]
@@ -960,6 +965,19 @@ erDiagram
     }
     business_partner {
         BIGINT id PK
+    }
+```
+
+### Idempotency
+
+```mermaid
+erDiagram
+    idempotency_ledger {
+        VARCHAR ledger_key PK
+        CHAR state_code
+        CHAR fence
+        BYTEA result
+        TIMESTAMP updated_at
     }
 ```
 

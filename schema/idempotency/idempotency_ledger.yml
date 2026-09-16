@@ -1,0 +1,24 @@
+table: idempotency_ledger
+comment: Replay-safe record of mutating operations by caller-namespaced key; I in flight, C completed with result, U outcome unknown
+columns:
+  - name: ledger_key
+    type: VARCHAR(200)
+  - name: state_code
+    type: CHAR(1)
+  - name: fence
+    type: CHAR(32)
+  - name: result
+    type: BYTEA
+    nullable: true
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [ledger_key]
+indexes:
+  - name: idempotency_ledger_state_ix
+    columns: [state_code, updated_at]
+checks:
+  - name: idempotency_ledger_state_ck
+    expression: state_code IN ('I', 'C', 'U')
+  - name: idempotency_ledger_result_ck
+    expression: "(state_code = 'C' AND result IS NOT NULL) OR (state_code IN ('I', 'U') AND result IS NULL)"

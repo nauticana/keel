@@ -70,6 +70,12 @@ groups:
     depends_on: [tenant_management]
     seed_depends_on: []
 
+  - name: idempotency
+    path: idempotency
+    seed: seed/idempotency.yml
+    depends_on: []
+    seed_depends_on: []
+
   - name: billing
     path: billing
     seed: seed/billing.yml

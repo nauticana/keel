@@ -31,6 +31,11 @@ type TableLogger interface {
 	Init() error
 	LogChange(ctx context.Context, change *model.TableChangeLog) error
 	GetChange(ctx context.Context, id int64, partnerID int64, ownerID int) (*model.TableChangeLog, error)
-	FindChanges(ctx context.Context, filter ChangeFilter, partnerID int64, ownerID int) ([]*model.TableChangeLog, error)
 	Close()
+}
+
+// ChangeQuerier is the optional query-style read side; the file logger does not implement it, so
+// consumers that need it assert for it at composition time rather than fail on first read.
+type ChangeQuerier interface {
+	FindChanges(ctx context.Context, filter ChangeFilter, partnerID int64, ownerID int) ([]*model.TableChangeLog, error)
 }

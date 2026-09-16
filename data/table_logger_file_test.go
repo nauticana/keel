@@ -60,7 +60,8 @@ func TestTableLoggerFile_GetChangeScope(t *testing.T) {
 	if _, err := l.GetChange(ctx, change.ID+1, 0, 0); !errors.Is(err, port.ErrChangeNotFound) {
 		t.Errorf("missing id: want ErrChangeNotFound, got %v", err)
 	}
-	if _, err := l.FindChanges(ctx, port.ChangeFilter{TableName: "invoice"}, 5, 0); !errors.Is(err, ErrFindChangesUnsupported) {
-		t.Errorf("FindChanges: want ErrFindChangesUnsupported, got %v", err)
+	// Query-style reads are an optional capability the file logger deliberately lacks.
+	if _, ok := any(l).(port.ChangeQuerier); ok {
+		t.Error("file logger must not claim ChangeQuerier")
 	}
 }
