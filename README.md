@@ -54,6 +54,7 @@ graph TD
 | `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
 | `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `ConsentHandler` (record a consent + export consent history), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
+| `limiter` | Admission control: `FairSlotLimiter` (weighted, per-partner round-robin concurrency), `LocalRateLimiter` (per-partner + fleet token buckets per lane), `DistributedRateLimiter` (partner×fleet fixed windows charged atomically through `cache.MultiScopeAdmitter`, local fallback while the store is down), `LimitError` with `Retry-After` |
 | `clock` | Injectable time: `Clock` interface, real `System`, and `Fake` for tests that advance time instead of sleeping |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
@@ -766,6 +767,27 @@ All non-secret. For multiple issuers, construct one `resource.JWTValidator` per 
 ## MCP Server Layer
 
 The MCP server layer (transports, tool/resource registry, response envelopes, text bundles, field-catalog discovery, conformance assertions) lives in [`github.com/nauticana/scout`](https://github.com/nauticana/scout) — packages `scout/mcp`, `scout/mcp/mcptest`, `scout/domain`, and `scout/contract`. Keep keel's API-key/OAuth middleware, quota, guards, and query services around the scout transport for remote servers; authentication state enters through keel request context, not MCP arguments.
+
+## Admission Limiters
+
+`limiter` is process- and fleet-level admission control; `guard` stays the DB-counted trust check for individual writes. The subject is `model.AdmissionSubject{PartnerID}`; consumers keep domain-specific scheduling classes and telemetry dimensions in their own adapters. The ports are `port.RateLimiter` and `port.ConcurrencyLimiter`.
+
+- `FairSlotLimiter` — a weighted semaphore with one FIFO per partner served round-robin, so no partner monopolizes capacity and a large request cannot starve behind small ones. Cancellation never leaks a slot.
+- `LocalRateLimiter` — per-partner and fleet token buckets per named lane; drained buckets are never evicted, so a partner cannot reset its own limit by churning keys.
+- `DistributedRateLimiter` — the same lanes as fixed windows shared across replicas. Partner and fleet are charged as **one all-or-nothing** `Admit`, so a fleet refusal never leaves a partner increment behind. Concurrent callers on a hot key coalesce into one charge; a batch that does not fit is charged to the exact boundary, and a window seen full is refused locally until it rolls. Store errors or a `StoreTimeout` degrade to epoch-aligned local windows carrying `FallbackFraction` of each limit, rounded up (fleet-wide overshoot ≤ replicas × rounded local limit), counted as `limiter_store_outages_total`; one probe per `RecoveryProbe` restores shared admission. Both counters of a lane share the `{prefix:lane}` hash tag an atomic charge needs on Redis Cluster.
+- `LimitError{Err, Scope, After}` — every rejection; it satisfies `port.RetryAfterError` and `handler.HeaderCarrier`, so `Retry-After` reaches the client through `handler.JSON`.
+
+```go
+rl, err := limiter.NewDistributedRateLimiter(cacheSvc.(cache.MultiScopeAdmitter), limiter.DistributedRateLimiterConfig{
+    Lanes:               map[string]limiter.WindowLane{"turn": {Partner: {Limit: 600, Window: time.Minute}, Fleet: {Limit: 10000, Window: time.Minute}}},
+    KeyPrefix:           "app:rl",
+    StoreTimeout:        50 * time.Millisecond,
+    FallbackFraction:    0.5,
+    FallbackMaxPartners: 4096,
+    RecoveryProbe:       time.Second,
+})
+err = rl.Allow(ctx, "turn", model.AdmissionSubject{PartnerID: session.PartnerID})
+```
 
 ## Trust Guards (write/queue endpoints)
 
@@ -2508,6 +2530,10 @@ Rate-limit caps multiply by process count. With the OTP send cap of `3/contact` 
 
 The KV half is capped at `memory_cache_max_entries` (default 100000; 0 disables it) and evicts the least-recently-used key once full. Eviction can drop a live rate-limit counter and reset that window — one more reason a multi-instance deploy belongs on Valkey. Lists are uncapped. Tests can inject time with `NewMemoryCacheServiceWithClock`.
 
+### Typed in-process caches
+
+`cache.LRU[K, V]` is a fixed-capacity typed cache with per-entry TTL under one lock; `cache.ShardedLRU[K, V]` spreads keys over independently locked shards and sweeps expired entries in bounded batches on a `clock.Ticker`. Both take a `clock.Clock`, so tests advance time instead of waiting. Use them for a service's hot objects in front of a store; `CacheService` stays the shared string-valued cache.
+
 ### Multi-scope admission
 
 `MultiScopeAdmitter` charges several fixed-window counters as **one all-or-nothing decision** — a tenant quota and a fleet quota in a single round trip. Both backends implement it (Lua on Redis/Valkey, one lock in memory); it is separate from `CacheService` because adding a method there would break every external implementation.
@@ -2706,6 +2732,7 @@ keel/
 ├── secret/                    # Local JSON / GCP Secret Manager / AWS Secrets Manager / Azure Key Vault / Infisical + factory
 ├── logger/                    # File / GCP Cloud Logging / AWS CloudWatch / Azure Monitor Logs + factory
 ├── clock/                     # Injectable time: Clock, System, Fake
+├── limiter/                   # Fair slots, local and distributed partner×fleet rate limits
 ├── cache/                     # Redis / Valkey single-node + cluster + bounded memory fallback
 ├── storage/                   # S3 (AWS + Cloudflare R2) / GCS / Azure Blob
 ├── messaging/                 # GCP Pub/Sub + AWS SNS+SQS + NATS JetStream + factory
