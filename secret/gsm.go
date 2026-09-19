@@ -9,10 +9,19 @@ import (
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
+type gsmClient interface {
+	AccessSecretVersion(context.Context, *secretmanagerpb.AccessSecretVersionRequest, ...gax.CallOption) (*secretmanagerpb.AccessSecretVersionResponse, error)
+	AddSecretVersion(context.Context, *secretmanagerpb.AddSecretVersionRequest, ...gax.CallOption) (*secretmanagerpb.SecretVersion, error)
+	CreateSecret(context.Context, *secretmanagerpb.CreateSecretRequest, ...gax.CallOption) (*secretmanagerpb.Secret, error)
+}
+
 type SecretProviderGSM struct {
-	client *secretmanager.Client
+	client gsmClient
 }
 
 func NewSecretProviderGSM(ctx context.Context) (*SecretProviderGSM, error) {
@@ -34,4 +43,37 @@ func (s *SecretProviderGSM) GetSecret(ctx context.Context, path string) (string,
 	return strings.TrimSpace(string(result.Payload.Data)), nil
 }
 
-var _ SecretProvider = (*SecretProviderGSM)(nil)
+// PutSecret adds a version, creating the secret with automatic replication when
+// it does not exist yet.
+func (s *SecretProviderGSM) PutSecret(ctx context.Context, path string, value string) error {
+	if err := validatePut(path, value); err != nil {
+		return err
+	}
+	project := "projects/" + *common.ProjectID
+	addVersion := func() error {
+		_, err := s.client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+			Parent:  project + "/secrets/" + path,
+			Payload: &secretmanagerpb.SecretPayload{Data: []byte(value)},
+		})
+		return err
+	}
+	err := addVersion()
+	if status.Code(err) == codes.NotFound {
+		_, err = s.client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+			Parent:   project,
+			SecretId: path,
+			Secret: &secretmanagerpb.Secret{Replication: &secretmanagerpb.Replication{
+				Replication: &secretmanagerpb.Replication_Automatic_{Automatic: &secretmanagerpb.Replication_Automatic{}},
+			}},
+		})
+		if err == nil || status.Code(err) == codes.AlreadyExists {
+			err = addVersion()
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("failed to put secret %s: %w", path, err)
+	}
+	return nil
+}
+
+var _ SecretRWProvider = (*SecretProviderGSM)(nil)

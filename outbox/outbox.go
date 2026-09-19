@@ -16,7 +16,7 @@ const (
 	StatusPending = "P" // ready to dispatch once available_at passes
 	StatusActive  = "A" // claimed by a worker; lease_until guards a crashed claim
 	StatusDone    = "D" // dispatched
-	StatusFailed  = "F" // dead-lettered after MaxAttempts
+	StatusFailed  = "F" // dead-lettered: MaxAttempts reached or a PermanentError
 )
 
 // Event is one row to enqueue. Id is assigned by EnqueueTx and set on drained

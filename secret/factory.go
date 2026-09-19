@@ -9,6 +9,12 @@ import (
 )
 
 func NewSecretProvider(ctx context.Context) (SecretProvider, error) {
+	return NewSecretRWProvider(ctx)
+}
+
+// NewSecretRWProvider is for the few components that mint or rotate secrets;
+// everything else takes the read-only SecretProvider.
+func NewSecretRWProvider(ctx context.Context) (SecretRWProvider, error) {
 	switch *common.SecretMode {
 	case "local":
 		return &SecretProviderLocal{Filename: *common.Keystore}, nil

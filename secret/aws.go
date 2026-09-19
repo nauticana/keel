@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,10 +10,17 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 )
 
+type awsSecretsClient interface {
+	GetSecretValue(context.Context, *secretsmanager.GetSecretValueInput, ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
+	PutSecretValue(context.Context, *secretsmanager.PutSecretValueInput, ...func(*secretsmanager.Options)) (*secretsmanager.PutSecretValueOutput, error)
+	CreateSecret(context.Context, *secretsmanager.CreateSecretInput, ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error)
+}
+
 type SecretProviderAWS struct {
-	client *secretsmanager.Client
+	client awsSecretsClient
 }
 
 // NewSecretProviderAWS constructs the AWS Secrets Manager backend.
@@ -53,4 +61,29 @@ func (s *SecretProviderAWS) GetSecret(ctx context.Context, path string) (string,
 	return strings.TrimSpace(*result.SecretString), nil
 }
 
-var _ SecretProvider = (*SecretProviderAWS)(nil)
+// PutSecret stores a new AWSCURRENT version, creating the secret when it does
+// not exist yet.
+func (s *SecretProviderAWS) PutSecret(ctx context.Context, path string, value string) error {
+	if err := validatePut(path, value); err != nil {
+		return err
+	}
+	putValue := func() error {
+		_, err := s.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{SecretId: &path, SecretString: &value})
+		return err
+	}
+	err := putValue()
+	var notFound *types.ResourceNotFoundException
+	if errors.As(err, &notFound) {
+		_, err = s.client.CreateSecret(ctx, &secretsmanager.CreateSecretInput{Name: &path, SecretString: &value})
+		var exists *types.ResourceExistsException
+		if errors.As(err, &exists) {
+			err = putValue()
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("failed to put secret %s: %w", path, err)
+	}
+	return nil
+}
+
+var _ SecretRWProvider = (*SecretProviderAWS)(nil)

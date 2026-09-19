@@ -11,8 +11,13 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
 
+type azureSecretsClient interface {
+	GetSecret(ctx context.Context, name string, version string, options *azsecrets.GetSecretOptions) (azsecrets.GetSecretResponse, error)
+	SetSecret(ctx context.Context, name string, parameters azsecrets.SetSecretParameters, options *azsecrets.SetSecretOptions) (azsecrets.SetSecretResponse, error)
+}
+
 type SecretProviderAzure struct {
-	client *azsecrets.Client
+	client azureSecretsClient
 }
 
 // NewSecretProviderAzure constructs the Azure Key Vault backend.
@@ -60,4 +65,15 @@ func (s *SecretProviderAzure) GetSecret(ctx context.Context, path string) (strin
 	return strings.TrimSpace(*resp.Value), nil
 }
 
-var _ SecretProvider = (*SecretProviderAzure)(nil)
+// PutSecret relies on Key Vault's SetSecret being an upsert that adds a version.
+func (s *SecretProviderAzure) PutSecret(ctx context.Context, path string, value string) error {
+	if err := validatePut(path, value); err != nil {
+		return err
+	}
+	if _, err := s.client.SetSecret(ctx, path, azsecrets.SetSecretParameters{Value: &value}, nil); err != nil {
+		return fmt.Errorf("failed to put secret %s: %w", path, err)
+	}
+	return nil
+}
+
+var _ SecretRWProvider = (*SecretProviderAzure)(nil)

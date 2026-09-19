@@ -2,16 +2,23 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/nauticana/keel/common"
 
 	infisical "github.com/infisical/go-sdk"
+	infisicalerrors "github.com/infisical/go-sdk/packages/errors"
 )
 
+type infisicalClient interface {
+	Secrets() infisical.SecretsInterface
+}
+
 type SecretProviderInfisical struct {
-	client      infisical.InfisicalClientInterface
+	client      infisicalClient
 	projectID   string
 	environment string
 }
@@ -79,4 +86,33 @@ func (s *SecretProviderInfisical) GetSecret(ctx context.Context, path string) (s
 	return strings.TrimSpace(secret.SecretValue), nil
 }
 
-var _ SecretProvider = (*SecretProviderInfisical)(nil)
+// PutSecret updates the secret at the root path, creating it when the update
+// answers 404.
+func (s *SecretProviderInfisical) PutSecret(ctx context.Context, path string, value string) error {
+	if err := validatePut(path, value); err != nil {
+		return err
+	}
+	_, err := s.client.Secrets().Update(infisical.UpdateSecretOptions{
+		SecretKey:      path,
+		ProjectID:      s.projectID,
+		Environment:    s.environment,
+		SecretPath:     "/",
+		NewSecretValue: value,
+	})
+	var apiErr *infisicalerrors.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		_, err = s.client.Secrets().Create(infisical.CreateSecretOptions{
+			SecretKey:   path,
+			ProjectID:   s.projectID,
+			Environment: s.environment,
+			SecretPath:  "/",
+			SecretValue: value,
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("failed to put secret %s: %w", path, err)
+	}
+	return nil
+}
+
+var _ SecretRWProvider = (*SecretProviderInfisical)(nil)

@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,10 +14,24 @@ import (
 
 // Dispatcher delivers one drained event to its destination (email, queue, HTTP,
 // cache invalidation, …). A non-nil error triggers retry with exponential backoff
-// until MaxAttempts, after which the event is dead-lettered (status F). Event.Id
-// is a stable idempotency key the destination can dedupe on.
+// until MaxAttempts, after which the event is dead-lettered (status F); a
+// PermanentError dead-letters at once. Event.Id is a stable idempotency key the
+// destination can dedupe on.
 type Dispatcher interface {
 	Dispatch(ctx context.Context, e Event) error
+}
+
+// PermanentError marks a dispatch failure no retry can fix.
+type PermanentError struct{ Err error }
+
+func (e *PermanentError) Error() string { return e.Err.Error() }
+func (e *PermanentError) Unwrap() error { return e.Err }
+
+func Permanent(err error) error { return &PermanentError{Err: err} }
+
+func isPermanent(err error) bool {
+	var permanent *PermanentError
+	return errors.As(err, &permanent)
 }
 
 const (
@@ -115,7 +130,8 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 	token := common.AsInt64(row[7])
 
 	if derr := w.Dispatcher.Dispatch(ctx, e); derr != nil {
-		if attempts+1 >= w.maxAttempts() {
+		permanent := isPermanent(derr)
+		if permanent || attempts+1 >= w.maxAttempts() {
 			res, err := qs.Query(ctx, qFail, truncErr(derr), jobID, token)
 			if err != nil {
 				return fmt.Errorf("outbox %d: dead-letter write failed (event still active): %w", jobID, err)
@@ -124,7 +140,11 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 				journal.Warning(fmt.Sprintf("outbox %d: lease lost before dead-letter; another worker now owns it", jobID))
 				return nil
 			}
-			journal.Error(fmt.Sprintf("outbox %d dead-lettered after %d attempts: %v", jobID, attempts+1, derr))
+			reason := "attempts exhausted"
+			if permanent {
+				reason = "permanent failure"
+			}
+			journal.Error(fmt.Sprintf("outbox %d dead-lettered after %d attempts (%s): %v", jobID, attempts+1, reason, derr))
 			return nil
 		}
 		backoff := backoffSeconds(attempts + 1)

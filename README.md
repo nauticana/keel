@@ -61,7 +61,7 @@ graph TD
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected. See **Trust Guards** below. |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API; `SendEmail` takes a `headers` map for RFC 8058 one-click unsubscribe etc.), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
-| `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory |
+| `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory. Every provider also implements the writable `SecretRWProvider` (`PutSecret`) |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `redis_url` / `valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
 | `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob. `New(ctx, mode, WithSecretProvider(sp))` sources S3 credentials from the keystore instead of the AWS ambient env chain |
@@ -75,7 +75,7 @@ graph TD
 | `recording` | Consent-gated capture sessions: participants, `Start` fails closed unless every party's current session-scoped consent is affirmative, capture tokens with renewal, media stored by object reference, signed read URLs for participants |
 | `realtime` | WebSocket hub (`port.WebSocketHub`): per-user sockets, channel subscribe/unsubscribe protocol, cache-backed relay so workers and other pods deliver to a connected user (`PublishUser` / `PublishChannel`) |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
-| `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`. No dual-write race. |
+| `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
 ## Runtime Configuration
@@ -860,6 +860,41 @@ mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, _ jso
 ### `idempotency` — replay-safe mutating operations
 
 `port.IdempotencyLedger` records a key as in flight, completed with a non-nil opaque result, or unknown. `Begin` returns the prior entry so a replay hands back the stored result, a concurrent caller sees the claim, and an unknown outcome blocks retries until reconciled. A granted claim carries a fence that every later write must present. With a `Lease`, an in-flight claim not `Renew`ed within it is taken over under a new fence and the previous holder's ledger writes fail. The fence protects the ledger, not the side effect: a merely slow worker still finishes its external call, so a caller that enables takeover must make that call idempotent under the stable ledger key, arrange for its target to reject superseded fences, or leave the lease at zero and reconcile stuck keys explicitly. `PgsqlLedger` decides lease expiry on the database's own clock, so skew between worker nodes cannot cause a premature takeover. `MemoryLedger` is for one process.
+
+### `outbox.HTTPDispatcher` — signed webhooks off the outbox
+
+An `outbox.Dispatcher` that POSTs each event to one partner-owned HTTPS endpoint. The application owns event names, payloads and subscription storage; it enqueues **one outbox row per subscriber**, so each destination retries and dead-letters independently, and injects a `WebhookDestinationResolver` that answers with that row's `{PartnerID, URL, SecretRef}`.
+
+```go
+dispatcher, err := outbox.NewHTTPDispatcher(outbox.HTTPDispatcherConfig{
+    Resolver: subscriptions, // outbox.WebhookDestinationResolver
+    Secrets:  secrets,       // secret.SecretProvider; SecretRef is read per delivery, never cached
+    Egress:   outbox.EgressPolicy{AllowedHosts: []string{"hooks.partner.example", "*.partner.example"}},
+})
+w := &outbox.Worker{Dispatcher: dispatcher}
+```
+
+Body — ids are strings because they are bigint; `payload` is the event's JSON verbatim (`null` when empty):
+
+```json
+{"id":"7","type":"finding.created","aggregateType":"finding","aggregateId":"99","partnerId":"42","payload":{}}
+```
+
+| Header | Value |
+|---|---|
+| `Webhook-Id`, `Idempotency-Key` | the outbox event id — stable across retries; receivers dedupe on it |
+| `Webhook-Timestamp` | unix seconds of this attempt |
+| `Webhook-Signature` | `v1,` + base64(HMAC-SHA256(key, `id.timestamp.body`)) |
+
+The scheme is [Standard Webhooks](https://www.standardwebhooks.com/) v1, so receivers can use an existing verifier; Go receivers call `outbox.VerifyWebhookSignature`. A secret prefixed `whsec_` is base64-decoded into the key, any other value is used as raw bytes.
+
+| Outcome | Result |
+|---|---|
+| 2xx | delivered |
+| 408, 425, 429, 5xx, transport error or timeout, secret lookup failure | retried with the worker's backoff |
+| any other status, a redirect, an egress rejection, invalid payload JSON, an event without a partner, a destination owned by another partner | `outbox.PermanentError` — dead-lettered on the first attempt |
+
+Egress fails closed: HTTPS only, no credentials in the URL, the host must match `AllowedHosts` (exact, `*.suffix`, or `*`), and the *resolved* address is checked at connect time, so a listed name pointing at a loopback, private, link-local or CGNAT address is refused (`AllowPrivateNetworks` lifts that for in-cluster receivers). Redirects are never followed, the proxy environment is ignored, the response body is read up to 64 KiB and discarded, and one attempt is bounded by `Timeout` (10s; keep it below the worker's `LeaseTTL`). Errors stored in `last_error` name the host only, never the URL. Any `Dispatcher` or resolver can return `outbox.Permanent(err)` to skip the remaining retries.
 
 ### `clock` — injectable time
 
@@ -2182,6 +2217,17 @@ Selection is driven by flag variables:
 - `--secret_mode=local|gsm|aws|azure|infisical`
   - `azure` reads from Azure Key Vault; set `--azure_keyvault_url=https://<vault>.vault.azure.net/`. Auth uses `azidentity.DefaultAzureCredential` (managed identity on Azure VM/AKS, or the `AZURE_*` env fallback), so no secret material passes through the process config.
   - `infisical` reads from [Infisical](https://infisical.com) — the production-grade option for deployments **not** on AWS/GCP/Azure (so they need not fall back to the local `secrets.json` file). Set `--infisical_project_id`, `--infisical_environment` (default `prod`), and `--infisical_host` (default `https://app.infisical.com`; override for a self-hosted instance). Auth uses an Infisical **machine identity** via Universal Auth: the SDK reads `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` / `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` from the environment, so — like the gsm/aws/azure backends — the credential is owned by the vendor SDK's chain and never passes through a keel flag. Universal Auth is chosen because it is platform-agnostic; the native AWS/Azure/GCP/Kubernetes machine-identity methods only apply when running on that platform.
+  - **Writing secrets.** Every backend also implements `secret.SecretRWProvider`, which adds `PutSecret(ctx, path, value)`: create the secret or make `value` its current version. Build it with `secret.NewSecretRWProvider(ctx)` (same `--secret_mode` switch) and hand it only to the component that mints or rotates a secret — per-tenant signing keys, provider-issued tokens; everything else keeps taking the read-only `SecretProvider`. Blank paths and values are refused with `ErrInvalidSecretWrite`, since `GetSecret` trims and could never read them back. Readers that cached a value, including `MustGet` results held since boot, do not see a later write.
+
+    | Backend | `PutSecret` | Write permission the runtime identity needs |
+    |---|---|---|
+    | `local` | merges into the file's current contents and replaces it atomically with mode `0600`; creates a missing file; writers in other processes are not coordinated | write access to the keystore's directory |
+    | `gsm` | `AddSecretVersion`; on `NotFound`, `CreateSecret` (automatic replication) first | `secretmanager.versions.add`, plus `secretmanager.secrets.create` for new secrets |
+    | `aws` | `PutSecretValue`; on `ResourceNotFoundException`, `CreateSecret` | `secretsmanager:PutSecretValue`, plus `secretsmanager:CreateSecret` for new secrets |
+    | `azure` | `SetSecret` (an upsert that adds a version) | Key Vault Secrets Officer, or the `Set` secret permission |
+    | `infisical` | update at the root path; on 404, create | write access for the machine identity on the project environment |
+
+    Grant the write permission only to services that call `PutSecret`; read-only services keep their existing role.
 - `--log_type=local|gcp|aws|azure`
   - `HttpBackend` writes one access record per request through `ApplicationLogger.Access` — `METHOD /path STATUS BYTES MILLIS CLIENT_IP` — as the outermost middleware, so rejections from CORS, TLS guard, API-key and SSO layers are recorded too, and a handler panic is recorded as 500 before it propagates. Query strings are excluded because public confirmation URLs can contain credentials. `CLIENT_IP` comes from `common.TrustedClientIP`, so forwarding headers are honored only behind `trusted_proxy_cidr`. `/health` and `/ready` are logged only when they fail (status ≥ 400). A nil `Journal` leaves requests unchanged. `local` lands it in `<name>_access_<date>.log`; `gcp` and `azure` route it to the `<name>_access` log name; `aws` writes it to the same CloudWatch stream as server records with an `[ACCESS]` prefix.
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
@@ -2356,6 +2402,19 @@ The generic `TableService.Insert` path (used by REST + downstream services) auto
 ### JS client precision caveat
 
 Snowflake ids are always > 2^52, so naive JavaScript `JSON.parse` will lose precision. Browser / React-Native clients that read `user.id` as a number will see truncation. Serialize the id as a string in REST responses when any JS consumer is in the read path.
+
+## Race-safe ordinal allocation
+
+For a per-scope running number (the n-th client of an agency, line n of a document) a sequence is the wrong tool: it is global and leaves gaps. Declare `UNIQUE (scope_id, ordinal)` and allocate in one statement:
+
+```sql
+INSERT INTO scoped_item (id, scope_id, item_ref, ordinal)
+SELECT ?, ?, ?, COALESCE(MAX(ordinal), 0) + 1 FROM scoped_item WHERE scope_id = ?
+ON CONFLICT DO NOTHING
+RETURNING ordinal
+```
+
+Two concurrent allocators compute the same `MAX + 1`; the unique constraint lets one win and `ON CONFLICT DO NOTHING` turns the loser's violation into zero rows instead of an aborted transaction. On zero rows, re-read: if the row for `item_ref` now exists (a replay of the same allocation) return its ordinal, otherwise retry the insert. Without the unique constraint the statement is not safe at any isolation level below serializable.
 
 ## Database Schema Requirements
 
