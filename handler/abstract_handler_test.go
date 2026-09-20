@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -81,5 +82,19 @@ func TestRequirePartnerRejectsNonPositiveIDs(t *testing.T) {
 		if !tc.ok && w.Code != http.StatusUnauthorized {
 			t.Fatalf("partner %d: status %d, want 401", tc.partnerID, w.Code)
 		}
+	}
+}
+
+func TestSessionPartner(t *testing.T) {
+	var h AbstractHandler
+	for _, session := range []*model.UserSession{nil, {Id: 1}, {Id: 1, PartnerId: -1}} {
+		_, err := h.SessionPartner(session)
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+			t.Fatalf("session %+v: err = %v, want 401 APIError", session, err)
+		}
+	}
+	if got, err := h.SessionPartner(&model.UserSession{Id: 1, PartnerId: 42}); err != nil || got != 42 {
+		t.Fatalf("got %d, %v", got, err)
 	}
 }

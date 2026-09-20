@@ -363,3 +363,24 @@ func TestListActiveCredentials(t *testing.T) {
 		t.Fatalf("parsed = %+v", got)
 	}
 }
+
+func TestConnectionsByShopDomain(t *testing.T) {
+	s, qs := newTestStore(t)
+	qs.next[qShopConnections] = &model.QueryResult{Rows: [][]any{
+		{int64(7), int64(3), "shopify", "O", "R", int64(4)},
+	}}
+	got, err := s.ConnectionsByShopDomain(context.Background(), "shopify", "https://My-Store.myshopify.com/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].PartnerID != 7 || got[0].EntityID != 3 || got[0].Status != "R" || got[0].Rev != 4 {
+		t.Fatalf("parsed = %+v", got)
+	}
+	call, _ := qs.last(qShopConnections)
+	if call.args[0] != "shopify" || call.args[1] != "https://my-store.myshopify.com/%" {
+		t.Fatalf("args = %v", call.args)
+	}
+	if _, err := s.ConnectionsByShopDomain(context.Background(), "shopify", "evil.com/%"); err == nil {
+		t.Fatal("non-shopify host must be rejected")
+	}
+}

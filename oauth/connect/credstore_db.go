@@ -65,6 +65,7 @@ const (
 	qListActive         = "cred_list_active"
 	qConnectedProviders = "cred_connected_providers"
 	qActiveConnection   = "cred_active_connection"
+	qShopConnections    = "cred_shop_connections"
 )
 
 var credentialQueries = map[string]string{
@@ -150,6 +151,13 @@ SELECT DISTINCT provider FROM partner_credential
 SELECT connection_type, cred_ref, COALESCE(api_endpoint, ''), rev
   FROM partner_credential
  WHERE partner_id = ? AND entity_id = ? AND provider = ? AND status = 'A'
+`,
+	// Any status: shop/redact arrives 48h after the uninstall.
+	qShopConnections: `
+SELECT partner_id, entity_id, provider, connection_type, status, rev
+  FROM partner_credential
+ WHERE provider = ? AND api_endpoint LIKE ?
+ ORDER BY partner_id, entity_id
 `,
 	// OAuth only (API keys don't refresh); skip currently-leased rows. rev lets the
 	// sweep claim/CAS its writes.
@@ -476,6 +484,39 @@ func (s *CredentialStoreDB) ListActiveCredentials(ctx context.Context) ([]Active
 			Provider:       common.AsString(row[2]),
 			ConnectionType: common.AsString(row[3]),
 			Rev:            int(common.AsInt64(row[4])),
+		})
+	}
+	return out, nil
+}
+
+// ShopConnection is one partner_credential row bound to a Shopify shop.
+type ShopConnection struct {
+	ActiveCredential
+	Status string
+}
+
+// ConnectionsByShopDomain lists every connection of the provider to the shop,
+// whatever its status. The domain is canonicalized, so it carries no LIKE wildcard.
+func (s *CredentialStoreDB) ConnectionsByShopDomain(ctx context.Context, provider, shopDomain string) ([]ShopConnection, error) {
+	shop, err := client.CanonicalShopDomain(shopDomain)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.qs.Query(ctx, qShopConnections, provider, "https://"+shop+"/%")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ShopConnection, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		out = append(out, ShopConnection{
+			ActiveCredential: ActiveCredential{
+				PartnerID:      common.AsInt64(row[0]),
+				EntityID:       common.AsInt64(row[1]),
+				Provider:       common.AsString(row[2]),
+				ConnectionType: common.AsString(row[3]),
+				Rev:            int(common.AsInt64(row[5])),
+			},
+			Status: common.AsString(row[4]),
 		})
 	}
 	return out, nil

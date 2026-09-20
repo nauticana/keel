@@ -77,6 +77,8 @@ graph TD
 | `realtime` | WebSocket hub (`port.WebSocketHub`): per-user sockets, channel subscribe/unsubscribe protocol, cache-backed relay so workers and other pods deliver to a connected user (`PublishUser` / `PublishChannel`) |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
 | `content` | Read and edit fields of existing objects on external content platforms: `ResourceWriter` / `FieldReader` ports, `Writers` provider selection, typed provider errors, `ConnectionFieldReader`, and `ShopifyWriter` with an injected field map |
+| `browser` | Headless Chrome via chromedp: `Launcher` (profile-dir lifecycle, stale-profile sweep, crashpad-safe flags), `Session` (tabs on one Chrome), `Renderer` / `DOMRenderer` (load, evaluate JS, capture cookies). Chrome is a runtime requirement of binaries that import it |
+| `reference` | Public reference-data clients over `common.RequestJSON`: `CrUXClient` (Chrome UX Report p75 field data), `KGClient` (Google Knowledge Graph), `WikidataClient`; keys are named keystore secrets sent as a header |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
@@ -913,6 +915,54 @@ shopify, err := content.NewShopifyWriter(content.ShopifyFieldMap{
     content.ShopifyPage:    {"seo_title": {Metafield: &content.ShopifyMetafield{Namespace: "global", Key: "title_tag", Type: "single_line_text_field"}}},
 })
 ```
+
+### Shopify mandatory compliance webhooks
+
+`handler.ShopifyComplianceHandler` serves `customers/data_request`, `customers/redact` and `shop/redact` on one public route: capped raw body, `X-Shopify-Hmac-Sha256` verified under the app secret named by `SecretName` (401 on mismatch), routed by `X-Shopify-Topic` (unknown topic 404) to a `port.ShopifyComplianceService`. `service.BaseShopifyComplianceService` journals each request (ids only, no contact data) and acknowledges it — complete for an app that stores no Shopify customer data. An app that does embeds it and overrides the topics it holds data for; `connect.CredentialStoreDB.ConnectionsByShopDomain` resolves the shop to its connections in any status, since `shop/redact` arrives after the uninstall.
+
+```go
+compliance := &handler.ShopifyComplianceHandler{
+    Service:    &service.BaseShopifyComplianceService{Journal: journal},
+    Secrets:    secrets,
+    SecretName: "shopify_api_secret",
+}
+mux.HandleFunc("/public/webhook/shopify/compliance", compliance.Handle)
+```
+
+### `browser` — headless Chrome
+
+`Launcher` owns what is easy to get wrong around chromedp: a per-launch profile dir removed on cancel, a sweep of profile dirs leaked by killed processes, new-mode headless, a crashpad-safe flag set, and `TMPDIR`/`HOME` for the Chrome subprocess. Settings are fields, wired from the app's own flags — keel adds no config keys for it.
+
+```go
+launcher := &browser.Launcher{Headless: true, Journal: journal}
+
+// one page: load, probe, capture
+renderer := &browser.DOMRenderer{Launcher: launcher}
+res, err := renderer.Render(ctx, browser.RenderRequest{URL: u, Evaluations: map[string]string{"cmp": "!!window.__tcfapi"}})
+found := res.Truthy("cmp")
+
+// many pages on one Chrome: the tab context takes any chromedp action
+session, err := launcher.Start(ctx)
+defer session.Close()
+tabCtx, closeTab := session.NewTab(30 * time.Second)
+defer closeTab()
+```
+
+Depend on `browser.Renderer`, not `*DOMRenderer`, so a pooled implementation can replace it without touching callers. An expression that throws evaluates to `nil`; one that could not run is reported in `RenderResult.EvaluationErrors`. `Launcher.NewAllocator` is the lower-level entry for code that manages its own chromedp contexts.
+
+### `reference` — CrUX, Knowledge Graph, Wikidata
+
+```go
+key := reference.APIKey{Secrets: secrets, SecretName: "google_api_key"}
+crux := &reference.CrUXClient{APIKey: key}
+rec, err := crux.RecordForURL(ctx, pageURL, reference.CrUXFormFactorPhone) // falls back to the origin aggregate
+```
+
+`ErrNoAPIKey` means "not tried" (no secret named, or it is empty); `ErrCrUXNoData` means CrUX publishes nothing for the URL or origin; an unpublished metric is `CrUXNoValue`. `KGClient.FindEntity` and `WikidataClient.FindEntity` return an empty match, not an error, when nothing is found. `WikidataClient.UserAgent` is required by Wikimedia policy. Other failures are `*common.HTTPStatusError`, so `RateLimited()` / `Transient()` classify them.
+
+### `common` — URL and parsed-HTML helpers
+
+`WithScheme` (bare host → `https://`), `ResolveURL` (DNS check with a `www.` fallback, `ErrHostUnresolvable`), and over `*html.Node`: `ExtractLinks`, `ExtractTitle` (skips `<svg>` icon titles), `ExtractText` (verbatim), `PlainTextNode` (`PlainText` for a parsed subtree).
 
 ### `common.CallerSession` — who is calling, anywhere a context flows
 
@@ -2806,6 +2856,7 @@ All methods are stateless — they only inspect the JWT or request context and w
 | `RequireSession(w, r) (*Session, bool)` | 401 if no session. Use when you need the full session. |
 | `RequireUser(w, r) (int, bool)` | 401 if no user id. |
 | `RequirePartner(w, r) (int64, bool)` | 401 if `partner_id <= 0`. |
+| `SessionPartner(session) (int64, error)` | Same rule for a `JSONFunc`, which has a session and no writer; the error is a 401 `*APIError`. |
 | `ReadRequest(w, r, &req) bool` | `MaxBytesReader(config.Config().MaxRequestSize)` + JSON unmarshal; 400 on failure. Public endpoints. |
 | `ReadAuthRequest(w, r, &req) (*Session, bool)` | `RequireSession + ReadRequest` combined. Authenticated endpoints with a JSON body. |
 | `RequireMethod(w, r, methods...string) bool` | 405 + `Allow` header if `r.Method` doesn't match any of the allowed methods. One-line guard for HTTP-method-restricted handlers. |

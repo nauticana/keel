@@ -55,11 +55,11 @@ func NewShopifyProvider(svc CredentialStore, name, callbackURL, apiKey, secretNa
 	return p
 }
 
-// canonicalShopDomain validates and normalizes a user-supplied shop to a bare
+// CanonicalShopDomain validates and normalizes a user-supplied shop to a bare
 // *.myshopify.com host, tolerating a pasted URL/scheme/path. The result is safe
 // to interpolate into Shopify endpoints — the app secret only ever leaves to a
 // validated Shopify host.
-func canonicalShopDomain(raw string) (string, error) {
+func CanonicalShopDomain(raw string) (string, error) {
 	s := strings.TrimSpace(strings.ToLower(raw))
 	if s == "" {
 		return "", fmt.Errorf("missing shop parameter (e.g. mystore.myshopify.com)")
@@ -79,7 +79,7 @@ func canonicalShopDomain(raw string) (string, error) {
 }
 
 func (p *ShopifyProvider) AuthURL(ctx context.Context, partnerID int64, params map[string]string) (string, error) {
-	shop, err := canonicalShopDomain(params["shop"])
+	shop, err := CanonicalShopDomain(params["shop"])
 	if err != nil {
 		return "", err
 	}
@@ -103,7 +103,7 @@ func (p *ShopifyProvider) AuthURL(ctx context.Context, partnerID int64, params m
 // confirms the request genuinely came from Shopify (HMAC over the query, keyed
 // by the app secret) and that the shop is a canonical Shopify host.
 func (p *ShopifyProvider) ValidateCallback(ctx context.Context, query url.Values) error {
-	if _, err := canonicalShopDomain(query.Get("shop")); err != nil {
+	if _, err := CanonicalShopDomain(query.Get("shop")); err != nil {
 		return err
 	}
 	apiSecret, err := p.Service.GetSecret(ctx, p.SecretName)
@@ -153,7 +153,7 @@ func (p *ShopifyProvider) Callback(ctx context.Context, code, state string) erro
 		return err
 	}
 	ctx = WithEntity(ctx, entityFromExtra(extra))
-	shop, err := canonicalShopDomain(extra["shop"])
+	shop, err := CanonicalShopDomain(extra["shop"])
 	if err != nil {
 		return err
 	}

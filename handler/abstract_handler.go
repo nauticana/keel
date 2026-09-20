@@ -162,11 +162,21 @@ func (h *AbstractHandler) RequirePartner(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return 0, false
 	}
-	if session.PartnerId <= 0 {
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "No partner associated with session")
+	partnerID, err := h.SessionPartner(session)
+	if err != nil {
+		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", err.Error())
 		return 0, false
 	}
-	return session.PartnerId, true
+	return partnerID, true
+}
+
+// SessionPartner is RequirePartner for functions that receive a session
+// instead of a ResponseWriter (JSONFunc); the error is a 401 *APIError.
+func (h *AbstractHandler) SessionPartner(session *model.UserSession) (int64, error) {
+	if session == nil || session.PartnerId <= 0 {
+		return 0, NewAPIError(http.StatusUnauthorized, "No partner associated with session")
+	}
+	return session.PartnerId, nil
 }
 
 // ReadRequest reads the request body (capped at config.Config().MaxRequestSize) and

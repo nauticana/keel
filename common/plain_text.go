@@ -30,8 +30,13 @@ func PlainText(markup string) string {
 	if err != nil {
 		return strings.Join(strings.Fields(markup), " ")
 	}
+	return PlainTextNode(doc)
+}
+
+// PlainTextNode is PlainText for an already-parsed subtree.
+func PlainTextNode(n *html.Node) string {
 	var sb strings.Builder
-	writePlainText(&sb, doc)
+	writePlainText(&sb, n)
 	return strings.Join(strings.Fields(sb.String()), " ")
 }
 
