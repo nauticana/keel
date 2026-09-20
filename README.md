@@ -719,6 +719,21 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 |---|---|
 | `api_key` | Issued keys: `id`, `partner_id`, `key_name`, `key_prefix` (visible), `key_hash` (SHA-256), `scopes` (CSV), `is_active`, `expires_at`, `last_used_at`. |
 
+### `service.HttpBackend.CORSMiddleware` — cross-origin access
+
+| Field | Purpose |
+|---|---|
+| `Origin` | Comma-separated origin allowlist, or `*`. Empty disables CORS. The request `Origin` is echoed back only when it matches. |
+| `AllowCredentials` | Emits `Access-Control-Allow-Credentials: true`. Invalid with `Origin: "*"` — CORS is disabled and the misconfiguration is journaled. |
+| `ExposeHeaders` | Response headers a cross-origin browser client may read, emitted as `Access-Control-Expose-Headers` whenever the origin is allowed. Without it the client sees only the CORS-safelisted headers and any custom header reads as `null`. |
+
+```go
+srv := service.HttpBackend{
+    Origin:        config.Config().CORSOrigin,
+    ExposeHeaders: []string{"X-Data-Source-Status", "X-Data-Source"},
+}
+```
+
 ## OAuth 2.1 Resource Server (v1.2.0)
 
 For OAuth-based clients that won't send a custom `X-API-Key` — notably **ChatGPT Apps SDK** — keel validates access tokens issued by an external authorization server and publishes RFC 9728 discovery metadata. Sits beside the X-API-Key / JWT paths; nothing existing changes.

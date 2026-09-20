@@ -70,6 +70,10 @@ type HttpBackend struct {
 	// at startup time inside CORSMiddleware.
 	AllowCredentials bool
 
+	// ExposeHeaders lists response headers a cross-origin browser client
+	// may read beyond the CORS-safelisted set. Empty emits nothing.
+	ExposeHeaders []string
+
 	UserService   user.UserService
 	QuotaService  port.QuotaService
 	ApiKeyService *APIKeyService
@@ -278,6 +282,7 @@ func (h *HttpBackend) CORSMiddleware(next http.Handler) http.Handler {
 		}
 		return next
 	}
+	exposeHeaders := strings.Join(h.ExposeHeaders, ", ")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Vary: Origin must be set on every response so caches don't
 		// reuse a CORS-keyed entry for a different origin.
@@ -299,6 +304,9 @@ func (h *HttpBackend) CORSMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Max-Age", "600")
 			if h.AllowCredentials {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+			if exposeHeaders != "" {
+				w.Header().Set("Access-Control-Expose-Headers", exposeHeaders)
 			}
 		}
 		if r.Method == http.MethodOptions {

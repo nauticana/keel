@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.67",
+   "title": "CORS Access-Control-Expose-Headers on HttpBackend",
+   "tags": [
+    "additive"
+   ],
+   "summary": "HttpBackend gains ExposeHeaders []string, emitted by CORSMiddleware as Access-Control-Expose-Headers whenever the request origin is allowed, so cross-origin browser clients can read custom response headers. Zero value emits nothing; existing behavior is unchanged.",
+   "body_markdown": "### New — `service`\n\n| Symbol | Purpose |\n|---|---|\n| `HttpBackend.ExposeHeaders []string` | response headers emitted as `Access-Control-Expose-Headers` by `CORSMiddleware` |\n\nA cross-origin browser client can read only the CORS-safelisted response headers (`Cache-Control`, `Content-Language`, `Content-Length`, `Content-Type`, `Expires`, `Last-Modified`, `Pragma`). Any other header a handler sets reads as `null` on the client unless the response names it in `Access-Control-Expose-Headers`. `CORSMiddleware` had no way to emit that header, so each handler had to set it itself.\n\n`ExposeHeaders` is joined with `, ` and emitted alongside `Access-Control-Allow-Origin`, under the same condition: only when the request origin is allowed. Rejected origins and an empty list emit nothing. It works with a concrete allowlist, the `*` wildcard, and `AllowCredentials`.\n\n```go\nsrv := service.HttpBackend{\n    Origin:        config.Config().CORSOrigin,\n    ExposeHeaders: []string{\"X-Data-Source-Status\", \"X-Data-Source\"},\n    // …\n}\n```\n\n### Migration steps for downstream consumers\n\n1. Nothing to do — the field is optional and its zero value keeps the previous response headers byte-for-byte.\n2. If a handler emits a custom response header that a browser client reads cross-origin, list it in `ExposeHeaders` and delete any per-handler `Access-Control-Expose-Headers` write — a handler calling `Header().Set` on it after the middleware would replace the backend-wide list.\n"
+  },
+  {
    "version": "v1.2.66",
    "title": "Quo SMS provider",
    "tags": [
