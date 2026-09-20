@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.66",
+   "title": "Quo SMS provider",
+   "tags": [
+    "additive"
+   ],
+   "summary": "dispatcher.NewSMSDispatcher gains a third provider, quo, selected by sms_provider alongside twilio and telnyx. Quo authenticates with a raw API key header and has no sender-pool object, so sms_service_sid names a single sender — a phone number id or an E.164 number. Existing providers, the port.MessageDispatcher interface and the flag set are unchanged.",
+   "body_markdown": "### New — `dispatcher`\n\n| Symbol | Purpose |\n|---|---|\n| `sms_provider=quo` | third SMS provider behind `dispatcher.NewSMSDispatcher`, alongside `twilio` and `telnyx` |\n\nQuo (formerly OpenPhone) posts JSON to the v1 Messages API. Two things differ from the existing adapters:\n\n- `Authorization` carries the raw API key, with no `Bearer` prefix.\n- Quo has no sender-pool object, so `sms_service_sid` names one sender directly — a phone number id (`PN…`) or the number in E.164 — rather than a pool the provider routes within. Regional sender selection is not available on this provider; use `twilio` or `telnyx` where one message must reach several regions from region-local senders.\n\nThe adapter sends one message per recipient even though the API accepts a `to` array, so `Dispatch`/`Send` keep the same per-recipient error semantics as the other providers. `sms_account_sid` is unused.\n\n### Configuration\n\n| Source | Key | Change |\n|---|---|---|\n| Config | `sms_provider` | now accepts `quo` |\n| Config | `sms_service_sid` | for `quo`, holds the sender id or E.164 number |\n| Secret provider | `sms_auth_token` | for `quo`, holds the API key |\n\nThe `application_config_flag` seed rows for both flags ship in keel's core seed; their descriptions were updated. No new flag, column or table.\n\n### Migration steps for downstream consumers\n\n1. Nothing to do — `twilio` and `telnyx` are unchanged and the factory's failure modes are the same.\n2. To adopt Quo, set `sms_provider=quo`, point `sms_service_sid` at the sender, and store the API key in the `sms_auth_token` secret. Re-run the core seed to pick up the revised flag descriptions.\n3. Sending to US numbers requires the provider's US carrier registration; without it the API returns 400 and the dispatcher surfaces it as a wrapped `http 400` error.\n"
+  },
+  {
    "version": "v1.2.65",
    "title": "Signed HTTP webhook dispatcher for the outbox; permanent dispatch errors; writable secret providers",
    "tags": [

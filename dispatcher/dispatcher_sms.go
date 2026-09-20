@@ -70,7 +70,7 @@ func (d *smsDispatcher) Send(ctx context.Context, to, _, body string, data map[s
 }
 
 // NewSMSDispatcher builds the SMS dispatcher selected by config sms_provider
-// (twilio | telnyx). Returns an error when the provider is unset/unknown or a
+// (twilio | telnyx | quo). Returns an error when the provider is unset/unknown or a
 // required credential/id is missing, so callers register the "sms" channel
 // only on success and cleanly run with SMS disabled otherwise.
 func NewSMSDispatcher(ctx context.Context, secrets secret.SecretProvider, users port.RecipientResolver, journal logger.ApplicationLogger) (port.MessageDispatcher, error) {
@@ -79,6 +79,8 @@ func NewSMSDispatcher(ctx context.Context, secrets secret.SecretProvider, users 
 		return newTwilioSMSDispatcher(ctx, secrets, users, journal)
 	case "telnyx":
 		return newTelnyxSMSDispatcher(ctx, secrets, users, journal)
+	case "quo":
+		return newQuoSMSDispatcher(ctx, secrets, users, journal)
 	case "":
 		return nil, fmt.Errorf("sms: sms_provider not set")
 	default:

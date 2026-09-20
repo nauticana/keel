@@ -172,8 +172,8 @@ type KeelConfig struct {
 	RedisURL                    string        // redis_url                     ""                 Single-node Redis connection (password in redis_password secret)
 	ValkeyURL                   string        // valkey_url                    ""                 Valkey connection (password in valkey_password secret)
 	ValkeyCluster               bool          // valkey_cluster                false              Use Redis-Cluster protocol
-	SMSProvider                 string        // sms_provider                  twilio             SMS provider: twilio | telnyx (empty disables SMS)
-	SMSServiceSID               string        // sms_service_sid               ""                 SMS sender-pool id: Twilio Messaging Service SID (MG...) or Telnyx Messaging Profile ID
+	SMSProvider                 string        // sms_provider                  twilio             SMS provider: twilio | telnyx | quo (empty disables SMS)
+	SMSServiceSID               string        // sms_service_sid               ""                 SMS sender: Twilio Messaging Service SID (MG...), Telnyx Messaging Profile ID or Quo number id (PN...)/E.164
 	PayoutProvider              string        // payout_provider               AW                 Payout provider code: AW | SC | WI
 	PayoutReturnURL             string        // payout_return_url             ""                 Deep-link the payout provider redirects back to after KYC
 	PayoutWebhookURL            string        // payout_webhook_url            ""                 Public host the payout provider sends webhook events to

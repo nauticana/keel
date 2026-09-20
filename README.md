@@ -1589,9 +1589,9 @@ Wraps the existing `MailClient` so SMTP/API email plugs into the dispatcher regi
 
 **Custom headers.** `MailClient.SendEmail(ctx, subject, body, recipients, headers)` takes a `map[string]string` of extra RFC 5322 headers — pass `nil` for none, or e.g. `{"List-Unsubscribe": "<https://…/unsub?token=…>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}` for the Gmail/Yahoo one-click unsubscribe button. SMTP mode injects them into the message; API mode forwards them as a `headers` object in the JSON to the mail backend (which must place them on the outbound message). Names are validated (RFC 5322 field-name syntax; reserved/structural names like `From`/`Subject`/`Content-Type`/`Resent-*` are rejected; values may not contain C0 control bytes or DEL — tab excepted; a `Name: value` line over 998 octets is rejected) — `SendEmail` returns an error rather than silently rewriting a bad header. The `EmailDispatcher`/`LocalNotificationService` path does **not** carry headers — its `data` map is a generic per-dispatcher bag (the SMS adapter reads `data["country"]`), not RFC 5322 headers — so senders that need headers call `MailClient.SendEmail` directly. `SendEmailHTML` does not take a headers argument.
 
-### `dispatcher.NewSMSDispatcher` — provider-agnostic SMS (Twilio / Telnyx)
+### `dispatcher.NewSMSDispatcher` — provider-agnostic SMS (Twilio / Telnyx / Quo)
 
-Sends SMS through the provider selected by config `sms_provider`. Both providers implement `port.MessageDispatcher` behind one factory, so they plug into `LocalNotificationService` on the `"sms"` channel and share the same sender-pool model — switching providers is a config + secret change, no code edits:
+Sends SMS through the provider selected by config `sms_provider`. All providers implement `port.MessageDispatcher` behind one factory, so they plug into `LocalNotificationService` on the `"sms"` channel behind one sender id — switching providers is a config + secret change, no code edits:
 
 ```go
 sms, err := dispatcher.NewSMSDispatcher(ctx, secrets, userSvc, journal)
@@ -1606,12 +1606,12 @@ Configuration:
 
 | Source | Key | Purpose |
 |---|---|---|
-| Config | `sms_provider` | `twilio` (default) or `telnyx`; empty disables SMS |
-| Config | `sms_service_sid` | Sender pool: Twilio Messaging Service SID (`MG…`) or Telnyx Messaging Profile ID |
-| Secret provider | `sms_auth_token` | Twilio auth token, **or** Telnyx API key (Bearer) |
-| Secret provider | `sms_account_sid` | Twilio account SID (basic-auth username). Unused by Telnyx. |
+| Config | `sms_provider` | `twilio` (default), `telnyx` or `quo`; empty disables SMS |
+| Config | `sms_service_sid` | Sender: Twilio Messaging Service SID (`MG…`), Telnyx Messaging Profile ID, or Quo phone number id (`PN…`)/E.164 number |
+| Secret provider | `sms_auth_token` | Twilio auth token, Telnyx API key (Bearer), **or** Quo API key |
+| Secret provider | `sms_account_sid` | Twilio account SID (basic-auth username). Unused by Telnyx and Quo. |
 
-The sender pool (`sms_service_sid`) routes each outbound message to the right sender (CA long code, US 10DLC, UK/EU alphanumeric, …) from the senders/numbers attached in the provider console — adding regional coverage is a console-only change. **Telnyx** is the cost-effective alternative to Twilio and uses the same interface here (Bearer-auth JSON to the Messages v2 API vs Twilio's basic-auth form POST — the difference is entirely inside the provider adapter).
+The sender pool (`sms_service_sid`) routes each outbound message to the right sender (CA long code, US 10DLC, UK/EU alphanumeric, …) from the senders/numbers attached in the provider console — adding regional coverage is a console-only change. **Telnyx** is the cost-effective alternative to Twilio and uses the same interface here (Bearer-auth JSON to the Messages v2 API vs Twilio's basic-auth form POST — the difference is entirely inside the provider adapter). **Quo** (formerly OpenPhone) has no sender-pool object — `sms_service_sid` names one sender directly, and the adapter posts one message per recipient to the v1 Messages API with the raw API key as the `Authorization` header (no `Bearer` prefix). Quo also caps `content` at **1600 characters** and rejects anything longer with a 400 — Twilio and Telnyx segment a long body transparently, so check message templates against that limit before switching a deployment to `quo`.
 
 The factory fails fast when the provider is unset/unknown or a required credential/id is missing, so callers `Register` only on success. `Dispatch` resolves `userID` to an E.164 phone via the `RecipientResolver`, returning `nil` when there's no phone on file (the "nobody to notify" no-op); `Send` targets an explicit recipient. Non-2xx and transport failures are wrapped as errors so the worker logs and leaves the notification pending for retry.
 
