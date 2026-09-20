@@ -17,14 +17,24 @@ import (
 // from legacy plaintext during a migration window.
 const sealPrefix = "enc:v1:"
 
-// DecodeKEK parses a 32-byte AES-256 key from its 64-char hex form.
-func DecodeKEK(hexKey string) ([]byte, error) {
-	key, err := hex.DecodeString(strings.TrimSpace(hexKey))
-	if err != nil {
-		return nil, err
+// DecodeKEK parses a 32-byte AES-256 key from its canonical 64-char hex form
+// or from base64 (standard or URL alphabet, padded or not).
+func DecodeKEK(encoded string) ([]byte, error) {
+	encoded = strings.TrimSpace(encoded)
+	if key, err := hex.DecodeString(encoded); err == nil {
+		return checkKEKLength(key)
 	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if key, err := enc.DecodeString(encoded); err == nil {
+			return checkKEKLength(key)
+		}
+	}
+	return nil, errors.New("KEK is neither hex nor base64")
+}
+
+func checkKEKLength(key []byte) ([]byte, error) {
 	if len(key) != 32 {
-		return nil, errors.New("KEK must be 32 bytes (64 hex chars)")
+		return nil, fmt.Errorf("KEK must be 32 bytes (got %d)", len(key))
 	}
 	return key, nil
 }

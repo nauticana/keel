@@ -16,7 +16,7 @@ var keelTestFlagIDs = []string{
 	oauth_resources, oauth_scopes_supported, oauth_as_mode,
 	oauth_signing_key_secret, oauth_access_token_ttl, oauth_refresh_token_ttl,
 	oauth_code_ttl, oauth_max_auth_redirects, outbound_max_redirects,
-	outbound_max_rps, trusted_proxy_cidr, nats_url, nats_name,
+	outbound_max_rps, outbound_max_response_size, trusted_proxy_cidr, nats_url, nats_name,
 	nats_creds_secret, storage_mode, storage_bucket, s3_endpoint, s3_credential_mode,
 	storage_public_base_url, storage_account_url, messaging_mode,
 	max_request_size, http_read_timeout, http_write_timeout,
@@ -29,7 +29,7 @@ var keelTestFlagIDs = []string{
 	nats_connect_timeout, nats_fetch_timeout, nats_ack_wait, nats_max_deliver,
 	nats_max_ack_pending, smtp_dial_timeout, smtp_deadline, quota_cache_ttl,
 	oauth_jwks_cache_ttl, social_jwks_cache_ttl, oauth_state_ttl_seconds,
-	oauth_connect_lease_seconds, otp_token_ttl, social_nonce_ttl,
+	oauth_connect_lease_seconds, oauth_access_token_cache_ttl, otp_token_ttl, social_nonce_ttl,
 	registration_confirmation_ttl, max_registration_attempts,
 	verify_2fa_window, verify_2fa_per_ip, max_list_page_size,
 	default_list_page_size, post_write_timeout, stripe_webhook_tolerance,
@@ -47,6 +47,7 @@ func keelRows() ConfigRows {
 	}
 	m[default_commission_rate_bp] = ConfigRow{Default: "2000"}
 	m[refresh_token_ttl] = ConfigRow{Default: "2592000"}
+	m[outbound_max_response_size] = ConfigRow{Default: "16777216"}
 	m[commission_hold_days] = ConfigRow{Default: "14"}
 	m[agency_payout_min_minor] = ConfigRow{Default: "2500"}
 	m[webhook_claim_lease_seconds] = ConfigRow{Default: "900"}
@@ -160,6 +161,18 @@ func TestParseErr_DownstreamAccumulateAndClear(t *testing.T) {
 	}
 	if err := c.ParseErr(); err != nil {
 		t.Fatalf("ParseErr should clear after reporting, got: %v", err)
+	}
+}
+
+func TestApplyRejectsNonPositiveOutboundResponseCap(t *testing.T) {
+	for _, value := range []string{"0", "-1"} {
+		rows := keelRows()
+		row := rows[outbound_max_response_size]
+		row.Value = value
+		rows[outbound_max_response_size] = row
+		if err := (&KeelConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), outbound_max_response_size) {
+			t.Fatalf("value %s: err = %v", value, err)
+		}
 	}
 }
 

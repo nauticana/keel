@@ -162,7 +162,7 @@ func (h *AbstractHandler) RequirePartner(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return 0, false
 	}
-	if session.PartnerId < 0 {
+	if session.PartnerId <= 0 {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "No partner associated with session")
 		return 0, false
 	}

@@ -199,15 +199,16 @@ func (r *RepositoryPgsql) BeginTx(ctx context.Context, queries map[string]string
 func rewriteQueries(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
 	for k, v := range in {
-		out[k] = rewritePlaceholders(v)
+		out[k] = RewritePlaceholders(v)
 	}
 	return out
 }
 
-// rewritePlaceholders walks a SQL string and converts each `?` outside
+// RewritePlaceholders walks a SQL string and converts each `?` outside
 // of string-literals / comments into a positional `$N` placeholder.
 // The state machine tracks every context where `?` is literal text:
-// single-quoted strings (with `”` escape), double-quoted identifiers,
+// single-quoted strings (with doubled-quote escapes), E-strings (with backslash escapes),
+// double-quoted identifiers,
 // `-- line` comments, `/* block */` comments WITH NESTING (Postgres
 // allows nested block comments), and `$tag$ ... $tag$` dollar-quoted
 // strings (used by `CREATE FUNCTION ... AS $$...$$` and friends).
@@ -215,7 +216,7 @@ func rewriteQueries(in map[string]string) map[string]string {
 // Without the dollar-quote and nesting handling (MAJOR 10), a future
 // consumer registering a SQL function body containing `?` characters
 // would silently see them renumbered as placeholders.
-func rewritePlaceholders(sql string) string {
+func RewritePlaceholders(sql string) string {
 	var b strings.Builder
 	b.Grow(len(sql))
 	n := 0
@@ -230,12 +231,15 @@ func rewritePlaceholders(sql string) string {
 	state := stCode
 	blockDepth := 0
 	dollarTag := ""
+	escapeString := false
 	for i := 0; i < len(sql); i++ {
 		ch := sql[i]
 		switch state {
 		case stCode:
 			switch {
 			case ch == '\'':
+				escapeString = i > 0 && (sql[i-1] == 'e' || sql[i-1] == 'E') &&
+					(i == 1 || !isSQLIdentifierByte(sql[i-2]))
 				state = stSingle
 				b.WriteByte(ch)
 			case ch == '"':
@@ -279,6 +283,11 @@ func rewritePlaceholders(sql string) string {
 			}
 		case stSingle:
 			b.WriteByte(ch)
+			if escapeString && ch == '\\' && i+1 < len(sql) {
+				i++
+				b.WriteByte(sql[i])
+				continue
+			}
 			if ch == '\'' {
 				// Doubled '' is an escaped single-quote inside a
 				// SQL string literal — stay in stSingle.
@@ -288,6 +297,7 @@ func rewritePlaceholders(sql string) string {
 					continue
 				}
 				state = stCode
+				escapeString = false
 			}
 		case stDouble:
 			b.WriteByte(ch)
@@ -345,11 +355,18 @@ func readDollarTag(sql string, i int) (string, bool) {
 	if i+1 < len(sql) && sql[i+1] == '$' {
 		return "$$", true
 	}
-	// `$identifier$` — identifier is letters / digits / underscore.
-	for j := i + 1; j < len(sql) && j-i <= 64; j++ {
+	// `$identifier$` — the tag follows PostgreSQL's unquoted identifier
+	// rules: it starts with a letter or underscore, then letters, digits or
+	// underscores. In particular, `$1$` is not a dollar-quote delimiter.
+	for j := i + 1; j < len(sql); j++ {
 		ch := sql[j]
 		if ch == '$' {
 			return sql[i : j+1], true
+		}
+		if j == i+1 && !(ch == '_' ||
+			(ch >= 'a' && ch <= 'z') ||
+			(ch >= 'A' && ch <= 'Z')) {
+			return "", false
 		}
 		if !(ch == '_' ||
 			(ch >= 'a' && ch <= 'z') ||
@@ -359,6 +376,12 @@ func readDollarTag(sql string, i int) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func isSQLIdentifierByte(ch byte) bool {
+	return ch == '_' || ch == '$' ||
+		(ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9') || ch >= 0x80
 }
 
 func (r *RepositoryPgsql) CreateTableService(ctx context.Context, table *model.TableDefinition) port.TableService {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nauticana/keel/crypto"
 	"github.com/nauticana/keel/model"
@@ -18,12 +20,19 @@ type qcall struct {
 
 // fakeQS records queries and returns canned results by query name.
 type fakeQS struct {
+	mu    sync.Mutex
 	calls []qcall
 	next  map[string]*model.QueryResult
-	err   error // when set, every Query returns it
+	err   error             // when set, every Query returns it
+	hook  func(name string) // runs before the canned result is read
 }
 
 func (f *fakeQS) Query(_ context.Context, name string, args ...any) (*model.QueryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hook != nil {
+		f.hook(name)
+	}
 	f.calls = append(f.calls, qcall{name, args})
 	if f.err != nil {
 		return nil, f.err
@@ -34,6 +43,18 @@ func (f *fakeQS) Query(_ context.Context, name string, args ...any) (*model.Quer
 	return &model.QueryResult{}, nil
 }
 func (f *fakeQS) GenID() int64 { return 1 }
+
+func (f *fakeQS) count(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c.name == name {
+			n++
+		}
+	}
+	return n
+}
 
 func (f *fakeQS) last(name string) (qcall, bool) {
 	for i := len(f.calls) - 1; i >= 0; i-- {
@@ -166,9 +187,16 @@ func TestOAuthStateRoundTripAndMismatch(t *testing.T) {
 }
 
 // seedCred makes the Test-path read (credAndRev) return a sealed token at rev.
+// seedCred seeds an active credential whose refresh lease is free.
 func seedCred(s *CredentialStoreDB, qs *fakeQS, token string, rev int64) {
+	seedCredStatus(s, qs, token, rev, "A")
 	sealed, _ := s.seal(token)
-	qs.next[qCredForRefresh] = &model.QueryResult{Rows: [][]any{{sealed, rev}}}
+	qs.next[qClaim] = &model.QueryResult{Rows: [][]any{{sealed}}}
+}
+
+func seedCredStatus(s *CredentialStoreDB, qs *fakeQS, token string, rev int64, status string) {
+	sealed, _ := s.seal(token)
+	qs.next[qCredForRefresh] = &model.QueryResult{Rows: [][]any{{sealed, rev, status}}}
 }
 
 func TestRefreshAccessToken(t *testing.T) {
@@ -196,7 +224,7 @@ func TestRefreshAccessToken(t *testing.T) {
 		t.Fatal("success should completeCAS")
 	}
 
-	// rotation: new token sealed and CAS-written on the read rev.
+	// rotation: new token sealed and CAS-written on the claimed rev (read rev + 1).
 	s3, qs3 := newTestStore(t)
 	seedCred(s3, qs3, "old", 3)
 	s3.Refresh = func(_ context.Context, _, _ string) (RefreshResult, error) {
@@ -212,8 +240,11 @@ func TestRefreshAccessToken(t *testing.T) {
 	if sealed := rot.args[0].(string); !crypto.IsSealed(sealed) {
 		t.Fatalf("rotated token not sealed: %q", sealed)
 	}
-	if rot.args[4].(int) != 3 {
-		t.Fatalf("rotation should CAS on rev 3, got %v", rot.args[4])
+	if claim, ok := qs3.last(qClaim); !ok || claim.args[4].(int) != 3 {
+		t.Fatalf("active credential should be claimed at the read rev 3, got %+v", claim)
+	}
+	if rot.args[4].(int) != 4 {
+		t.Fatalf("rotation should CAS on the claimed rev 4, got %v", rot.args[4])
 	}
 
 	// failure: error surfaces and status CAS-flips to 'E'.
@@ -227,6 +258,43 @@ func TestRefreshAccessToken(t *testing.T) {
 	}
 	if _, ok := qs4.last(qMarkErroredCAS); !ok {
 		t.Fatal("failure should CAS-mark errored")
+	}
+}
+
+func TestRefreshAccessTokenWaitsForLeaseHeldElsewhere(t *testing.T) {
+	s, qs := newTestStore(t)
+	s.claimBackoff = time.Millisecond
+	seedCred(s, qs, "old", 3)
+	delete(qs.next, qClaim) // the sweep holds the lease
+	exchanged := false
+	s.Refresh = func(context.Context, string, string) (RefreshResult, error) {
+		exchanged = true
+		return RefreshResult{AccessToken: "fresh"}, nil
+	}
+	if _, err := s.RefreshAccessToken(context.Background(), 7, "google"); !errors.Is(err, ErrRefreshInProgress) {
+		t.Fatalf("err = %v", err)
+	}
+	if exchanged || qs.count(qMarkErroredCAS) != 0 {
+		t.Fatal("a lost claim must neither spend the refresh token nor mark the row errored")
+	}
+}
+
+// An errored row is outside the sweep (it claims status 'A' only), so the Test
+// path still exchanges it, CAS-writing on the rev it read.
+func TestRefreshAccessTokenExchangesErroredRowWithoutClaim(t *testing.T) {
+	s, qs := newTestStore(t)
+	seedCredStatus(s, qs, "old", 3, "E")
+	s.Refresh = func(context.Context, string, string) (RefreshResult, error) {
+		return RefreshResult{AccessToken: "at", RefreshToken: "rotated"}, nil
+	}
+	if got, err := s.RefreshAccessToken(context.Background(), 7, "google"); err != nil || got != "at" {
+		t.Fatalf("got %q err %v", got, err)
+	}
+	if qs.count(qClaim) != 0 {
+		t.Fatal("errored row must not be claimed")
+	}
+	if rot, _ := qs.last(qRotateCAS); rot.args[4].(int) != 3 {
+		t.Fatalf("rotation should CAS on the read rev 3, got %v", rot.args[4])
 	}
 }
 

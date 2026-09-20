@@ -37,6 +37,7 @@ const (
 	oauth_max_auth_redirects      = "oauth_max_auth_redirects"
 	outbound_max_redirects        = "outbound_max_redirects"
 	outbound_max_rps              = "outbound_max_rps"
+	outbound_max_response_size    = "outbound_max_response_size"
 	trusted_proxy_cidr            = "trusted_proxy_cidr"
 	nats_url                      = "nats_url"
 	nats_name                     = "nats_name"
@@ -88,6 +89,7 @@ const (
 	social_jwks_cache_ttl         = "social_jwks_cache_ttl"
 	oauth_state_ttl_seconds       = "oauth_state_ttl_seconds"
 	oauth_connect_lease_seconds   = "oauth_connect_lease_seconds"
+	oauth_access_token_cache_ttl  = "oauth_access_token_cache_ttl"
 	otp_token_ttl                 = "otp_token_ttl"
 	social_nonce_ttl              = "social_nonce_ttl"
 	registration_confirmation_ttl = "registration_confirmation_ttl"
@@ -157,6 +159,7 @@ type KeelConfig struct {
 	StoragePublicBaseURL        string        // storage_public_base_url       ""                 Public base URL for ObjectStorage.PublicURL
 	StorageAccountURL           string        // storage_account_url           ""                 Azure Blob service endpoint
 	MessagingMode               string        // messaging_mode                ""                 Messaging: noop, gcp, aws or nats (empty = error)
+	OutboundMaxResponseSize     int64         // outbound_max_response_size    16777216           Response body cap for common.RequestJSON (bytes)
 	MaxRequestSize              int64         // max_request_size              16777216           Maximum request body size (bytes)
 	HttpReadTimeout             int           // http_read_timeout             15                 HTTP read timeout in seconds
 	HttpWriteTimeout            int           // http_write_timeout            30                 HTTP write timeout in seconds
@@ -196,6 +199,7 @@ type KeelConfig struct {
 	OAuthJWKSCacheTTL           time.Duration // oauth_jwks_cache_ttl          3600               OAuth JWKS cache expiry
 	SocialJWKSCacheTTL          time.Duration // social_jwks_cache_ttl         3600               Google/Apple JWKS cache expiry
 	OAuthStateTTLSeconds        int           // oauth_state_ttl_seconds       600                authorize->callback round-trip window (sec)
+	OAuthAccessTokenCacheTTL    time.Duration // oauth_access_token_cache_ttl  300                In-process reuse of a minted connection access token (sec); 0 mints on every ResolveAccess
 	OAuthConnectLeaseSeconds    int           // oauth_connect_lease_seconds   300                Credential refresh lease duration (sec)
 	OTPTokenTTL                 time.Duration // otp_token_ttl                 300                OTP token validity window
 	SocialNonceTTL              time.Duration // social_nonce_ttl              600                Social-login nonce validity
@@ -251,6 +255,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OAuthMaxAuthRedirects = c.Int(m, oauth_max_auth_redirects)
 	c.OutboundMaxRedirects = c.Int(m, outbound_max_redirects)
 	c.OutboundMaxRPS = c.Float(m, outbound_max_rps)
+	c.OutboundMaxResponseSize = c.Int64(m, outbound_max_response_size)
 	c.TrustedProxyCIDR = c.String(m, trusted_proxy_cidr)
 	c.NatsURL = c.String(m, nats_url)
 	c.NatsName = c.String(m, nats_name)
@@ -302,6 +307,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.SocialJWKSCacheTTL = c.Duration(m, social_jwks_cache_ttl)
 	c.OAuthStateTTLSeconds = c.Int(m, oauth_state_ttl_seconds)
 	c.OAuthConnectLeaseSeconds = c.Int(m, oauth_connect_lease_seconds)
+	c.OAuthAccessTokenCacheTTL = c.Duration(m, oauth_access_token_cache_ttl)
 	c.OTPTokenTTL = c.Duration(m, otp_token_ttl)
 	c.SocialNonceTTL = c.Duration(m, social_nonce_ttl)
 	c.RegistrationConfirmationTTL = c.Duration(m, registration_confirmation_ttl)
@@ -324,6 +330,12 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 
 	if c.RefreshTokenTTL <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", refresh_token_ttl))
+	}
+	if c.OAuthAccessTokenCacheTTL < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_access_token_cache_ttl))
+	}
+	if c.OutboundMaxResponseSize <= 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", outbound_max_response_size))
 	}
 	if c.DefaultCommissionRateBP <= 0 || c.DefaultCommissionRateBP > 10000 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 1 and 10000", default_commission_rate_bp))

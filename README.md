@@ -42,11 +42,12 @@ graph TD
 
 | Package | Description |
 |---------|-------------|
-| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), string/DB helpers (`NullIfEmpty`, `Slugify`, `GenerateNumericCode`, `ParseDBTimestamp`), email/URL domain helpers (`DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`), HTTP response utilities (`WriteJSON`, `WriteError`/`WriteJSONError`), shared HTTP client, and bootstrap flag variables |
+| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), string/DB helpers (`NullIfEmpty`, `Slugify`, `GenerateNumericCode`, `ParseDBTimestamp`), email/URL domain helpers (`DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`), HTTP response utilities (`WriteJSON`, `WriteError`/`WriteJSONError`), shared HTTP client with the typed `RequestJSON` helper, `PlainText` (HTML → text), and bootstrap flag variables |
 | `config` | DB-backed composite runtime configuration, flag parsing helpers, and atomic reload (see **Runtime Configuration**) |
 | `model` | Domain-agnostic models: `TableDefinition`, `TableColumn`, `ForeignKey`, `UserSession`, `PasswordPolicy`, `QueryResult`, `AppError`, `UserMenu`, `DeviceToken`, `TableChangeLog` |
 | `port` | Interface definitions for all pluggable components — **including database access** (`DatabaseRepository`, `QueryService`, `TxQueryService`, `TableService`, `TxView`), plus auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger, `TrustGuard` admission checks. Depend on these, not on concrete `pgsql`/`data` types. |
 | `data` | `AbstractRepository`, `AbstractTableService` (embed-only bases that implement the `port` DB interfaces), file-based `TableLogger`, Snowflake bigint id generator |
+| `pgsql/sqlsmoke` | Test support: load schema files into a throwaway PostgreSQL and PREPARE every named query, so SQL drift fails in `go test` |
 | `pgsql` | PostgreSQL implementation using `pgx/v5` — repository, table service, query service, tx-bound query service, tx view. For typed reads against a fixed schema, use [`pgx.CollectRows[T]`](https://pkg.go.dev/github.com/jackc/pgx/v5#CollectRows) directly (already in scope; no keel wrapper needed); reserve `QueryService.Query` for metadata-driven dynamic-schema reads where the `[][]any` shape is intentional. |
 | `schema` | YAML-based schema definition + seed loader, plus the `schemagen` model used by `cmd/schemagen` to emit DDL/DML for any supported dialect |
 | `schema/dialect` | DDL dialects (PostgreSQL, MySQL) consumed by `schemagen` |
@@ -57,7 +58,7 @@ graph TD
 | `idempotency` | `port.IdempotencyLedger` implementations: `MemoryLedger` and `PgsqlLedger` over `idempotency_ledger` — replay a completed key, refuse a live claim, and block on an unknown outcome until reconciliation |
 | `limiter` | Admission control: `FairSlotLimiter` (weighted, per-partner round-robin concurrency), `LocalRateLimiter` (per-partner + fleet token buckets per lane), `DistributedRateLimiter` (partner×fleet fixed windows charged atomically through `cache.MultiScopeAdmitter`, local fallback while the store is down), `LimitError` with `Retry-After` |
 | `clock` | Injectable time: `Clock` interface, real `System`, and `Fake` for tests that advance time instead of sleeping |
-| `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` for TOTP seeds, refresh tokens, vault values; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
+| `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` (hex or base64) for TOTP seeds, refresh tokens, vault values; secret-backed `LoadKEK` and `Sealer`; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected. See **Trust Guards** below. |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API; `SendEmail` takes a `headers` map for RFC 8058 one-click unsubscribe etc.), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
@@ -75,6 +76,7 @@ graph TD
 | `recording` | Consent-gated capture sessions: participants, `Start` fails closed unless every party's current session-scoped consent is affirmative, capture tokens with renewal, media stored by object reference, signed read URLs for participants |
 | `realtime` | WebSocket hub (`port.WebSocketHub`): per-user sockets, channel subscribe/unsubscribe protocol, cache-backed relay so workers and other pods deliver to a connected user (`PublishUser` / `PublishChannel`) |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
+| `content` | Read and edit fields of existing objects on external content platforms: `ResourceWriter` / `FieldReader` ports, `Writers` provider selection, typed provider errors, `ConnectionFieldReader`, and `ShopifyWriter` with an injected field map |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
@@ -839,7 +841,7 @@ At-rest encryption for sensitive fields (TOTP seeds, refresh tokens, secret-mana
 ```go
 import "github.com/nauticana/keel/crypto"
 
-kek, _ := crypto.DecodeKEK(secrets.MustGet(ctx, "field_kek")) // 32-byte AES-256 key, hex-encoded
+kek, _ := crypto.LoadKEK(ctx, secrets, "field_kek")           // 32-byte AES-256 key, hex or base64
 sealed, _ := crypto.Seal(kek, []byte(totpSeed))               // store in DB
 if plain, ok := crypto.Open(kek, row); ok { use(plain) } else { use([]byte(row)) /* legacy */ }
 ```
@@ -862,6 +864,54 @@ mux.Handle("/api/v1/widget", h.JSON("POST", func(ctx context.Context, s *model.U
 }))
 
 mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, _ json.RawMessage) (any, error) { ... }))
+```
+
+### `crypto.Sealer` — one KEK per purpose
+
+`NewSealer(ctx, secrets, secretName)` loads the KEK once and seals/opens the same `enc:v1:` envelope. `SealBytes` fits byte-column hooks:
+
+```go
+taxIDs, err := crypto.NewSealer(ctx, secrets, "tax_id_kek")
+payoutHandler.SealTaxID = taxIDs.SealBytes
+```
+
+### `common.RequestJSON` — typed outbound JSON calls
+
+Sends a JSON body on the shared client and returns body + headers. A non-2xx response returns both alongside `*common.HTTPStatusError`, which classifies itself (`Unauthorized`, `RateLimited`, `Transient`, `Permanent`); mapping to provider errors and decoding stay with the caller. Bodies over `outbound_max_response_size` return the truncated body with `ErrResponseTooLarge` (joined with the status error on a non-2xx).
+
+```go
+body, hdr, err := common.RequestJSON(ctx, http.MethodPost, url, map[string]string{"Authorization": "Bearer " + tok}, payload)
+var status *common.HTTPStatusError
+if errors.As(err, &status) && status.Unauthorized() { return ErrReauthorize }
+```
+
+### `common.PlainText` — HTML to text
+
+Visible text of a document or fragment: `script`/`style`/`noscript`/`template`/`title` dropped, entities decoded, whitespace collapsed, a space where a block element separated two words (`<b>wo</b>rd` stays `word`).
+
+### `pgsql/sqlsmoke` — PREPARE every named query
+
+Queries go through the production `pgsql.RewritePlaceholders`, so PostgreSQL validates exactly what runs. Schema order, query groups and the DSN belong to the calling test:
+
+```go
+conn, _ := pgx.Connect(ctx, dsn)
+if err := sqlsmoke.LoadSchema(ctx, conn, "sql/basis.sql", "sql/app.sql"); err != nil { t.Fatal(err) }
+sqlsmoke.Run(t, conn, map[string]map[string]string{"orders": orderQueries}) // one subtest per query
+```
+
+### `connect.ReadinessResolver` — can this tenant's data exist?
+
+Evaluates an injected `[]connect.Source{ID, Provider, Collected}` against the tenant's active connections: `NOT_COLLECTED` (no collector ships — connecting an account will not help), `NOT_CONNECTED`, or `READY`. Table names, collectors and user copy stay in the app.
+
+### `content` — edit existing objects on a content platform
+
+`ResourceWriter` reads and updates one logical field of an object addressed by `ResourceRef`; `Writers{"shopify": w}` selects the provider; `ConnectionFieldReader` resolves the partner's connection through `connect.CredentialStoreDB.ResolveAccess`. `ResolveAccess` mints OAuth access tokens under the refresh-sweep lease (one exchange per credential, fleet-wide, so a rotating refresh token is never spent twice), reuses them in-process for `oauth_access_token_cache_ttl`, and returns `connect.ErrRefreshInProgress` when another worker holds the lease past its retry window. Failures are typed: `ErrUnsupportedProvider/Kind/Field`, `ErrResourceNotFound`, `ErrAccessDenied`, `ErrThrottled` (retryable), `ErrRejected`. `ShopifyWriter` owns the Admin GraphQL transport; where each logical field lives is injected:
+
+```go
+shopify, err := content.NewShopifyWriter(content.ShopifyFieldMap{
+    content.ShopifyProduct: {"body": {Input: "descriptionHtml"}, "seo_title": {SEO: "title"}},
+    content.ShopifyPage:    {"seo_title": {Metafield: &content.ShopifyMetafield{Namespace: "global", Key: "title_tag", Type: "single_line_text_field"}}},
+})
 ```
 
 ### `common.CallerSession` — who is calling, anywhere a context flows
@@ -2755,7 +2805,7 @@ All methods are stateless — they only inspect the JWT or request context and w
 | `GetUser(r) / GetPartner(r)` | Convenience accessors; -1 when absent. |
 | `RequireSession(w, r) (*Session, bool)` | 401 if no session. Use when you need the full session. |
 | `RequireUser(w, r) (int, bool)` | 401 if no user id. |
-| `RequirePartner(w, r) (int64, bool)` | 401 if `partner_id < 0`. |
+| `RequirePartner(w, r) (int64, bool)` | 401 if `partner_id <= 0`. |
 | `ReadRequest(w, r, &req) bool` | `MaxBytesReader(config.Config().MaxRequestSize)` + JSON unmarshal; 400 on failure. Public endpoints. |
 | `ReadAuthRequest(w, r, &req) (*Session, bool)` | `RequireSession + ReadRequest` combined. Authenticated endpoints with a JSON body. |
 | `RequireMethod(w, r, methods...string) bool` | 405 + `Allow` header if `r.Method` doesn't match any of the allowed methods. One-line guard for HTTP-method-restricted handlers. |

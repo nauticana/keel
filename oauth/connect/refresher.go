@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/nauticana/keel/oauth/client"
 	"github.com/nauticana/keel/secret"
@@ -52,6 +53,9 @@ func NewRefresher(secrets secret.SecretProvider, specs map[string]RefreshSpec) R
 				return RefreshResult{}, err
 			}
 			res := RefreshResult{AccessToken: tok.AccessToken}
+			if !tok.Expiry.IsZero() {
+				res.ExpiresIn = time.Until(tok.Expiry)
+			}
 			if tok.RefreshToken != "" && tok.RefreshToken != refreshToken {
 				res.RefreshToken = tok.RefreshToken // server rotated the refresh token; persist it
 			}
@@ -73,7 +77,7 @@ func NewRefresher(secrets secret.SecretProvider, specs map[string]RefreshSpec) R
 			if tr.AccessToken == "" {
 				return RefreshResult{}, fmt.Errorf("%s: empty access token", provider)
 			}
-			res := RefreshResult{AccessToken: tr.AccessToken}
+			res := RefreshResult{AccessToken: tr.AccessToken, ExpiresIn: time.Duration(tr.ExpiresIn) * time.Second}
 			if tr.RefreshToken != "" && tr.RefreshToken != refreshToken {
 				res.RefreshToken = tr.RefreshToken // server rotated the refresh token; persist it
 			}
@@ -95,7 +99,7 @@ func NewRefresher(secrets secret.SecretProvider, specs map[string]RefreshSpec) R
 			if tr.AccessToken == "" {
 				return RefreshResult{}, fmt.Errorf("%s: empty access token", provider)
 			}
-			res := RefreshResult{AccessToken: tr.AccessToken}
+			res := RefreshResult{AccessToken: tr.AccessToken, ExpiresIn: time.Duration(tr.ExpiresIn) * time.Second}
 			if tr.RefreshToken != "" && tr.RefreshToken != refreshToken {
 				res.RefreshToken = tr.RefreshToken // server rotated the refresh token; persist it
 			}

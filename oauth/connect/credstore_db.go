@@ -12,11 +12,13 @@ package connect
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
+	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/crypto"
@@ -24,6 +26,7 @@ import (
 	"github.com/nauticana/keel/oauth/client"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -38,6 +41,7 @@ const (
 type RefreshResult struct {
 	AccessToken  string
 	RefreshToken string
+	ExpiresIn    time.Duration // access-token lifetime; 0 = not reported
 }
 
 // Refresher mints a fresh token from a stored refresh token for the given
@@ -47,18 +51,20 @@ type RefreshResult struct {
 type Refresher func(ctx context.Context, provider, refreshToken string) (RefreshResult, error)
 
 const (
-	qUpsertConnection = "cred_upsert_connection"
-	qUpdateStatus     = "cred_update_status"
-	qTouchChecked     = "cred_touch_checked"
-	qClaim            = "cred_claim"
-	qRotateCAS        = "cred_rotate_cas"
-	qCompleteCAS      = "cred_complete_cas"
-	qMarkErroredCAS   = "cred_mark_errored_cas"
-	qCredForRefresh   = "cred_for_refresh"
-	qGetCredentials   = "cred_get_credentials"
-	qGetAPIEndpoint   = "cred_get_api_endpoint"
-	qSetAPIEndpoint   = "cred_set_api_endpoint"
-	qListActive       = "cred_list_active"
+	qUpsertConnection   = "cred_upsert_connection"
+	qUpdateStatus       = "cred_update_status"
+	qTouchChecked       = "cred_touch_checked"
+	qClaim              = "cred_claim"
+	qRotateCAS          = "cred_rotate_cas"
+	qCompleteCAS        = "cred_complete_cas"
+	qMarkErroredCAS     = "cred_mark_errored_cas"
+	qCredForRefresh     = "cred_for_refresh"
+	qGetCredentials     = "cred_get_credentials"
+	qGetAPIEndpoint     = "cred_get_api_endpoint"
+	qSetAPIEndpoint     = "cred_set_api_endpoint"
+	qListActive         = "cred_list_active"
+	qConnectedProviders = "cred_connected_providers"
+	qActiveConnection   = "cred_active_connection"
 )
 
 var credentialQueries = map[string]string{
@@ -114,7 +120,7 @@ UPDATE partner_credential SET last_checked = CURRENT_TIMESTAMP
 	// Raw sealed cred_ref + rev, read together so an interactive refresh and its
 	// CAS write target the same revision.
 	qCredForRefresh: `
-SELECT cred_ref, rev FROM partner_credential
+SELECT cred_ref, rev, status FROM partner_credential
  WHERE partner_id = ? AND entity_id = ? AND provider = ? AND status != 'P'
 `,
 	qGetCredentials: `
@@ -134,6 +140,16 @@ SELECT COALESCE(api_endpoint, '')
 	qSetAPIEndpoint: `
 UPDATE partner_credential SET api_endpoint = ?
  WHERE partner_id = ? AND entity_id = ? AND provider = ?
+`,
+	qConnectedProviders: `
+SELECT DISTINCT provider FROM partner_credential
+ WHERE partner_id = ? AND entity_id = ? AND status = 'A'
+ ORDER BY provider
+`,
+	qActiveConnection: `
+SELECT connection_type, cred_ref, COALESCE(api_endpoint, ''), rev
+  FROM partner_credential
+ WHERE partner_id = ? AND entity_id = ? AND provider = ? AND status = 'A'
 `,
 	// OAuth only (API keys don't refresh); skip currently-leased rows. rev lets the
 	// sweep claim/CAS its writes.
@@ -160,6 +176,11 @@ type CredentialStoreDB struct {
 
 	qs  port.QueryService
 	kek []byte
+
+	accessOnce   sync.Once
+	access       *cache.LRU[accessKey, cachedAccess]
+	refreshing   singleflight.Group
+	claimBackoff time.Duration // first ResolveAccess retry delay; 0 = defaultClaimBackoff
 }
 
 func (s *CredentialStoreDB) logErr(msg string, err error) {
@@ -290,26 +311,32 @@ func (s *CredentialStoreDB) GetConnectionCredentials(ctx context.Context, partne
 	return cred, common.AsString(res.Rows[0][1]), nil
 }
 
-// RefreshAccessToken (client.CredentialStore) is the interactive Test path: it
-// re-reads cred_ref + rev together (so it can't apply a stale credential to a
-// newer revision), exchanges, and CAS-persists any rotation/error on that rev. A
+// RefreshAccessToken (client.CredentialStore) is the interactive Test path and
+// always exchanges. An active credential is exchanged under the sweep's lease;
+// any other status is outside the sweep, so it CAS-writes on the rev it read. A
 // nil Refresher stamps last_checked and returns the stored credential as-is.
 func (s *CredentialStoreDB) RefreshAccessToken(ctx context.Context, partnerID int64, provider string) (string, error) {
-	raw, rev, ok, err := s.credAndRev(ctx, partnerID, provider)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("no connection for partner %d provider %s", partnerID, provider)
-	}
-	cred, err := s.open(raw)
-	if err != nil {
-		return "", err
-	}
-	if s.Refresh == nil {
-		return cred, s.touchLastChecked(ctx, partnerID, provider)
-	}
-	return s.exchange(ctx, partnerID, provider, cred, rev)
+	key := accessKey{partnerID: partnerID, entityID: client.EntityFromContext(ctx), provider: provider}
+	return s.retryLostClaim(ctx, key, func() (string, error) {
+		raw, rev, status, ok, err := s.credAndRev(ctx, partnerID, provider)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("no connection for partner %d provider %s", partnerID, provider)
+		}
+		if s.Refresh != nil && status == statusActive {
+			return s.mintAccess(ctx, key, rev)
+		}
+		cred, err := s.open(raw)
+		if err != nil {
+			return "", err
+		}
+		if s.Refresh == nil {
+			return cred, s.touchLastChecked(ctx, partnerID, provider)
+		}
+		return s.exchange(ctx, partnerID, provider, cred, rev)
+	})
 }
 
 // RefreshDue (connect.Store) is the worker-sweep path. It atomically claims the
@@ -336,20 +363,25 @@ func (s *CredentialStoreDB) RefreshDue(ctx context.Context, partnerID int64, pro
 // exchange runs the Refresher and CAS-persists the outcome on rev; last_checked
 // and the lease are cleared by every completion path.
 func (s *CredentialStoreDB) exchange(ctx context.Context, partnerID int64, provider, refreshToken string, rev int) (string, error) {
+	res, err := s.exchangeResult(ctx, partnerID, provider, refreshToken, rev)
+	return res.AccessToken, err
+}
+
+func (s *CredentialStoreDB) exchangeResult(ctx context.Context, partnerID int64, provider, refreshToken string, rev int) (RefreshResult, error) {
 	if s.Refresh == nil {
-		return refreshToken, s.completeCAS(ctx, partnerID, provider, rev)
+		return RefreshResult{AccessToken: refreshToken}, s.completeCAS(ctx, partnerID, provider, rev)
 	}
 	res, err := s.Refresh(ctx, provider, refreshToken)
 	if err == nil && res.AccessToken == "" {
 		err = fmt.Errorf("provider %s returned an empty access token", provider)
 	}
 	if err != nil {
-		return "", s.errAlso(err, s.markErroredCAS(ctx, partnerID, provider, rev))
+		return RefreshResult{}, s.errAlso(err, s.markErroredCAS(ctx, partnerID, provider, rev))
 	}
 	if res.RefreshToken != "" && res.RefreshToken != refreshToken {
-		return res.AccessToken, s.rotateCAS(ctx, partnerID, provider, res.RefreshToken, rev)
+		return res, s.rotateCAS(ctx, partnerID, provider, res.RefreshToken, rev)
 	}
-	return res.AccessToken, s.completeCAS(ctx, partnerID, provider, rev)
+	return res, s.completeCAS(ctx, partnerID, provider, rev)
 }
 
 // claim atomically leases the credential to this worker if it is still at
@@ -366,15 +398,13 @@ func (s *CredentialStoreDB) claim(ctx context.Context, partnerID int64, provider
 }
 
 // credAndRev reads the raw sealed cred_ref and its rev together.
-func (s *CredentialStoreDB) credAndRev(ctx context.Context, partnerID int64, provider string) (string, int, bool, error) {
+func (s *CredentialStoreDB) credAndRev(ctx context.Context, partnerID int64, provider string) (cred string, rev int, status string, ok bool, err error) {
 	res, err := s.qs.Query(ctx, qCredForRefresh, partnerID, client.EntityFromContext(ctx), provider)
-	if err != nil {
-		return "", 0, false, err
+	if err != nil || len(res.Rows) == 0 {
+		return "", 0, "", false, err
 	}
-	if len(res.Rows) == 0 {
-		return "", 0, false, nil
-	}
-	return common.AsString(res.Rows[0][0]), int(common.AsInt64(res.Rows[0][1])), true, nil
+	row := res.Rows[0]
+	return common.AsString(row[0]), int(common.AsInt64(row[1])), common.AsString(row[2]), true, nil
 }
 
 // completeCAS clears the lease + stamps last_checked on a no-rotation success. A
@@ -451,22 +481,154 @@ func (s *CredentialStoreDB) ListActiveCredentials(ctx context.Context) ([]Active
 	return out, nil
 }
 
-// loadKEK fetches the 32-byte AES-256 KEK named by EncKeySecret. Accepts hex
-// (canonical) or base64 encoding so either keystore form works.
+// ErrNoActiveConnection means the partner has no status 'A' connection to the provider.
+var ErrNoActiveConnection = errors.New("no active connection")
+
+const (
+	connectionTypeOAuth = "O"
+	statusActive        = "A"
+)
+
+// ConnectedProviders lists the providers the partner holds an active connection to.
+func (s *CredentialStoreDB) ConnectedProviders(ctx context.Context, partnerID int64) ([]string, error) {
+	res, err := s.qs.Query(ctx, qConnectedProviders, partnerID, client.EntityFromContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	providers := make([]string, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		providers = append(providers, common.AsString(row[0]))
+	}
+	return providers, nil
+}
+
+// ErrRefreshInProgress means another worker held the credential's refresh lease
+// for the whole retry window; the caller may retry later.
+var ErrRefreshInProgress = errors.New("credential refresh in progress elsewhere")
+
+const (
+	accessCacheCapacity  = 10000
+	accessExpirySkew     = 30 * time.Second
+	claimAttempts        = 5
+	defaultClaimBackoff  = 250 * time.Millisecond
+	claimBumpsBeforeIdle = 2 // claim, then the completing CAS
+)
+
+type accessKey struct {
+	partnerID int64
+	entityID  int64
+	provider  string
+}
+
+// cachedAccess is valid only while the row is still at rev: any reauthorization
+// or refresh elsewhere moves rev and drops the hit.
+type cachedAccess struct {
+	token string
+	rev   int
+}
+
+var errClaimLost = errors.New("claim lost")
+
+func (s *CredentialStoreDB) accessCache() *cache.LRU[accessKey, cachedAccess] {
+	s.accessOnce.Do(func() { s.access = cache.NewLRU[accessKey, cachedAccess](accessCacheCapacity, nil) })
+	return s.access
+}
+
+// ResolveAccess returns a usable token and the api endpoint of the partner's
+// active connection. OAuth access tokens are minted under the same lease as the
+// refresh sweep — one exchange at a time per credential, fleet-wide — and reused
+// in-process for oauth_access_token_cache_ttl. Other connection types return the
+// stored credential.
+func (s *CredentialStoreDB) ResolveAccess(ctx context.Context, partnerID int64, provider string) (token, apiEndpoint string, err error) {
+	key := accessKey{partnerID: partnerID, entityID: client.EntityFromContext(ctx), provider: provider}
+	token, err = s.retryLostClaim(ctx, key, func() (string, error) {
+		res, err := s.qs.Query(ctx, qActiveConnection, partnerID, key.entityID, provider)
+		if err != nil {
+			return "", err
+		}
+		if len(res.Rows) == 0 {
+			return "", fmt.Errorf("partner %d provider %s: %w", partnerID, provider, ErrNoActiveConnection)
+		}
+		row := res.Rows[0]
+		apiEndpoint = common.AsString(row[2])
+		rev := int(common.AsInt64(row[3]))
+		if common.AsString(row[0]) != connectionTypeOAuth || s.Refresh == nil {
+			return s.open(common.AsString(row[1]))
+		}
+		if hit, ok := s.accessCache().Get(key); ok && hit.rev == rev {
+			return hit.token, nil
+		}
+		return s.mintAccess(ctx, key, rev)
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return token, apiEndpoint, nil
+}
+
+// retryLostClaim re-runs attempt, which re-reads the row, while its claim loses
+// to another worker's lease or a moved rev.
+func (s *CredentialStoreDB) retryLostClaim(ctx context.Context, key accessKey, attempt func() (string, error)) (string, error) {
+	backoff := s.claimBackoff
+	if backoff <= 0 {
+		backoff = defaultClaimBackoff
+	}
+	for n := 1; ; n++ {
+		token, err := attempt()
+		if !errors.Is(err, errClaimLost) {
+			return token, err
+		}
+		if n == claimAttempts {
+			return "", fmt.Errorf("partner %d provider %s: %w", key.partnerID, key.provider, ErrRefreshInProgress)
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+		backoff *= 2
+	}
+}
+
+// mintAccess claims the credential at rev and exchanges it; concurrent callers
+// in this process share one exchange.
+func (s *CredentialStoreDB) mintAccess(ctx context.Context, key accessKey, rev int) (string, error) {
+	flight := fmt.Sprintf("%d/%d/%s/%d", key.partnerID, key.entityID, key.provider, rev)
+	token, err, _ := s.refreshing.Do(flight, func() (any, error) {
+		raw, claimed, err := s.claim(ctx, key.partnerID, key.provider, rev)
+		if err != nil {
+			return "", err
+		}
+		if !claimed {
+			return "", errClaimLost
+		}
+		claimedRev := rev + 1
+		cred, err := s.open(raw)
+		if err != nil {
+			return "", s.errAlso(err, s.markErroredCAS(ctx, key.partnerID, key.provider, claimedRev))
+		}
+		minted, err := s.exchangeResult(ctx, key.partnerID, key.provider, cred, claimedRev)
+		if err != nil {
+			return "", err
+		}
+		if ttl := accessCacheTTL(minted.ExpiresIn); ttl > 0 {
+			s.accessCache().Set(key, cachedAccess{token: minted.AccessToken, rev: rev + claimBumpsBeforeIdle}, ttl)
+		}
+		return minted.AccessToken, nil
+	})
+	return token.(string), err
+}
+
+func accessCacheTTL(expiresIn time.Duration) time.Duration {
+	ttl := config.Config().OAuthAccessTokenCacheTTL
+	if expiresIn > 0 && expiresIn-accessExpirySkew < ttl {
+		ttl = expiresIn - accessExpirySkew
+	}
+	return ttl
+}
+
 func (s *CredentialStoreDB) loadKEK(ctx context.Context) ([]byte, error) {
-	raw, err := s.Secrets.GetSecret(ctx, s.EncKeySecret)
-	if err != nil {
-		return nil, fmt.Errorf("fetch credential KEK %q: %w", s.EncKeySecret, err)
-	}
-	if key, err := crypto.DecodeKEK(raw); err == nil {
-		return key, nil
-	}
-	key, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		return nil, fmt.Errorf("credential KEK %q is neither hex nor base64: %w", s.EncKeySecret, err)
-	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("credential KEK %q must be 32 bytes (got %d)", s.EncKeySecret, len(key))
-	}
-	return key, nil
+	return crypto.LoadKEK(ctx, s.Secrets, s.EncKeySecret)
 }

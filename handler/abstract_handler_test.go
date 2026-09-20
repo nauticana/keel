@@ -61,3 +61,25 @@ func TestEnsureRequestIDPreservesOrCreatesCorrelation(t *testing.T) {
 		t.Fatalf("request id = %q, want upstream id", got)
 	}
 }
+
+func TestRequirePartnerRejectsNonPositiveIDs(t *testing.T) {
+	var h AbstractHandler
+	for _, tc := range []struct {
+		partnerID int64
+		ok        bool
+	}{{-1, false}, {0, false}, {42, true}} {
+		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+		stashSession(r, &model.UserSession{Id: 1, PartnerId: tc.partnerID})
+		w := httptest.NewRecorder()
+		got, ok := h.RequirePartner(w, r)
+		if ok != tc.ok {
+			t.Fatalf("partner %d: ok=%v, want %v", tc.partnerID, ok, tc.ok)
+		}
+		if tc.ok && got != tc.partnerID {
+			t.Fatalf("partner %d: got %d", tc.partnerID, got)
+		}
+		if !tc.ok && w.Code != http.StatusUnauthorized {
+			t.Fatalf("partner %d: status %d, want 401", tc.partnerID, w.Code)
+		}
+	}
+}
