@@ -32,7 +32,7 @@ var _ port.MessageDispatcher = (*smsDispatcher)(nil)
 
 // Dispatch resolves userID -> E.164 phone via the RecipientResolver and sends.
 // Returns nil when the user has no phone on file (the channel-level no-op
-// documented on port.MessageDispatcher).
+// documented on port.MessageDispatcher) and journals a warning.
 func (d *smsDispatcher) Dispatch(ctx context.Context, userID int, _ string, body string, _ map[string]string) error {
 	if d.users == nil {
 		return fmt.Errorf("%s: users not set", d.name)
@@ -43,6 +43,9 @@ func (d *smsDispatcher) Dispatch(ctx context.Context, userID int, _ string, body
 	}
 	to = strings.TrimSpace(to)
 	if to == "" {
+		if d.journal != nil {
+			d.journal.Warning(fmt.Sprintf("%s: no phone on file for user %d, SMS not sent", d.name, userID))
+		}
 		return nil
 	}
 	if err := d.postFn(ctx, to, body); err != nil {

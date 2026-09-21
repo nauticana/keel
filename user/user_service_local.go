@@ -199,19 +199,19 @@ SELECT DISTINCT
 `,
 
 	qUserByLogin: `
-SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time
+SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time, phone
   FROM user_account
  WHERE user_name = ?
 `,
 
 	qUserByLoginEmail: `
-SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time
+SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time, phone
   FROM user_account
  WHERE user_email = ?
 `,
 
 	qUserById: `
-SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time
+SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time, phone
   FROM user_account
  WHERE id = ?
 `,
@@ -232,7 +232,7 @@ SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.pa
 `,
 
 	qPartnerUserByEmail: `
-SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.passtext, U.login_attempts, U.last_login_attempt, U.lock_time, p.partner_id
+SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.passtext, U.login_attempts, U.last_login_attempt, U.lock_time, p.partner_id, U.phone
   FROM user_account U
   LEFT JOIN partner_user p ON p.user_id = U.id
  WHERE U.user_email = ?
@@ -399,7 +399,7 @@ VALUES (nextval('user_refresh_token_seq'), ?, ?, ?)
 `,
 
 	qGetRefreshToken: `
-SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id
+SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id, U.phone
   FROM user_refresh_token t, user_account U, partner_user p
  WHERE t.token_hash = ?
    AND t.revoked_at IS NULL
@@ -891,16 +891,17 @@ func (s *LocalUserService) GetUserById(userId int) (*model.UserSession, error) {
 	}
 
 	session := &model.UserSession{
-		Id:        userAccountId,
-		Subject:   common.AsString(row[1]),
-		Issuer:    s.Issuer,
-		FirstName: common.AsString(row[2]),
-		LastName:  common.AsString(row[3]),
-		Email:     common.AsString(row[4]),
-		Status:    uStatus,
-		Provider:  "local",
-		ExpiresAt: time.Now().Add(sessionTimeout()).Unix(),
-		IssuedAt:  time.Now().Unix(),
+		Id:          userAccountId,
+		Subject:     common.AsString(row[1]),
+		Issuer:      s.Issuer,
+		FirstName:   common.AsString(row[2]),
+		LastName:    common.AsString(row[3]),
+		Email:       common.AsString(row[4]),
+		PhoneNumber: common.AsString(row[11]),
+		Status:      uStatus,
+		Provider:    "local",
+		ExpiresAt:   time.Now().Add(sessionTimeout()).Unix(),
+		IssuedAt:    time.Now().Unix(),
 	}
 
 	partnerRes, err := s.queryService.Query(ctx, qPartnerUserByid, userAccountId)
@@ -966,16 +967,17 @@ func (s *LocalUserService) GetUserByLogin(username string, password string) (*mo
 	}
 
 	session := &model.UserSession{
-		Id:        userAccountId,
-		Subject:   common.AsString(row[1]),
-		Issuer:    s.Issuer,
-		FirstName: common.AsString(row[2]),
-		LastName:  common.AsString(row[3]),
-		Email:     common.AsString(row[4]),
-		Status:    uStatus,
-		Provider:  "local",
-		ExpiresAt: time.Now().Add(sessionTimeout()).Unix(),
-		IssuedAt:  time.Now().Unix(),
+		Id:          userAccountId,
+		Subject:     common.AsString(row[1]),
+		Issuer:      s.Issuer,
+		FirstName:   common.AsString(row[2]),
+		LastName:    common.AsString(row[3]),
+		Email:       common.AsString(row[4]),
+		PhoneNumber: common.AsString(row[11]),
+		Status:      uStatus,
+		Provider:    "local",
+		ExpiresAt:   time.Now().Add(sessionTimeout()).Unix(),
+		IssuedAt:    time.Now().Unix(),
 	}
 	if passdate.AddDate(0, 0, s.passwordPolicy.PasswordExpire).Before(time.Now()) {
 		return nil, fmt.Errorf("password expired")
@@ -1009,6 +1011,7 @@ func (s *LocalUserService) GetUserByUsername(username string) (*model.UserSessio
 		"local",
 	)
 	session.Subject = common.AsString(row[1])
+	session.PhoneNumber = common.AsString(row[11])
 	return session, nil
 }
 
@@ -1036,16 +1039,17 @@ func (s *LocalUserService) GetUserByEmail(email string) (*model.UserSession, err
 		return nil, err
 	}
 	session := &model.UserSession{
-		Id:        userAccountId,
-		Subject:   common.AsString(row[1]) + " " + common.AsString(row[2]),
-		Issuer:    s.Issuer,
-		FirstName: common.AsString(row[1]),
-		LastName:  common.AsString(row[2]),
-		Email:     common.AsString(row[3]),
-		PartnerId: common.AsInt64(row[10]),
-		Provider:  "local",
-		ExpiresAt: time.Now().Add(sessionTimeout()).Unix(),
-		IssuedAt:  time.Now().Unix(),
+		Id:          userAccountId,
+		Subject:     common.AsString(row[1]) + " " + common.AsString(row[2]),
+		Issuer:      s.Issuer,
+		FirstName:   common.AsString(row[1]),
+		LastName:    common.AsString(row[2]),
+		Email:       common.AsString(row[3]),
+		PhoneNumber: common.AsString(row[11]),
+		PartnerId:   common.AsInt64(row[10]),
+		Provider:    "local",
+		ExpiresAt:   time.Now().Add(sessionTimeout()).Unix(),
+		IssuedAt:    time.Now().Unix(),
 	}
 	return session, nil
 }
@@ -1260,6 +1264,7 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 		Status:           common.AsString(row[4]),
 		TwoFactorEnabled: common.AsBool(row[5]),
 		PartnerId:        common.AsInt64(row[6]),
+		PhoneNumber:      common.AsString(row[7]),
 		Issuer:           s.Issuer,
 		ExpiresAt:        time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:         time.Now().Unix(),
