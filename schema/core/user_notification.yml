@@ -1,0 +1,38 @@
+table: user_notification
+comment: In-app notification inbox, one row per message shown to a user. notification_type is consumer-defined.
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: notification_type
+    type: VARCHAR(20)
+    nullable: true
+  - name: title
+    type: VARCHAR(200)
+  - name: body
+    type: TEXT
+    nullable: true
+  - name: data
+    type: TEXT
+    nullable: true
+    comment: JSON object of string values
+  - name: read_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: user_notification_seq
+  column: id
+indexes:
+  - name: idx_user_notification_user
+    columns: [user_id, created_at]
+foreign_keys:
+  - name: user_notifications
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

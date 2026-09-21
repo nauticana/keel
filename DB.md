@@ -65,6 +65,7 @@ flowchart RL
         user_otp
         user_social_provider
         device_token
+        user_notification
         consent_policy
         consent_event
     end
@@ -75,6 +76,7 @@ flowchart RL
     user_otp --> user_account
     user_social_provider --> user_account
     device_token --> user_account
+    user_notification --> user_account
     consent_event --> consent_policy
     consent_event --> user_account
 
@@ -197,6 +199,7 @@ flowchart BT
         payment_webhook_log["payment_webhook_log"]
         payment_method["payment_method"]
         user_payment_method["user_payment_method"]
+        user_billing_customer["user_billing_customer"]
     end
 
     subgraph payout["Payout"]
@@ -417,22 +420,23 @@ erDiagram
 ```mermaid
 erDiagram
 
-    consent_policy ||--o{ consent_event : "consent_event_policies"
-
-    user_account_history }o--|| user_account : "user_historic_actions"
-    user_social_provider }o--|| user_account : "user_social_providers"
-    user_otp }o--|| user_account : "user_otps"
-    user_refresh_token }o--|| user_account : "user_refresh_tokens"
-
-    user_account o|--o{ consent_event : "consent_event_users"
-    user_account ||--o{ user_trusted_device : "user_trusted_devices"
-    user_account ||--o{ device_token : "device_token_users"
-
-    user_account ||--o{ user_permission : "user_permissions"
     authorization_role ||--o{ user_permission : "permitted_users"
     authorization_object ||--o{ authorization_object_action : "authorization_object_actions"
     authorization_role ||--o{ authorization_role_permission : "authorization_role_permissions"
     authorization_object_action ||--o{ authorization_role_permission : "permitted_object_action"
+
+    consent_policy ||--o{ consent_event : "consent_event_policies"
+
+    user_account ||--o{ user_account_history : "user_historic_actions"
+    user_account ||--o{ user_social_provider : "user_social_providers"
+    user_account ||--o{ user_otp : "user_otps"
+    user_account ||--o{ user_refresh_token : "user_refresh_tokens"
+    user_account ||--o{ user_notification : "user_notifications"
+
+    consent_event }o--|o user_account : "consent_event_users"
+    user_trusted_device }o--|| user_account : "user_trusted_devices"
+    device_token }o--|| user_account : "device_token_users"
+    user_permission }o--|| user_account : "user_permissions"
 
     user_account_history {
         BIGINT user_id PK,FK
@@ -483,6 +487,16 @@ erDiagram
         TIMESTAMP created_at
         TIMESTAMP updated_at
         TIMESTAMP last_seen_at
+    }
+    user_notification {
+        BIGINT id PK
+        BIGINT user_id FK
+        VARCHAR notification_type
+        VARCHAR title
+        TEXT body
+        TEXT data
+        TIMESTAMP read_at
+        TIMESTAMP created_at
     }
     user_account {
         BIGINT id PK
@@ -875,6 +889,7 @@ erDiagram
 erDiagram
     business_partner ||--o{ payment_method : "partner_payment_methods"
     user_account ||--o{ user_payment_method : "user_payment_method_users"
+    user_account ||--o{ user_billing_customer : "user_billing_customers"
 
     payment_webhook_log {
         BIGINT id PK
@@ -909,8 +924,14 @@ erDiagram
         VARCHAR brand
         SMALLINT expiry_month
         SMALLINT expiry_year
-        CHAR currency
+        CHAR currency "nullable"
         BOOLEAN is_default
+        TIMESTAMP created_at
+    }
+    user_billing_customer {
+        BIGINT user_id PK,FK
+        VARCHAR provider PK
+        VARCHAR customer_token
         TIMESTAMP created_at
     }
     business_partner {

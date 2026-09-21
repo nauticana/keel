@@ -200,6 +200,7 @@ seeds:
       - [lookup_style, Lookup Style]
       - [action_kind, Action Kind]
       - [measurement_unit, Measurement Unit]
+      - [user_action_type, User Action Type]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -208,6 +209,16 @@ seeds:
       - [action_kind, P, Post]
       - [action_kind, R, Redirect]
       - [action_kind, V, Reveal]
+      - [user_action_type, C, Create]
+      - [user_action_type, L, Login]
+      - [user_action_type, F, Failed Login]
+      - [user_action_type, O, Logout]
+      - [user_action_type, X, Lock]
+      - [user_action_type, U, Unlock]
+      - [user_action_type, P, Password Change]
+      - [user_action_type, D, Delete]
+      - [user_action_type, M, Profile Change]
+      - [user_action_type, N, Contact Change]
       - [measurement_unit, each, Each]
       - [measurement_unit, lump_sum, Lump Sum]
       - [measurement_unit, minute, Minute]
@@ -247,6 +258,7 @@ seeds:
     rows:
       - [lookup_style, foreign_key_lookup, lookup_style]
       - [action_kind, table_action, action_kind]
+      - [user_action_type, user_account_history, action_type]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:

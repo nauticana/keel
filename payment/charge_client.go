@@ -15,8 +15,12 @@ type ChargeStatus string
 
 const (
 	ChargeSucceeded      ChargeStatus = "succeeded"
-	ChargeRequiresAction ChargeStatus = "requires_action" // off-session SCA/3DS needed
-	ChargeFailed         ChargeStatus = "failed"
+	ChargeRequiresAction ChargeStatus = "requires_action" // PaymentIntent carries a next_action to run
+	// ChargeAuthenticationRequired: the off-session confirmation was refused for
+	// SCA. The PaymentIntent has no next_action; the customer must come
+	// on-session and confirm it again with ChargeResult.PaymentMethodID.
+	ChargeAuthenticationRequired ChargeStatus = "authentication_required"
+	ChargeFailed                 ChargeStatus = "failed"
 )
 
 // ChargeRequest is one off-session charge against a stored credential.
@@ -73,7 +77,8 @@ func validateMetadata(md map[string]string) error {
 type ChargeResult struct {
 	Status           ChargeStatus
 	ProviderChargeID string // PaymentIntent / charge id (pi_xxx)
-	ClientSecret     string // PI client_secret — for the project to build an SCA confirmation page when Status==requires_action
+	ClientSecret     string // PI client_secret: requires_action runs its next_action; authentication_required re-confirms with PaymentMethodID (Stripe.js confirmCardPayment, stripe-ios STPPaymentHandler.confirmPayment)
+	PaymentMethodID  string // stored method to re-confirm with when Status==authentication_required
 	ActionURL        string // a provider-hosted redirect URL when one exists (often empty for off-session 3DS)
 	Error            string // decline / error message when failed
 }
@@ -96,6 +101,10 @@ type StripeChargeClient struct {
 	Stripe *StripeCheckoutClient
 }
 
+type stripePaymentMethodRef struct {
+	ID string `json:"id"`
+}
+
 type stripeNextAction struct {
 	RedirectToURL *struct {
 		URL string `json:"url"`
@@ -110,13 +119,17 @@ type stripeChargeResponse struct {
 	ClientSecret string            `json:"client_secret"`
 	NextAction   *stripeNextAction `json:"next_action"`
 	Error        *struct {
-		Code          string `json:"code"`
-		Message       string `json:"message"`
+		Code          string                  `json:"code"`
+		Message       string                  `json:"message"`
+		PaymentMethod *stripePaymentMethodRef `json:"payment_method"`
 		PaymentIntent *struct {
-			ID           string            `json:"id"`
-			Status       string            `json:"status"`
-			ClientSecret string            `json:"client_secret"`
-			NextAction   *stripeNextAction `json:"next_action"`
+			ID               string            `json:"id"`
+			Status           string            `json:"status"`
+			ClientSecret     string            `json:"client_secret"`
+			NextAction       *stripeNextAction `json:"next_action"`
+			LastPaymentError *struct {
+				PaymentMethod *stripePaymentMethodRef `json:"payment_method"`
+			} `json:"last_payment_error"`
 		} `json:"payment_intent"`
 	} `json:"error"`
 }
@@ -168,18 +181,21 @@ func (c *StripeChargeClient) Charge(ctx context.Context, req ChargeRequest) (Cha
 	}
 
 	var resp stripeChargeResponse
-	_ = json.Unmarshal(body, &resp) // defensive; missing fields stay zero
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return ChargeResult{}, fmt.Errorf("stripe charge: decode response: %w", err)
+	}
 
 	if status >= 200 && status < 300 {
 		res := ChargeResult{ProviderChargeID: resp.ID, ClientSecret: resp.ClientSecret}
 		switch resp.Status {
 		case "succeeded", "processing":
 			res.Status = ChargeSucceeded
-		case "requires_action", "requires_confirmation":
+		case "requires_action":
 			res.Status = ChargeRequiresAction
 			res.ActionURL = actionURL(resp.NextAction)
 		default:
 			res.Status = ChargeFailed
+			res.Error = "unexpected PaymentIntent status " + resp.Status
 		}
 		return res, nil
 	}
@@ -188,14 +204,28 @@ func (c *StripeChargeClient) Charge(ctx context.Context, req ChargeRequest) (Cha
 	// puts the PaymentIntent under error.payment_intent in that case.
 	if resp.Error != nil {
 		pi := resp.Error.PaymentIntent
-		authRequired := resp.Error.Code == "authentication_required" ||
-			(pi != nil && pi.Status == "requires_action")
-		if authRequired {
-			res := ChargeResult{Status: ChargeRequiresAction}
+		if pi != nil && pi.Status == "requires_action" {
+			return ChargeResult{
+				Status:           ChargeRequiresAction,
+				ProviderChargeID: pi.ID,
+				ClientSecret:     pi.ClientSecret,
+				ActionURL:        actionURL(pi.NextAction),
+			}, nil
+		}
+		if resp.Error.Code == "authentication_required" {
+			res := ChargeResult{Status: ChargeAuthenticationRequired}
+			if resp.Error.PaymentMethod != nil {
+				res.PaymentMethodID = resp.Error.PaymentMethod.ID
+			}
 			if pi != nil {
 				res.ProviderChargeID = pi.ID
 				res.ClientSecret = pi.ClientSecret
-				res.ActionURL = actionURL(pi.NextAction)
+				if res.PaymentMethodID == "" && pi.LastPaymentError != nil && pi.LastPaymentError.PaymentMethod != nil {
+					res.PaymentMethodID = pi.LastPaymentError.PaymentMethod.ID
+				}
+			}
+			if res.PaymentMethodID == "" {
+				res.PaymentMethodID = req.PaymentMethodToken
 			}
 			return res, nil
 		}

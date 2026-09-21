@@ -67,14 +67,16 @@ const (
 	UserStatusInitial    = "I"
 	UserStatusDeleted    = "D"
 
-	UserActivityCreate = "C"
-	UserActivityLogin  = "L"
-	UserActivityFailed = "F"
-	UserActivityLogout = "O"
-	UserActivityLock   = "X"
-	UserActivityUnlock = "U"
-	UserActivityPasswd = "P"
-	UserActivityDelete = "D"
+	UserActivityCreate  = "C"
+	UserActivityLogin   = "L"
+	UserActivityFailed  = "F"
+	UserActivityLogout  = "O"
+	UserActivityLock    = "X"
+	UserActivityUnlock  = "U"
+	UserActivityPasswd  = "P"
+	UserActivityDelete  = "D"
+	UserActivityProfile = "M"
+	UserActivityContact = "N"
 
 	// EncryptionCost is the bcrypt work factor for password hashes.
 	// Bumped from 10 → 12 in v0.4.1 to track OWASP 2024 guidance.
@@ -86,6 +88,7 @@ const (
 	qUserAccountPolicy  = "user_account_policy"
 	qUserMenu           = "user_menu"
 	qUserByLogin        = "user_by_login"
+	qUserByLoginEmail   = "user_by_login_email"
 	qUserById           = "user_by_id"
 	qPartnerUserByid    = "partner_user_by_id"
 	qPartnerUserByEmail = "partner_user_by_email"
@@ -199,6 +202,12 @@ SELECT DISTINCT
 SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time
   FROM user_account
  WHERE user_name = ?
+`,
+
+	qUserByLoginEmail: `
+SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time
+  FROM user_account
+ WHERE user_email = ?
 `,
 
 	qUserById: `
@@ -902,16 +911,33 @@ func (s *LocalUserService) GetUserById(userId int) (*model.UserSession, error) {
 	return session, nil
 }
 
-func (s *LocalUserService) GetUserByLogin(username string, password string) (*model.UserSession, error) {
-	ctx := s.ctx()
-	res, err := s.queryService.Query(ctx, qUserByLogin, username)
+// loginRow resolves a login identifier by user_name, then by user_email.
+func (s *LocalUserService) loginRow(ctx context.Context, identifier string) ([]any, error) {
+	res, err := s.queryService.Query(ctx, qUserByLogin, identifier)
 	if err != nil {
 		return nil, err
 	}
 	if len(res.Rows) == 0 {
-		return nil, fmt.Errorf("user account not found for username: %s", username)
+		email := normalizeEmail(identifier)
+		if !strings.Contains(email, "@") {
+			return nil, fmt.Errorf("user account not found for username: %s", identifier)
+		}
+		if res, err = s.queryService.Query(ctx, qUserByLoginEmail, email); err != nil {
+			return nil, err
+		}
+		if len(res.Rows) == 0 {
+			return nil, fmt.Errorf("user account not found for username: %s", identifier)
+		}
 	}
-	row := res.Rows[0]
+	return res.Rows[0], nil
+}
+
+func (s *LocalUserService) GetUserByLogin(username string, password string) (*model.UserSession, error) {
+	ctx := s.ctx()
+	row, err := s.loginRow(ctx, username)
+	if err != nil {
+		return nil, err
+	}
 	userAccountId := int(common.AsInt64(row[0]))
 	uStatus := common.AsString(row[5])
 	passdate, _ := row[6].(time.Time)
@@ -970,15 +996,10 @@ func (s *LocalUserService) GetUserByLogin(username string, password string) (*mo
 }
 
 func (s *LocalUserService) GetUserByUsername(username string) (*model.UserSession, error) {
-	ctx := s.ctx()
-	res, err := s.queryService.Query(ctx, qUserByLogin, username)
+	row, err := s.loginRow(s.ctx(), username)
 	if err != nil {
 		return nil, err
 	}
-	if len(res.Rows) == 0 {
-		return nil, fmt.Errorf("user account not found for username: %s", username)
-	}
-	row := res.Rows[0]
 	session := s.newSession(
 		int(common.AsInt64(row[0])),
 		common.AsString(row[2]),
@@ -1746,7 +1767,7 @@ func (s *LocalUserService) UpdateProfile(userID int, firstName, lastName, locale
 	if err != nil {
 		return err
 	}
-	return s.AddUserHistory(userID, 0, "", "PROFILE", "A", "")
+	return s.AddUserHistory(userID, 0, "", UserActivityProfile, "A", "")
 }
 
 // CreateContactChange mints a confirmation code for an email/phone change,
@@ -1824,7 +1845,7 @@ func (s *LocalUserService) ConfirmContactChange(userID int, channel, newValue st
 		return err
 	}
 	_, _ = s.queryService.Query(ctx, qConfirmContactChange, newValue, userID)
-	return s.AddUserHistory(userID, 0, "", "CONTACT_"+strings.ToUpper(channel), "A", "")
+	return s.AddUserHistory(userID, 0, "", UserActivityContact, "A", channel)
 }
 
 // newSession builds a UserSession with Issuer/IssuedAt/ExpiresAt consistently

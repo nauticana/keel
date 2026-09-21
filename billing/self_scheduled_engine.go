@@ -246,7 +246,7 @@ func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invI
 		if e.OnPaid != nil {
 			e.OnPaid(ctx, partnerID, invID)
 		}
-	case payment.ChargeRequiresAction:
+	case payment.ChargeRequiresAction, payment.ChargeAuthenticationRequired:
 		e.exec(ctx, qSSMarkAction, res.ProviderChargeID, invID)
 		if e.OnRequiresAction != nil {
 			e.OnRequiresAction(ctx, partnerID, invID, res)

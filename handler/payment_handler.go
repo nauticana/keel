@@ -50,7 +50,10 @@ type AbstractPaymentHandler struct {
 	// CustomerID returns the provider customer already stored for a user, or
 	// "" to let the provider create one. nil creates a customer per call.
 	CustomerID func(ctx context.Context, userID int) (string, error)
-	Journal    logger.ApplicationLogger
+	// LinkCustomer stores the customer the provider created when CustomerID
+	// returned "". payment.UserCustomerService backs both hooks.
+	LinkCustomer func(ctx context.Context, userID int, customerID string) error
+	Journal      logger.ApplicationLogger
 
 	AllowedRedirectHosts []string
 	AllowedPriceIDs      []string
@@ -283,6 +286,13 @@ func (h *AbstractPaymentHandler) CreateSetupIntent(w http.ResponseWriter, r *htt
 	if res == nil || res.ClientSecret == "" || res.CustomerID == "" || res.EphemeralKey == "" {
 		h.WriteRequestError(r, w, http.StatusBadGateway, "Bad Gateway", "setup intent returned an incomplete response")
 		return
+	}
+	if customerID == "" && h.LinkCustomer != nil {
+		if err := h.LinkCustomer(r.Context(), session.Id, res.CustomerID); err != nil {
+			h.logError("setup intent: link customer: %v", err)
+			h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", "failed to store customer")
+			return
+		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	common.WriteJSON(w, http.StatusOK, map[string]string{

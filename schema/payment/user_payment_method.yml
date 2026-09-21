@@ -31,7 +31,7 @@ columns:
     nullable: true
   - name: currency
     type: CHAR(3)
-    default: "USD"
+    nullable: true
   - name: is_default
     type: BOOLEAN
     default: "FALSE"

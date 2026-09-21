@@ -56,3 +56,28 @@ func TestLocalNotificationService_RoutesByTo(t *testing.T) {
 		t.Fatal("unknown channel: want error, got nil")
 	}
 }
+
+type recordingInbox struct {
+	recordingDispatcher
+	port.NotificationInbox
+	addedType string
+}
+
+func (r *recordingInbox) Add(_ context.Context, _ int, notificationType, _, _ string, _ map[string]string) (int64, error) {
+	r.addedType = notificationType
+	return 1, nil
+}
+
+func TestLocalNotificationService_InboxKeepsType(t *testing.T) {
+	inbox := &recordingInbox{}
+	notif := NewLocalNotificationService()
+	notif.Register(InboxChannel, inbox)
+	if err := notif.Send(context.Background(), port.NotificationRequest{
+		Channel: InboxChannel, UserID: 7, Type: "S", Title: "hello",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if inbox.addedType != "S" || inbox.method != "" {
+		t.Fatalf("type = %q, dispatcher method = %q", inbox.addedType, inbox.method)
+	}
+}

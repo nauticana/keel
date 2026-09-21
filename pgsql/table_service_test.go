@@ -23,13 +23,17 @@ var errSentinel = errors.New("sentinel: pgxQuerier short-circuit")
 // internals — keeping the test pure-Go with no real DB or pgx-Row stub
 // machinery.
 type captureQuerier struct {
-	sql  string
-	args []any
+	sql          string
+	args         []any
+	execSucceeds bool
 }
 
 func (q *captureQuerier) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	q.sql = sql
 	q.args = args
+	if q.execSucceeds {
+		return pgconn.CommandTag{}, nil
+	}
 	return pgconn.CommandTag{}, errSentinel
 }
 func (q *captureQuerier) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
@@ -485,4 +489,37 @@ func TestInsertSingle_DefaultSubstitution(t *testing.T) {
 			t.Fatalf("expected qty bound as NULL, got args: %v", qc.args)
 		}
 	})
+}
+
+type fixedIDs int64
+
+func (f fixedIDs) NextID() int64 { return int64(f) }
+
+func TestInsertSingle_GeneratesUnsequencedSurrogateKey(t *testing.T) {
+	s, qc := newService(t, defaultSubTable(), &stubAuthQuery{})
+	s.IdGenerator = fixedIDs(9001)
+	qc.execSucceeds = true
+	ctx := context.Background()
+
+	for name, item := range map[string]map[string]any{
+		"absent":   {"Name": "x"},
+		"zero":     {"Id": float64(0), "Name": "x"},
+		"negative": {"Id": int64(-4), "Name": "x"},
+		"invalid":  {"Id": "abc", "Name": "x"},
+	} {
+		id, err := s.InsertSingle(ctx, 0, 0, item)
+		if err != nil || id != 9001 || qc.args[0] != int64(9001) {
+			t.Fatalf("%s: id=%d err=%v args=%v", name, id, err, qc.args)
+		}
+	}
+
+	id, err := s.InsertSingle(ctx, 0, 0, map[string]any{"Id": "9007199254740993", "Name": "x"})
+	if err != nil || id != -1 || qc.args[0] != "9007199254740993" {
+		t.Fatalf("caller id must be kept: id=%d err=%v args=%v", id, err, qc.args)
+	}
+
+	s.IdGenerator = nil
+	if _, err := s.InsertSingle(ctx, 0, 0, map[string]any{"Name": "x"}); err == nil {
+		t.Fatal("no sequence and no generator must fail before the write")
+	}
 }

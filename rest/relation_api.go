@@ -395,7 +395,7 @@ func (s *RelationAPI) postInTx(ctx context.Context, view port.TxView, partnerID 
 	for _, item := range items {
 		opCode, ok := s.getOpCode(item)
 		if !ok {
-			continue
+			return model.NewBadRequest("op_code is required on every item of " + parentTable.TableName)
 		}
 		switch opCode {
 		case "D":
@@ -436,7 +436,7 @@ func (s *RelationAPI) postInTx(ctx context.Context, view port.TxView, partnerID 
 				return err
 			}
 		default:
-			return fmt.Errorf("unknown operation code %s", opCode)
+			return model.NewBadRequest("unknown operation code " + opCode)
 		}
 	}
 	return nil

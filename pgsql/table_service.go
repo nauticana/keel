@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -572,6 +573,8 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 	var args []any
 	hasSequence := false
 	seqColumn := ""
+	generatedKey := s.Table.UnsequencedSurrogateKey()
+	generatedID := int64(-1)
 	plc := 1
 	for _, col := range s.Table.Columns {
 		// R/H (and unmoded audit timestamps) are server-managed.
@@ -598,6 +601,13 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 		default:
 			v = s.ExtractValue(item, col)
 		}
+		if col == generatedKey && !isPositiveID(v) {
+			if s.IdGenerator == nil {
+				return -1, fmt.Errorf("table %s: key %s has no sequence and no id generator is wired", s.Table.TableName, col.ColumnName)
+			}
+			generatedID = s.IdGenerator.NextID()
+			v = generatedID
+		}
 		// A cleared/missing value (nil) on a column that has a DB default emits
 		// the SQL DEFAULT keyword so the default applies (e.g. NOT NULL ...
 		// DEFAULT 0) rather than binding NULL and tripping the constraint.
@@ -618,8 +628,21 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 		}
 		return id, nil
 	}
-	_, err := s.Client.Exec(ctx, sql, args...)
-	return -1, err
+	if _, err := s.Client.Exec(ctx, sql, args...); err != nil {
+		return -1, err
+	}
+	return generatedID, nil
+}
+
+// isPositiveID reports whether a caller-supplied key value is a usable id;
+// ids beyond 2^53 arrive from JSON clients as strings.
+func isPositiveID(v any) bool {
+	if str, ok := v.(string); ok {
+		id, err := strconv.ParseInt(str, 10, 64)
+		return err == nil && id > 0
+	}
+	id, ok := common.AsInt64OK(v)
+	return ok && id > 0
 }
 
 // Insert writes one row (when item is a scalar) or many (when item is

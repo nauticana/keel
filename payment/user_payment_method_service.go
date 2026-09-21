@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 )
@@ -94,9 +95,6 @@ func (s *UserPaymentMethodService) RecordFromSetupIntent(ctx context.Context, us
 	if setupIntentID == "" {
 		return fmt.Errorf("RecordFromSetupIntent: setupIntentID required")
 	}
-	if currency == "" {
-		currency = "USD"
-	}
 	last4, brand, expMonth, expYear := "", "", 0, 0
 	if s.CardClient != nil {
 		l, b, m, y, ok := s.CardClient.GetSetupIntentCard(ctx, setupIntentID)
@@ -109,7 +107,7 @@ func (s *UserPaymentMethodService) RecordFromSetupIntent(ctx context.Context, us
 		return fmt.Errorf("query service not available")
 	}
 	if _, err := qs.Query(ctx, qUPMInsert,
-		userID, "card", provider, setupIntentID, last4, brand, expMonth, expYear, currency,
+		userID, "card", provider, setupIntentID, last4, brand, expMonth, expYear, common.NullIfEmpty(currency),
 	); err != nil {
 		return fmt.Errorf("insert user_payment_method: %w", err)
 	}

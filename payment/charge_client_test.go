@@ -89,3 +89,50 @@ func TestCharge_RejectsInvalidMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestCharge_AuthenticationRequiredIsNotRequiresAction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		io.WriteString(w, `{"error":{"code":"authentication_required","message":"auth",
+			"payment_method":{"id":"pm_err"},
+			"payment_intent":{"id":"pi_1","status":"requires_payment_method","client_secret":"pi_1_secret"}}}`)
+	}))
+	defer srv.Close()
+
+	res, err := newTestChargeClient(srv).Charge(context.Background(), ChargeRequest{
+		CustomerToken: "cus_1", PaymentMethodToken: "pm_req", AmountMinor: 100, Currency: "CAD",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Status != ChargeAuthenticationRequired || res.PaymentMethodID != "pm_err" ||
+		res.ClientSecret != "pi_1_secret" || res.ProviderChargeID != "pi_1" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestCharge_RequiresConfirmationIsNotRequiresAction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":"pi_1","status":"requires_confirmation","client_secret":"pi_1_secret"}`)
+	}))
+	defer srv.Close()
+
+	res, err := newTestChargeClient(srv).Charge(context.Background(), ChargeRequest{AmountMinor: 100, Currency: "CAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != ChargeFailed || !strings.Contains(res.Error, "requires_confirmation") {
+		t.Fatalf("status = %q error = %q", res.Status, res.Error)
+	}
+}
+
+func TestCharge_RejectsMalformedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{`)
+	}))
+	defer srv.Close()
+
+	if _, err := newTestChargeClient(srv).Charge(context.Background(), ChargeRequest{AmountMinor: 100, Currency: "CAD"}); err == nil {
+		t.Fatal("malformed response must fail")
+	}
+}

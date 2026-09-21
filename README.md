@@ -54,21 +54,21 @@ graph TD
 | `cmd/schemagen` | CLI tool that converts `schema/*.yml` files into DDL + seed SQL |
 | `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
-| `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `ConsentHandler` (record a consent + export consent history), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
+| `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `ConsentHandler` (record a consent + export consent history), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `InboxHandler` (in-app notification inbox), `StorageHandler` (validated upload + signed preview URL), `WellKnownHandler` (app-association files), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
 | `idempotency` | `port.IdempotencyLedger` implementations: `MemoryLedger` and `PgsqlLedger` over `idempotency_ledger` — replay a completed key, refuse a live claim, and block on an unknown outcome until reconciliation |
 | `limiter` | Admission control: `FairSlotLimiter` (weighted, per-partner round-robin concurrency), `LocalRateLimiter` (per-partner + fleet token buckets per lane), `DistributedRateLimiter` (partner×fleet fixed windows charged atomically through `cache.MultiScopeAdmitter`, local fallback while the store is down), `LimitError` with `Retry-After` |
 | `clock` | Injectable time: `Clock` interface, real `System`, and `Fake` for tests that advance time instead of sleeping |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` (hex or base64) for TOTP seeds, refresh tokens, vault values; secret-backed `LoadKEK` and `Sealer`; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected. See **Trust Guards** below. |
-| `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API; `SendEmail` takes a `headers` map for RFC 8058 one-click unsubscribe etc.), `LocalNotificationService` (channel-keyed registry), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
+| `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API; `SendEmail` takes a `headers` map for RFC 8058 one-click unsubscribe etc.), `LocalNotificationService` (channel-keyed registry), `InboxService` (persisted in-app inbox, also the `"inbox"` channel), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory. Every provider also implements the writable `SecretRWProvider` (`PutSecret`) |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `redis_url` / `valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
-| `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob. `New(ctx, mode, WithSecretProvider(sp))` sources S3 credentials from the keystore instead of the AWS ambient env chain |
+| `storage` | Object storage: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob. `New(ctx, mode, WithSecretProvider(sp))` sources S3 credentials from the keystore instead of the AWS ambient env chain. `UploadService` adds a size cap, a sniffed content-type allow-list and short-lived signed read URLs |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
 | `metrics` | Optional Prometheus adapter for `port.MetricsRecorder`. It records into a downstream-owned registerer; keel creates no registry or scrape endpoint. |
-| `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository |
+| `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository, `UserCustomerService` (user ↔ provider customer) |
 | `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
 | `agency` | Agency/reseller lifecycle, frozen per-client percentage rates, append-only commission/reversal ledger, and monthly payout state machine over billing provenance |
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
@@ -78,7 +78,7 @@ graph TD
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
 | `content` | Read and edit fields of existing objects on external content platforms: `ResourceWriter` / `FieldReader` ports, `Writers` provider selection, typed provider errors, `ConnectionFieldReader`, and `ShopifyWriter` with an injected field map |
 | `browser` | Headless Chrome via chromedp: `Launcher` (profile-dir lifecycle, stale-profile sweep, crashpad-safe flags), `Session` (tabs on one Chrome), `Renderer` / `DOMRenderer` (load, evaluate JS, capture cookies). Chrome is a runtime requirement of binaries that import it |
-| `reference` | Public reference-data clients over `common.RequestJSON`: `CrUXClient` (Chrome UX Report p75 field data), `KGClient` (Google Knowledge Graph), `WikidataClient`; keys are named keystore secrets sent as a header |
+| `reference` | Public reference-data clients over `common.RequestJSON`: `CrUXClient` (Chrome UX Report p75 field data), `KGClient` (Google Knowledge Graph), `WikidataClient`, `IndexNowClient` (changed-URL submission); keys are named keystore secrets |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
@@ -394,6 +394,14 @@ grammar below to page correctly. `?order=` accepts
 comma-separated `column [ASC|DESC]` terms (`?order=amount DESC, id`); a term
 that doesn't resolve to a declared column is rejected, never silently dropped.
 
+Every POST item must carry `op_code` (`I` insert, `U` update, `D` delete, `R`
+unchanged parent whose children carry their own); a missing or unknown code is
+400. A sole integer key with a `table_sequence_usage` row takes the sequence's
+`nextval`; without one (and without a DB default) an insert that carries no
+positive id takes the next id from the repository's `port.BigintGenerator`
+(Snowflake by default), so surrogate keys are generated the same way on any
+database and stay unique across nodes. A caller-supplied positive id is kept.
+
 Unresolvable `?order=` terms and filter columns are `model.NewBadRequest`
 (400), not 500: the value is caller-controlled, so the server is healthy and
 the client is the one who must fix the request. This also makes the failure
@@ -569,7 +577,7 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 | `handler.QuotaEnforcer` | HTTP middleware: count new resources in a POST body → `CheckQuota` → **402** + optional post-write `After` hook. `CountOpCodeRows` builds your extractors | `Extractors []ResourceExtractor` |
 | `handler.FeatureGate` | entitlement via the `cap<0` flag convention: `FeatureAllowed`, `ListFeatures`, `FilterResponseField` (strip a premium child from a GET) | `Features`, `StripFeature`/`StripRecordKey` |
 | `payment.AddonReconciler` + `StripeAddonReconciler` | sync a metered add-on quantity as a subscription item (INERT when `PriceID==""`) | `PriceID`, `DesiredQty`, `SubIDFor` closures |
-| `payment.ChargeClient` + `StripeChargeClient` | off-session charge of a vaulted method (handles SCA-required & declines); forwards `ChargeRequest.Metadata` onto the PaymentIntent so the settled charge's webhook can correlate back; `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)` exposes the 4xx body and threads a caller idempotency key | `ChargeRequest` per call (`AmountMinor`, `IdempotencyKey`, `Metadata`) |
+| `payment.ChargeClient` + `StripeChargeClient` | off-session charge of a vaulted method. `ChargeRequiresAction` = the PaymentIntent has a `next_action` to run; `ChargeAuthenticationRequired` = the off-session confirmation was refused for SCA, so the customer confirms it again on-session with `ChargeResult.PaymentMethodID` + `ClientSecret` (Stripe.js `confirmCardPayment`, stripe-ios `STPPaymentHandler.confirmPayment`); declines and any other PaymentIntent status are `ChargeFailed` with the reason in `Error`; an undecodable provider response is returned as `err`; forwards `ChargeRequest.Metadata` onto the PaymentIntent so the settled charge's webhook can correlate back; `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)` exposes the 4xx body and threads a caller idempotency key | `ChargeRequest` per call (`AmountMinor`, `IdempotencyKey`, `Metadata`) |
 | `worker.AbstractBillingReconciler` | daily backstop pass over active partners (run from a systemd timer, never a CI cron) | `Partners`, `Reconcile` closures |
 | `billing.BillingEngine` (+ `ProviderSubscriptionEngine`, `SelfScheduledEngine`) | the recurring-engine strategy: provider runs the cycle **or** we self-schedule (own billing-run → off-session charge → invoice → dunning). `SelfScheduledEngine.BillSubscriptionsFromTable` enables keel's built-in **installment engine**: charges every due `partner_plan_subscription`, computes the per-installment amount from its snapshot terms, advances `next_charge_date`, and rolls to a new term (`auto_renew`) or ends the row at term end | engine choice + the self-scheduled closures (or just the flag for the built-in installment pass) |
 | basis: `invoice`/`invoice_line`/`partner_billing_customer`, `subscription_plan_price{plan_id,billing_cycle,term_count,term_type,amount_minor,currency,provider_price_id}` (per-offer prices, nested under `subscription_plan` via `rest_api_child`), `subscription_plan.{activation_mode,trial_days}`, `subscription_addon.{billing_cycle,term_count,term_type}`, `partner_plan_subscription`/`partner_addon_subscription.{billing_cycle,term_count,term_type,amount_minor,renewal_date,next_charge_date,…}` | the missing billing tables/columns | per-env seed of `subscription_plan_price` rows (amount + `provider_price_id`) + `activation_mode` |
@@ -950,7 +958,7 @@ defer closeTab()
 
 Depend on `browser.Renderer`, not `*DOMRenderer`, so a pooled implementation can replace it without touching callers. An expression that throws evaluates to `nil`; one that could not run is reported in `RenderResult.EvaluationErrors`. `Launcher.NewAllocator` is the lower-level entry for code that manages its own chromedp contexts.
 
-### `reference` — CrUX, Knowledge Graph, Wikidata
+### `reference` — CrUX, Knowledge Graph, Wikidata, IndexNow
 
 ```go
 key := reference.APIKey{Secrets: secrets, SecretName: "google_api_key"}
@@ -959,6 +967,8 @@ rec, err := crux.RecordForURL(ctx, pageURL, reference.CrUXFormFactorPhone) // fa
 ```
 
 `ErrNoAPIKey` means "not tried" (no secret named, or it is empty); `ErrCrUXNoData` means CrUX publishes nothing for the URL or origin; an unpublished metric is `CrUXNoValue`. `KGClient.FindEntity` and `WikidataClient.FindEntity` return an empty match, not an error, when nothing is found. `WikidataClient.UserAgent` is required by Wikimedia policy. Other failures are `*common.HTTPStatusError`, so `RateLimited()` / `Transient()` classify them.
+
+`IndexNowClient{APIKey, KeyLocation}.Submit(ctx, host, urls)` posts in batches of 10,000 and stops at the first failed batch; 400/403/422/429 map to `ErrIndexNowBadRequest` / `KeyInvalid` / `URLMismatch` / `RateLimited`. The host must serve the key at `/<key>.txt` or `KeyLocation`.
 
 ### `common` — URL and parsed-HTML helpers
 
@@ -1022,6 +1032,19 @@ Any error in the chain implementing `ErrorHeaders() http.Header` has those heade
 ```go
 return nil, handler.NewAPIError(http.StatusTooManyRequests, "rate limited").WithHeader("Retry-After", "30")
 ```
+
+### `handler.WellKnownHandler` — app-association files
+
+```go
+wk := &handler.WellKnownHandler{Documents: map[string][]byte{
+    handler.AppleAppSiteAssociationPath: aasaJSON,
+    handler.AndroidAssetLinksPath:       assetLinksJSON,
+}}
+if err := wk.Validate(); err != nil { … } // non-JSON document fails wiring
+srv.Handle(wk.GetPublicRoutes())
+```
+
+Answers GET/HEAD with `application/json` and a direct 200 — Apple and Android reject a redirect, so mount it on the apex host itself.
 
 ### `handler.CSRF` — double-submit-cookie helper
 
@@ -1205,8 +1228,11 @@ srv.Handle(publicHandler.GetPublicRoutes())
 
 `forgot` and `change` share one handler: an empty `old_password` selects the reset-by-email path. Public routes sit under `/public`, outside the `/api` prefix that `SSOMiddleware` gates — a client calling `/api/v1/public/...` hits the bearer check, not the route.
 
+`username` on login and on the three password routes is the account's
+`user_name` or, when it contains `@`, its `user_email` (`user_name` wins).
+
 This is an opt-in route map over existing handlers; it does not change their
-request contracts. In particular, `{email}` on `forgot` and `{token, new_password}`
+request contracts. In particular, an `email` field on `forgot` and `{token, new_password}`
 on `reset` are not supported by these handlers. Clients must use the documented
 username/code flow or retain their application-specific adapter. Keep custom
 routes instead of replacing them wholesale when their contracts differ.
@@ -1347,6 +1373,8 @@ Every social-create, social-re-auth, phone-create, and phone-re-auth path now wr
 
 - `UserActivityCreate` with object name `social:<provider>` or `phone` on first signup.
 - `UserActivityLogin` with the same object name on subsequent re-auths.
+
+`user_account_history.action_type` is a one-character code: `C` create, `L` login, `F` failed login, `O` logout, `X` lock, `U` unlock, `P` password, `D` delete, `M` profile change, `N` contact change (object name = `email` / `phone`). The `user_action_type` constant domain labels them in CRUD screens.
 
 Combined with the password-login history that was already written by `GetUserByLogin` / `GetUserByEmail`, every authenticated session in the system now leaves an audit-trail entry — answering "when did this user first sign in?" and "when did this social-only user last log in?" without ambiguity.
 
@@ -1692,6 +1720,22 @@ err = notif.Send(ctx, port.NotificationRequest{
 
 Unknown channel returns a typed error so callers can distinguish "channel not configured" from "dispatcher failed". `Channels()` lists registered channel names — useful for admin/diagnostic surfaces.
 
+### `dispatcher.InboxService` — in-app inbox
+
+Persists messages in `user_notification` and implements `port.NotificationInbox` (`Add`, `List`, `MarkRead`, `MarkAllRead`). Registered as a channel it stores `req.Type` as the consumer-defined `notification_type`:
+
+```go
+inbox := &dispatcher.InboxService{DB: db}
+notif.Register(dispatcher.InboxChannel, inbox)
+inboxHandler := handler.InboxHandler{AbstractHandler: base, Inbox: inbox} // mount GetAuthRoutes()
+```
+
+| Route | |
+|---|---|
+| `GET /inbox?before=<id>&limit=<n>` | `port.InboxPage{messages, unreadCount}`, newest first; `before` pages backwards, `limit` caps at 100 |
+| `POST /inbox/mark_read` `{"id": "<id>"}` | 204; 404 for a message the caller does not own |
+| `POST /inbox/mark_all_read` | 204 |
+
 ### `dispatcher.EmailDispatcher` — MailClient adapter
 
 Wraps the existing `MailClient` so SMTP/API email plugs into the dispatcher registry:
@@ -1987,7 +2031,7 @@ type IntentClient interface {
 // IntentResult{IntentID, ClientSecret, CustomerID, EphemeralKey}
 ```
 
-Set `AbstractPaymentHandler.Intents` and mount `CreateSetupIntent`, by convention at `POST /api/billing/setup-intent`. It is always JWT-gated, takes no body, derives the email and `metadata[user_id]` from the authenticated session, and answers `{setupIntentId, clientSecret, customerId, ephemeralKey}` with `Cache-Control: no-store`. It never accepts a caller-supplied provider customer ID: set `AbstractPaymentHandler.CustomerID` to a lookup of the customer id your app stored for the user (from the first response or the `setup_intent.succeeded` webhook), otherwise every call creates a new provider customer. Payment intents carry an amount, so there is no HTTP route for them: the service that knows the price calls `CreatePaymentIntent` and hands the client secret to the app only when Stripe reports `requires_action` (3DS). `StripeCheckoutClient.APIVersion` pins the `Stripe-Version` header used to create ephemeral keys; other Stripe calls retain the account's configured API version.
+Set `AbstractPaymentHandler.Intents` and mount `CreateSetupIntent`, by convention at `POST /api/billing/setup-intent`. It is always JWT-gated, takes no body, derives the email and `metadata[user_id]` from the authenticated session, and answers `{setupIntentId, clientSecret, customerId, ephemeralKey}` with `Cache-Control: no-store`. It never accepts a caller-supplied provider customer ID: wire `payment.UserCustomerService{DB, Provider: payment.ProviderStripe}` into the `CustomerID` and `LinkCustomer` hooks — the first intent's customer is stored in `user_billing_customer` and reused; with `CustomerID` unset every call creates a new provider customer. `UserPaymentMethodService.RecordFromSetupIntent` stores `currency` as NULL unless one is passed: a SetupIntent carries none, so charge in the order's currency, not the card's. Payment intents carry an amount, so there is no HTTP route for them: the service that knows the price calls `CreatePaymentIntent` and hands the client secret to the app only when Stripe reports `requires_action` (3DS). `StripeCheckoutClient.APIVersion` pins the `Stripe-Version` header used to create ephemeral keys; other Stripe calls retain the account's configured API version.
 
 ### What each project still owns
 
@@ -2351,6 +2395,7 @@ Selection is driven by flag variables:
   - **Cloudflare R2 / S3-compatible**: use `s3` plus `s3_endpoint=https://<account>.r2.cloudflarestorage.com` (this switches the client to path-style addressing). `s3_endpoint` replaces the former `S3_ENDPOINT` env var. AWS/R2 credentials still resolve through the AWS SDK's own chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `AWS_REGION=auto` for R2) — that is the SDK's concern, not a keel knob.
   - **Public URLs**: `ObjectStorage.PublicURL(bucket, key)` returns a stable, non-expiring served URL (no signing, no API call) for publicly-readable buckets. GCS → `https://storage.googleapis.com/<bucket>/<key>`; S3/R2 → `<storage_public_base_url>/<key>` (set `storage_public_base_url` to an R2 custom domain or `*.r2.dev` host — the bucket is not in the path because the domain already maps to it; empty returns `""`); Azure → `<account-url>/<container>/<key>`. Use `GetSignedURL` instead when the bucket is private.
   - **Azure**: requires `storage_account_url=https://<account>.blob.core.windows.net/`; auth via `azidentity.DefaultAzureCredential`.
+  - **HTTP surface**: `storage.UploadService{Storage, Bucket, MaxBytes, ContentTypes, SignedURLSeconds}` sniffs the content type from the bytes (the client's claim is ignored), enforces the allow-list and size cap, and mints signed read URLs. `handler.StorageHandler{Uploads, UploadKey, PreviewKey}` exposes `Upload` (multipart field `file` → 201 `{key, contentType, url}`; 415 / 413 on a refused type / size) and `Preview` (→ `{url}`, `no-store`). The app mounts both and injects the two hooks, which pick the object key and authorize the caller (return a `*model.AppError` to refuse). `storage.SanitizeFilename` reduces a client filename to a safe key segment.
 - `messaging_mode=noop|gcp|aws|nats` (empty = error)
 
 ## Messaging (publisher / subscriber)
@@ -2569,7 +2614,7 @@ the repository has one database-diagram source of truth.
 
 ### Table Summary
 
-All 78 tables emitted by `schema/basis_pgsql.sql` are listed individually so
+All 80 tables emitted by `schema/basis_pgsql.sql` are listed individually so
 this summary can be checked directly against the generated schema.
 
 | Table | Purpose |
@@ -2611,6 +2656,7 @@ this summary can be checked directly against the generated schema.
 | `consent_policy` | Versioned regional consent-policy documents |
 | `consent_event` | Immutable user or pre-registration consent evidence |
 | `device_token` | Push-notification device registrations |
+| `user_notification` | In-app notification inbox (`read_at` NULL = unread) |
 | `oauth_client` | OAuth 2.1 client registrations |
 | `subscription_plan` | Subscription-plan catalogue |
 | `oauth_authorization_code` | Short-lived OAuth authorization codes |
@@ -2627,7 +2673,8 @@ this summary can be checked directly against the generated schema.
 | `payment_webhook_log` | Raw inbound payment-provider webhooks with idempotency + audit |
 | `payment_method` | Stored payment methods per partner (provider customer tokens) |
 | `user_bank_info` | Versioned payout destinations — one active row per (user, partner), history preserved |
-| `user_payment_method` | Saved end-user cards, wallets, and bank methods |
+| `user_payment_method` | Saved end-user cards, wallets, and bank methods (`currency` nullable — unknown for a SetupIntent card) |
+| `user_billing_customer` | User ↔ provider-customer token, one per (user, provider) |
 | `table_action` | Authorized custom actions surfaced by generic CRUD UIs |
 | `invoice` | Partner invoices and provider reconciliation state |
 | `invoice_line` | Domain-neutral invoice lines with minor units and service periods |

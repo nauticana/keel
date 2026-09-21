@@ -23,6 +23,7 @@ tables:
   - user_otp
   - user_social_provider
   - device_token
+  - user_notification
   - authorization_object
   - authorization_object_action
   - authorization_role

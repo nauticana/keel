@@ -48,6 +48,20 @@ type TableDefinition struct {
 	Actions []*TableAction
 }
 
+// UnsequencedSurrogateKey returns the sole integer key column the database
+// does not generate (no table_sequence_usage row, no DB default), else nil.
+// Inserts fill it from the repository's id generator.
+func (t *TableDefinition) UnsequencedSurrogateKey() *TableColumn {
+	if len(t.Keys) != 1 {
+		return nil
+	}
+	key := t.Keys[0]
+	if key.DataType != DT_INT || key.SequenceName != "" || key.HasDefault {
+		return nil
+	}
+	return key
+}
+
 func (t *TableDefinition) TypeScriptColumnsNouser(indent string) string {
 	s := ""
 	for _, col := range t.Columns {

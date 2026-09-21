@@ -1,0 +1,23 @@
+table: user_billing_customer
+comment: User ↔ provider-customer token, one row per (user, provider); the user-payer sibling of partner_billing_customer.
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: provider
+    type: VARCHAR(30)
+  - name: customer_token
+    type: VARCHAR(255)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [user_id, provider]
+foreign_keys:
+  - name: user_billing_customers
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: idx_user_billing_customer_token
+    columns: [provider, customer_token]
+    unique: true

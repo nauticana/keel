@@ -1,6 +1,7 @@
 // Package reference holds clients for public reference-data APIs: Chrome UX
-// Report field data, Google Knowledge Graph and Wikidata entity search. All
-// ride common.RequestJSON, so outbound limits and typed status errors apply.
+// Report field data, Google Knowledge Graph, Wikidata entity search and IndexNow
+// URL submission. All ride common.RequestJSON, so outbound limits and typed
+// status errors apply.
 package reference
 
 import (
@@ -23,16 +24,24 @@ type APIKey struct {
 	SecretName string
 }
 
-func (k APIKey) headers(ctx context.Context) (map[string]string, error) {
+func (k APIKey) value(ctx context.Context) (string, error) {
 	if k.Secrets == nil || k.SecretName == "" {
-		return nil, ErrNoAPIKey
+		return "", ErrNoAPIKey
 	}
 	key, err := k.Secrets.GetSecret(ctx, k.SecretName)
 	if err != nil {
-		return nil, fmt.Errorf("reference: read %s: %w", k.SecretName, err)
+		return "", fmt.Errorf("reference: read %s: %w", k.SecretName, err)
 	}
 	if key == "" {
-		return nil, ErrNoAPIKey
+		return "", ErrNoAPIKey
+	}
+	return key, nil
+}
+
+func (k APIKey) headers(ctx context.Context) (map[string]string, error) {
+	key, err := k.value(ctx)
+	if err != nil {
+		return nil, err
 	}
 	return map[string]string{googleAPIKeyHeader: key}, nil
 }

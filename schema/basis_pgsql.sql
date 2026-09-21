@@ -294,6 +294,23 @@ CREATE INDEX IF NOT EXISTS idx_device_token_user_active ON device_token(user_id,
 CREATE SEQUENCE IF NOT EXISTS device_token_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('device_token', 'id', 'device_token_seq') ON CONFLICT DO NOTHING;
 
+-- In-app notification inbox, one row per message shown to a user. notification_type is consumer-defined.
+CREATE TABLE IF NOT EXISTS user_notification (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    notification_type                    VARCHAR(20)  ,
+    title                                VARCHAR(200)  NOT NULL,
+    body                                 TEXT         ,
+    data                                 TEXT         ,
+    read_at                              TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT user_notification_pk PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_notification_user ON user_notification(user_id, created_at);
+
+CREATE SEQUENCE IF NOT EXISTS user_notification_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_notification', 'id', 'user_notification_seq') ON CONFLICT DO NOTHING;
+
 -- RBAC authorization object definitions
 CREATE TABLE IF NOT EXISTS authorization_object (
     id                                   VARCHAR(30)   NOT NULL,
@@ -742,7 +759,7 @@ CREATE TABLE IF NOT EXISTS user_payment_method (
     brand                                VARCHAR(20)  ,
     expiry_month                         SMALLINT     ,
     expiry_year                          SMALLINT     ,
-    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    currency                             CHAR(3)      ,
     is_default                           BOOLEAN       NOT NULL DEFAULT FALSE,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT user_payment_method_pk PRIMARY KEY (id)
@@ -751,6 +768,16 @@ CREATE INDEX IF NOT EXISTS idx_user_payment_method_user ON user_payment_method(u
 
 CREATE SEQUENCE IF NOT EXISTS user_payment_method_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_payment_method', 'id', 'user_payment_method_seq') ON CONFLICT DO NOTHING;
+
+-- User ↔ provider-customer token, one row per (user, provider); the user-payer sibling of partner_billing_customer.
+CREATE TABLE IF NOT EXISTS user_billing_customer (
+    user_id                              BIGINT        NOT NULL,
+    provider                             VARCHAR(30)   NOT NULL,
+    customer_token                       VARCHAR(255)  NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT user_billing_customer_pk PRIMARY KEY (user_id, provider)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_billing_customer_token ON user_billing_customer(provider, customer_token);
 
 -- Versioned (user, partner) bank account details for out-bound payouts.
 -- Owned by keel/payout. Raw routing details live with the provider
@@ -1352,6 +1379,15 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_notifications' AND table_name = 'user_notification'
+  ) THEN
+    ALTER TABLE user_notification ADD CONSTRAINT user_notifications FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'authorization_object_actions' AND table_name = 'authorization_object_action'
   ) THEN
     ALTER TABLE authorization_object_action ADD CONSTRAINT authorization_object_actions FOREIGN KEY (authorization_object_id) REFERENCES authorization_object(id);
@@ -1634,6 +1670,15 @@ BEGIN
      WHERE constraint_name = 'user_payment_method_users' AND table_name = 'user_payment_method'
   ) THEN
     ALTER TABLE user_payment_method ADD CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_billing_customers' AND table_name = 'user_billing_customer'
+  ) THEN
+    ALTER TABLE user_billing_customer ADD CONSTRAINT user_billing_customers FOREIGN KEY (user_id) REFERENCES user_account(id);
   END IF;
 END $$;
 DO $$

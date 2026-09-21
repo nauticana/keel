@@ -53,9 +53,13 @@ func (s *StorageGCS) Close() error {
 }
 
 func (s *StorageGCS) Upload(ctx context.Context, bucket, key string, reader io.Reader, contentType string) error {
+	// Close commits whatever was written; only a cancelled context aborts.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	w := s.client.Bucket(bucket).Object(key).NewWriter(ctx)
 	w.ContentType = contentType
 	if _, err := io.Copy(w, reader); err != nil {
+		cancel()
 		_ = w.Close()
 		return fmt.Errorf("gcs: failed to upload %s/%s: %w", bucket, key, err)
 	}

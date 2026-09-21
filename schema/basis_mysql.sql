@@ -298,6 +298,21 @@ CREATE TABLE IF NOT EXISTS device_token (
 CREATE UNIQUE INDEX device_token_user_token_uq ON device_token(user_id, token);
 CREATE INDEX idx_device_token_user_active ON device_token(user_id, is_active);
 
+-- In-app notification inbox, one row per message shown to a user. notification_type is consumer-defined.
+CREATE TABLE IF NOT EXISTS user_notification (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    notification_type                    VARCHAR(20)  ,
+    title                                VARCHAR(200)  NOT NULL,
+    body                                 TEXT         ,
+    data                                 TEXT         ,
+    read_at                              DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT user_notifications FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_user_notification_user ON user_notification(user_id, created_at);
+
 -- RBAC authorization object definitions
 CREATE TABLE IF NOT EXISTS authorization_object (
     id                                   VARCHAR(30)   NOT NULL,
@@ -747,13 +762,24 @@ CREATE TABLE IF NOT EXISTS user_payment_method (
     brand                                VARCHAR(20)  ,
     expiry_month                         SMALLINT     ,
     expiry_year                          SMALLINT     ,
-    currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
+    currency                             CHAR(3)      ,
     is_default                           TINYINT(1)    NOT NULL DEFAULT 0,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_user_payment_method_user ON user_payment_method(user_id, is_default);
+
+-- User ↔ provider-customer token, one row per (user, provider); the user-payer sibling of partner_billing_customer.
+CREATE TABLE IF NOT EXISTS user_billing_customer (
+    user_id                              BIGINT        NOT NULL,
+    provider                             VARCHAR(30)   NOT NULL,
+    customer_token                       VARCHAR(255)  NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, provider),
+    CONSTRAINT user_billing_customers FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_user_billing_customer_token ON user_billing_customer(provider, customer_token);
 
 -- Versioned (user, partner) bank account details for out-bound payouts.
 -- Owned by keel/payout. Raw routing details live with the provider
