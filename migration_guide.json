@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.71",
+   "title": "InboxHandler routes move under /notifications",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "handler.InboxHandler serves /notifications instead of /inbox, leaving the inbox path free for a mail surface. Payloads, methods and Go symbols are unchanged.",
+   "body_markdown": "### Breaking\n\n| Before | After |\n|---|---|\n| `GET /inbox` | `GET /notifications` |\n| `POST /inbox/mark_read` | `POST /notifications/mark_read` |\n| `POST /inbox/mark_all_read` | `POST /notifications/mark_all_read` |\n\nAll under `common.RestPrefix`. Update every client that calls the old paths; there is no alias.\n"
+  },
+  {
    "version": "v1.2.70",
    "title": "authentication_required charge status; email login; user customer store; inbox; storage, well-known and IndexNow surfaces",
    "tags": [

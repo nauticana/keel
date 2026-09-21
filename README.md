@@ -1732,9 +1732,9 @@ inboxHandler := handler.InboxHandler{AbstractHandler: base, Inbox: inbox} // mou
 
 | Route | |
 |---|---|
-| `GET /inbox?before=<id>&limit=<n>` | `port.InboxPage{messages, unreadCount}`, newest first; `before` pages backwards, `limit` caps at 100 |
-| `POST /inbox/mark_read` `{"id": "<id>"}` | 204; 404 for a message the caller does not own |
-| `POST /inbox/mark_all_read` | 204 |
+| `GET /notifications?before=<id>&limit=<n>` | `port.InboxPage{messages, unreadCount}`, newest first; `before` pages backwards, `limit` caps at 100 |
+| `POST /notifications/mark_read` `{"id": "<id>"}` | 204; 404 for a message the caller does not own |
+| `POST /notifications/mark_all_read` | 204 |
 
 ### `dispatcher.EmailDispatcher` — MailClient adapter
 

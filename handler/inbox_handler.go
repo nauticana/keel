@@ -18,9 +18,9 @@ type InboxHandler struct {
 
 func (h *InboxHandler) GetAuthRoutes() map[string]func(w http.ResponseWriter, r *http.Request) {
 	return map[string]func(w http.ResponseWriter, r *http.Request){
-		common.RestPrefix + "/inbox":               h.List,
-		common.RestPrefix + "/inbox/mark_read":     h.MarkRead,
-		common.RestPrefix + "/inbox/mark_all_read": h.MarkAllRead,
+		common.RestPrefix + "/notifications":               h.List,
+		common.RestPrefix + "/notifications/mark_read":     h.MarkRead,
+		common.RestPrefix + "/notifications/mark_all_read": h.MarkAllRead,
 	}
 }
 
