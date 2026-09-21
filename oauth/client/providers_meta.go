@@ -32,6 +32,7 @@ func NewMetaProvider(svc CredentialStore, name, callbackURL, appID, appSecretNam
 		// The persisted credential is a long-lived (60-day) token, not a refreshable
 		// one — Test exercises it directly rather than forcing a refresh.
 		SkipRefreshOnTest: true,
+		NoImpliedScopes:   true,
 	}
 	b.DeriveCredential = func(ctx context.Context, t *oauth2.Token) (string, error) {
 		appSecret, err := svc.GetSecret(ctx, appSecretName)

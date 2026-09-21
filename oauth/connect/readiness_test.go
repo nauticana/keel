@@ -151,8 +151,8 @@ func TestResolveAccessOAuthClaimsThenServesFromCache(t *testing.T) {
 	if claim.args[4] != 3 {
 		t.Fatalf("claimed at rev %v, want 3", claim.args[4])
 	}
-	if done, _ := qs.last(qCompleteCAS); done.args[3] != 4 {
-		t.Fatalf("completed on rev %v, want the claimed rev 4", done.args[3])
+	if done, _ := qs.last(qCompleteCAS); done.args[4] != 4 {
+		t.Fatalf("completed on rev %v, want the claimed rev 4", done.args[4])
 	}
 
 	setRev(qs, 5) // claim + completion each bumped rev

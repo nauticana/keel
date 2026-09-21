@@ -18,6 +18,7 @@ type fakeStore struct {
 	state       string
 	gotCred     string // captured by UpsertConnection
 	gotEndpoint string
+	gotScopes   []string
 }
 
 func (s *fakeStore) CreateOAuthState(_ context.Context, _ int64, _ string, _ map[string]string) (string, error) {
@@ -26,8 +27,8 @@ func (s *fakeStore) CreateOAuthState(_ context.Context, _ int64, _ string, _ map
 func (s *fakeStore) ConsumeOAuthState(_ context.Context, _, _ string) (int64, map[string]string, error) {
 	return 1, nil, nil
 }
-func (s *fakeStore) UpsertConnection(_ context.Context, _ int64, _, _, credRef, apiEndpoint string) error {
-	s.gotCred, s.gotEndpoint = credRef, apiEndpoint
+func (s *fakeStore) UpsertConnection(_ context.Context, _ int64, conn Connection) error {
+	s.gotCred, s.gotEndpoint, s.gotScopes = conn.CredRef, conn.APIEndpoint, conn.GrantedScopes
 	return nil
 }
 func (s *fakeStore) UpdateConnectionStatus(_ context.Context, _ int64, _, _, _ string) error {
@@ -38,6 +39,9 @@ func (s *fakeStore) GetConnectionCredentials(_ context.Context, _ int64, _ strin
 }
 func (s *fakeStore) RefreshAccessToken(_ context.Context, _ int64, _ string) (string, error) {
 	return "access", nil
+}
+func (s *fakeStore) GrantedScopes(_ context.Context, _ int64, _ string) ([]string, error) {
+	return s.gotScopes, nil
 }
 func (s *fakeStore) GetSecret(_ context.Context, key string) (string, error) {
 	return s.secrets[key], nil

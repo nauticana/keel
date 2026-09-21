@@ -1,13 +1,15 @@
-// Package content reads and edits fields of existing objects on external
-// content platforms. It owns the ports, provider selection, typed provider
-// errors and provider transports; which logical fields exist, and where each
-// lives on a provider, is injected by the app.
+// Package content reads, edits, creates and deletes objects on external content
+// platforms, and puts files on them. It owns the ports, provider selection,
+// typed provider errors and provider transports; which logical fields exist,
+// where each lives on a provider, and which object to create with what content,
+// are injected by the app.
 package content
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 )
 
 var (
@@ -24,6 +26,11 @@ var (
 	ErrThrottled = errors.New("content: provider throttled the request")
 	// ErrRejected: the provider understood the request and refused the change.
 	ErrRejected = errors.New("content: provider rejected the request")
+	// ErrUnsupportedOperation: the provider's writer does not implement the
+	// operation (creating, deleting or uploading) the caller asked for.
+	ErrUnsupportedOperation = errors.New("content: operation unsupported by provider")
+	// ErrMediaTooLarge: the upload exceeds the uploader's size cap.
+	ErrMediaTooLarge = errors.New("content: media exceeds the size cap")
 )
 
 // ResourceRef addresses one object through one authorized connection.
@@ -42,6 +49,25 @@ type WriteResult struct {
 type ResourceWriter interface {
 	ReadField(ctx context.Context, ref ResourceRef, field string) (string, error)
 	UpdateField(ctx context.Context, ref ResourceRef, field, value string) (WriteResult, error)
+}
+
+// ResourceCreator creates an object of ref.Kind from the same logical fields
+// UpdateField writes. ref.ID is ignored on the way in; the returned ref carries
+// the provider's own id, so the caller can edit or delete what it just made.
+type ResourceCreator interface {
+	Create(ctx context.Context, ref ResourceRef, fields map[string]string) (ResourceRef, WriteResult, error)
+}
+
+// ResourceDeleter removes the object ref addresses.
+type ResourceDeleter interface {
+	Delete(ctx context.Context, ref ResourceRef) (WriteResult, error)
+}
+
+// MediaUploader puts a file on the platform's own CDN and returns the URL to
+// write into a field — storage puts bytes in our bucket, which is not what a CMS
+// field wants. ref.Kind and ref.ID are unused; the connection is what matters.
+type MediaUploader interface {
+	Upload(ctx context.Context, ref ResourceRef, name, contentType string, r io.Reader) (url string, result WriteResult, err error)
 }
 
 // FieldReader reads a live field through the partner's own connection.
@@ -63,6 +89,33 @@ func (w Writers) For(provider string) (ResourceWriter, error) {
 		return writer, nil
 	}
 	return nil, fmt.Errorf("%w: %q", ErrUnsupportedProvider, provider)
+}
+
+// Creator, Deleter and Uploader select the provider's writer and report whether
+// it carries that capability, so a caller never type-asserts on its own.
+func (w Writers) Creator(provider string) (ResourceCreator, error) {
+	return capability[ResourceCreator](w, provider, "create")
+}
+
+func (w Writers) Deleter(provider string) (ResourceDeleter, error) {
+	return capability[ResourceDeleter](w, provider, "delete")
+}
+
+func (w Writers) Uploader(provider string) (MediaUploader, error) {
+	return capability[MediaUploader](w, provider, "upload")
+}
+
+func capability[T any](w Writers, provider, op string) (T, error) {
+	var zero T
+	writer, err := w.For(provider)
+	if err != nil {
+		return zero, err
+	}
+	able, ok := writer.(T)
+	if !ok {
+		return zero, fmt.Errorf("%w: %s cannot %s", ErrUnsupportedOperation, provider, op)
+	}
+	return able, nil
 }
 
 // ConnectionFieldReader is the FieldReader over an AccessResolver and Writers.

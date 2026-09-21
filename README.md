@@ -61,7 +61,7 @@ graph TD
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` (hex or base64) for TOTP seeds, refresh tokens, vault values; secret-backed `LoadKEK` and `Sealer`; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected. See **Trust Guards** below. |
-| `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API; `SendEmail` takes a `headers` map for RFC 8058 one-click unsubscribe etc.), `LocalNotificationService` (channel-keyed registry), `InboxService` (persisted in-app inbox, also the `"inbox"` channel), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
+| `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API; `SendEmail` takes a `headers` map for RFC 8058 one-click unsubscribe etc.), `LocalNotificationService` (channel-keyed registry with suppression + dedupe), `SuppressionService` (table-backed `port.NotificationSuppressor`), `InboxService` (persisted in-app inbox, also the `"inbox"` channel), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
 | `secret` | Secret providers: Local (JSON file), Google Secret Manager, AWS Secrets Manager, Azure Key Vault, Infisical + factory. Every provider also implements the writable `SecretRWProvider` (`PutSecret`) |
 | `logger` | Application loggers: File-based, GCP Cloud Logging (structured JSON), AWS CloudWatch, Azure Monitor Logs + factory |
 | `cache` | Cache service. Single port covers KV + list + pub/sub. Backends: Redis/Valkey (single-node or Redis-Cluster) and an in-process memory implementation that's the default fallback when no `redis_url` / `valkey_url` is set — that keeps OTP and 2FA-verify rate limits effective without a separate cache server. Passwords sourced from secret (`redis_password` / `valkey_password`). |
@@ -75,10 +75,11 @@ graph TD
 | `push` | `port.MessageDispatcher` push implementations — FCM, native APNs, per-platform router, NoOp fallback + factory |
 | `recording` | Consent-gated capture sessions: participants, `Start` fails closed unless every party's current session-scoped consent is affirmative, capture tokens with renewal, media stored by object reference, signed read URLs for participants |
 | `realtime` | WebSocket hub (`port.WebSocketHub`): per-user sockets, channel subscribe/unsubscribe protocol, cache-backed relay so workers and other pods deliver to a connected user (`PublishUser` / `PublishChannel`) |
-| `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — and `AbstractWorker`, the embed-only one-call worker bootstrap |
-| `content` | Read and edit fields of existing objects on external content platforms: `ResourceWriter` / `FieldReader` ports, `Writers` provider selection, typed provider errors, `ConnectionFieldReader`, and `ShopifyWriter` with an injected field map |
+| `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — `AbstractWorker`, the embed-only one-call worker bootstrap, `JobLoop` for queue-shaped work and `Scheduler` for recurring per-tenant work over `work_schedule` |
+| `content` | Read, edit, create and delete objects on external content platforms, and upload files to them: `ResourceWriter` / `ResourceCreator` / `ResourceDeleter` / `MediaUploader` / `FieldReader` ports, `Writers` provider selection with capability accessors, typed provider errors, `ConnectionFieldReader`, and `ShopifyWriter` with an injected field map |
 | `browser` | Headless Chrome via chromedp: `Launcher` (profile-dir lifecycle, stale-profile sweep, crashpad-safe flags), `Session` (tabs on one Chrome), `Renderer` / `DOMRenderer` (load, evaluate JS, capture cookies). Chrome is a runtime requirement of binaries that import it |
-| `reference` | Public reference-data clients over `common.RequestJSON`: `CrUXClient` (Chrome UX Report p75 field data), `KGClient` (Google Knowledge Graph), `WikidataClient`, `IndexNowClient` (changed-URL submission); keys are named keystore secrets |
+| `reference` | Public reference-data clients over `common.RequestJSON`: `CrUXClient` (Chrome UX Report p75 field data), `KGClient` (Google Knowledge Graph), `WikidataClient`, `IndexNowClient` (changed-URL submission), `Geocoder` / `GoogleGeocodeClient` (address ↔ point with a precision the caller can reject on); keys are named keystore secrets |
+| `geo` | `AddressService` fills `partner_address.latitude` / `longitude` from a `reference.Geocoder`, refusing a placement coarser than `MinPrecision` |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
@@ -909,6 +910,58 @@ if err := sqlsmoke.LoadSchema(ctx, conn, "sql/basis.sql", "sql/app.sql"); err !=
 sqlsmoke.Run(t, conn, map[string]map[string]string{"orders": orderQueries}) // one subtest per query
 ```
 
+### OAuth connections record the scopes they were granted
+
+Every provider's exchange writes what the provider actually returned into `partner_credential.granted_scopes`, and a refresh that reports a scope set updates it — so a feature needing a wider grant than onboarding asked for can tell, before it calls the provider and gets a 403:
+
+```go
+missing, err := store.MissingScopes(ctx, partnerID, "gsc", []string{"https://www.googleapis.com/auth/webmasters"})
+if len(missing) > 0 {
+    // ask this partner to re-consent, for exactly these scopes
+    u, _ := provider.AuthURL(ctx, partnerID, map[string]string{client.ParamExtraScopes: client.JoinScopes(missing)})
+}
+```
+
+`ParamExtraScopes` widens the consent URL without a second provider registration. The merged requested set is kept in OAuth state because RFC 6749 lets a provider omit `scope` when it granted that exact set; `BaseProvider.NoImpliedScopes` (set for Meta, where users decline individual permissions) records nothing instead. `BaseProvider.RequiredScopes` refuses a narrower grant before persistence. `GrantedScopes` returns `connect.ErrNoActiveConnection` when no connection exists.
+
+### `worker.Scheduler` — which tenants are due?
+
+`JobLoop` covers queue-shaped work. `Scheduler` covers the other shape — recurring per-tenant work — so a worker stops re-deriving due-ness from whatever table its task happens to write:
+
+```go
+sched := &worker.Scheduler{DB: db}
+_ = sched.Schedule(ctx, partnerID, "review_poll", 6*time.Hour)   // enroll; re-intervalling keeps its place
+
+for _, task := range due {           // due, err := sched.Due(ctx, "review_poll", 25)
+    if err := poll(ctx, task.PartnerID); err != nil {
+        _ = sched.Fail(ctx, task, err)
+        continue
+    }
+    _ = sched.Complete(ctx, task)
+}
+```
+
+Due-ness lives in `work_schedule`, so an empty run still counts and failures back off exponentially. Each `ScheduledTask` carries a lease token; `Complete` and `Fail` return `worker.ErrScheduleClaimLost` for a claim that was re-claimed after its lease lapsed, or whose tenant was dropped. The interval and task remain app-owned.
+
+### Notification suppression and dedupe
+
+Honoring unsubscribes, bounces and complaints is a compliance obligation (CAN-SPAM, CASL, the carrier rules for SMS), not app-specific behavior, so the check sits behind `port.NotificationService` rather than at every call site:
+
+```go
+notif := dispatcher.NewLocalNotificationService()
+notif.Suppressor = &dispatcher.SuppressionService{DB: db}  // table-backed default
+notif.Recipients = userService                             // resolves a UserID to its email/phone
+notif.Ledger     = ledger                                  // backs NotificationRequest.DedupeKey
+
+err := notif.Send(ctx, port.NotificationRequest{Channel: dispatcher.EmailChannel, UserID: 42, PartnerID: 7, ...})
+switch {
+case errors.Is(err, port.ErrNotificationSuppressed): // *port.SuppressedError carries the reason
+case errors.Is(err, port.ErrNotificationDuplicate):  // an earlier Send already carried this DedupeKey
+}
+```
+
+A refusal is a typed outcome, never a silent success. The check covers the `email` and `sms` channels only, on the address the dispatcher would use — an explicit `To`, or the contact `Recipients` resolves — so a user-id send cannot bypass the list; other channels (the inbox, push device tokens) have nothing to suppress. A suppression store that is down fails the send rather than reading as "not suppressed". `SuppressionService.Suppress` / `Release` keep `notification_suppression`, scoped to a partner or, with `dispatcher.AllPartners`, to the whole fleet; contacts are stored lowercased so a differently-cased address cannot slip past its own entry. `DedupeKey` collapses repeats through the idempotency ledger, a failed delivery releases the key so a retry is not mistaken for a duplicate, and a delivery whose completion could not be recorded is marked unknown so it is not sent twice.
+
 ### `connect.ReadinessResolver` — can this tenant's data exist?
 
 Evaluates an injected `[]connect.Source{ID, Provider, Collected}` against the tenant's active connections: `NOT_COLLECTED` (no collector ships — connecting an account will not help), `NOT_CONNECTED`, or `READY`. Table names, collectors and user copy stay in the app.
@@ -923,6 +976,23 @@ shopify, err := content.NewShopifyWriter(content.ShopifyFieldMap{
     content.ShopifyPage:    {"seo_title": {Metafield: &content.ShopifyMetafield{Namespace: "global", Key: "title_tag", Type: "single_line_text_field"}}},
 })
 ```
+
+### `content` — create, delete and upload
+
+`ResourceCreator` builds a new object from the same logical fields `UpdateField` writes — including the ones the provider demands at creation, which the field map supplies as ordinary inputs — and returns a `ResourceRef` carrying the provider's own id, so the caller can edit or delete what it just made. `ResourceDeleter` removes one. `MediaUploader` puts a file on the platform's CDN and returns the URL to write into a field; `storage` is the wrong tool there, because it puts bytes in *our* bucket and a CMS field wants the file on the platform's own. An app therefore needs no second HTTP client for the store it is already connected to.
+
+```go
+ref := content.ResourceRef{Endpoint: endpoint, Token: token, Kind: content.ShopifyPage}
+
+creator, err := writers.Creator("shopify")                    // ErrUnsupportedOperation if it cannot
+page, _, err := creator.Create(ctx, ref, map[string]string{"title": "Sizing", "body": html})
+
+uploader, err := writers.Uploader("shopify")
+url, _, err := uploader.Upload(ctx, ref, "hero.png", "image/png", file)   // provider-hosted URL
+_, err = shopify.UpdateField(ctx, page, "hero", url)
+```
+
+`Writers.Creator` / `.Deleter` / `.Uploader` select the provider and report `ErrUnsupportedOperation` when its writer does not carry that capability, so no call site type-asserts. `ShopifyWriter` implements all three: create and delete map to each kind's own mutation shape (Shopify puts the id in the input for some kinds and beside it for others), and `Upload` runs the staged-upload / POST / `fileCreate` sequence and waits for the asset to leave `PROCESSING` — a URL that is not servable yet would publish as a broken image. Uploads are capped at `MaxUploadBytes` (default 20 MiB, `ErrMediaTooLarge`) because the staged target is signed for an exact size; `PollAttempts` and `PollInterval` bound the wait, and exhausting them is `ErrThrottled`, not a failure.
 
 ### Shopify mandatory compliance webhooks
 
@@ -968,7 +1038,19 @@ rec, err := crux.RecordForURL(ctx, pageURL, reference.CrUXFormFactorPhone) // fa
 
 `ErrNoAPIKey` means "not tried" (no secret named, or it is empty); `ErrCrUXNoData` means CrUX publishes nothing for the URL or origin; an unpublished metric is `CrUXNoValue`. `KGClient.FindEntity` and `WikidataClient.FindEntity` return an empty match, not an error, when nothing is found. `WikidataClient.UserAgent` is required by Wikimedia policy. Other failures are `*common.HTTPStatusError`, so `RateLimited()` / `Transient()` classify them.
 
-`IndexNowClient{APIKey, KeyLocation}.Submit(ctx, host, urls)` posts in batches of 10,000 and stops at the first failed batch; 400/403/422/429 map to `ErrIndexNowBadRequest` / `KeyInvalid` / `URLMismatch` / `RateLimited`. The host must serve the key at `/<key>.txt` or `KeyLocation`.
+`IndexNowClient{APIKey, KeyLocation}.Submit(ctx, host, urls)` posts in batches of 10,000 and stops at the first failed batch; 400/403/422/429 map to `ErrIndexNowBadRequest` / `KeyInvalid` / `URLMismatch` / `RateLimited`. The host must serve the key at `/<key>.txt` or `KeyLocation`. `VerifyKeyFile(ctx, host)` reads that file back and returns `ErrIndexNowKeyNotServed` when it is missing or different; a transient failure is a plain error, never a verdict about the host.
+
+### `reference.Geocoder` — address ↔ point, and the `geo` columns it fills
+
+`Geocoder` is the provider-independent port (`Geocode`, `Reverse`); `GoogleGeocodeClient` is the shipped implementation, so an app can move to Mapbox or Nominatim without its callers changing. A result carries the point, the provider's normalized components (street, city, county, state, country, postal code) and a `Precision` the caller must be able to reject on — a city centroid silently turns a proximity ranking into noise:
+
+```go
+geocoder := &reference.GoogleGeocodeClient{APIKey: key, Region: "us"}
+addresses := &geo.AddressService{DB: db, Geocoder: geocoder} // MinPrecision defaults to GEOMETRIC_CENTER
+point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
+```
+
+`geo.AddressService` fills `partner_address.latitude` / `longitude`, which nothing else in keel writes: a row that already has a point costs no vendor call and is never overwritten, a placement coarser than `MinPrecision` is `geo.ErrPrecisionTooCoarse` and is not stored, and the street line is geocoded together with the row's city/state/zip/country. Nothing found is `reference.ErrNoGeocodeMatch`; a quota refusal — which this API reports inside a 200 body — is `reference.ErrGeocodeQuotaExceeded`. Which addresses are worth geocoding, geo-grid construction and ranking by point stay with the app.
 
 ### `common` — URL and parsed-HTML helpers
 

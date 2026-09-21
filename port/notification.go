@@ -2,6 +2,8 @@ package port
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -12,6 +14,9 @@ type NotificationSender interface {
 
 type NotificationRequest struct {
 	UserID int
+	// PartnerID scopes the suppression check to one tenant; 0 consults only the
+	// fleet-wide entries.
+	PartnerID int64
 	// To, when set, is an explicit channel address (email / phone / device token)
 	// delivered via MessageDispatcher.Send, bypassing userID resolution. Leave it
 	// empty to resolve the address from UserID via Dispatch. For SMS to a national
@@ -22,11 +27,47 @@ type NotificationRequest struct {
 	Title   string
 	Body    string
 	Data    map[string]string
+	// DedupeKey collapses repeats: the first Send under a key is delivered and
+	// every later one is ErrNotificationDuplicate until the ledger forgets it.
+	// Ignored unless the service has a ledger.
+	DedupeKey string
 }
 
+// NotificationService delivers a notification, or refuses it. Refusals are
+// typed: ErrNotificationSuppressed (the recipient must not be contacted on this
+// channel) and ErrNotificationDuplicate (a repeat under the same DedupeKey) are
+// outcomes the caller can tell apart from a delivery, never a silent success.
 type NotificationService interface {
 	Send(ctx context.Context, req NotificationRequest) error
 }
+
+// NotificationSuppressor answers whether a contact may be delivered to on a
+// channel. Honoring unsubscribes, bounces and complaints is a compliance
+// obligation (CAN-SPAM, CASL, carrier rules for SMS), so the check belongs
+// behind the service rather than at each call site. partnerID scopes the
+// lookup; an entry recorded fleet-wide applies to every tenant.
+type NotificationSuppressor interface {
+	Suppressed(ctx context.Context, channel, contact string, partnerID int64) (suppressed bool, reason string, err error)
+}
+
+var (
+	// ErrNotificationSuppressed: the recipient is on the suppression list.
+	ErrNotificationSuppressed = errors.New("notification: recipient is suppressed")
+	// ErrNotificationDuplicate: another Send already carried this DedupeKey.
+	ErrNotificationDuplicate = errors.New("notification: duplicate of an already-sent notification")
+)
+
+// SuppressedError names the channel and why, never the contact.
+type SuppressedError struct {
+	Channel string
+	Reason  string
+}
+
+func (e *SuppressedError) Error() string {
+	return fmt.Sprintf("notification: %s recipient is suppressed (%s)", e.Channel, e.Reason)
+}
+
+func (e *SuppressedError) Unwrap() error { return ErrNotificationSuppressed }
 
 type InboxMessage struct {
 	ID        int64             `json:"id,string"`

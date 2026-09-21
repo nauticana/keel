@@ -52,7 +52,8 @@ func NewRefresher(secrets secret.SecretProvider, specs map[string]RefreshSpec) R
 			if err != nil {
 				return RefreshResult{}, err
 			}
-			res := RefreshResult{AccessToken: tok.AccessToken}
+			scope, _ := tok.Extra("scope").(string)
+			res := RefreshResult{AccessToken: tok.AccessToken, Scope: scope}
 			if !tok.Expiry.IsZero() {
 				res.ExpiresIn = time.Until(tok.Expiry)
 			}
@@ -77,7 +78,7 @@ func NewRefresher(secrets secret.SecretProvider, specs map[string]RefreshSpec) R
 			if tr.AccessToken == "" {
 				return RefreshResult{}, fmt.Errorf("%s: empty access token", provider)
 			}
-			res := RefreshResult{AccessToken: tr.AccessToken, ExpiresIn: time.Duration(tr.ExpiresIn) * time.Second}
+			res := RefreshResult{AccessToken: tr.AccessToken, ExpiresIn: time.Duration(tr.ExpiresIn) * time.Second, Scope: tr.Scope}
 			if tr.RefreshToken != "" && tr.RefreshToken != refreshToken {
 				res.RefreshToken = tr.RefreshToken // server rotated the refresh token; persist it
 			}
@@ -99,7 +100,7 @@ func NewRefresher(secrets secret.SecretProvider, specs map[string]RefreshSpec) R
 			if tr.AccessToken == "" {
 				return RefreshResult{}, fmt.Errorf("%s: empty access token", provider)
 			}
-			res := RefreshResult{AccessToken: tr.AccessToken, ExpiresIn: time.Duration(tr.ExpiresIn) * time.Second}
+			res := RefreshResult{AccessToken: tr.AccessToken, ExpiresIn: time.Duration(tr.ExpiresIn) * time.Second, Scope: tr.Scope}
 			if tr.RefreshToken != "" && tr.RefreshToken != refreshToken {
 				res.RefreshToken = tr.RefreshToken // server rotated the refresh token; persist it
 			}

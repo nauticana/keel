@@ -1,7 +1,7 @@
 // Package reference holds clients for public reference-data APIs: Chrome UX
-// Report field data, Google Knowledge Graph, Wikidata entity search and IndexNow
-// URL submission. All ride common.RequestJSON, so outbound limits and typed
-// status errors apply.
+// Report field data, Google Knowledge Graph, Wikidata entity search, IndexNow
+// URL submission and address geocoding. All ride common.RequestJSON, so
+// outbound limits and typed status errors apply.
 package reference
 
 import (

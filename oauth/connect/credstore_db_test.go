@@ -113,7 +113,10 @@ func TestOpenWrongKeyIsHardError(t *testing.T) {
 func TestUpsertConnectionSealsAndScopesEntity(t *testing.T) {
 	s, qs := newTestStore(t)
 	ctx := client.WithEntity(context.Background(), 42)
-	if err := s.UpsertConnection(ctx, 7, "square", "O", "the-token", "https://api"); err != nil {
+	if err := s.UpsertConnection(ctx, 7, client.Connection{
+		Provider: "square", ConnType: "O", CredRef: "the-token", APIEndpoint: "https://api",
+		GrantedScopes: []string{"read", "write"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	c, ok := qs.last(qUpsertConnection)
@@ -243,8 +246,8 @@ func TestRefreshAccessToken(t *testing.T) {
 	if claim, ok := qs3.last(qClaim); !ok || claim.args[4].(int) != 3 {
 		t.Fatalf("active credential should be claimed at the read rev 3, got %+v", claim)
 	}
-	if rot.args[4].(int) != 4 {
-		t.Fatalf("rotation should CAS on the claimed rev 4, got %v", rot.args[4])
+	if rot.args[5].(int) != 4 {
+		t.Fatalf("rotation should CAS on the claimed rev 4, got %v", rot.args[5])
 	}
 
 	// failure: error surfaces and status CAS-flips to 'E'.
@@ -293,8 +296,8 @@ func TestRefreshAccessTokenExchangesErroredRowWithoutClaim(t *testing.T) {
 	if qs.count(qClaim) != 0 {
 		t.Fatal("errored row must not be claimed")
 	}
-	if rot, _ := qs.last(qRotateCAS); rot.args[4].(int) != 3 {
-		t.Fatalf("rotation should CAS on the read rev 3, got %v", rot.args[4])
+	if rot, _ := qs.last(qRotateCAS); rot.args[5].(int) != 3 {
+		t.Fatalf("rotation should CAS on the read rev 3, got %v", rot.args[5])
 	}
 }
 
@@ -344,7 +347,7 @@ func TestRefreshDueClaimsAndRefreshes(t *testing.T) {
 		t.Fatalf("should refresh the claimed cred_ref, got %q", got)
 	}
 	// completion CAS-targets the claimed rev (expectRev+1 = 6).
-	if c, ok := qs.last(qCompleteCAS); !ok || c.args[3].(int) != 6 {
+	if c, ok := qs.last(qCompleteCAS); !ok || c.args[4].(int) != 6 {
 		t.Fatal("completion should CAS on the claimed rev")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/nauticana/keel/common"
 )
@@ -39,26 +40,60 @@ type ShopifyTarget struct {
 // ShopifyFieldMap is kind → logical field → target.
 type ShopifyFieldMap map[string]map[string]ShopifyTarget
 
+// shopifyKind is the Admin GraphQL shape of one resource kind: the field it is
+// read under, and the update / create / delete mutations with their input
+// wrappers. Shopify is not uniform here — an id travels in the input for some
+// kinds and as its own argument for others, on each mutation independently.
 type shopifyKind struct {
 	root      string
 	mutation  string
 	inputType string
 	inputArg  string
 	idInInput bool
+
+	createMutation  string
+	createInputType string
+	createInputArg  string
+
+	deleteMutation  string
+	deleteInputType string // empty: the mutation takes id: ID! directly
+	deleteInputArg  string
 }
 
 var shopifyKinds = map[string]shopifyKind{
-	ShopifyPage:       {"page", "pageUpdate", "PageUpdateInput", "page", false},
-	ShopifyArticle:    {"article", "articleUpdate", "ArticleUpdateInput", "article", false},
-	ShopifyProduct:    {"product", "productUpdate", "ProductUpdateInput", "product", true},
-	ShopifyCollection: {"collection", "collectionUpdate", "CollectionInput", "input", true},
+	ShopifyPage: {
+		root: "page", mutation: "pageUpdate", inputType: "PageUpdateInput", inputArg: "page",
+		createMutation: "pageCreate", createInputType: "PageCreateInput", createInputArg: "page",
+		deleteMutation: "pageDelete",
+	},
+	ShopifyArticle: {
+		root: "article", mutation: "articleUpdate", inputType: "ArticleUpdateInput", inputArg: "article",
+		createMutation: "articleCreate", createInputType: "ArticleCreateInput", createInputArg: "article",
+		deleteMutation: "articleDelete",
+	},
+	ShopifyProduct: {
+		root: "product", mutation: "productUpdate", inputType: "ProductUpdateInput", inputArg: "product", idInInput: true,
+		createMutation: "productCreate", createInputType: "ProductCreateInput", createInputArg: "product",
+		deleteMutation: "productDelete", deleteInputType: "ProductDeleteInput", deleteInputArg: "input",
+	},
+	ShopifyCollection: {
+		root: "collection", mutation: "collectionUpdate", inputType: "CollectionInput", inputArg: "input", idInInput: true,
+		createMutation: "collectionCreate", createInputType: "CollectionInput", createInputArg: "input",
+		deleteMutation: "collectionDelete", deleteInputType: "CollectionDeleteInput", deleteInputArg: "input",
+	},
 }
 
 var graphQLName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// ShopifyWriter edits Shopify objects over the Admin GraphQL API. The API
-// version is part of ResourceRef.Endpoint.
+// ShopifyWriter reads, edits, creates and deletes Shopify objects over the
+// Admin GraphQL API, and uploads files to the shop's CDN. The API version is
+// part of ResourceRef.Endpoint. The upload fields are optional; each has a
+// documented default.
 type ShopifyWriter struct {
+	MaxUploadBytes int64         // upload cap; 0 = DefaultMaxUploadBytes
+	PollAttempts   int           // file-processing polls; 0 = 12
+	PollInterval   time.Duration // wait between polls; 0 = 500ms
+
 	fields ShopifyFieldMap
 }
 
@@ -175,7 +210,7 @@ func (w *ShopifyWriter) read(ctx context.Context, ref ResourceRef, kind shopifyK
 	}
 	query := fmt.Sprintf("query(%s){%s(id:$id){%s}}", params, kind.root, selection)
 	var data map[string]*shopifyFieldValue
-	if _, err := w.graphql(ctx, ref, query, vars, &data); err != nil {
+	if _, err := shopifyGraphQL(ctx, ref, query, vars, &data); err != nil {
 		return nil, err
 	}
 	if data[kind.root] == nil {
@@ -221,33 +256,47 @@ func (w *ShopifyWriter) UpdateField(ctx context.Context, ref ResourceRef, field,
 	return w.mutate(ctx, ref, kind.mutation, query, vars)
 }
 
-func (w *ShopifyWriter) mutate(ctx context.Context, ref ResourceRef, root, query string, vars map[string]any) (WriteResult, error) {
+// shopifyMutate runs a mutation and returns its payload fields alongside the
+// raw response. A userErrors entry is a refusal, not a transport failure.
+func shopifyMutate(ctx context.Context, ref ResourceRef, root, query string, vars map[string]any) (map[string]json.RawMessage, WriteResult, error) {
 	var data map[string]*struct {
 		UserErrors []struct {
 			Field   []string `json:"field"`
 			Message string   `json:"message"`
 		} `json:"userErrors"`
 	}
-	raw, err := w.graphql(ctx, ref, query, vars, &data)
+	raw, err := shopifyGraphQL(ctx, ref, query, vars, &data)
 	if err != nil {
-		return WriteResult{}, err
+		return nil, WriteResult{}, err
 	}
 	result := data[root]
 	if result == nil {
-		return WriteResult{}, fmt.Errorf("%w: shopify %s returned no result", ErrRejected, root)
+		return nil, WriteResult{}, fmt.Errorf("%w: shopify %s returned no result", ErrRejected, root)
 	}
 	if errs := result.UserErrors; len(errs) > 0 {
 		msgs := make([]string, 0, len(errs))
 		for _, e := range errs {
 			msgs = append(msgs, strings.TrimSpace(strings.Join(e.Field, ".")+": "+e.Message))
 		}
-		return WriteResult{}, fmt.Errorf("%w: shopify %s: %s", ErrRejected, root, strings.Join(msgs, "; "))
+		return nil, WriteResult{}, fmt.Errorf("%w: shopify %s: %s", ErrRejected, root, strings.Join(msgs, "; "))
 	}
-	return WriteResult{Response: string(raw)}, nil
+	// Re-read the payload untyped so callers can pick out the created object.
+	var payloads map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &struct {
+		Data *map[string]map[string]json.RawMessage `json:"data"`
+	}{Data: &payloads}); err != nil {
+		return nil, WriteResult{}, fmt.Errorf("decode shopify %s payload: %w", root, err)
+	}
+	return payloads[root], WriteResult{Response: string(raw)}, nil
 }
 
-// graphql checks the errors array explicitly: GraphQL answers 200 on query errors.
-func (w *ShopifyWriter) graphql(ctx context.Context, ref ResourceRef, query string, vars map[string]any, out any) ([]byte, error) {
+func (w *ShopifyWriter) mutate(ctx context.Context, ref ResourceRef, root, query string, vars map[string]any) (WriteResult, error) {
+	_, res, err := shopifyMutate(ctx, ref, root, query, vars)
+	return res, err
+}
+
+// shopifyGraphQL checks the errors array explicitly: GraphQL answers 200 on query errors.
+func shopifyGraphQL(ctx context.Context, ref ResourceRef, query string, vars map[string]any, out any) ([]byte, error) {
 	raw, _, err := common.RequestJSON(ctx, http.MethodPost, strings.TrimRight(ref.Endpoint, "/")+"/graphql.json",
 		map[string]string{"X-Shopify-Access-Token": ref.Token},
 		map[string]any{"query": query, "variables": vars})

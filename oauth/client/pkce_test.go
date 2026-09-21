@@ -41,6 +41,10 @@ func (c *capturingStore) CreateOAuthState(_ context.Context, _ int64, _ string, 
 	return c.fakeStore.state, nil
 }
 
+func (c *capturingStore) ConsumeOAuthState(_ context.Context, _, _ string) (int64, map[string]string, error) {
+	return 1, c.params, nil
+}
+
 func TestAuthURL_PKCE(t *testing.T) {
 	cs := &capturingStore{fakeStore: newFake()}
 	p := NewOAuth2Provider(cs, "twitter", "https://app/cb", "cid", "google_secret",

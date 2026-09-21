@@ -1,2 +1,3 @@
 tables:
   - service_registry
+  - work_schedule

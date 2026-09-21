@@ -1,0 +1,16 @@
+table: notification_suppression
+comment: Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). partner_id 0 is every tenant, so it carries no FK; contact is stored lowercased.
+columns:
+  - name: channel
+    type: VARCHAR(20)
+  - name: contact
+    type: VARCHAR(255)
+  - name: partner_id
+    type: BIGINT
+    default: "0"
+  - name: reason
+    type: VARCHAR(30)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [channel, contact, partner_id]

@@ -42,6 +42,7 @@ type RefreshResult struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    time.Duration // access-token lifetime; 0 = not reported
+	Scope        string        // scopes the provider reports on the refresh; empty = keep the recorded set
 }
 
 // Refresher mints a fresh token from a stored refresh token for the given
@@ -60,6 +61,7 @@ const (
 	qMarkErroredCAS     = "cred_mark_errored_cas"
 	qCredForRefresh     = "cred_for_refresh"
 	qGetCredentials     = "cred_get_credentials"
+	qGrantedScopes      = "cred_granted_scopes"
 	qGetAPIEndpoint     = "cred_get_api_endpoint"
 	qSetAPIEndpoint     = "cred_set_api_endpoint"
 	qListActive         = "cred_list_active"
@@ -73,12 +75,13 @@ var credentialQueries = map[string]string{
 	// reauth also clears any stale lease and stamps last_checked.
 	qUpsertConnection: `
 INSERT INTO partner_credential
- (id, partner_id, entity_id, provider, connection_type, cred_ref, status, api_endpoint, issued_at, last_checked)
+ (id, partner_id, entity_id, provider, connection_type, cred_ref, status, api_endpoint, granted_scopes, issued_at, last_checked)
 VALUES
- (nextval('partner_credential_seq'), ?, ?, ?, ?, ?, 'A', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ (nextval('partner_credential_seq'), ?, ?, ?, ?, ?, 'A', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT (partner_id, entity_id, provider)
 DO UPDATE SET cred_ref = EXCLUDED.cred_ref, connection_type = EXCLUDED.connection_type,
- status = 'A', api_endpoint = EXCLUDED.api_endpoint, rev = partner_credential.rev + 1,
+ status = 'A', api_endpoint = EXCLUDED.api_endpoint, granted_scopes = EXCLUDED.granted_scopes,
+ rev = partner_credential.rev + 1,
  lease_until = NULL, issued_at = CURRENT_TIMESTAMP, last_checked = CURRENT_TIMESTAMP
 `,
 	// Atomic claim: exactly one worker wins (CAS on the worklist rev + an unheld
@@ -94,13 +97,15 @@ RETURNING cred_ref
 	// CAS on the claimed rev; each completion clears the lease and stamps last_checked.
 	qRotateCAS: `
 UPDATE partner_credential
-   SET cred_ref = ?, rev = rev + 1, lease_until = NULL, last_checked = CURRENT_TIMESTAMP
+   SET cred_ref = ?, granted_scopes = COALESCE(?, granted_scopes),
+       rev = rev + 1, lease_until = NULL, last_checked = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND entity_id = ? AND provider = ? AND rev = ?
 RETURNING id
 `,
 	qCompleteCAS: `
 UPDATE partner_credential
-   SET rev = rev + 1, lease_until = NULL, last_checked = CURRENT_TIMESTAMP
+   SET granted_scopes = COALESCE(?, granted_scopes),
+       rev = rev + 1, lease_until = NULL, last_checked = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND entity_id = ? AND provider = ? AND rev = ?
 RETURNING id
 `,
@@ -123,6 +128,13 @@ UPDATE partner_credential SET last_checked = CURRENT_TIMESTAMP
 	qCredForRefresh: `
 SELECT cred_ref, rev, status FROM partner_credential
  WHERE partner_id = ? AND entity_id = ? AND provider = ? AND status != 'P'
+`,
+	qGrantedScopes: `
+SELECT COALESCE(granted_scopes, '')
+  FROM partner_credential
+ WHERE partner_id = ? AND entity_id = ? AND provider = ? AND status != 'P'
+ ORDER BY last_checked DESC NULLS LAST
+ LIMIT 1
 `,
 	qGetCredentials: `
 SELECT cred_ref, COALESCE(api_endpoint, '')
@@ -285,13 +297,37 @@ func (s *CredentialStoreDB) ConsumeOAuthState(ctx context.Context, state, provid
 
 // --- connection persistence (entity read from ctx, 0 = tenant-wide) ---
 
-func (s *CredentialStoreDB) UpsertConnection(ctx context.Context, partnerID int64, provider, connType, credRef, apiEndpoint string) error {
-	enc, err := s.seal(credRef)
+func (s *CredentialStoreDB) UpsertConnection(ctx context.Context, partnerID int64, conn client.Connection) error {
+	enc, err := s.seal(conn.CredRef)
 	if err != nil {
 		return fmt.Errorf("seal credential: %w", err)
 	}
-	_, err = s.qs.Query(ctx, qUpsertConnection, partnerID, client.EntityFromContext(ctx), provider, connType, enc, apiEndpoint)
+	_, err = s.qs.Query(ctx, qUpsertConnection, partnerID, client.EntityFromContext(ctx), conn.Provider, conn.ConnType, enc,
+		conn.APIEndpoint, common.NullIfEmpty(client.JoinScopes(conn.GrantedScopes)))
 	return err
+}
+
+// GrantedScopes returns the scopes recorded for the connection; an empty slice
+// means the provider reported none, which is not the same as no connection.
+func (s *CredentialStoreDB) GrantedScopes(ctx context.Context, partnerID int64, provider string) ([]string, error) {
+	res, err := s.qs.Query(ctx, qGrantedScopes, partnerID, client.EntityFromContext(ctx), provider)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Rows) == 0 {
+		return nil, fmt.Errorf("partner %d provider %s: %w", partnerID, provider, ErrNoActiveConnection)
+	}
+	return client.ParseScopes(common.AsString(res.Rows[0][0])), nil
+}
+
+// MissingScopes is what a re-consent must ask for: the required scopes the
+// connection does not carry. Empty means the grant is already wide enough.
+func (s *CredentialStoreDB) MissingScopes(ctx context.Context, partnerID int64, provider string, required []string) ([]string, error) {
+	granted, err := s.GrantedScopes(ctx, partnerID, provider)
+	if err != nil {
+		return nil, err
+	}
+	return client.MissingScopes(granted, required), nil
 }
 
 func (s *CredentialStoreDB) UpdateConnectionStatus(ctx context.Context, partnerID int64, provider, connType, status string) error {
@@ -377,7 +413,7 @@ func (s *CredentialStoreDB) exchange(ctx context.Context, partnerID int64, provi
 
 func (s *CredentialStoreDB) exchangeResult(ctx context.Context, partnerID int64, provider, refreshToken string, rev int) (RefreshResult, error) {
 	if s.Refresh == nil {
-		return RefreshResult{AccessToken: refreshToken}, s.completeCAS(ctx, partnerID, provider, rev)
+		return RefreshResult{AccessToken: refreshToken}, s.completeCAS(ctx, partnerID, provider, "", rev)
 	}
 	res, err := s.Refresh(ctx, provider, refreshToken)
 	if err == nil && res.AccessToken == "" {
@@ -387,9 +423,9 @@ func (s *CredentialStoreDB) exchangeResult(ctx context.Context, partnerID int64,
 		return RefreshResult{}, s.errAlso(err, s.markErroredCAS(ctx, partnerID, provider, rev))
 	}
 	if res.RefreshToken != "" && res.RefreshToken != refreshToken {
-		return res, s.rotateCAS(ctx, partnerID, provider, res.RefreshToken, rev)
+		return res, s.rotateCAS(ctx, partnerID, provider, res.RefreshToken, res.Scope, rev)
 	}
-	return res, s.completeCAS(ctx, partnerID, provider, rev)
+	return res, s.completeCAS(ctx, partnerID, provider, res.Scope, rev)
 }
 
 // claim atomically leases the credential to this worker if it is still at
@@ -417,8 +453,8 @@ func (s *CredentialStoreDB) credAndRev(ctx context.Context, partnerID int64, pro
 
 // completeCAS clears the lease + stamps last_checked on a no-rotation success. A
 // lost CAS (a reauth won) is fine — its write already cleared the lease.
-func (s *CredentialStoreDB) completeCAS(ctx context.Context, partnerID int64, provider string, rev int) error {
-	_, err := s.qs.Query(ctx, qCompleteCAS, partnerID, client.EntityFromContext(ctx), provider, rev)
+func (s *CredentialStoreDB) completeCAS(ctx context.Context, partnerID int64, provider, scope string, rev int) error {
+	_, err := s.qs.Query(ctx, qCompleteCAS, normalizedScopes(scope), partnerID, client.EntityFromContext(ctx), provider, rev)
 	return err
 }
 
@@ -431,15 +467,19 @@ func (s *CredentialStoreDB) markErroredCAS(ctx context.Context, partnerID int64,
 
 // rotateCAS seals and persists a replacement refresh token only if rev is
 // unchanged; a lost CAS (a newer credential won) is not an error.
-func (s *CredentialStoreDB) rotateCAS(ctx context.Context, partnerID int64, provider, newRefresh string, rev int) error {
+func (s *CredentialStoreDB) rotateCAS(ctx context.Context, partnerID int64, provider, newRefresh, scope string, rev int) error {
 	enc, err := s.seal(newRefresh)
 	if err != nil {
 		return fmt.Errorf("seal rotated token: %w", err)
 	}
-	if _, err := s.qs.Query(ctx, qRotateCAS, enc, partnerID, client.EntityFromContext(ctx), provider, rev); err != nil {
+	if _, err := s.qs.Query(ctx, qRotateCAS, enc, normalizedScopes(scope), partnerID, client.EntityFromContext(ctx), provider, rev); err != nil {
 		return fmt.Errorf("persist rotated token: %w", err)
 	}
 	return nil
+}
+
+func normalizedScopes(raw string) any {
+	return common.NullIfEmpty(client.JoinScopes(client.ParseScopes(raw)))
 }
 
 // errAlso surfaces a bookkeeping-write failure alongside the primary error so a

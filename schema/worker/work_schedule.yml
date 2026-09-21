@@ -1,0 +1,40 @@
+table: work_schedule
+comment: Per-tenant cadence for recurring worker tasks (worker.Scheduler); task_kind is consumer-defined
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: task_kind
+    type: VARCHAR(30)
+  - name: interval_seconds
+    type: INTEGER
+  - name: next_run_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: last_run_at
+    type: TIMESTAMP
+    nullable: true
+  - name: last_error
+    type: TEXT
+    nullable: true
+  - name: consecutive_failures
+    type: INTEGER
+    default: "0"
+  - name: lease_until
+    type: TIMESTAMP
+    nullable: true
+  - name: lease_token
+    type: BIGINT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, task_kind]
+foreign_keys:
+  - name: work_schedule_partners
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+indexes:
+  - name: idx_work_schedule_due
+    columns: [task_kind, next_run_at]

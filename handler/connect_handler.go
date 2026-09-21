@@ -117,7 +117,12 @@ func (h *OAuthConnectHandler) saveAPIKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	ctx := client.WithEntity(r.Context(), req.EntityID)
-	if err := h.Store.UpsertConnection(ctx, partnerID, req.Provider, client.ConnTypeAPIKey, req.CredRef, req.APIEndpoint); err != nil {
+	if err := h.Store.UpsertConnection(ctx, partnerID, client.Connection{
+		Provider:    req.Provider,
+		ConnType:    client.ConnTypeAPIKey,
+		CredRef:     req.CredRef,
+		APIEndpoint: req.APIEndpoint,
+	}); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Save Failed", err.Error())
 		return
 	}

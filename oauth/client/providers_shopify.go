@@ -87,6 +87,8 @@ func (p *ShopifyProvider) AuthURL(ctx context.Context, partnerID int64, params m
 	if e := params[StateEntityKey]; e != "" {
 		extra[StateEntityKey] = e
 	}
+	scopes := JoinScopes(mergeScopes(ParseScopes(p.Scopes), params[ParamExtraScopes]))
+	extra[stateRequestedScopesKey] = scopes
 	state, err := p.Service.CreateOAuthState(ctx, partnerID, p.ProviderName, extra)
 	if err != nil {
 		return "", err
@@ -94,7 +96,7 @@ func (p *ShopifyProvider) AuthURL(ctx context.Context, partnerID int64, params m
 	return fmt.Sprintf("https://%s/admin/oauth/authorize?client_id=%s&scope=%s&redirect_uri=%s&state=%s",
 		shop,
 		url.QueryEscape(p.APIKey),
-		url.QueryEscape(p.Scopes),
+		url.QueryEscape(scopes),
 		url.QueryEscape(p.CallbackURL),
 		url.QueryEscape(state)), nil
 }
@@ -175,26 +177,21 @@ func (p *ShopifyProvider) Callback(ctx context.Context, code, state string) erro
 	// Confirm the merchant granted every required scope before storing the
 	// connection active — a partial/tampered install must not be accepted and
 	// then fail later.
-	if err := requireScopes(tok.Scope, p.RequiredScopes); err != nil {
-		return err
+	granted := ParseScopes(tok.Scope)
+	if len(granted) == 0 {
+		granted = ParseScopes(extra[stateRequestedScopesKey])
+	}
+	if missing := MissingScopes(granted, p.RequiredScopes); len(missing) > 0 {
+		return &MissingScopeError{Provider: p.ProviderName, Missing: missing}
 	}
 	apiEndpoint := fmt.Sprintf("https://%s/admin/api/%s", shop, p.APIVersion)
-	return p.Service.UpsertConnection(ctx, partnerID, p.ProviderName, ConnTypeOAuth, tok.AccessToken, apiEndpoint)
-}
-
-func requireScopes(granted string, required []string) error {
-	g := make(map[string]bool)
-	for _, s := range strings.Split(granted, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			g[s] = true
-		}
-	}
-	for _, s := range required {
-		if !g[s] {
-			return fmt.Errorf("shopify did not grant required scope %q", s)
-		}
-	}
-	return nil
+	return p.Service.UpsertConnection(ctx, partnerID, Connection{
+		Provider:      p.ProviderName,
+		ConnType:      ConnTypeOAuth,
+		CredRef:       tok.AccessToken,
+		APIEndpoint:   apiEndpoint,
+		GrantedScopes: granted,
+	})
 }
 
 // testHealthcheck calls /shop.json with Shopify's custom auth header.

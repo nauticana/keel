@@ -10,12 +10,6 @@ groups:
     depends_on: []
     seed_depends_on: []
 
-  - name: worker
-    path: worker
-    seed: seed/worker.yml
-    depends_on: []
-    seed_depends_on: [core]
-
   - name: geo
     path: geo
     seed: seed/geo.yml
@@ -26,6 +20,12 @@ groups:
     path: tenant_management
     seed: seed/tenant_management.yml
     depends_on: [core, geo]
+    seed_depends_on: [core]
+
+  - name: worker
+    path: worker
+    seed: seed/worker.yml
+    depends_on: [tenant_management]
     seed_depends_on: [core]
 
   - name: oauth_server

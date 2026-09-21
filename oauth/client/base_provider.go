@@ -31,9 +31,11 @@ type BaseProvider struct {
 	Endpoint          oauth2.Endpoint
 	Scopes            []string
 	AuthCodeOptions   []oauth2.AuthCodeOption
-	RequireRefresh    bool // fail Callback when the exchange returns no refresh token
-	UsePKCE           bool // RFC 7636: engine handles the verifier/challenge (Twitter/X and any PKCE-required provider)
-	JSONTokenExchange bool // token endpoint needs a JSON body {client_id, client_secret, code} (Clover v2 et al.); form-encoded exchange 415s. Not combined with PKCE.
+	RequiredScopes    []string // Callback refuses a grant missing any of these (MissingScopeError)
+	NoImpliedScopes   bool     // an omitted scope response says nothing about the grant: the user can decline individual permissions (Meta)
+	RequireRefresh    bool     // fail Callback when the exchange returns no refresh token
+	UsePKCE           bool     // RFC 7636: engine handles the verifier/challenge (Twitter/X and any PKCE-required provider)
+	JSONTokenExchange bool     // token endpoint needs a JSON body {client_id, client_secret, code} (Clover v2 et al.); form-encoded exchange 415s. Not combined with PKCE.
 
 	APIEndpoint       string
 	DeriveAPIEndpoint func(ctx context.Context, accessToken string) string
@@ -79,6 +81,7 @@ func (b *BaseProvider) AuthURL(ctx context.Context, partnerID int64, params map[
 	if err != nil {
 		return "", err
 	}
+	cfg.Scopes = mergeScopes(cfg.Scopes, params[ParamExtraScopes])
 	opts := b.AuthCodeOptions
 	if b.UsePKCE {
 		verifier, challenge, err := GeneratePKCE()
@@ -96,7 +99,7 @@ func (b *BaseProvider) AuthURL(ctx context.Context, partnerID int64, params map[
 			oauth2.SetAuthURLParam("code_challenge", challenge),
 			oauth2.SetAuthURLParam("code_challenge_method", "S256"))
 	}
-	state, err := b.Service.CreateOAuthState(ctx, partnerID, b.ProviderName, params)
+	state, err := b.Service.CreateOAuthState(ctx, partnerID, b.ProviderName, stateExtras(params, cfg.Scopes))
 	if err != nil {
 		return "", err
 	}
@@ -110,18 +113,18 @@ func (b *BaseProvider) Callback(ctx context.Context, code, state string) error {
 	if err != nil {
 		return err
 	}
-	// PKCE needs the verifier from state as an exchange param, so consume state
-	// up front; the default flow consumes it after exchange.
+	partnerID, extra, err := b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
+	if err != nil {
+		return err
+	}
+	if requested := ParseScopes(extra[stateRequestedScopesKey]); len(requested) > 0 {
+		cfg.Scopes = requested
+	}
 	var (
-		partnerID    int64
-		extra        map[string]string
-		exchangeOpts []oauth2.AuthCodeOption
+		exchangeOpts  []oauth2.AuthCodeOption
+		grantedScopes []string
 	)
 	if b.UsePKCE {
-		partnerID, extra, err = b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
-		if err != nil {
-			return err
-		}
 		verifier := extra[StatePKCEKey]
 		if verifier == "" {
 			return fmt.Errorf("%s: PKCE verifier missing from state", b.ProviderName)
@@ -139,20 +142,25 @@ func (b *BaseProvider) Callback(ctx context.Context, code, state string) error {
 			return fmt.Errorf("token exchange: %w", xerr)
 		}
 		token = &oauth2.Token{AccessToken: tr.AccessToken, RefreshToken: tr.RefreshToken}
+		grantedScopes = ParseScopes(tr.Scope)
 	} else {
 		token, err = cfg.Exchange(ctx, code, exchangeOpts...)
 		if err != nil {
 			return fmt.Errorf("token exchange: %w", err)
 		}
+		scope, _ := token.Extra("scope").(string)
+		grantedScopes = ParseScopes(scope)
+	}
+	// RFC 6749 permits scope to be omitted when it is identical to the
+	// requested set.
+	if len(grantedScopes) == 0 && !b.NoImpliedScopes {
+		grantedScopes = append([]string(nil), cfg.Scopes...)
+	}
+	if missing := MissingScopes(grantedScopes, b.RequiredScopes); len(missing) > 0 {
+		return &MissingScopeError{Provider: b.ProviderName, Missing: missing}
 	}
 	if b.RequireRefresh && token.RefreshToken == "" {
 		return fmt.Errorf("%s: no refresh token; re-authorize with prompt=consent", b.ProviderName)
-	}
-	if !b.UsePKCE {
-		partnerID, extra, err = b.Service.ConsumeOAuthState(ctx, state, b.ProviderName)
-		if err != nil {
-			return err
-		}
 	}
 	// Recover the entity scope stashed at AuthURL so the store writes the right
 	// (partner, entity) row; 0 = tenant-wide for callers that never set it.
@@ -165,7 +173,13 @@ func (b *BaseProvider) Callback(ctx context.Context, code, state string) error {
 	if b.DeriveAPIEndpoint != nil {
 		apiEndpoint = b.DeriveAPIEndpoint(ctx, token.AccessToken)
 	}
-	if err := b.Service.UpsertConnection(ctx, partnerID, b.ProviderName, b.connType(), credRef, apiEndpoint); err != nil {
+	if err := b.Service.UpsertConnection(ctx, partnerID, Connection{
+		Provider:      b.ProviderName,
+		ConnType:      b.connType(),
+		CredRef:       credRef,
+		APIEndpoint:   apiEndpoint,
+		GrantedScopes: grantedScopes,
+	}); err != nil {
 		return err
 	}
 	if b.PostCallback != nil {

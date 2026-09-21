@@ -311,6 +311,16 @@ CREATE INDEX IF NOT EXISTS idx_user_notification_user ON user_notification(user_
 CREATE SEQUENCE IF NOT EXISTS user_notification_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_notification', 'id', 'user_notification_seq') ON CONFLICT DO NOTHING;
 
+-- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). partner_id 0 is every tenant, so it carries no FK; contact is stored lowercased.
+CREATE TABLE IF NOT EXISTS notification_suppression (
+    channel                              VARCHAR(20)   NOT NULL,
+    contact                              VARCHAR(255)  NOT NULL,
+    partner_id                           BIGINT        NOT NULL DEFAULT 0,
+    reason                               VARCHAR(30)   NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT notification_suppression_pk PRIMARY KEY (channel, contact, partner_id)
+);
+
 -- RBAC authorization object definitions
 CREATE TABLE IF NOT EXISTS authorization_object (
     id                                   VARCHAR(30)   NOT NULL,
@@ -397,17 +407,6 @@ CREATE INDEX IF NOT EXISTS idx_consent_event_phone ON consent_event(phone_hash, 
 CREATE SEQUENCE IF NOT EXISTS consent_event_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('consent_event', 'id', 'consent_event_seq') ON CONFLICT DO NOTHING;
 
--- Background worker registration and heartbeat
-CREATE TABLE IF NOT EXISTS service_registry (
-    service_name                         VARCHAR(16)   NOT NULL,
-    started_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    hostname                             VARCHAR(64)   NOT NULL,
-    pid                                  BIGINT        NOT NULL,
-    status                               CHAR(1)       NOT NULL,
-    last_heartbeat                       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT service_registry_pk PRIMARY KEY (service_name, started_at)
-);
-
 -- Country reference table
 CREATE TABLE IF NOT EXISTS country (
     id                                   CHAR(2)       NOT NULL,
@@ -474,6 +473,33 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT partner_domain_pk PRIMARY KEY (partner_id, domain_url)
 );
+
+-- Background worker registration and heartbeat
+CREATE TABLE IF NOT EXISTS service_registry (
+    service_name                         VARCHAR(16)   NOT NULL,
+    started_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    hostname                             VARCHAR(64)   NOT NULL,
+    pid                                  BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL,
+    last_heartbeat                       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT service_registry_pk PRIMARY KEY (service_name, started_at)
+);
+
+-- Per-tenant cadence for recurring worker tasks (worker.Scheduler); task_kind is consumer-defined
+CREATE TABLE IF NOT EXISTS work_schedule (
+    partner_id                           BIGINT        NOT NULL,
+    task_kind                            VARCHAR(30)   NOT NULL,
+    interval_seconds                     INTEGER       NOT NULL,
+    next_run_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_run_at                          TIMESTAMP    ,
+    last_error                           TEXT         ,
+    consecutive_failures                 INTEGER       NOT NULL DEFAULT 0,
+    lease_until                          TIMESTAMP    ,
+    lease_token                          BIGINT       ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT work_schedule_pk PRIMARY KEY (partner_id, task_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
 
 -- OAuth 2.1 registered clients (Dynamic Client Registration)
 CREATE TABLE IF NOT EXISTS oauth_client (
@@ -569,6 +595,7 @@ CREATE TABLE IF NOT EXISTS partner_credential (
     cred_ref                             TEXT          NOT NULL,
     api_endpoint                         VARCHAR(255) ,
     status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    granted_scopes                       TEXT         ,
     rev                                  INTEGER       NOT NULL DEFAULT 0,
     lease_until                          TIMESTAMP    ,
     issued_at                            TIMESTAMP    ,
@@ -1517,6 +1544,15 @@ BEGIN
      WHERE constraint_name = 'partner_domains' AND table_name = 'partner_domain'
   ) THEN
     ALTER TABLE partner_domain ADD CONSTRAINT partner_domains FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'work_schedule_partners' AND table_name = 'work_schedule'
+  ) THEN
+    ALTER TABLE work_schedule ADD CONSTRAINT work_schedule_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id);
   END IF;
 END $$;
 DO $$

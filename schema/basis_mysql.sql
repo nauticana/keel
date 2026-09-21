@@ -313,6 +313,16 @@ CREATE TABLE IF NOT EXISTS user_notification (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_user_notification_user ON user_notification(user_id, created_at);
 
+-- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). partner_id 0 is every tenant, so it carries no FK; contact is stored lowercased.
+CREATE TABLE IF NOT EXISTS notification_suppression (
+    channel                              VARCHAR(20)   NOT NULL,
+    contact                              VARCHAR(255)  NOT NULL,
+    partner_id                           BIGINT        NOT NULL DEFAULT 0,
+    reason                               VARCHAR(30)   NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (channel, contact, partner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- RBAC authorization object definitions
 CREATE TABLE IF NOT EXISTS authorization_object (
     id                                   VARCHAR(30)   NOT NULL,
@@ -400,17 +410,6 @@ CREATE INDEX idx_consent_event_user ON consent_event(user_id, consent_type);
 CREATE INDEX idx_consent_event_email ON consent_event(email_hash, consent_type);
 CREATE INDEX idx_consent_event_phone ON consent_event(phone_hash, consent_type);
 
--- Background worker registration and heartbeat
-CREATE TABLE IF NOT EXISTS service_registry (
-    service_name                         VARCHAR(16)   NOT NULL,
-    started_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    hostname                             VARCHAR(64)   NOT NULL,
-    pid                                  BIGINT        NOT NULL,
-    status                               CHAR(1)       NOT NULL,
-    last_heartbeat                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (service_name, started_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- Country reference table
 CREATE TABLE IF NOT EXISTS country (
     id                                   CHAR(2)       NOT NULL,
@@ -482,6 +481,34 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     PRIMARY KEY (partner_id, domain_url),
     CONSTRAINT partner_domains FOREIGN KEY (partner_id) REFERENCES business_partner(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Background worker registration and heartbeat
+CREATE TABLE IF NOT EXISTS service_registry (
+    service_name                         VARCHAR(16)   NOT NULL,
+    started_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    hostname                             VARCHAR(64)   NOT NULL,
+    pid                                  BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL,
+    last_heartbeat                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (service_name, started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Per-tenant cadence for recurring worker tasks (worker.Scheduler); task_kind is consumer-defined
+CREATE TABLE IF NOT EXISTS work_schedule (
+    partner_id                           BIGINT        NOT NULL,
+    task_kind                            VARCHAR(30)   NOT NULL,
+    interval_seconds                     INT           NOT NULL,
+    next_run_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_run_at                          DATETIME     ,
+    last_error                           TEXT         ,
+    consecutive_failures                 INT           NOT NULL DEFAULT 0,
+    lease_until                          DATETIME     ,
+    lease_token                          BIGINT       ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (partner_id, task_kind),
+    CONSTRAINT work_schedule_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
 
 -- OAuth 2.1 registered clients (Dynamic Client Registration)
 CREATE TABLE IF NOT EXISTS oauth_client (
@@ -571,6 +598,7 @@ CREATE TABLE IF NOT EXISTS partner_credential (
     cred_ref                             TEXT          NOT NULL,
     api_endpoint                         VARCHAR(255) ,
     status                               CHAR(1)       NOT NULL DEFAULT 'A',
+    granted_scopes                       TEXT         ,
     rev                                  INT           NOT NULL DEFAULT 0,
     lease_until                          DATETIME     ,
     issued_at                            DATETIME     ,
