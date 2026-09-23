@@ -138,10 +138,18 @@ func TestWritersCapabilities(t *testing.T) {
 	if _, err := writers.Uploader("shopify"); err != nil {
 		t.Errorf("shopify should upload: %v", err)
 	}
+	if _, err := writers.Lister("shopify"); err != nil {
+		t.Errorf("shopify should list images: %v", err)
+	}
+	if _, err := writers.Annotator("shopify"); err != nil {
+		t.Errorf("shopify should annotate images: %v", err)
+	}
 	for name, err := range map[string]error{
-		"create": firstErr(writers.Creator("wordpress")),
-		"delete": firstErr(writers.Deleter("wordpress")),
-		"upload": firstErr(writers.Uploader("wordpress")),
+		"create":   firstErr(writers.Creator("wordpress")),
+		"delete":   firstErr(writers.Deleter("wordpress")),
+		"upload":   firstErr(writers.Uploader("wordpress")),
+		"list":     firstErr(writers.Lister("wordpress")),
+		"annotate": firstErr(writers.Annotator("wordpress")),
 	} {
 		if !errors.Is(err, ErrUnsupportedOperation) {
 			t.Errorf("%s: err = %v, want ErrUnsupportedOperation", name, err)

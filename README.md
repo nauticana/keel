@@ -974,8 +974,16 @@ Evaluates an injected `[]connect.Source{ID, Provider, Collected}` against the te
 shopify, err := content.NewShopifyWriter(content.ShopifyFieldMap{
     content.ShopifyProduct: {"body": {Input: "descriptionHtml"}, "seo_title": {SEO: "title"}},
     content.ShopifyPage:    {"seo_title": {Metafield: &content.ShopifyMetafield{Namespace: "global", Key: "title_tag", Type: "single_line_text_field"}}},
+    content.ShopifyArticle: {
+        "published": {Input: "isPublished", Type: content.ValueBool},
+        "tags":      {Input: "tags", Type: content.ValueList},
+        "author":    {Input: "author", Type: content.ValueJSON},
+        "image":     {Input: "image", Type: content.ValueJSON, Selection: "{altText url}"},
+    },
 })
 ```
+
+Values stay strings at the port; an `Input` target's `Type` says how one is decoded before it is sent — `ValueString` (the zero value), `ValueBool`, `ValueList` (a JSON array of strings or comma-separated) or `ValueJSON` (any JSON document, `""` is null). A typed field reads back as JSON text its own decoder accepts, so a read value can be written back unchanged; an object-typed input needs a `Selection` to be readable. A value that does not decode is `ErrInvalidValue` and nothing is sent.
 
 ### `content` — create, delete and upload
 
@@ -992,7 +1000,9 @@ url, _, err := uploader.Upload(ctx, ref, "hero.png", "image/png", file)   // pro
 _, err = shopify.UpdateField(ctx, page, "hero", url)
 ```
 
-`Writers.Creator` / `.Deleter` / `.Uploader` select the provider and report `ErrUnsupportedOperation` when its writer does not carry that capability, so no call site type-asserts. `ShopifyWriter` implements all three: create and delete map to each kind's own mutation shape (Shopify puts the id in the input for some kinds and beside it for others), and `Upload` runs the staged-upload / POST / `fileCreate` sequence and waits for the asset to leave `PROCESSING` — a URL that is not servable yet would publish as a broken image. Uploads are capped at `MaxUploadBytes` (default 20 MiB, `ErrMediaTooLarge`) because the staged target is signed for an exact size; `PollAttempts` and `PollInterval` bound the wait, and exhausting them is `ErrThrottled`, not a failure.
+`MediaLister` lists the images a resource owns (`ResourceImage{ID, URL, Alt}`) and `MediaAnnotator` sets the alt text of one of them. `ShopifyWriter` implements both for a product's gallery; `SetImageAlt` confirms the image belongs to the product before `fileUpdate`, which would otherwise accept any file in the shop, and reports a foreign one as `ErrResourceNotFound`. An article's or collection's single featured image is a field — map it as `ValueJSON` with a `Selection`.
+
+`Writers.Creator` / `.Deleter` / `.Uploader` / `.Lister` / `.Annotator` select the provider and report `ErrUnsupportedOperation` when its writer does not carry that capability, so no call site type-asserts. `ShopifyWriter` implements all five: create and delete map to each kind's own mutation shape (Shopify puts the id in the input for some kinds and beside it for others), and `Upload` runs the staged-upload / POST / `fileCreate` sequence and waits for the asset to leave `PROCESSING` — a URL that is not servable yet would publish as a broken image. Uploads are capped at `MaxUploadBytes` (default 20 MiB, `ErrMediaTooLarge`) because the staged target is signed for an exact size; `PollAttempts` and `PollInterval` bound the wait, and exhausting them is `ErrThrottled`, not a failure.
 
 ### Shopify mandatory compliance webhooks
 
@@ -1026,7 +1036,9 @@ tabCtx, closeTab := session.NewTab(30 * time.Second)
 defer closeTab()
 ```
 
-Depend on `browser.Renderer`, not `*DOMRenderer`, so a pooled implementation can replace it without touching callers. An expression that throws evaluates to `nil`; one that could not run is reported in `RenderResult.EvaluationErrors`. `Launcher.NewAllocator` is the lower-level entry for code that manages its own chromedp contexts.
+Depend on `browser.Renderer`, not `*DOMRenderer`, so a pooled implementation can replace it without touching callers. An expression that throws evaluates to `nil`; one that could not run is reported in `RenderResult.EvaluationErrors`.
+
+`CaptureRequests` records what the page asked the network for — a library that loaded is not a beacon that left. Each `NetworkRequest` carries URL, method, Chrome's resource type (`Ping` for `sendBeacon`), status (0 while unanswered) and Chrome's error text for a failed one (`net::ERR_BLOCKED_BY_CLIENT`); redirect hops are separate entries. The list stops at `MaxRequests` (default 1000) and sets `RequestsTruncated`; bodies are never recorded, and a cross-origin iframe's requests run in another renderer and are not seen. `Settle` waits after load before anything is captured, for tags that fire late. Matching URLs to vendors is the caller's job. `Launcher.NewAllocator` is the lower-level entry for code that manages its own chromedp contexts.
 
 ### `reference` — CrUX, Knowledge Graph, Wikidata, IndexNow
 

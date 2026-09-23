@@ -13,8 +13,8 @@ var (
 
 // Create makes a new object of ref.Kind from the same logical fields
 // UpdateField writes — including the ones the provider requires at creation
-// (a page's title, an article's blogId), which the field map supplies as
-// ordinary inputs. ref.ID is ignored; the returned ref carries Shopify's id.
+// (a page's title, an article's blogId and author), which the field map
+// supplies as ordinary inputs typed by their ValueType. ref.ID is ignored; the returned ref carries Shopify's id.
 func (w *ShopifyWriter) Create(ctx context.Context, ref ResourceRef, fields map[string]string) (ResourceRef, WriteResult, error) {
 	kind, ok := shopifyKinds[ref.Kind]
 	if !ok {
@@ -69,7 +69,11 @@ func (w *ShopifyWriter) createInput(kind string, fields map[string]string) (map[
 		case target.SEO != "":
 			seo[target.SEO] = value
 		default:
-			input[target.Input] = value
+			v, err := target.inputValue(field, value)
+			if err != nil {
+				return nil, err
+			}
+			input[target.Input] = v
 		}
 	}
 	if len(seo) > 0 {

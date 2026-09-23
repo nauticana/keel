@@ -16,6 +16,13 @@ type RenderRequest struct {
 	// loaded DOM; its JSON value lands under the same label in the result.
 	Evaluations    map[string]string
 	CaptureCookies bool
+	// CaptureRequests records every request the page sends, in order, up to
+	// MaxRequests (0 = DefaultMaxRequests). Bodies are never recorded.
+	CaptureRequests bool
+	MaxRequests     int
+	// Settle waits after load, before anything is captured, for work the page
+	// defers past load — a tag that beacons late. It counts against Timeout.
+	Settle time.Duration
 }
 
 type RenderResult struct {
@@ -26,7 +33,10 @@ type RenderResult struct {
 	Evaluations      map[string]any
 	EvaluationErrors map[string]error
 	Cookies          []http.Cookie
-	Loaded           time.Duration // navigate through DOM capture
+	Requests         []NetworkRequest
+	// RequestsTruncated: MaxRequests was reached and later requests are missing.
+	RequestsTruncated bool
+	Loaded            time.Duration // navigate until body is visible
 }
 
 // Truthy reports whether the labelled evaluation produced a JS-truthy value;

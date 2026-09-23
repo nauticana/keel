@@ -30,11 +30,16 @@ type ShopifyMetafield struct {
 }
 
 // ShopifyTarget says where a logical field lives on a Shopify object. Exactly
-// one member is set.
+// one of Input, SEO, Metafield is set; Type and Selection refine an Input.
 type ShopifyTarget struct {
 	Input     string // field on the object and its update input, e.g. "descriptionHtml"
 	SEO       string // "title" or "description" of the object's seo member
 	Metafield *ShopifyMetafield
+
+	Type ValueType // how the input's value is typed; zero is a string
+	// Selection is the sub-selection that reads an object-typed Input as JSON,
+	// e.g. "{altText url}" for an article's image.
+	Selection string
 }
 
 // ShopifyFieldMap is kind → logical field → target.
@@ -146,7 +151,85 @@ func (t ShopifyTarget) validate() error {
 	if set != 1 {
 		return errors.New("exactly one of Input, SEO, Metafield must be set")
 	}
+	if !t.Type.valid() {
+		return fmt.Errorf("unknown value type %d", t.Type)
+	}
+	if t.Input == "" && t.Type != ValueString {
+		return errors.New("a value type applies to an Input only")
+	}
+	if t.Selection != "" {
+		if t.Type != ValueJSON {
+			return errors.New("a selection needs ValueJSON")
+		}
+		if !validGraphQLSelection(t.Selection) {
+			return fmt.Errorf("selection %q is not a plain GraphQL selection set", t.Selection)
+		}
+	}
 	return nil
+}
+
+// validGraphQLSelection accepts nested sets of bare field names only — no
+// arguments, aliases, fragments or directives — so a mapping cannot widen the query.
+func validGraphQLSelection(s string) bool {
+	runes := []rune(s)
+	i := 0
+	var selection func() bool
+	skipSpace := func() {
+		for i < len(runes) {
+			switch runes[i] {
+			case ' ', '\t', '\n', '\r':
+				i++
+			default:
+				return
+			}
+		}
+	}
+	selection = func() bool {
+		skipSpace()
+		if i >= len(runes) || runes[i] != '{' {
+			return false
+		}
+		i++
+		fields := 0
+		for {
+			skipSpace()
+			if i >= len(runes) {
+				return false
+			}
+			if runes[i] == '}' {
+				i++
+				return fields > 0
+			}
+			if runes[i] != '_' && (runes[i] < 'A' || runes[i] > 'Z') && (runes[i] < 'a' || runes[i] > 'z') {
+				return false
+			}
+			for i++; i < len(runes); i++ {
+				r := runes[i]
+				if r != '_' && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+					break
+				}
+			}
+			fields++
+			skipSpace()
+			if i < len(runes) && runes[i] == '{' && !selection() {
+				return false
+			}
+		}
+	}
+	if !selection() {
+		return false
+	}
+	skipSpace()
+	return i == len(runes)
+}
+
+// inputValue is the value an Input target sends on create and update.
+func (t ShopifyTarget) inputValue(field, value string) (any, error) {
+	v, err := t.Type.decode(value)
+	if err != nil {
+		return nil, fmt.Errorf("field %q: %w", field, err)
+	}
+	return v, nil
 }
 
 func (w *ShopifyWriter) target(ref ResourceRef, field string) (shopifyKind, ShopifyTarget, error) {
@@ -167,8 +250,8 @@ type shopifySEO struct {
 }
 
 type shopifyFieldValue struct {
-	Value     *string    `json:"value"`
-	SEO       shopifySEO `json:"seo"`
+	Value     json.RawMessage `json:"value"`
+	SEO       shopifySEO      `json:"seo"`
 	Metafield *struct {
 		Value string `json:"value"`
 	} `json:"metafield"`
@@ -194,12 +277,12 @@ func (w *ShopifyWriter) ReadField(ctx context.Context, ref ResourceRef, field st
 	case target.SEO == "description":
 		return deref(got.SEO.Description), nil
 	}
-	return deref(got.Value), nil
+	return target.Type.render(got.Value)
 }
 
 func (w *ShopifyWriter) read(ctx context.Context, ref ResourceRef, kind shopifyKind, target ShopifyTarget) (*shopifyFieldValue, error) {
 	vars := map[string]any{"id": ref.ID}
-	params, selection := "$id:ID!", "value: "+target.Input
+	params, selection := "$id:ID!", "value: "+target.Input+target.Selection
 	switch {
 	case target.Metafield != nil:
 		params += ",$ns:String!,$key:String!"
@@ -242,7 +325,11 @@ func (w *ShopifyWriter) UpdateField(ctx context.Context, ref ResourceRef, field,
 		seo[target.SEO] = value
 		input["seo"] = seo
 	} else {
-		input[target.Input] = value
+		v, err := target.inputValue(field, value)
+		if err != nil {
+			return WriteResult{}, err
+		}
+		input[target.Input] = v
 	}
 	vars := map[string]any{"in": input}
 	var query string

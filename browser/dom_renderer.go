@@ -44,18 +44,32 @@ func (r *DOMRenderer) Render(ctx context.Context, req RenderRequest) (*RenderRes
 	if ua := strings.TrimSpace(req.UserAgent); ua != "" {
 		actions = append(actions, emulation.SetUserAgentOverride(ua))
 	}
+	var requests *requestLog
+	if req.CaptureRequests {
+		requests = newRequestLog(req.MaxRequests)
+		chromedp.ListenTarget(tabCtx, requests.observe)
+	}
 	out := &RenderResult{URL: req.URL, Evaluations: map[string]any{}, EvaluationErrors: map[string]error{}}
 	start := time.Now()
 	actions = append(actions,
 		chromedp.Navigate(req.URL),
 		// body visible = the static shell of an asynchronously hydrating app is in place.
 		chromedp.WaitVisible("body", chromedp.ByQuery),
-		chromedp.OuterHTML("html", &out.RenderedHTML),
+		chromedp.ActionFunc(func(context.Context) error {
+			out.Loaded = time.Since(start)
+			return nil
+		}),
 	)
+	if req.Settle > 0 {
+		actions = append(actions, chromedp.Sleep(req.Settle))
+	}
+	actions = append(actions, chromedp.OuterHTML("html", &out.RenderedHTML))
 	if err := chromedp.Run(tabCtx, actions); err != nil {
 		return nil, fmt.Errorf("browser: render %s: %w", req.URL, err)
 	}
-	out.Loaded = time.Since(start)
+	if requests != nil {
+		out.Requests, out.RequestsTruncated = requests.snapshot()
+	}
 
 	for label, expr := range req.Evaluations {
 		value, err := evaluate(tabCtx, expr)

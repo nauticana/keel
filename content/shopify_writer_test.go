@@ -55,6 +55,13 @@ var testFields = ShopifyFieldMap{
 		"seo_title": {SEO: "title"},
 		"seo_desc":  {SEO: "description"},
 	},
+	ShopifyArticle: {
+		"title":     {Input: "title"},
+		"published": {Input: "isPublished", Type: ValueBool},
+		"tags":      {Input: "tags", Type: ValueList},
+		"author":    {Input: "author", Type: ValueJSON},
+		"image":     {Input: "image", Type: ValueJSON, Selection: "{altText url}"},
+	},
 }
 
 func newTestWriter(t *testing.T) *ShopifyWriter {
@@ -73,13 +80,24 @@ func refOf(ref ResourceRef, kind string) ResourceRef {
 
 func TestNewShopifyWriterValidatesFieldMap(t *testing.T) {
 	for name, fields := range map[string]ShopifyFieldMap{
-		"unknown kind":        {"order": {"note": {Input: "note"}}},
-		"no target":           {ShopifyPage: {"x": {}}},
-		"two targets":         {ShopifyPage: {"x": {Input: "body", SEO: "title"}}},
-		"injected selection":  {ShopifyPage: {"x": {Input: "body} shop{name"}}},
-		"bad seo member":      {ShopifyProduct: {"x": {SEO: "keywords"}}},
-		"partial metafield":   {ShopifyPage: {"x": {Metafield: &ShopifyMetafield{Namespace: "global"}}}},
-		"empty logical field": {ShopifyPage: {"": {Input: "body"}}},
+		"unknown kind":         {"order": {"note": {Input: "note"}}},
+		"no target":            {ShopifyPage: {"x": {}}},
+		"two targets":          {ShopifyPage: {"x": {Input: "body", SEO: "title"}}},
+		"injected selection":   {ShopifyPage: {"x": {Input: "body} shop{name"}}},
+		"bad seo member":       {ShopifyProduct: {"x": {SEO: "keywords"}}},
+		"partial metafield":    {ShopifyPage: {"x": {Metafield: &ShopifyMetafield{Namespace: "global"}}}},
+		"empty logical field":  {ShopifyPage: {"": {Input: "body"}}},
+		"typed seo member":     {ShopifyProduct: {"x": {SEO: "title", Type: ValueBool}}},
+		"typed metafield":      {ShopifyPage: {"x": {Metafield: &ShopifyMetafield{Namespace: "n", Key: "k", Type: "t"}, Type: ValueList}}},
+		"unknown value type":   {ShopifyPage: {"x": {Input: "body", Type: ValueType(9)}}},
+		"untyped selection":    {ShopifyArticle: {"x": {Input: "image", Selection: "{url}"}}},
+		"selection argument":   {ShopifyArticle: {"x": {Input: "image", Type: ValueJSON, Selection: "{url(transform:{})}"}}},
+		"selection escape":     {ShopifyArticle: {"x": {Input: "image", Type: ValueJSON, Selection: "{url}} shop{name"}}},
+		"unbalanced":           {ShopifyArticle: {"x": {Input: "image", Type: ValueJSON, Selection: "{url}}{"}}},
+		"empty selection":      {ShopifyArticle: {"x": {Input: "image", Type: ValueJSON, Selection: "{}"}}},
+		"numeric field":        {ShopifyArticle: {"x": {Input: "image", Type: ValueJSON, Selection: "{123}"}}},
+		"empty nested set":     {ShopifyArticle: {"x": {Input: "image", Type: ValueJSON, Selection: "{image{}}"}}},
+		"anonymous nested set": {ShopifyArticle: {"x": {Input: "image", Type: ValueJSON, Selection: "{{url}}"}}},
 	} {
 		if _, err := NewShopifyWriter(fields); err == nil {
 			t.Errorf("%s: accepted", name)
