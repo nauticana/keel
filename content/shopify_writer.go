@@ -30,11 +30,14 @@ type ShopifyMetafield struct {
 }
 
 // ShopifyTarget says where a logical field lives on a Shopify object. Exactly
-// one of Input, SEO, Metafield is set; Type and Selection refine an Input.
+// one of Input, SEO, Metafield, Redirect is set; Type and Selection refine an Input.
 type ShopifyTarget struct {
 	Input     string // field on the object and its update input, e.g. "descriptionHtml"
 	SEO       string // "title" or "description" of the object's seo member
 	Metafield *ShopifyMetafield
+	// Redirect retires the object behind a URL redirect from its online-store
+	// path; the value is the redirect target, "" while the object is live.
+	Redirect bool
 
 	Type ValueType // how the input's value is typed; zero is a string
 	// Selection is the sub-selection that reads an object-typed Input as JSON,
@@ -148,8 +151,11 @@ func (t ShopifyTarget) validate() error {
 			return errors.New("metafield needs namespace, key and type")
 		}
 	}
+	if t.Redirect {
+		set++
+	}
 	if set != 1 {
-		return errors.New("exactly one of Input, SEO, Metafield must be set")
+		return errors.New("exactly one of Input, SEO, Metafield, Redirect must be set")
 	}
 	if !t.Type.valid() {
 		return fmt.Errorf("unknown value type %d", t.Type)
@@ -262,6 +268,9 @@ func (w *ShopifyWriter) ReadField(ctx context.Context, ref ResourceRef, field st
 	if err != nil {
 		return "", err
 	}
+	if target.Redirect {
+		return w.readRedirect(ctx, ref, kind)
+	}
 	got, err := w.read(ctx, ref, kind, target)
 	if err != nil {
 		return "", err
@@ -307,6 +316,9 @@ func (w *ShopifyWriter) UpdateField(ctx context.Context, ref ResourceRef, field,
 	if err != nil {
 		return WriteResult{}, err
 	}
+	if target.Redirect {
+		return w.updateRedirect(ctx, ref, kind, value)
+	}
 	if mf := target.Metafield; mf != nil {
 		return w.mutate(ctx, ref, "metafieldsSet",
 			`mutation($metafields:[MetafieldsSetInput!]!){metafieldsSet(metafields:$metafields){userErrors{field message}}}`,
@@ -331,6 +343,11 @@ func (w *ShopifyWriter) UpdateField(ctx context.Context, ref ResourceRef, field,
 		}
 		input[target.Input] = v
 	}
+	return w.update(ctx, ref, kind, input)
+}
+
+// update runs the kind's update mutation with input, which it may extend with the id.
+func (w *ShopifyWriter) update(ctx context.Context, ref ResourceRef, kind shopifyKind, input map[string]any) (WriteResult, error) {
 	vars := map[string]any{"in": input}
 	var query string
 	if kind.idInInput {

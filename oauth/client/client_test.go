@@ -95,6 +95,16 @@ func TestMetaProvider_Config(t *testing.T) {
 	if b.RequireRefresh {
 		t.Error("Meta has no refresh token; RequireRefresh must be false")
 	}
+	if got := b.DeriveAPIEndpoint(context.Background(), ""); got != "https://graph.facebook.com/v23.0/me" {
+		t.Errorf("API endpoint = %q, want the default Graph version", got)
+	}
+	b.GraphVersion = "v24.0"
+	if got := b.DeriveEndpoint().TokenURL; got != "https://graph.facebook.com/v24.0/oauth/access_token" {
+		t.Errorf("token endpoint = %q, want the overridden Graph version", got)
+	}
+	if got := b.DeriveAPIEndpoint(context.Background(), ""); got != "https://graph.facebook.com/v24.0/me" {
+		t.Errorf("derived API endpoint = %q, want the overridden Graph version", got)
+	}
 }
 
 func TestBaseProvider_connType(t *testing.T) {

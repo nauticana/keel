@@ -144,3 +144,36 @@ func TestTransactionalWriteHookFailureRollsBackAutoCRUD(t *testing.T) {
 		t.Fatalf("called=%v inserted=%v rolledBack=%v committed=%v", called, table.inserted, db.rolledBack, db.committed)
 	}
 }
+
+func TestAttachActionParameters(t *testing.T) {
+	newTables := func() map[string]*model.TableDefinition {
+		return map[string]*model.TableDefinition{"lead": {
+			TableName: "lead",
+			Keys:      []*model.TableColumn{{ColumnName: "id"}},
+			Actions:   []*model.TableAction{{TableName: "lead", ActionName: "mark_won"}},
+		}}
+	}
+	tables := newTables()
+	err := attachActionParameters(tables, [][]any{
+		{"lead", "mark_won", "sale_value", "Sale value", "number", true, ""},
+		{"lead", "mark_won", "currency", "Currency", "string", true, "currency"},
+		{"lead", "unknown_action", "x", "X", "string", false, ""},
+		{"missing_table", "mark_won", "x", "X", "string", false, ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := tables["lead"].Actions[0].Parameters
+	if len(params) != 2 || params[0].Name != "sale_value" || !params[0].Required || params[1].LookupTable != "currency" {
+		t.Fatalf("parameters = %+v", params)
+	}
+
+	for _, rows := range [][][]any{
+		{{"lead", "mark_won", "id", "Id", "number", false, ""}},
+		{{"lead", "mark_won", "note", "Note", "string", false, ""}, {"lead", "mark_won", "note", "Note", "string", false, ""}},
+	} {
+		if err := attachActionParameters(newTables(), rows); err == nil {
+			t.Errorf("rows %v: want a collision error", rows)
+		}
+	}
+}

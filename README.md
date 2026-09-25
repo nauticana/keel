@@ -1002,7 +1002,9 @@ _, err = shopify.UpdateField(ctx, page, "hero", url)
 
 `MediaLister` lists the images a resource owns (`ResourceImage{ID, URL, Alt}`) and `MediaAnnotator` sets the alt text of one of them. `ShopifyWriter` implements both for a product's gallery; `SetImageAlt` confirms the image belongs to the product before `fileUpdate`, which would otherwise accept any file in the shop, and reports a foreign one as `ErrResourceNotFound`. An article's or collection's single featured image is a field — map it as `ValueJSON` with a `Selection`.
 
-`Writers.Creator` / `.Deleter` / `.Uploader` / `.Lister` / `.Annotator` select the provider and report `ErrUnsupportedOperation` when its writer does not carry that capability, so no call site type-asserts. `ShopifyWriter` implements all five: create and delete map to each kind's own mutation shape (Shopify puts the id in the input for some kinds and beside it for others), and `Upload` runs the staged-upload / POST / `fileCreate` sequence and waits for the asset to leave `PROCESSING` — a URL that is not servable yet would publish as a broken image. Uploads are capped at `MaxUploadBytes` (default 20 MiB, `ErrMediaTooLarge`) because the staged target is signed for an exact size; `PollAttempts` and `PollInterval` bound the wait, and exhausting them is `ErrThrottled`, not a failure.
+A `ShopifyTarget{Redirect: true}` field retires a page, article, product or collection behind a URL redirect. Writing a target creates or retargets the redirect, then unpublishes the object from the storefront; writing `""` republishes it and deletes the redirect. A live object reads as `""`. An already-unpublished object without a redirect is rejected because rollback could not safely restore it. `RedirectLister` lists the store's redirects. The connection needs `read_online_store_navigation` and `write_online_store_navigation`; products and collections also need `write_publications`.
+
+`Writers.Creator` / `.Deleter` / `.Uploader` / `.Lister` / `.Annotator` / `.RedirectLister` select the provider and report `ErrUnsupportedOperation` when its writer does not carry that capability, so no call site type-asserts. `ShopifyWriter` implements all six: create and delete map to each kind's own mutation shape (Shopify puts the id in the input for some kinds and beside it for others), and `Upload` runs the staged-upload / POST / `fileCreate` sequence and waits for the asset to leave `PROCESSING` — a URL that is not servable yet would publish as a broken image. Uploads are capped at `MaxUploadBytes` (default 20 MiB, `ErrMediaTooLarge`) because the staged target is signed for an exact size; `PollAttempts` and `PollInterval` bound the wait, and exhausting them is `ErrThrottled`, not a failure.
 
 ### Shopify mandatory compliance webhooks
 
@@ -2380,6 +2382,17 @@ The `low_limit` column carries the table_name (lowercase), matched the same way 
 `POST /api/v1/{table_name}/{action_name}` — no `/action/` segment, version segment matches the table's `rest_api_header.version`. Request body carries the record's primary key columns (record-specific) or `{}` (table-level).
 
 Override via the `table_action.method_name` column when two tables need to route to one shared handler — keel uses `{method_name}` in place of `{table}/{action_name}` on the URL.
+
+### Parameters
+
+An action that needs values besides the key declares them in `table_action_parameter` (`seq`, `param_name`, `caption`, `data_type`, `required`, `lookup_table`); they reach the client as `TableAction.parameters` and are posted merged with the key. `lookup_table` offers that table's rows as choices. A `param_name` equal to a key column or repeated within the action fails REST boot. The handler validates the values.
+
+```yaml
+- table: table_action_parameter
+  columns: [table_name, action_name, seq, param_name, caption, data_type, required]
+  rows:
+    - [lead, mark_won, 1, sale_value, Sale value, number, true]
+```
 
 ### Backend wiring
 

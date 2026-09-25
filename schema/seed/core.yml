@@ -266,6 +266,7 @@ seeds:
       - [constant_lookups, D, caption]
       - [constant_values, D, caption]
       - [rest_report_params, S, "*"]
+      - [table_action_parameters, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
@@ -281,6 +282,7 @@ seeds:
       - [constant_header, 2, 0, constant_lookups]
       - [rest_api_header, 1, 0, rest_api_children]
       - [rest_report_header, 1, 0, rest_report_params]
+      - [table_action, 1, 0, table_action_parameters]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -27,6 +28,7 @@ const (
 	qRestReportHeader = "rest_report_header"
 	qRestReportParam  = "rest_report_param"
 	qTableAction      = "table_action"
+	qTableActionParam = "table_action_parameter"
 	qTableGrants      = "table_grants"
 )
 
@@ -51,6 +53,10 @@ SELECT table_name, action_name, caption, COALESCE(icon, ''),
        action_kind
   FROM table_action
  ORDER BY table_name, display_order, action_name`,
+	qTableActionParam: `
+SELECT table_name, action_name, param_name, caption, data_type, required, COALESCE(lookup_table, '')
+  FROM table_action_parameter
+ ORDER BY table_name, action_name, seq`,
 }
 
 type Permission struct {
@@ -722,6 +728,44 @@ func (s *RestService) loadTableActions(ctx context.Context) error {
 			action.Method = common.APIVersion + "/" + tableName + "/" + actionName
 		}
 		table.Actions = append(table.Actions, action)
+	}
+	if _, ok := s.db.GetTableDefinitions()["table_action_parameter"]; !ok {
+		return nil
+	}
+	res, err = s.qs.Query(ctx, qTableActionParam)
+	if err != nil {
+		return fmt.Errorf("load table_action_parameter rows: %w", err)
+	}
+	return attachActionParameters(s.db.GetTableDefinitions(), res.Rows)
+}
+
+// attachActionParameters rejects a parameter that would overwrite a key column
+// or another parameter in the merged POST body.
+func attachActionParameters(tables map[string]*model.TableDefinition, rows [][]any) error {
+	for _, row := range rows {
+		tableName, actionName := common.AsString(row[0]), common.AsString(row[1])
+		table := tables[tableName]
+		if table == nil {
+			continue
+		}
+		idx := slices.IndexFunc(table.Actions, func(a *model.TableAction) bool { return a.ActionName == actionName })
+		if idx < 0 {
+			continue
+		}
+		action := table.Actions[idx]
+		param := &model.TableActionParameter{
+			Name:        common.AsString(row[2]),
+			Caption:     common.AsString(row[3]),
+			DataType:    common.AsString(row[4]),
+			Required:    common.AsBool(row[5]),
+			LookupTable: common.AsString(row[6]),
+		}
+		if slices.ContainsFunc(table.Keys, func(k *model.TableColumn) bool { return k.ColumnName == param.Name }) ||
+			slices.ContainsFunc(action.Parameters, func(p *model.TableActionParameter) bool { return p.Name == param.Name }) {
+			return fmt.Errorf("table_action_parameter %s.%s.%s collides with a key column or another parameter",
+				tableName, actionName, param.Name)
+		}
+		action.Parameters = append(action.Parameters, param)
 	}
 	return nil
 }

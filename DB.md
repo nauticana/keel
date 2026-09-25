@@ -27,11 +27,13 @@ flowchart RL
         direction BT
         table_sequence_usage["table_sequence_usage"]
         table_action["table_action"]
+        table_action_parameter["table_action_parameter"]
         application_config_flag["application_config_flag"]
         application_config_value["application_config_value"]
         application_menu["application_menu"]
         application_menu_item["application_menu_item"]
     end
+    table_action_parameter --> table_action
     application_config_value --> application_config_flag
     application_menu_item --> application_menu
 
@@ -274,6 +276,8 @@ above show the actual merged component boundary and module dependencies.
 
 ```mermaid
 erDiagram
+    table_action ||--o{ table_action_parameter : "table_action_parameters"
+
     table_action {
         VARCHAR table_name PK
         VARCHAR action_name PK
@@ -284,6 +288,16 @@ erDiagram
         VARCHAR method_name
         SMALLINT display_order
         VARCHAR confirm_message
+    }
+    table_action_parameter {
+        VARCHAR table_name PK,FK
+        VARCHAR action_name PK,FK
+        INTEGER seq PK
+        VARCHAR param_name
+        VARCHAR caption
+        VARCHAR data_type
+        BOOLEAN required
+        VARCHAR lookup_table
     }
     table_sequence_usage {
         VARCHAR table_name PK

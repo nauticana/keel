@@ -31,8 +31,8 @@ var (
 	// ErrRejected: the provider understood the request and refused the change.
 	ErrRejected = errors.New("content: provider rejected the request")
 	// ErrUnsupportedOperation: the provider's writer does not implement the
-	// operation (creating, deleting, uploading, listing or annotating images)
-	// the caller asked for.
+	// operation (creating, deleting, uploading, listing or annotating images,
+	// listing redirects) the caller asked for.
 	ErrUnsupportedOperation = errors.New("content: operation unsupported by provider")
 	// ErrMediaTooLarge: the upload exceeds the uploader's size cap.
 	ErrMediaTooLarge = errors.New("content: media exceeds the size cap")
@@ -109,6 +109,18 @@ type MediaAnnotator interface {
 	SetImageAlt(ctx context.Context, ref ResourceRef, imageID, alt string) (WriteResult, error)
 }
 
+// Redirect sends requests for Path, e.g. "/pages/old", to Target.
+type Redirect struct {
+	ID     string `json:"id"`
+	Path   string `json:"path"`
+	Target string `json:"target"`
+}
+
+// RedirectLister lists the platform's URL redirects; ref.Kind and ref.ID are unused.
+type RedirectLister interface {
+	ListRedirects(ctx context.Context, ref ResourceRef) ([]Redirect, error)
+}
+
 // FieldReader reads a live field through the partner's own connection.
 type FieldReader interface {
 	ReadField(ctx context.Context, partnerID int64, provider, kind, id, field string) (string, error)
@@ -130,7 +142,7 @@ func (w Writers) For(provider string) (ResourceWriter, error) {
 	return nil, fmt.Errorf("%w: %q", ErrUnsupportedProvider, provider)
 }
 
-// Creator, Deleter, Uploader, Lister and Annotator select the provider's writer and report whether
+// Creator, Deleter, Uploader, Lister, Annotator and RedirectLister select the provider's writer and report whether
 // it carries that capability, so a caller never type-asserts on its own.
 func (w Writers) Creator(provider string) (ResourceCreator, error) {
 	return capability[ResourceCreator](w, provider, "create")
@@ -150,6 +162,10 @@ func (w Writers) Lister(provider string) (MediaLister, error) {
 
 func (w Writers) Annotator(provider string) (MediaAnnotator, error) {
 	return capability[MediaAnnotator](w, provider, "annotate images")
+}
+
+func (w Writers) RedirectLister(provider string) (RedirectLister, error) {
+	return capability[RedirectLister](w, provider, "list redirects")
 }
 
 func capability[T any](w Writers, provider, op string) (T, error) {

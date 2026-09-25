@@ -39,16 +39,27 @@ func IsReservedActionName(actionName string) bool {
 // the {action_name} segment of the URL (useful for routing two tables'
 // actions through a single shared handler).
 type TableAction struct {
-	TableName       string `json:"-"`      // for index keying only — not serialised to the wire
-	ActionName      string `json:"action"` // lowercase action_name
-	Caption         string `json:"caption"`
-	Icon            string `json:"icon,omitempty"` // Material icon name; empty → label-only
-	RecordSpecific  bool   `json:"recordSpecific"` // TRUE: per-row button; FALSE: table-level
-	MethodName      string `json:"-"`              // optional URL-path override; resolved into Method server-side
-	Method          string `json:"method"`         // resolved URL path (POST target)
-	DisplayOrder    int    `json:"displayOrder"`
-	ConfirmMessage  string `json:"confirmMessage,omitempty"`
-	Kind            string `json:"kind,omitempty"`  // action_kind: P post (default) / R redirect / V reveal
-	AuthorityObject string `json:"authorityObject"` // uppercased TableName — for canExecute() check on client
-	AuthorityAction string `json:"authorityCheck"`  // uppercased ActionName — for canExecute() check on client
+	TableName       string                  `json:"-"`      // for index keying only — not serialised to the wire
+	ActionName      string                  `json:"action"` // lowercase action_name
+	Caption         string                  `json:"caption"`
+	Icon            string                  `json:"icon,omitempty"` // Material icon name; empty → label-only
+	RecordSpecific  bool                    `json:"recordSpecific"` // TRUE: per-row button; FALSE: table-level
+	MethodName      string                  `json:"-"`              // optional URL-path override; resolved into Method server-side
+	Method          string                  `json:"method"`         // resolved URL path (POST target)
+	DisplayOrder    int                     `json:"displayOrder"`
+	ConfirmMessage  string                  `json:"confirmMessage,omitempty"`
+	Kind            string                  `json:"kind,omitempty"`  // action_kind: P post (default) / R redirect / V reveal
+	AuthorityObject string                  `json:"authorityObject"` // uppercased TableName — for canExecute() check on client
+	AuthorityAction string                  `json:"authorityCheck"`  // uppercased ActionName — for canExecute() check on client
+	Parameters      []*TableActionParameter `json:"parameters,omitempty"`
+}
+
+// TableActionParameter is one value the client collects before posting the
+// action, merged into the body next to the record key.
+type TableActionParameter struct {
+	Name        string `json:"name"`
+	Caption     string `json:"caption"`
+	DataType    string `json:"dataType"`
+	Required    bool   `json:"required"`
+	LookupTable string `json:"lookupTable,omitempty"` // offer this table's rows as choices
 }

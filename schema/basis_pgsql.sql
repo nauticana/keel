@@ -162,6 +162,21 @@ CREATE TABLE IF NOT EXISTS table_action (
 );
 CREATE INDEX IF NOT EXISTS idx_table_action_table ON table_action(table_name);
 
+-- Input values a table action asks for besides the record key. The client
+-- posts them merged with the key; the action's handler validates them.
+-- lookup_table offers the rows of that table as choices.
+CREATE TABLE IF NOT EXISTS table_action_parameter (
+    table_name                           VARCHAR(80)   NOT NULL,
+    action_name                          VARCHAR(30)   NOT NULL,
+    seq                                  INTEGER       NOT NULL,
+    param_name                           VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    data_type                            VARCHAR(20)   NOT NULL DEFAULT 'string',
+    required                             BOOLEAN       NOT NULL DEFAULT FALSE,
+    lookup_table                         VARCHAR(80)  ,
+    CONSTRAINT table_action_parameter_pk PRIMARY KEY (table_name, action_name, seq)
+);
+
 -- Configurable password and login policies
 CREATE TABLE IF NOT EXISTS user_account_policy (
     id                                   VARCHAR(30)   NOT NULL,
@@ -1346,6 +1361,15 @@ BEGIN
      WHERE constraint_name = 'rest_report_param_constants' AND table_name = 'rest_report_param'
   ) THEN
     ALTER TABLE rest_report_param ADD CONSTRAINT rest_report_param_constants FOREIGN KEY (constant_id) REFERENCES constant_header(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'table_action_parameters' AND table_name = 'table_action_parameter'
+  ) THEN
+    ALTER TABLE table_action_parameter ADD CONSTRAINT table_action_parameters FOREIGN KEY (table_name, action_name) REFERENCES table_action(table_name, action_name);
   END IF;
 END $$;
 DO $$

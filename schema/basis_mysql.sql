@@ -172,6 +172,22 @@ CREATE TABLE IF NOT EXISTS table_action (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_table_action_table ON table_action(table_name);
 
+-- Input values a table action asks for besides the record key. The client
+-- posts them merged with the key; the action's handler validates them.
+-- lookup_table offers the rows of that table as choices.
+CREATE TABLE IF NOT EXISTS table_action_parameter (
+    table_name                           VARCHAR(80)   NOT NULL,
+    action_name                          VARCHAR(30)   NOT NULL,
+    seq                                  INT           NOT NULL,
+    param_name                           VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    data_type                            VARCHAR(20)   NOT NULL DEFAULT 'string',
+    required                             TINYINT(1)    NOT NULL DEFAULT 0,
+    lookup_table                         VARCHAR(80)  ,
+    PRIMARY KEY (table_name, action_name, seq),
+    CONSTRAINT table_action_parameters FOREIGN KEY (table_name, action_name) REFERENCES table_action(table_name, action_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Configurable password and login policies
 CREATE TABLE IF NOT EXISTS user_account_policy (
     id                                   VARCHAR(30)   NOT NULL,

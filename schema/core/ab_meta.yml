@@ -14,6 +14,7 @@ tables:
   - rest_report_param
   - column_display_attribute
   - table_action
+  - table_action_parameter
   - user_account_policy
   - user_account
   - user_account_history

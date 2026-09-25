@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.75",
+   "title": "The Meta Graph API version is configurable; a resource can be retired behind a URL redirect; decimal ↔ minor-unit conversion; table actions take parameters",
+   "tags": [
+    "additive"
+   ],
+   "summary": "Meta providers expose a configurable Graph API version. Shopify redirects can retire and restore pages, articles, products and collections. Decimal amounts convert exactly to and from currency minor units. Table actions can declare parameters. No new config keys.",
+   "body_markdown": "### Meta Graph API version\n\n`NewMetaProvider` returns a `*MetaProvider` whose `GraphVersion` (default `v23.0`) drives the OAuth endpoints, token exchange and healthcheck; set it after construction to move versions. Callers that held the result as `*BaseProvider` change the type; `Provider` callers are unaffected.\n\n### Resource redirects\n\nMap `ShopifyTarget{Redirect: true}` on a page, article, product or collection. A non-empty write creates or retargets the redirect and unpublishes the resource; an empty write republishes it and deletes the redirect. `RedirectLister.ListRedirects` returns the store's redirects. Products and collections are published or unpublished through the Online Store publication (`publishablePublish` / `publishableUnpublish`) and need `write_publications` in addition to the online-store-navigation scopes.\n\n### Minor units\n\n`ParseMinorUnits` parses an exact decimal at the currency's precision without `float64`; excess precision and overflow are errors. `FormatMinorUnits` renders an `int64` at that precision.\n\n### Table action parameters\n\nThe new `table_action_parameter` child table declares values collected beside a record key. They are returned as `TableAction.Parameters`; key collisions and duplicate names fail REST boot. Apply the new table and the `foreign_key_lookup` and `rest_api_child` seed rows."
+  },
+  {
    "version": "v1.2.74",
    "title": "Typed content fields; a resource's images can be listed and annotated; the renderer records network requests",
    "tags": [

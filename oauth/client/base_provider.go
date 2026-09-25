@@ -29,6 +29,7 @@ type BaseProvider struct {
 	ClientID          string
 	SecretName        string
 	Endpoint          oauth2.Endpoint
+	DeriveEndpoint    func() oauth2.Endpoint // replaces Endpoint when set; read at each flow
 	Scopes            []string
 	AuthCodeOptions   []oauth2.AuthCodeOption
 	RequiredScopes    []string // Callback refuses a grant missing any of these (MissingScopeError)
@@ -55,6 +56,13 @@ func (b *BaseProvider) connType() string {
 	return b.ConnType
 }
 
+func (b *BaseProvider) endpoint() oauth2.Endpoint {
+	if b.DeriveEndpoint != nil {
+		return b.DeriveEndpoint()
+	}
+	return b.Endpoint
+}
+
 func (b *BaseProvider) oauthConfig(ctx context.Context) (*oauth2.Config, error) {
 	if b.ClientID == "" || b.SecretName == "" {
 		return nil, fmt.Errorf("%s: missing ClientID or SecretName", b.ProviderName)
@@ -66,7 +74,7 @@ func (b *BaseProvider) oauthConfig(ctx context.Context) (*oauth2.Config, error) 
 	return &oauth2.Config{
 		ClientID:     b.ClientID,
 		ClientSecret: secret,
-		Endpoint:     b.Endpoint,
+		Endpoint:     b.endpoint(),
 		RedirectURL:  b.CallbackURL,
 		Scopes:       b.Scopes,
 	}, nil
@@ -133,7 +141,7 @@ func (b *BaseProvider) Callback(ctx context.Context, code, state string) error {
 	}
 	var token *oauth2.Token
 	if b.JSONTokenExchange {
-		tr, xerr := ManualTokenExchangeJSON(ctx, b.Endpoint.TokenURL, map[string]string{
+		tr, xerr := ManualTokenExchangeJSON(ctx, b.endpoint().TokenURL, map[string]string{
 			"client_id":     cfg.ClientID,
 			"client_secret": cfg.ClientSecret,
 			"code":          code,

@@ -60,6 +60,9 @@ func (w *ShopifyWriter) createInput(kind string, fields map[string]string) (map[
 		if !ok {
 			return nil, fmt.Errorf("%w: %q on %s", ErrUnsupportedField, field, kind)
 		}
+		if target.Redirect {
+			return nil, fmt.Errorf("%w: %q on %s: a new object has nothing to retire", ErrUnsupportedField, field, kind)
+		}
 		switch {
 		case target.Metafield != nil:
 			metafields = append(metafields, map[string]any{
