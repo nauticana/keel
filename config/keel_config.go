@@ -49,6 +49,8 @@ const (
 	dms_max_bytes                 = "dms_max_bytes"
 	scan_mode                     = "scan_mode"
 	scan_addr                     = "scan_addr"
+	extract_mode                  = "extract_mode"
+	extract_max_bytes             = "extract_max_bytes"
 	storage_public_base_url       = "storage_public_base_url"
 	storage_account_url           = "storage_account_url"
 	messaging_mode                = "messaging_mode"
@@ -162,6 +164,8 @@ type KeelConfig struct {
 	DmsMaxBytes                 int64         // dms_max_bytes                 104857600          Largest document component the dms core buffers (bytes)
 	ScanMode                    string        // scan_mode                     none               Content scanner: none | clamd
 	ScanAddr                    string        // scan_addr                     ""                 clamd host:port
+	ExtractMode                 string        // extract_mode                  native             Text extractor: native
+	ExtractMaxBytes             int64         // extract_max_bytes             67108864           Largest decompressed document part or extracted text (bytes)
 	StoragePublicBaseURL        string        // storage_public_base_url       ""                 Public base URL for ObjectStorage.PublicURL
 	StorageAccountURL           string        // storage_account_url           ""                 Azure Blob service endpoint
 	MessagingMode               string        // messaging_mode                ""                 Messaging: noop, gcp, aws or nats (empty = error)
@@ -273,6 +277,8 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.DmsMaxBytes = c.Int64(m, dms_max_bytes)
 	c.ScanMode = c.String(m, scan_mode)
 	c.ScanAddr = c.String(m, scan_addr)
+	c.ExtractMode = c.String(m, extract_mode)
+	c.ExtractMaxBytes = c.Int64(m, extract_max_bytes)
 	c.StoragePublicBaseURL = c.String(m, storage_public_base_url)
 	c.StorageAccountURL = c.String(m, storage_account_url)
 	c.MessagingMode = c.String(m, messaging_mode)

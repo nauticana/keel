@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.78",
+   "title": "A text-extraction port with a native PDF, DOCX, Markdown and plain-text extractor",
+   "tags": [
+    "additive"
+   ],
+   "summary": "The new extract package adds TextExtractor, returning UTF-8 text with levelled heading, paragraph, table and page sections, and Native, a pure-Go extractor for plain text, Markdown, DOCX and PDF text layers. New config keys: extract_mode, extract_max_bytes.",
+   "body_markdown": "### extract\n\n`extract.TextExtractor` (`Supports`, `Extract(ctx, mediaType, raw) (Extracted, error)`) and `extract.Native{MaxBytes}` for `text/plain`, `text/markdown`, DOCX and PDF text layers. Sections carry `Kind` (`heading`, `paragraph`, `table`, `page`), `Level` (1–9 for headings), `Page` and byte offsets into `Text`. DOCX text is read from `w:t` only: tab stops, tracked-change history (previous formatting, deleted and moved-away text), field codes and the legacy copy of a text box are skipped, and text-box paragraphs follow the paragraph that holds them. Headings resolve through `styles.xml` (built-in names, outline levels, `w:basedOn`), so localized and derived styles work. A PDF page without a text layer is an empty page section; `Extracted.EmptyPages()` lists them for an OCR fallback.\n\n`extract.New(mode, maxBytes)` (a non-positive `maxBytes` fails) / `NewFromConfig()` read the new flags `extract_mode` (default `native`) and `extract_max_bytes` (default 67108864): each decompressed DOCX part and the extracted text stop there with `extract.ErrTooLarge`, since a small compressed upload can expand without bound. Before parsing a PDF, keel runs a best-effort check that decodes each stream it finds (by `/Length`, through the `/Filter` chain, images included) and refuses the file with `extract.ErrTooLarge` once the total passes the cap; encrypted PDFs are refused with `extract.ErrEncrypted`. The check is not a PDF parser: a file crafted to read differently to it than to the parser still gets through, and parser hangs on malformed syntax are not caught. Extract untrusted PDFs in a worker with a memory limit and a deadline until the parser enforces its own limits. Apply the two `application_config_flag` seed rows (`core`). Adds `github.com/razvandimescu/gopdf` (MIT, no dependencies).\n\nAn application that decoded PDF or DOCX itself wraps `Native` in its decoder and deletes its parser stack."
+  },
+  {
    "version": "v1.2.77",
    "title": "An explicit docProt is kept apart from the server setting; set-type documents; retention sweeper; a partner-document upload handler; storage.Spec JSON tags",
    "tags": [

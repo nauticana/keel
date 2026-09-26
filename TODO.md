@@ -30,6 +30,8 @@ This file consolidates the v0.6 deferral notes plus the downstream-consumer revi
 | C7 | Tax + coupon on `CheckoutRequest` | C | MED | ⏳ open — driven by demand |
 | C12 | Remote ArchiveLink `document.ContentStore` | C | LOW | ⏳ open — driven by demand |
 | C13 | `recording_media` on a content repository | C | LOW | ⏳ open — driven by demand |
+| C14 | OCR providers behind `extract.TextExtractor` | C | LOW | ⏳ open — driven by demand |
+| C15 | Use gopdf decode limits, drop the pre-check | C | **HIGH** | ⏳ open — waiting on gopdf#44; untrusted PDFs unsafe in-process until then |
 | C8 | IP allowlist on webhook endpoints (defence-in-depth) | C | MED | ⏳ open — driven by demand |
 | C9 | Fuzz tests on Stripe signature verification | C | LOW | ✅ done |
 | C10 | Property-based parser tests (`rapid`) | C | LOW | ⏳ open — lower value now, fuzz targets cover adjacent ground |
@@ -104,6 +106,8 @@ Real value but no concrete consumer asking yet. Defer until a downstream project
 | C11 | Subscription pause / resume — the only mutation C4 listed that `billing.SubscriptionLifecycle` does not cover | 3–4 hr |
 | C12 | `document.ContentStore` port with a second implementation that stores partner documents on a remote ArchiveLink content server over HTTP, so client applications can share one central content server instead of their own buckets | 2–3 days |
 | C13 | `recording_media` on a content repository (`contrep_id` + `doc_key`) instead of recording a `bucket` column; `ObjectStorage` stays usable directly, so this is only for relocation and per-repository credentials | 1 day |
+| C14 | OCR providers behind `extract.TextExtractor` (GCP Vision, AWS Textract, Azure Vision) for scanned pages, selected by `extract_mode`; a chain that tries `Native` first and falls back to OCR when a page has no text layer | 2 days |
+| C15 | Replace `extract`'s PDF stream pre-check with gopdf's own decode limits once [gopdf#44](https://github.com/razvandimescu/gopdf/issues/44) ships (or a ~10-line limit on `decompress` and the LZW reader in a fork), then delete `pdf_streams.go`, the second decode and the `ErrEncrypted` refusal. The regex pre-check is bypassed by files that read differently to it than to gopdf's parser: a fake `N G obj` inside a string, a nested dict or a repeated key before the real `/Filter` or `/Length`, a `#`-escaped filter name, a space after `stream`; `TestPDFParserMismatchBombs` holds them, skipped — un-skip it with the fix. Adopt gopdf#42 (parser hangs) the same way | 2 hr |
 
 ---
 

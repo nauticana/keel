@@ -83,6 +83,8 @@ seeds:
       - [dms_max_bytes, int64, false, '104857600', Largest document component the dms core buffers (bytes)]
       - [scan_mode, string, true, none, 'Content scanner: none | clamd']
       - [scan_addr, string, true, '', clamd host:port]
+      - [extract_mode, string, true, native, 'Text extractor: native']
+      - [extract_max_bytes, int64, false, '67108864', Largest decompressed document part or extracted text (bytes)]
       - [storage_public_base_url, string, true, '', Public base URL for ObjectStorage.PublicURL]
       - [storage_account_url, string, true, '', Azure Blob service endpoint]
       - [messaging_mode, string, true, '', 'Messaging: gcp or aws']

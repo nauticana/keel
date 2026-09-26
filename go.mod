@@ -28,6 +28,7 @@ require (
 	github.com/nats-io/nats.go v1.51.0
 	github.com/nyaruka/phonenumbers v1.7.2
 	github.com/pquerna/otp v1.5.0
+	github.com/razvandimescu/gopdf v0.11.2
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/smallstep/pkcs7 v0.2.1
 	golang.org/x/crypto v0.49.0
