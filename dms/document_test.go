@@ -60,8 +60,25 @@ func TestCreateWithoutComponentsAndServerSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc, err := s.Info(ctx, "K1", "D1")
-	if err != nil || doc.DocProt != "" || len(doc.Components) != 0 {
+	if err != nil || doc.DocProt != DocProtServerSetting || len(doc.Components) != 0 {
 		t.Fatalf("empty document: %+v %v", doc, err)
+	}
+	if err := s.Create(ctx, "K1", "D2", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if doc, _ := s.Info(ctx, "K1", "D2"); doc.DocProt != "" {
+		t.Errorf("an explicit empty docProt is unrestricted, not the server setting: %q", doc.DocProt)
+	}
+	for attrs, want := range map[*map[string]string]string{
+		{}: DocProtServerSetting, {AttrDocProt: docProtNone}: "", {AttrDocProt: "du"}: "du",
+	} {
+		if got := DocProtOf(*attrs); got != want {
+			t.Errorf("DocProtOf(%v) = %q, want %q", *attrs, got, want)
+		}
+	}
+	legacy(t, s, "L1", "data", "2020-01-01")
+	if doc, _ := s.Info(ctx, "K1", "L1"); doc.DocProt != DocProtServerSetting {
+		t.Errorf("a legacy document without a header uses the server setting: %q", doc.DocProt)
 	}
 }
 

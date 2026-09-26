@@ -135,18 +135,21 @@ func (s *DocumentService) Store(ctx context.Context, up Upload) (*PartnerDocumen
 		doc.Status = StatusPending
 	}
 	comp := dms.ComponentInput{ID: DataComponent, ContentType: mediaType, Body: bytes.NewReader(raw)}
-	if err := s.Docs.Create(ctx, doc.ContRepID, doc.DocKey, "", []dms.ComponentInput{comp}); !dms.Succeeded(err) {
+	if err := s.Docs.Create(ctx, doc.ContRepID, doc.DocKey, dms.DocProtServerSetting, []dms.ComponentInput{comp}); !dms.Succeeded(err) {
 		return nil, err
 	}
-	if err := s.insert(ctx, doc); err != nil {
+	if err := s.insert(ctx, doc, typ); err != nil {
 		_ = s.Docs.Delete(ctx, doc.ContRepID, doc.DocKey)
 		return nil, err
 	}
 	return doc, nil
 }
 
-func (s *DocumentService) insert(ctx context.Context, doc *PartnerDocument) error {
+func (s *DocumentService) insert(ctx context.Context, doc *PartnerDocument, typ *DocumentType) error {
 	return s.transact(ctx, func(tx port.TxQueryService) error {
+		if err := s.lockGroup(ctx, tx, doc); err != nil {
+			return err
+		}
 		next, err := tx.Query(ctx, qNextVersion, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID))
 		if err != nil {
 			return err
@@ -160,7 +163,7 @@ func (s *DocumentService) insert(ctx context.Context, doc *PartnerDocument) erro
 			doc.Title, doc.FileName, doc.VersionNo, doc.DocumentNumber, expires, doc.OriginIP, nullableID(doc.UploadedBy), doc.Status); err != nil {
 			return err
 		}
-		if doc.Status == StatusApproved {
+		if doc.Status == StatusApproved && typ.Supersedes {
 			if _, err := tx.Query(ctx, qSupersede, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID), doc.ID); err != nil {
 				return err
 			}
@@ -193,6 +196,15 @@ func (s *DocumentService) transact(ctx context.Context, fn func(port.TxQueryServ
 	return nil
 }
 
+// lockGroup serializes writers of one (partner, type, subject) group for the
+// transaction, so two concurrent approvals cannot both end approved. A row
+// lock cannot do this: the rows that must exclude each other are still
+// pending, or not inserted yet.
+func (s *DocumentService) lockGroup(ctx context.Context, tx port.TxQueryService, doc *PartnerDocument) error {
+	_, err := tx.Query(ctx, qLockGroup, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID))
+	return err
+}
+
 func (s *DocumentService) lock(ctx context.Context, tx port.TxQueryService, partnerID, id int64) (*PartnerDocument, error) {
 	res, err := tx.Query(ctx, qLock, partnerID, id)
 	if err != nil {
@@ -206,7 +218,7 @@ func (s *DocumentService) lock(ctx context.Context, tx port.TxQueryService, part
 
 // Review approves or rejects a pending document. An approval supersedes the
 // previously approved version of the same type and subject in the same
-// transaction.
+// transaction, unless the type keeps every approved document.
 func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID int64, approve bool, notes string) error {
 	return s.transact(ctx, func(tx port.TxQueryService) error {
 		doc, err := s.lock(ctx, tx, partnerID, id)
@@ -219,8 +231,17 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 		status := StatusRejected
 		if approve {
 			status = StatusApproved
-			if _, err := tx.Query(ctx, qSupersede, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID), doc.ID); err != nil {
+			typ, err := s.documentType(ctx, doc.DocumentType)
+			if err != nil {
 				return err
+			}
+			if err := s.lockGroup(ctx, tx, doc); err != nil {
+				return err
+			}
+			if typ.Supersedes {
+				if _, err := tx.Query(ctx, qSupersede, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID), doc.ID); err != nil {
+					return err
+				}
 			}
 		}
 		_, err = tx.Query(ctx, qSetReview, status, reviewerID, notes, id)
@@ -228,8 +249,8 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 	})
 }
 
-// Retire withdraws a document without a replacement. The objects stay for a
-// retention job; the row is hidden from lists.
+// Retire withdraws a document without a replacement. The row leaves the
+// lists; RetentionSweeper deletes the objects later.
 func (s *DocumentService) Retire(ctx context.Context, partnerID, id int64) error {
 	return s.transact(ctx, func(tx port.TxQueryService) error {
 		doc, err := s.lock(ctx, tx, partnerID, id)
@@ -239,11 +260,13 @@ func (s *DocumentService) Retire(ctx context.Context, partnerID, id int64) error
 		if doc.Status == StatusRetired {
 			return fmt.Errorf("%w: %d is already retired", ErrInvalidState, id)
 		}
-		_, err = tx.Query(ctx, qSetStatus, StatusRetired, id)
+		_, err = tx.Query(ctx, qRetire, id)
 		return err
 	})
 }
 
+// Get returns the document; a purged one (its objects deleted by the
+// RetentionSweeper) is ErrNotFound.
 func (s *DocumentService) Get(ctx context.Context, partnerID, id int64) (*PartnerDocument, error) {
 	res, err := s.query(ctx).Query(ctx, qGet, partnerID, id)
 	if err != nil {
@@ -252,7 +275,14 @@ func (s *DocumentService) Get(ctx context.Context, partnerID, id int64) (*Partne
 	if len(res.Rows) == 0 {
 		return nil, fmt.Errorf("%w: %d", ErrNotFound, id)
 	}
-	return documentFromRow(res.Rows[0]), nil
+	return unpurged(documentFromRow(res.Rows[0]))
+}
+
+func unpurged(doc *PartnerDocument) (*PartnerDocument, error) {
+	if !doc.PurgedAt.IsZero() {
+		return nil, fmt.Errorf("%w: %d is purged", ErrNotFound, doc.ID)
+	}
+	return doc, nil
 }
 
 // Read returns the document and its content; Content carries the component attributes.
@@ -326,7 +356,7 @@ func (s *DocumentService) ByVersion(ctx context.Context, partnerID, userID int64
 	if len(docs) == 0 {
 		return nil, fmt.Errorf("%w: %s v%d", ErrNotFound, documentType, versionNo)
 	}
-	return docs[0], nil
+	return unpurged(docs[0])
 }
 
 // Latest returns the newest non-retired version of every type for a subject

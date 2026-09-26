@@ -18,14 +18,14 @@ import (
 //	azure the storage account key; the account name comes from AccountURL
 //	file  none
 type Spec struct {
-	Mode             string // s3, gcs, azure or file
-	Bucket           string // container for azure, root folder for file
-	Project          string // GCS project that owns the bucket; CreateBucket only
-	Region           string // S3 region or GCS location; empty defers to the provider
-	Endpoint         string // S3-compatible endpoint (R2, MinIO); path-style addressing when set
-	AccountURL       string // Azure Blob service endpoint
-	PublicBaseURL    string // public-read base for PublicURL on s3
-	CredentialSecret string
+	Mode             string `json:"mode"`            // s3, gcs, azure or file
+	Bucket           string `json:"bucket"`          // container for azure, root folder for file
+	Project          string `json:"project"`         // GCS project that owns the bucket; CreateBucket only
+	Region           string `json:"region"`          // S3 region or GCS location; empty defers to the provider
+	Endpoint         string `json:"endpoint"`        // S3-compatible endpoint (R2, MinIO); path-style addressing when set
+	AccountURL       string `json:"account_url"`     // Azure Blob service endpoint
+	PublicBaseURL    string `json:"public_base_url"` // public-read base for PublicURL on s3
+	CredentialSecret string `json:"credential_secret"`
 }
 
 type s3Credentials struct {

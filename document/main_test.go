@@ -18,13 +18,20 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
+type catalog struct{ defs []dms.RepositoryDefinition }
+
+func (c *catalog) Repositories(context.Context) ([]dms.RepositoryDefinition, error) {
+	return c.defs, nil
+}
+
 // memStore is an in-memory stand-in for the document tables, driven by query name.
 type memStore struct {
-	types    map[string][]any // contrep_id, max_bytes, media_types, requires_review
-	owners   map[string]any   // contrep_id → partner_id or nil
-	rows     map[int64][]any  // partner_document in selectFields order
-	nextID   int64
-	inserted []int64 // rows written in the open transaction
+	types      map[string][]any // contrep_id, max_bytes, media_types, requires_review
+	owners     map[string]any   // contrep_id → partner_id or nil
+	rows       map[int64][]any  // partner_document in selectFields order
+	nextID     int64
+	inserted   []int64 // rows written in the open transaction
+	groupLocks int
 }
 
 func (m *memStore) GenID() int64                 { m.nextID++; return m.nextID }
@@ -65,7 +72,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		out.Rows = [][]any{{max + 1}}
 	case qInsert:
 		m.rows[args[0].(int64)] = []any{args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], int64(args[8].(int)),
-			args[9], args[10], args[11], args[12], time.Now(), args[13], nil, nil, nil, nil}
+			args[9], args[10], args[11], args[12], time.Now(), args[13], nil, nil, nil, nil, nil, nil}
 		m.inserted = append(m.inserted, args[0].(int64))
 	case qSupersede:
 		for _, r := range m.rows {
@@ -73,6 +80,8 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 				r[14], r[18] = StatusSuperseded, time.Now()
 			}
 		}
+	case qLockGroup:
+		m.groupLocks++
 	case qGet, qLock:
 		if r, ok := m.rows[args[1].(int64)]; ok && r[3] == args[0] {
 			out.Rows = [][]any{r}
@@ -122,8 +131,20 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	case qSetReview:
 		r := m.rows[args[3].(int64)]
 		r[14], r[15], r[16], r[17] = args[0], args[1], time.Now(), args[2]
-	case qSetStatus:
-		m.rows[args[1].(int64)][14] = args[0]
+	case qRetire:
+		r := m.rows[args[0].(int64)]
+		r[14], r[19] = StatusRetired, time.Now()
+	case qRetiredBefore:
+		cursorAt, cursorID := args[1].(time.Time), args[2].(int64)
+		for _, r := range m.rows {
+			at := r[19].(time.Time)
+			if r[14] == StatusRetired && r[20] == nil && at.Before(args[0].(time.Time)) &&
+				(at.After(cursorAt) || (at.Equal(cursorAt) && r[0].(int64) > cursorID)) {
+				out.Rows = append(out.Rows, []any{r[0], r[1], r[2], at})
+			}
+		}
+	case qSetPurged:
+		m.rows[args[0].(int64)][20] = time.Now()
 	default:
 		return nil, errors.New("unexpected query " + name)
 	}
@@ -146,17 +167,20 @@ func newService(t *testing.T) (*DocumentService, *memStore) {
 	t.Helper()
 	store := &memStore{
 		types: map[string][]any{
-			"licence": {"docs", int64(64), "image/png, application/pdf", true},
-			"logo":    {"docs", int64(64), "image/png", false},
-			"foreign": {"other", int64(64), "image/png", false},
+			"licence":    {"docs", int64(64), "image/png, application/pdf", true, true},
+			"logo":       {"docs", int64(64), "image/png", false, true},
+			"attachment": {"docs", int64(64), "image/png", false, false},
+			"cold":       {"cold", int64(64), "image/png", false, true},
+			"foreign":    {"other", int64(64), "image/png", false, true},
 		},
-		owners: map[string]any{"docs": nil, "other": int64(99)},
+		owners: map[string]any{"docs": nil, "other": int64(99), "cold": nil},
 		rows:   map[int64][]any{},
 	}
-	repos := &dms.ContentRepositoryService{Catalog: dms.StaticCatalog{
+	repos := &dms.ContentRepositoryService{Catalog: &catalog{defs: []dms.RepositoryDefinition{
 		{ID: "docs", Storage: storage.Spec{Mode: "file", Bucket: t.TempDir()}},
 		{ID: "other", Storage: storage.Spec{Mode: "file", Bucket: t.TempDir()}},
-	}}
+		{ID: "cold", Storage: storage.Spec{Mode: "file", Bucket: t.TempDir()}},
+	}}}
 	docs := &dms.ContentDocumentService{Repos: repos, MaxBytes: 1 << 20}
 	return &DocumentService{DB: memRepo{store: store}, Repos: repos, Docs: docs}, store
 }

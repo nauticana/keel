@@ -15,6 +15,15 @@ import (
 // represents the document header.
 const HeaderComponent = "dochdr_"
 
+// DocProtServerSetting is the docProt of a document whose creator left the
+// degree of protection to the repository (ArchiveLink: parameter omitted);
+// "" is an explicit "no restrictions".
+const DocProtServerSetting = "serversetting"
+
+// docProtNone stores an explicit empty docProt: providers do not round-trip
+// empty attribute values.
+const docProtNone = "-"
+
 // Attribute keys, lowercase with underscores so every provider round-trips them.
 const (
 	AttrDocID         = "doc_id"
@@ -83,7 +92,7 @@ type Component struct {
 type Document struct {
 	Repository   string
 	Key          string
-	DocProt      string // "" means the repository default
+	DocProt      string // DocProtServerSetting when the creator left it to the repository; "" means unrestricted
 	DateC, TimeC string
 	DateM, TimeM string
 	Components   []Component
@@ -140,5 +149,18 @@ func componentFromAttrs(id string, attrs map[string]string) Component {
 		ID: id, ContentType: attrs[AttrContentType], Charset: attrs[AttrCharset], AppVersion: attrs[AttrAppVersion],
 		Length: length, Digest: attrs[AttrContentDigest],
 		DateC: attrs[AttrDateC], TimeC: attrs[AttrTimeC], DateM: attrs[AttrDateM], TimeM: attrs[AttrTimeM],
+	}
+}
+
+// DocProtOf decodes the header attributes' degree of protection, so a caller
+// holding the header can resolve the repository default without Info.
+func DocProtOf(attrs map[string]string) string {
+	switch v, ok := attrs[AttrDocProt]; {
+	case !ok:
+		return DocProtServerSetting
+	case v == docProtNone:
+		return ""
+	default:
+		return v
 	}
 }

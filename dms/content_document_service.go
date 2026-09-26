@@ -1,6 +1,7 @@
 package dms
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -83,7 +84,11 @@ func (s *ContentDocumentService) headerAttributes(docKey, docProt, dateC, timeC 
 		AttrDocID: docKey, AttrCompID: HeaderComponent,
 		AttrDateC: dateC, AttrTimeC: timeC, AttrDateM: dateM, AttrTimeM: timeM,
 	}
-	if docProt != "" && docProt != "serversetting" {
+	switch docProt {
+	case DocProtServerSetting:
+	case "":
+		attrs[AttrDocProt] = docProtNone
+	default:
 		attrs[AttrDocProt] = docProt
 	}
 	return attrs
@@ -107,7 +112,7 @@ func (s *ContentDocumentService) upgrade(ctx context.Context, repo *ContentRepos
 			dateC, timeC = d, t
 		}
 	}
-	if err := s.putHeader(ctx, repo, docKey, "", dateC, timeC); err != nil && !errors.Is(err, storage.ErrExists) {
+	if err := s.putHeader(ctx, repo, docKey, DocProtServerSetting, dateC, timeC); err != nil && !errors.Is(err, storage.ErrExists) {
 		return err
 	}
 	return nil
@@ -184,7 +189,7 @@ func (s *ContentDocumentService) putComponent(ctx context.Context, repo *Content
 	if old[AttrDateC] != "" {
 		attrs[AttrDateC], attrs[AttrTimeC] = old[AttrDateC], old[AttrTimeC]
 	}
-	return repo.Storage.PutObject(ctx, repo.Key(docKey, in.ID), strings.NewReader(string(content)), in.ContentType, attrs)
+	return repo.Storage.PutObject(ctx, repo.Key(docKey, in.ID), bytes.NewReader(content), in.ContentType, attrs)
 }
 
 func (s *ContentDocumentService) notify(ctx context.Context, repoID, docKey string, stored, deleted []string) error {
@@ -372,13 +377,13 @@ func (s *ContentDocumentService) Info(ctx context.Context, repoID, docKey string
 	if !hasHeader && len(ids) == 0 {
 		return nil, notFound(docKey)
 	}
-	doc := &Document{Repository: repoID, Key: docKey}
+	doc := &Document{Repository: repoID, Key: docKey, DocProt: DocProtServerSetting}
 	if hasHeader {
 		attrs, err := repo.Storage.GetObjectAttributes(ctx, repo.Key(docKey, HeaderComponent))
 		if err != nil {
 			return nil, err
 		}
-		doc.DocProt = attrs[AttrDocProt]
+		doc.DocProt = DocProtOf(attrs)
 		doc.DateC, doc.TimeC, doc.DateM, doc.TimeM = attrs[AttrDateC], attrs[AttrTimeC], attrs[AttrDateM], attrs[AttrTimeM]
 	}
 	for _, id := range ids {

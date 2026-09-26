@@ -29,6 +29,8 @@ type PartnerDocument struct {
 	ReviewedAt     time.Time
 	ReviewerNotes  string
 	SupersededAt   time.Time
+	RetiredAt      time.Time
+	PurgedAt       time.Time
 	Content        *dms.Component
 }
 
@@ -40,7 +42,7 @@ func documentFromRow(r []any) *PartnerDocument {
 		DocumentNumber: common.AsString(r[9]), ExpiresOn: common.AsTime(r[10]), OriginIP: common.AsString(r[11]),
 		UploadedBy: optionalID(r[12]), UploadedAt: common.AsTime(r[13]), Status: common.AsString(r[14]),
 		ReviewerID: optionalID(r[15]), ReviewedAt: common.AsTime(r[16]), ReviewerNotes: common.AsString(r[17]),
-		SupersededAt: common.AsTime(r[18]),
+		SupersededAt: common.AsTime(r[18]), RetiredAt: common.AsTime(r[19]), PurgedAt: common.AsTime(r[20]),
 	}
 }
 

@@ -4,10 +4,11 @@ comment: |
   <path_prefix>/<doc_key>/). user_id names the member the document is about
   (a licence holder); null means the partner itself. A new version is a new
   row. status P=pending review, Y=approved, N=rejected, X=superseded by a
-  newer approval, R=retired. Content type, size and digest live in the
-  document's component attributes. The approved-uniqueness index does not
-  cover rows with a null user_id (SQL nulls are distinct); DocumentService
-  supersedes the prior approval in the same transaction for both cases.
+  newer approval, R=retired (retired_at; purged_at once the RetentionSweeper
+  deleted its objects). Content type, size and digest live in the document's
+  component attributes. One approved row per partner, subject and type is
+  kept by DocumentService in the review transaction, not by an index: a type
+  with supersedes=false keeps every approved row.
 columns:
   - name: id
     type: BIGINT
@@ -59,6 +60,12 @@ columns:
   - name: superseded_at
     type: TIMESTAMP
     nullable: true
+  - name: retired_at
+    type: TIMESTAMP
+    nullable: true
+  - name: purged_at
+    type: TIMESTAMP
+    nullable: true
 primary_key: [id]
 sequence:
   name: partner_document_seq
@@ -67,10 +74,6 @@ indexes:
   - name: partner_document_key_uq
     columns: [contrep_id, doc_key]
     unique: true
-  - name: partner_document_approved_uq
-    columns: [partner_id, user_id, document_type]
-    unique: true
-    where: "status = 'Y'"
   - name: partner_document_ix1
     columns: [partner_id, document_type, version_no]
 foreign_keys:
