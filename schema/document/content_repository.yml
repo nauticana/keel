@@ -1,0 +1,57 @@
+table: content_repository
+comment: |
+  A logical storage space in front of one bucket (see the dms package). Its
+  storage location (storage_mode, bucket, path_prefix) never changes while
+  documents exist, and a row with documents is never deleted; edits go
+  through dms.ContentRepositoryService, not generic REST. storage_mode and
+  bucket are the location and are always recorded here; a null endpoint,
+  account_url, public_base_url or credential_secret means "use the matching
+  flag" (s3_endpoint, storage_account_url, storage_public_base_url,
+  storage_credential_secret). credential_secret is the NAME of a keystore
+  secret. partner_id null means shared.
+columns:
+  - name: id
+    type: VARCHAR(30)
+  - name: caption
+    type: VARCHAR(80)
+  - name: storage_mode
+    type: VARCHAR(10)
+  - name: bucket
+    type: VARCHAR(200)
+  - name: project
+    type: VARCHAR(100)
+    nullable: true
+  - name: region
+    type: VARCHAR(40)
+    nullable: true
+  - name: endpoint
+    type: VARCHAR(200)
+    nullable: true
+  - name: account_url
+    type: VARCHAR(200)
+    nullable: true
+  - name: public_base_url
+    type: VARCHAR(200)
+    nullable: true
+  - name: credential_secret
+    type: VARCHAR(100)
+    nullable: true
+  - name: path_prefix
+    type: VARCHAR(100)
+    nullable: true
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: default_doc_prot
+    type: VARCHAR(4)
+    nullable: true
+  - name: status
+    type: VARCHAR(10)
+    default: active
+primary_key: [id]
+foreign_keys:
+  - name: content_repository_owner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

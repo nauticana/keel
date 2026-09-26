@@ -1,0 +1,4 @@
+tables:
+  - content_repository
+  - document_type
+  - partner_document

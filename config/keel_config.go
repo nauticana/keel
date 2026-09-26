@@ -45,7 +45,10 @@ const (
 	storage_mode                  = "storage_mode"
 	storage_bucket                = "storage_bucket"
 	s3_endpoint                   = "s3_endpoint"
-	s3_credential_mode            = "s3_credential_mode"
+	storage_credential_secret     = "storage_credential_secret"
+	dms_max_bytes                 = "dms_max_bytes"
+	scan_mode                     = "scan_mode"
+	scan_addr                     = "scan_addr"
 	storage_public_base_url       = "storage_public_base_url"
 	storage_account_url           = "storage_account_url"
 	messaging_mode                = "messaging_mode"
@@ -152,10 +155,13 @@ type KeelConfig struct {
 	NatsURL                     string        // nats_url                      ""                 NATS server URL
 	NatsName                    string        // nats_name                     ""                 NATS client name surfaced in NATS observability
 	NatsCredsSecret             string        // nats_creds_secret             ""                 Secret NAME holding the NATS .creds file content (Synadia Cloud); empty = no creds
-	StorageMode                 string        // storage_mode                  ""                 Object storage: s3, gcs, or azure
+	StorageMode                 string        // storage_mode                  ""                 Object storage: s3, gcs, azure or file
 	StorageBucket               string        // storage_bucket                ""                 Default object-storage bucket
 	S3Endpoint                  string        // s3_endpoint                   ""                 S3-compatible endpoint override
-	S3CredentialMode            string        // s3_credential_mode            chain              Worker storage S3/R2 credential source: chain | secret
+	StorageCredentialSecret     string        // storage_credential_secret     ""                 Secret NAME holding the storage credential (s3 JSON, gcs service-account JSON, azure account key); empty = ambient chain
+	DmsMaxBytes                 int64         // dms_max_bytes                 104857600          Largest document component the dms core buffers (bytes)
+	ScanMode                    string        // scan_mode                     none               Content scanner: none | clamd
+	ScanAddr                    string        // scan_addr                     ""                 clamd host:port
 	StoragePublicBaseURL        string        // storage_public_base_url       ""                 Public base URL for ObjectStorage.PublicURL
 	StorageAccountURL           string        // storage_account_url           ""                 Azure Blob service endpoint
 	MessagingMode               string        // messaging_mode                ""                 Messaging: noop, gcp, aws or nats (empty = error)
@@ -263,7 +269,10 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.StorageMode = c.String(m, storage_mode)
 	c.StorageBucket = c.String(m, storage_bucket)
 	c.S3Endpoint = c.String(m, s3_endpoint)
-	c.S3CredentialMode = c.String(m, s3_credential_mode)
+	c.StorageCredentialSecret = c.String(m, storage_credential_secret)
+	c.DmsMaxBytes = c.Int64(m, dms_max_bytes)
+	c.ScanMode = c.String(m, scan_mode)
+	c.ScanAddr = c.String(m, scan_addr)
 	c.StoragePublicBaseURL = c.String(m, storage_public_base_url)
 	c.StorageAccountURL = c.String(m, storage_account_url)
 	c.MessagingMode = c.String(m, messaging_mode)

@@ -1,0 +1,25 @@
+table: document_type
+comment: |
+  A kind of partner document: which repository it is routed to, its upload
+  limits and whether it starts pending review. Seeded by each application.
+columns:
+  - name: id
+    type: VARCHAR(30)
+  - name: caption
+    type: VARCHAR(80)
+  - name: contrep_id
+    type: VARCHAR(30)
+  - name: max_bytes
+    type: BIGINT
+  - name: media_types
+    type: VARCHAR(500)
+  - name: requires_review
+    type: BOOLEAN
+    default: false
+primary_key: [id]
+foreign_keys:
+  - name: document_type_repository
+    columns: [contrep_id]
+    references:
+      table: content_repository
+      columns: [id]

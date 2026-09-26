@@ -2,10 +2,9 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
-
-	"github.com/nauticana/keel/config"
 )
 
 func TestS3PublicURL(t *testing.T) {
@@ -23,7 +22,7 @@ func TestS3PublicURL(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &StorageS3{publicBaseURL: strings.TrimRight(tc.base, "/")}
-			if got := s.PublicURL("ignored-bucket", tc.key); got != tc.want {
+			if got := s.PublicURL(tc.key); got != tc.want {
 				t.Fatalf("PublicURL = %q, want %q", got, tc.want)
 			}
 		})
@@ -31,8 +30,8 @@ func TestS3PublicURL(t *testing.T) {
 }
 
 func TestGCSPublicURL(t *testing.T) {
-	s := &StorageGCS{}
-	got := s.PublicURL("my-bucket", "/path/to/obj.png")
+	s := &StorageGCS{name: "my-bucket"}
+	got := s.PublicURL("/path/to/obj.png")
 	want := "https://storage.googleapis.com/my-bucket/path/to/obj.png"
 	if got != want {
 		t.Fatalf("PublicURL = %q, want %q", got, want)
@@ -40,17 +39,52 @@ func TestGCSPublicURL(t *testing.T) {
 }
 
 func TestFactoryUnknownMode(t *testing.T) {
-	if _, err := New(context.Background(), "nope"); err == nil {
+	if _, err := New(context.Background(), Spec{Mode: "nope", Bucket: "b"}, nil); err == nil {
 		t.Fatal("expected error for unknown mode")
 	}
 }
 
+func TestFactoryRequiresBucket(t *testing.T) {
+	if _, err := New(context.Background(), Spec{Mode: "file", Bucket: " "}, nil); err == nil || !strings.Contains(err.Error(), "bucket is required") {
+		t.Fatalf("expected bucket error, got %v", err)
+	}
+}
+
+func TestFactoryNeverCreatesBucket(t *testing.T) {
+	spec := Spec{Mode: "file", Bucket: t.TempDir() + "/missing"}
+	if _, err := New(context.Background(), spec, nil); !errors.Is(err, ErrBucketNotFound) {
+		t.Fatalf("expected ErrBucketNotFound, got %v", err)
+	}
+	if err := CreateBucket(context.Background(), spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(context.Background(), spec, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAzureAccountName(t *testing.T) {
+	name, err := azureAccountName("https://acct.blob.core.windows.net/")
+	if err != nil || name != "acct" {
+		t.Fatalf("account = %q %v", name, err)
+	}
+	if _, err := azureAccountName("nope"); err == nil {
+		t.Fatal("expected an error for a URL without a host")
+	}
+}
+
+func TestAzurePublicURLKeepsKeySlashes(t *testing.T) {
+	s := &StorageAzure{name: "docs", url: "https://acct.blob.core.windows.net/"}
+	got := s.PublicURL("a b/c+d.pdf")
+	want := "https://acct.blob.core.windows.net/docs/a%20b/c+d.pdf"
+	if got != want {
+		t.Fatalf("PublicURL = %q, want %q", got, want)
+	}
+}
+
 func TestFactoryAzureRequiresAccountURL(t *testing.T) {
-	orig := config.Config().StorageAccountURL
-	t.Cleanup(func() { config.Config().StorageAccountURL = orig })
-	config.Config().StorageAccountURL = ""
-	_, err := New(context.Background(), "azure")
-	if err == nil || !strings.Contains(err.Error(), "storage_account_url is required") {
-		t.Fatalf("expected storage_account_url error, got %v", err)
+	_, err := New(context.Background(), Spec{Mode: "azure", Bucket: "c"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "AccountURL is required") {
+		t.Fatalf("expected AccountURL error, got %v", err)
 	}
 }

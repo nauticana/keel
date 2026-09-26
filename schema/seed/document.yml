@@ -1,0 +1,38 @@
+comment: Document management seed data
+order: 200
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [content_repository_status, Content Repository Status]
+      - [partner_document_status, Partner Document Status]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [content_repository_status, active, Active]
+      - [content_repository_status, read-only, Read only]
+      - [content_repository_status, migrating, Migrating]
+      - [partner_document_status, P, Pending review]
+      - [partner_document_status, Y, Approved]
+      - [partner_document_status, N, Rejected]
+      - [partner_document_status, X, Superseded]
+      - [partner_document_status, R, Retired]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [content_repository_status, content_repository, status]
+      - [partner_document_status, partner_document, status]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [content_repository_owner, S, caption]
+      - [document_type_repository, S, caption]
+      - [partner_documents, S, caption]
+      - [partner_document_repository, S, caption]
+      - [partner_document_type, S, caption]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [content_repository, content_repository]
+      - [document_type, document_type]
+      - [partner_document, partner_document]

@@ -61,12 +61,12 @@ type JobExecutor struct {
 	NewDatabase func(ctx context.Context, sp secret.SecretProvider) (port.DatabaseRepository, error)
 	NewQuota    func(db port.DatabaseRepository) port.QuotaService
 
-	// Storage is the optional object-storage backend selected by
-	// storage_mode, populated by AbstractWorker.Run when the flag is set (nil
+	// Storage is the optional object-storage backend for storage_bucket,
+	// populated by AbstractWorker.Run when storage_mode is set (nil
 	// otherwise). ProcessQueue does not receive it as a parameter to keep
 	// the JobWorker interface stable; workers that need storage should hold
-	// a reference to their JobExecutor, or build their own via
-	// storage.New(ctx, config.Config().StorageMode).
+	// a reference to their JobExecutor, or build one per bucket via
+	// storage.NewFromConfig(ctx, secrets, bucket).
 	Storage storage.ObjectStorage
 }
 

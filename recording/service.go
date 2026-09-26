@@ -113,13 +113,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	qMediaCounts:    `SELECT COALESCE(SUM(CASE WHEN status = 'U' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'P' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'X' THEN 1 ELSE 0 END), 0) FROM recording_media WHERE session_id = ?`,
 }
 
-// Service is the consent-gated session state machine. Bucket and Storage
-// are required for uploads; CaptureTTL bounds a capture authorization.
+// Service is the consent-gated session state machine. Storage is required for
+// uploads; CaptureTTL bounds a capture authorization.
 type Service struct {
 	DB                 port.DatabaseRepository
 	Consents           user.ConsentService
 	Storage            storage.ObjectStorage
-	Bucket             string
 	CaptureTTL         time.Duration
 	MaxMediaBytes      int64
 	AllowedContentType map[string]bool
@@ -402,7 +401,7 @@ func (s *Service) Stop(ctx context.Context, sessionID int64, actorID int) error 
 // Upload stores one object for a recording or finalizing session. The media
 // row is pending until the object is persisted; a failed upload stays failed.
 func (s *Service) Upload(ctx context.Context, sessionID int64, actorID int, captureToken, objectKey, contentType string, body io.Reader) (*Media, error) {
-	if s.Storage == nil || s.Bucket == "" || s.MaxMediaBytes <= 0 {
+	if s.Storage == nil || s.MaxMediaBytes <= 0 {
 		return nil, fmt.Errorf("recording: storage is not configured")
 	}
 	if body == nil || !s.AllowedContentType[contentType] {
@@ -434,8 +433,8 @@ func (s *Service) Upload(ctx context.Context, sessionID int64, actorID int, capt
 			_, err = tx.Query(ctx, qResetMedia, contentType, actorID, media.ID)
 			return err
 		}
-		media = &Media{ID: tx.GenID(), SessionID: sessionID, Bucket: s.Bucket, ObjectKey: storageKey, ContentType: contentType, Status: MediaPending}
-		_, err = tx.Query(ctx, qInsertMedia, media.ID, sessionID, s.Bucket, storageKey, contentType, 0, actorID)
+		media = &Media{ID: tx.GenID(), SessionID: sessionID, Bucket: s.Storage.Bucket(), ObjectKey: storageKey, ContentType: contentType, Status: MediaPending}
+		_, err = tx.Query(ctx, qInsertMedia, media.ID, sessionID, s.Storage.Bucket(), storageKey, contentType, 0, actorID)
 		return err
 	})
 	if err != nil {
@@ -445,8 +444,8 @@ func (s *Service) Upload(ctx context.Context, sessionID int64, actorID int, capt
 		return media, nil
 	}
 	counter := &countingReader{r: io.LimitReader(body, s.MaxMediaBytes+1)}
-	if err := s.Storage.Upload(ctx, s.Bucket, storageKey, counter, contentType); err != nil || counter.n > s.MaxMediaBytes {
-		_ = s.Storage.Delete(ctx, s.Bucket, storageKey)
+	if err := s.Storage.PutObject(ctx, storageKey, counter, contentType, nil); err != nil || counter.n > s.MaxMediaBytes {
+		_ = s.Storage.DeleteObject(ctx, storageKey)
 		_, updateErr := s.query(ctx).Query(ctx, qSetMediaStatus, MediaFailed, counter.n, MediaFailed, media.ID)
 		media.Status = MediaFailed
 		if counter.n > s.MaxMediaBytes {
@@ -480,7 +479,10 @@ func (s *Service) MediaURL(ctx context.Context, sessionID int64, actorID int, me
 	if common.AsString(row[6]) != MediaReady {
 		return "", ErrMediaNotReady
 	}
-	return s.Storage.GetSignedURL(ctx, common.AsString(row[2]), common.AsString(row[3]), expirySeconds)
+	if bucket := common.AsString(row[2]); bucket != s.Storage.Bucket() {
+		return "", fmt.Errorf("recording: media %d is in bucket %q, storage is bound to %q", mediaID, bucket, s.Storage.Bucket())
+	}
+	return s.Storage.GetSignedURL(ctx, common.AsString(row[3]), expirySeconds)
 }
 
 func (s *Service) withCapture(ctx context.Context, sessionID int64, actorID int, captureToken string, fn func(port.TxQueryService, *sessionRow) error) error {

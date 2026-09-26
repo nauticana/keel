@@ -1,0 +1,106 @@
+table: partner_document
+comment: |
+  A partner's business record for one dms document (the objects under
+  <path_prefix>/<doc_key>/). user_id names the member the document is about
+  (a licence holder); null means the partner itself. A new version is a new
+  row. status P=pending review, Y=approved, N=rejected, X=superseded by a
+  newer approval, R=retired. Content type, size and digest live in the
+  document's component attributes. The approved-uniqueness index does not
+  cover rows with a null user_id (SQL nulls are distinct); DocumentService
+  supersedes the prior approval in the same transaction for both cases.
+columns:
+  - name: id
+    type: BIGINT
+  - name: contrep_id
+    type: VARCHAR(30)
+  - name: doc_key
+    type: VARCHAR(64)
+  - name: partner_id
+    type: BIGINT
+  - name: document_type
+    type: VARCHAR(30)
+  - name: user_id
+    type: BIGINT
+    nullable: true
+  - name: title
+    type: VARCHAR(200)
+  - name: file_name
+    type: VARCHAR(200)
+  - name: version_no
+    type: INTEGER
+    default: 1
+  - name: document_number
+    type: VARCHAR(50)
+    nullable: true
+  - name: expires_on
+    type: DATE
+    nullable: true
+  - name: origin_ip
+    type: VARCHAR(45)
+    nullable: true
+  - name: uploaded_by
+    type: BIGINT
+    nullable: true
+  - name: uploaded_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: status
+    type: CHAR(1)
+    default: P
+  - name: reviewer_id
+    type: BIGINT
+    nullable: true
+  - name: reviewed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: reviewer_notes
+    type: TEXT
+    nullable: true
+  - name: superseded_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: partner_document_seq
+  column: id
+indexes:
+  - name: partner_document_key_uq
+    columns: [contrep_id, doc_key]
+    unique: true
+  - name: partner_document_approved_uq
+    columns: [partner_id, user_id, document_type]
+    unique: true
+    where: "status = 'Y'"
+  - name: partner_document_ix1
+    columns: [partner_id, document_type, version_no]
+foreign_keys:
+  - name: partner_documents
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_document_repository
+    columns: [contrep_id]
+    references:
+      table: content_repository
+      columns: [id]
+  - name: partner_document_type
+    columns: [document_type]
+    references:
+      table: document_type
+      columns: [id]
+  - name: partner_document_subject
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: partner_document_uploader
+    columns: [uploaded_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: partner_document_reviewer
+    columns: [reviewer_id]
+    references:
+      table: user_account
+      columns: [id]

@@ -47,10 +47,10 @@ type HttpBackend struct {
 	DB      port.DatabaseRepository
 	Secrets secret.SecretProvider
 
-	// Storage is the optional object-storage backend (s3/R2, gcs, azure)
+	// Storage is the optional object-storage backend (s3/R2, gcs, azure, file)
 	// selected by storage_mode. nil when storage is not configured;
 	// handlers that serve uploads should nil-check before use. Build it
-	// with storage.New(ctx, config.Config().StorageMode). Call svc.Storage.Upload
+	// with storage.NewFromConfig(ctx, secrets, bucket). Call svc.Storage.PutObject
 	// to store a blob and svc.Storage.PublicURL to get its served URL.
 	Storage storage.ObjectStorage
 

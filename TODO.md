@@ -28,6 +28,8 @@ This file consolidates the v0.6 deferral notes plus the downstream-consumer revi
 | C5 | `CreateRefund` + `SubmitDisputeEvidence` | C | MED | ⏳ open — premise strengthened by v1.2.39/40 |
 | C6 | Operator-initiated webhook replay + dead-letter | C | **HIGH** | ✅ done |
 | C7 | Tax + coupon on `CheckoutRequest` | C | MED | ⏳ open — driven by demand |
+| C12 | Remote ArchiveLink `document.ContentStore` | C | LOW | ⏳ open — driven by demand |
+| C13 | `recording_media` on a content repository | C | LOW | ⏳ open — driven by demand |
 | C8 | IP allowlist on webhook endpoints (defence-in-depth) | C | MED | ⏳ open — driven by demand |
 | C9 | Fuzz tests on Stripe signature verification | C | LOW | ✅ done |
 | C10 | Property-based parser tests (`rapid`) | C | LOW | ⏳ open — lower value now, fuzz targets cover adjacent ground |
@@ -100,6 +102,8 @@ Real value but no concrete consumer asking yet. Defer until a downstream project
 | C8 | IP allowlist on webhook endpoints — defence-in-depth + CPU savings (not the DoS fix originally claimed; that was closed in v0.5.0) | 3–4 hr |
 | C10 | Property-based parser tests (`rapid`). Lower value since C9: `payment/parser_test.go` and `signature_test.go` carry four fuzz targets covering adjacent ground | 2 hr |
 | C11 | Subscription pause / resume — the only mutation C4 listed that `billing.SubscriptionLifecycle` does not cover | 3–4 hr |
+| C12 | `document.ContentStore` port with a second implementation that stores partner documents on a remote ArchiveLink content server over HTTP, so client applications can share one central content server instead of their own buckets | 2–3 days |
+| C13 | `recording_media` on a content repository (`contrep_id` + `doc_key`) instead of recording a `bucket` column; `ObjectStorage` stays usable directly, so this is only for relocation and per-repository credentials | 1 day |
 
 ---
 

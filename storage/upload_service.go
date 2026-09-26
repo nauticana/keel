@@ -11,6 +11,8 @@ import (
 	"path"
 	"slices"
 	"strings"
+
+	"github.com/nauticana/keel/scan"
 )
 
 var (
@@ -20,10 +22,11 @@ var (
 
 // UploadService validates an object before writing it and mints short-lived
 // read URLs. The content type is sniffed from the bytes, never taken from the
-// client.
+// client. With a Scanner the body is buffered (bounded by MaxBytes) and scanned
+// before the write; scan.ErrContentRejected refuses it.
 type UploadService struct {
 	Storage          ObjectStorage
-	Bucket           string
+	Scanner          scan.ContentScanner
 	MaxBytes         int64
 	ContentTypes     []string // allowed media types, e.g. "image/png"
 	SignedURLSeconds int
@@ -31,8 +34,8 @@ type UploadService struct {
 
 // Upload writes r under key and returns the sniffed media type.
 func (s *UploadService) Upload(ctx context.Context, key string, r io.Reader) (string, error) {
-	if s.Storage == nil || s.MaxBytes <= 0 || len(s.ContentTypes) == 0 || s.Bucket == "" {
-		return "", fmt.Errorf("storage: UploadService needs Storage, Bucket, MaxBytes and ContentTypes")
+	if s.Storage == nil || s.MaxBytes <= 0 || len(s.ContentTypes) == 0 {
+		return "", fmt.Errorf("storage: UploadService needs Storage, MaxBytes and ContentTypes")
 	}
 	head := make([]byte, 512)
 	n, err := io.ReadFull(r, head)
@@ -45,7 +48,21 @@ func (s *UploadService) Upload(ctx context.Context, key string, r io.Reader) (st
 		return "", fmt.Errorf("%w: %s", ErrContentTypeNotAllowed, mediaType)
 	}
 	body := &cappedReader{r: io.MultiReader(bytes.NewReader(head), r), remaining: s.MaxBytes}
-	if err := s.Storage.Upload(ctx, s.Bucket, key, body, mediaType); err != nil {
+	var data io.Reader = body
+	if s.Scanner != nil {
+		content, err := io.ReadAll(body)
+		if body.exceeded {
+			return "", ErrObjectTooLarge
+		}
+		if err != nil {
+			return "", fmt.Errorf("storage: read upload: %w", err)
+		}
+		if err := s.Scanner.Scan(ctx, content); err != nil {
+			return "", err
+		}
+		data = bytes.NewReader(content)
+	}
+	if err := s.Storage.PutObject(ctx, key, data, mediaType, nil); err != nil {
 		// Every backend aborts on a reader error, so nothing was written and an
 		// object already at key is intact; deleting here would destroy it.
 		if body.exceeded {
@@ -57,10 +74,10 @@ func (s *UploadService) Upload(ctx context.Context, key string, r io.Reader) (st
 }
 
 func (s *UploadService) SignedURL(ctx context.Context, key string) (string, error) {
-	if s.Storage == nil || s.Bucket == "" || s.SignedURLSeconds <= 0 {
-		return "", fmt.Errorf("storage: Storage, Bucket and a positive SignedURLSeconds are required")
+	if s.Storage == nil || s.SignedURLSeconds <= 0 {
+		return "", fmt.Errorf("storage: Storage and a positive SignedURLSeconds are required")
 	}
-	return s.Storage.GetSignedURL(ctx, s.Bucket, key, s.SignedURLSeconds)
+	return s.Storage.GetSignedURL(ctx, key, s.SignedURLSeconds)
 }
 
 type cappedReader struct {

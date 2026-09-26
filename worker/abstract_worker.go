@@ -25,7 +25,7 @@ type AbstractWorker struct {
 	Interval int                   // poll interval, seconds
 	HCPort   int                   // /health port
 	Secret   secret.SecretProvider // set by Run before the loop; for AI/OAuth workers
-	Storage  storage.ObjectStorage // set by Run when storage_mode is set; nil otherwise
+	Storage  storage.ObjectStorage // storage_bucket, set by Run when storage_mode is set; nil otherwise
 	// LoadConfig loads the runtime configuration once the DB is up, before
 	// anything reads config.Config() (storage backend, HC port, tunables). Nil
 	// loads KeelConfig alone. Applications with a composite config set this to
@@ -73,7 +73,7 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 	}
 
 	// Object storage is optional; the factory picks the backend + credential source.
-	objStore, err := storage.NewFromConfig(ctx, secrets)
+	objStore, err := storage.NewFromConfig(ctx, secrets, config.Config().StorageBucket)
 	if err != nil {
 		return fmt.Errorf("worker %q: storage: %w", a.Caption, err)
 	}

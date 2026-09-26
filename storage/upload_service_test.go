@@ -13,7 +13,7 @@ type memoryStorage struct {
 	objects map[string][]byte
 }
 
-func (m *memoryStorage) Upload(_ context.Context, _, key string, r io.Reader, _ string) error {
+func (m *memoryStorage) PutObject(_ context.Context, key string, r io.Reader, _ string, _ map[string]string) error {
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -26,7 +26,7 @@ var pngHeader = []byte("\x89PNG\r\n\x1a\n")
 
 func TestUploadServiceValidatesTypeAndSize(t *testing.T) {
 	mem := &memoryStorage{objects: map[string][]byte{}}
-	svc := &UploadService{Storage: mem, Bucket: "b", MaxBytes: 64, ContentTypes: []string{"image/png"}}
+	svc := &UploadService{Storage: mem, MaxBytes: 64, ContentTypes: []string{"image/png"}}
 	ctx := context.Background()
 
 	png := append(append([]byte{}, pngHeader...), bytes.Repeat([]byte{1}, 40)...)

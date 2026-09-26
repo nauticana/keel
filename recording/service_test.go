@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/storage"
 	"github.com/nauticana/keel/user"
 )
 
@@ -131,11 +132,12 @@ func key(userID int, ref string) string {
 }
 
 type memStorage struct {
+	storage.ObjectStorage
 	uploaded map[string]int64
 	fail     bool
 }
 
-func (s *memStorage) Upload(_ context.Context, _, key string, r io.Reader, _ string) error {
+func (s *memStorage) PutObject(_ context.Context, key string, r io.Reader, _ string, _ map[string]string) error {
 	if s.fail {
 		return errors.New("bucket unavailable")
 	}
@@ -143,21 +145,18 @@ func (s *memStorage) Upload(_ context.Context, _, key string, r io.Reader, _ str
 	s.uploaded[key] = int64(len(b))
 	return nil
 }
-func (s *memStorage) Download(context.Context, string, string) (io.ReadCloser, error) {
-	return nil, nil
+func (s *memStorage) Bucket() string                             { return "rec" }
+func (s *memStorage) DeleteObject(context.Context, string) error { return nil }
+func (s *memStorage) GetSignedURL(_ context.Context, key string, _ int) (string, error) {
+	return "https://signed/" + s.Bucket() + "/" + key, nil
 }
-func (s *memStorage) Delete(context.Context, string, string) error { return nil }
-func (s *memStorage) GetSignedURL(_ context.Context, bucket, key string, _ int) (string, error) {
-	return "https://signed/" + bucket + "/" + key, nil
-}
-func (s *memStorage) PublicURL(bucket, key string) string { return "" }
 
 func newService(t *testing.T) (*Service, *memStore, *memConsents, *memStorage) {
 	t.Helper()
 	store := &memStore{sessions: map[int64][]any{}, participants: map[int64][][]any{}, media: map[int64][]any{}}
 	consents := &memConsents{decisions: map[string]bool{}}
 	stor := &memStorage{uploaded: map[string]int64{}}
-	return &Service{DB: memRepo{store: store}, Consents: consents, Storage: stor, Bucket: "rec", MaxMediaBytes: 1024, AllowedContentType: map[string]bool{"video/mp4": true}}, store, consents, stor
+	return &Service{DB: memRepo{store: store}, Consents: consents, Storage: stor, MaxMediaBytes: 1024, AllowedContentType: map[string]bool{"video/mp4": true}}, store, consents, stor
 }
 
 var testPolicy = user.ConsentPolicyRef{Type: "video", Region: "US", Version: "1", Language: "en"}
