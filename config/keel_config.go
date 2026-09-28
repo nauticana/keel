@@ -103,6 +103,9 @@ const (
 	max_registration_attempts     = "max_registration_attempts"
 	verify_2fa_window             = "verify_2fa_window"
 	verify_2fa_per_ip             = "verify_2fa_per_ip"
+	otp_send_window               = "otp_send_window"
+	otp_send_per_contact          = "otp_send_per_contact"
+	otp_send_per_ip               = "otp_send_per_ip"
 	max_list_page_size            = "max_list_page_size"
 	default_list_page_size        = "default_list_page_size"
 	post_write_timeout            = "post_write_timeout"
@@ -221,6 +224,9 @@ type KeelConfig struct {
 	MaxRegistrationAttempts     int           // max_registration_attempts     5                  Confirmation-code guess cap
 	Verify2FAWindow             time.Duration // verify_2fa_window             600                2FA verify rate-limit window
 	Verify2FAPerIP              int           // verify_2fa_per_ip             20                 2FA verify attempts per IP
+	OTPSendWindow               time.Duration // otp_send_window               600                OTP send rate-limit window
+	OTPSendPerContact           int           // otp_send_per_contact          3                  OTP sends per phone/email per window; 0 disables
+	OTPSendPerIP                int           // otp_send_per_ip               10                 OTP sends per client IP per window; 0 disables
 	MaxListPageSize             int           // max_list_page_size            1000               List page-size clamp
 	DefaultListPageSize         int           // default_list_page_size        100                Default list page size
 	PostWriteTimeout            time.Duration // post_write_timeout            10                 Post-response write timeout
@@ -335,6 +341,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.MaxRegistrationAttempts = c.Int(m, max_registration_attempts)
 	c.Verify2FAWindow = c.Duration(m, verify_2fa_window)
 	c.Verify2FAPerIP = c.Int(m, verify_2fa_per_ip)
+	c.OTPSendWindow = c.Duration(m, otp_send_window)
+	c.OTPSendPerContact = c.Int(m, otp_send_per_contact)
+	c.OTPSendPerIP = c.Int(m, otp_send_per_ip)
 	c.MaxListPageSize = c.Int(m, max_list_page_size)
 	c.DefaultListPageSize = c.Int(m, default_list_page_size)
 	c.PostWriteTimeout = c.Duration(m, post_write_timeout)
@@ -369,6 +378,15 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.AgencyPayoutMinMinor < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", agency_payout_min_minor))
+	}
+	if c.OTPSendWindow <= 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", otp_send_window))
+	}
+	if c.OTPSendPerContact < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", otp_send_per_contact))
+	}
+	if c.OTPSendPerIP < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", otp_send_per_ip))
 	}
 	if c.MemoryCacheMaxEntries < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", memory_cache_max_entries))

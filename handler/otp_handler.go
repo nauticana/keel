@@ -281,33 +281,39 @@ func (h *OTPHandler) SendOTP(w http.ResponseWriter, r *http.Request) {
 // therefore removed the only cap standing between an attacker and unbounded
 // SMS/email spend, so a counter that cannot be read fails closed.
 func (h *OTPHandler) rateLimitOTP(w http.ResponseWriter, r *http.Request, contactKeySuffix string) bool {
-	contactKey := "otp_rate:" + contactKeySuffix
-	count, err := h.Cache.Increment(r.Context(), contactKey)
-	if err != nil {
-		return h.rateLimitUnavailable(w, r, "per-contact OTP counter", err)
-	}
-	if count == 1 {
-		h.Cache.Set(r.Context(), contactKey, "1", 10*time.Minute)
-	}
-	if count > 3 {
-		h.WriteError(w, http.StatusTooManyRequests, "Too Many Requests", "too many OTP requests, try again later")
+	cfg := config.Config()
+	if h.overOTPCap(w, r, "otp_rate:"+contactKeySuffix, "per-contact", cfg.OTPSendPerContact, cfg.OTPSendWindow,
+		"too many OTP requests, try again later") {
 		return false
 	}
 	// Per-IP cap prevents pumping attacks that enumerate contacts
 	// (each under the per-contact limit) from a single origin.
-	ipKey := "otp_rate_ip:" + common.TrustedClientIP(r)
-	ipCount, err := h.Cache.Increment(r.Context(), ipKey)
-	if err != nil {
-		return h.rateLimitUnavailable(w, r, "per-IP OTP counter", err)
-	}
-	if ipCount == 1 {
-		h.Cache.Set(r.Context(), ipKey, "1", 10*time.Minute)
-	}
-	if ipCount > 10 {
-		h.WriteError(w, http.StatusTooManyRequests, "Too Many Requests", "too many OTP requests from this IP, try again later")
+	if h.overOTPCap(w, r, "otp_rate_ip:"+common.TrustedClientIP(r), "per-IP", cfg.OTPSendPerIP, cfg.OTPSendWindow,
+		"too many OTP requests from this IP, try again later") {
 		return false
 	}
 	return true
+}
+
+// overOTPCap counts one send against key and reports whether the request was
+// refused (response already written). A zero limit disables the cap.
+func (h *OTPHandler) overOTPCap(w http.ResponseWriter, r *http.Request, key, scope string, limit int, window time.Duration, refusal string) bool {
+	if limit == 0 {
+		if h.Journal != nil {
+			h.Journal.Warning("otp " + scope + " send rate limit is disabled")
+		}
+		return false
+	}
+	count, err := h.Cache.IncrementWithTTL(r.Context(), key, window)
+	if err != nil {
+		h.rateLimitUnavailable(w, r, scope+" OTP counter", err)
+		return true
+	}
+	if count > int64(limit) {
+		h.WriteError(w, http.StatusTooManyRequests, "Too Many Requests", refusal)
+		return true
+	}
+	return false
 }
 
 // rateLimitUnavailable refuses the send and records the cause. The client gets

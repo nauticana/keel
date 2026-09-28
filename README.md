@@ -1398,7 +1398,7 @@ The `otpToken` is a server-issued opaque value (32 random bytes, base64-URL) bou
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/public/otp/send` | Generate and send OTP. Rate limited: **3 per contact / 10 min** (keyed on the E.164 form so unnormalized variants share the quota) AND **10 per caller IP / 10 min** (mitigates SMS-pumping across enumerated numbers). |
+| POST | `/public/otp/send` | Generate and send OTP. Rate limited per `otp_send_window` (default 10 min): `otp_send_per_contact` (default 3, keyed on the E.164 form so unnormalized variants share the quota) AND `otp_send_per_ip` (default 10, mitigates SMS-pumping across enumerated numbers). A cap of 0 disables it and journals a warning on every send. |
 | POST | `/public/otp/verify` | Verify OTP code, returns JWT on success (max 5 attempts) |
 | POST | `/public/otp/resend` | Clear and regenerate OTP for an existing session |
 

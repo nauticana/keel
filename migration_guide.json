@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.86",
+   "title": "OTP send rate limits are config flags",
+   "tags": [
+    "additive"
+   ],
+   "summary": "The /public/otp/send per-contact and per-IP caps and their window move from constants to the application_config_flag catalog.",
+   "body_markdown": "### Config\n\n- New flags `otp_send_window` (duration seconds, default 600), `otp_send_per_contact` (default 3) and `otp_send_per_ip` (default 10), read as `KeelConfig.OTPSendWindow` / `OTPSendPerContact` / `OTPSendPerIP`. Defaults match the previous fixed limits. The window must be positive; a cap of `0` disables that cap (the handler journals a warning on each send it lets through uncounted), a negative cap fails config load.\n- The rows are required: config load fails without them. Existing databases insert them into `application_config_flag` (from `schema/seed/core.yml`); override per node in `application_config_value`.\n- The counters now use `IncrementWithTTL`, so the window is fixed from the first send instead of being reset by a racing `Set`."
+  },
+  {
    "version": "v1.2.85",
    "title": "OTP routes to its channel; a missing address is suppressed, not sent",
    "tags": [

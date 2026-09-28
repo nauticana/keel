@@ -31,7 +31,8 @@ var keelTestFlagIDs = []string{
 	oauth_jwks_cache_ttl, social_jwks_cache_ttl, oauth_state_ttl_seconds,
 	oauth_connect_lease_seconds, oauth_access_token_cache_ttl, otp_token_ttl, social_nonce_ttl,
 	registration_confirmation_ttl, max_registration_attempts,
-	verify_2fa_window, verify_2fa_per_ip, max_list_page_size,
+	verify_2fa_window, verify_2fa_per_ip, otp_send_window, otp_send_per_contact, otp_send_per_ip,
+	max_list_page_size,
 	default_list_page_size, post_write_timeout, stripe_webhook_tolerance,
 	stripe_max_retries, webhook_claim_lease_seconds,
 	default_outbound_timeout, snowflake_state_persist_ms,
@@ -51,6 +52,9 @@ func keelRows() ConfigRows {
 	m[commission_hold_days] = ConfigRow{Default: "14"}
 	m[agency_payout_min_minor] = ConfigRow{Default: "2500"}
 	m[webhook_claim_lease_seconds] = ConfigRow{Default: "900"}
+	m[otp_send_window] = ConfigRow{Default: "600"}
+	m[otp_send_per_contact] = ConfigRow{Default: "3"}
+	m[otp_send_per_ip] = ConfigRow{Default: "10"}
 	return m
 }
 
@@ -190,5 +194,18 @@ func TestApplyKeel_AirwallexTransferFlags(t *testing.T) {
 	}
 	if c.AirwallexXferReason != "professional_business_services" {
 		t.Errorf("AirwallexXferReason = %q, want default", c.AirwallexXferReason)
+	}
+}
+
+func TestApplyKeel_OTPSendCapZeroDisablesNegativeFails(t *testing.T) {
+	m := keelRows()
+	m[otp_send_per_contact] = ConfigRow{Value: "0"}
+	m[otp_send_per_ip] = ConfigRow{Value: "0"}
+	if err := (&KeelConfig{}).Apply(m); err != nil {
+		t.Fatalf("zero caps: %v", err)
+	}
+	m[otp_send_per_ip] = ConfigRow{Value: "-1"}
+	if err := (&KeelConfig{}).Apply(m); err == nil || !strings.Contains(err.Error(), otp_send_per_ip) {
+		t.Fatalf("negative cap: err = %v", err)
 	}
 }
