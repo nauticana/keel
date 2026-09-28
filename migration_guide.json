@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.80",
+   "title": "Client-safe upload errors; DOCX is sniffed by its main part",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "handler.RegisterErrorMessage registers a sentinel with public detail text. DocumentHandler and StorageHandler map document, dms, storage and scan errors through WriteServiceError with client-safe wording and codes instead of err.Error(). common.DetectMediaType reports an OOXML container by its main part, and DocumentService.Store sniffs with it.",
+   "body_markdown": "### Errors — registered public wording\n\n`handler.RegisterErrorMessage(sentinel, status, code, message)` is `RegisterErrorCode` with the public `detail`; an empty message keeps the sentinel's own text.\n\n### Uploads — client-safe 4xx (breaking)\n\n`DocumentHandler` no longer writes `err.Error()`: scanner output and `document: …` text stay in the log with the `request_id`. The handler package registers:\n\n| Sentinel | Status | `code` |\n|---|---|---|\n| `document.ErrUnknownType` | 400 | `document_unknown_type` |\n| `document.ErrTenantMismatch` | 403 | `document_forbidden` |\n| `document.ErrSelfReview` | 403 | `document_self_review` |\n| `scan.ErrContentRejected` | 403 | `content_rejected` |\n| `document.ErrNotFound` | 404 | `document_not_found` |\n| `document.ErrInvalidState` | 409 | `document_invalid_state` |\n| `document.ErrTooLarge`, `dms.ErrComponentTooLarge` | 413 | `document_too_large` |\n| `document.ErrMediaType` | 415 | `document_media_type` |\n\nA client that matched the old detail text branches on `code`. An app wanting other wording re-registers the sentinel with `RegisterErrorMessage` at wiring time. `StorageHandler` does the same for `storage.ErrContentTypeNotAllowed` (415, `upload_media_type`) and `storage.ErrObjectTooLarge` (413, `upload_too_large`, now also for a request over the multipart limit, previously 400). `scan.ErrContentRejected` now answers 403 wherever `WriteServiceError` handles it, including `StorageHandler` (previously 500).\n\n### Documents — DOCX sniffing\n\n`common.DetectMediaType(raw)` is `http.DetectContentType`, except that a ZIP whose `[Content_Types].xml` declares an `application/vnd.openxmlformats-officedocument.*.main+xml` part present in the archive is reported as that type without `.main+xml` (DOCX, XLSX, PPTX; macro-enabled files stay `application/zip`). `DocumentService.Store` uses it, so a `document_type.media_types` listing `application/vnd.openxmlformats-officedocument.wordprocessingml.document` accepts DOCX without `application/zip`. A type that allowed `application/zip` to admit DOCX lists the DOCX type instead."
+  },
+  {
    "version": "v1.2.79",
    "title": "One currency module; saved cards detach at the provider on removal; per-document read and review authorization with independent review; a realtime notification channel; client-safe service errors",
    "tags": [

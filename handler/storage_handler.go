@@ -12,6 +12,11 @@ import (
 
 const multipartFramingAllowance = 1 << 20
 
+func init() {
+	RegisterErrorMessage(storage.ErrContentTypeNotAllowed, http.StatusUnsupportedMediaType, "upload_media_type", "This kind of file cannot be uploaded")
+	RegisterErrorMessage(storage.ErrObjectTooLarge, http.StatusRequestEntityTooLarge, "upload_too_large", "The file exceeds the size limit")
+}
+
 // StorageHandler is the HTTP surface over storage.UploadService. The app
 // injects where an upload lands and which object a preview request may read;
 // both hooks authorize the caller and return a *model.AppError to refuse.
@@ -40,6 +45,11 @@ func (h *StorageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, h.Uploads.MaxBytes+multipartFramingAllowance)
 	file, header, err := r.FormFile("file")
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		h.WriteServiceError(w, r, storage.ErrObjectTooLarge)
+		return
+	}
 	if err != nil {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "multipart field file is required")
 		return
@@ -52,7 +62,7 @@ func (h *StorageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	contentType, err := h.Uploads.Upload(r.Context(), key, file)
 	if err != nil {
-		h.writeStorageError(w, r, err)
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	url, err := h.Uploads.SignedURL(r.Context(), key)
@@ -88,15 +98,4 @@ func (h *StorageHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	common.WriteJSON(w, http.StatusOK, map[string]string{"url": url})
-}
-
-func (h *StorageHandler) writeStorageError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, storage.ErrContentTypeNotAllowed):
-		h.WriteError(w, http.StatusUnsupportedMediaType, "Unsupported Media Type", err.Error())
-	case errors.Is(err, storage.ErrObjectTooLarge):
-		h.WriteError(w, http.StatusRequestEntityTooLarge, "Payload Too Large", err.Error())
-	default:
-		h.WriteServiceError(w, r, err)
-	}
 }

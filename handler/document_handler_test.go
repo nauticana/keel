@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/keel/document"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/scan"
 )
 
 type fakeDocuments struct {
@@ -100,6 +101,12 @@ func TestDocumentHandlerUpload(t *testing.T) {
 	h.Upload(w, multipartUpload(t, map[string]string{"document_type": "DF"}, []byte("x")))
 	if w.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("refused media type: %d", w.Code)
+	}
+	docs.err = fmt.Errorf("%w: Eicar-Signature FOUND", scan.ErrContentRejected)
+	w = httptest.NewRecorder()
+	h.Upload(w, multipartUpload(t, map[string]string{"document_type": "DF"}, []byte("x")))
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "Eicar") || !strings.Contains(w.Body.String(), "content_rejected") {
+		t.Errorf("scanner refusal must not reach the client: %d %s", w.Code, w.Body.String())
 	}
 	h.Authorize = func(context.Context, *model.UserSession, *document.Upload) error {
 		return model.NewForbidden("not yours")

@@ -15,6 +15,18 @@ import (
 	"github.com/nauticana/keel/scan"
 )
 
+func init() {
+	RegisterErrorMessage(document.ErrNotFound, http.StatusNotFound, "document_not_found", "Document not found")
+	RegisterErrorMessage(document.ErrUnknownType, http.StatusBadRequest, "document_unknown_type", "Unknown document type")
+	RegisterErrorMessage(document.ErrMediaType, http.StatusUnsupportedMediaType, "document_media_type", "This kind of file cannot be stored as this document type")
+	RegisterErrorMessage(document.ErrTooLarge, http.StatusRequestEntityTooLarge, "document_too_large", "The file exceeds the size limit")
+	RegisterErrorMessage(dms.ErrComponentTooLarge, http.StatusRequestEntityTooLarge, "document_too_large", "The file exceeds the size limit")
+	RegisterErrorMessage(document.ErrInvalidState, http.StatusConflict, "document_invalid_state", "The document's status does not allow this operation")
+	RegisterErrorMessage(document.ErrTenantMismatch, http.StatusForbidden, "document_forbidden", "This document type is not available")
+	RegisterErrorMessage(document.ErrSelfReview, http.StatusForbidden, "document_self_review", "The uploader cannot review this document")
+	RegisterErrorMessage(scan.ErrContentRejected, http.StatusForbidden, "content_rejected", "The file was rejected by the content scanner")
+}
+
 // DocumentStore is what DocumentHandler needs from document.DocumentService.
 type DocumentStore interface {
 	Store(ctx context.Context, up document.Upload) (*document.PartnerDocument, error)
@@ -102,7 +114,7 @@ func (h *DocumentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, err := h.Documents.Store(r.Context(), up)
 	if err != nil {
-		h.writeDocumentError(w, r, err)
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	common.WriteJSON(w, http.StatusCreated, doc)
@@ -132,7 +144,7 @@ func (h *DocumentHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	}
 	url, err := h.Documents.SignedURL(r.Context(), doc.PartnerID, doc.ID, h.SignedURLSeconds)
 	if err != nil {
-		h.writeDocumentError(w, r, err)
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -165,7 +177,7 @@ func (h *DocumentHandler) Review(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Documents.Review(r.Context(), doc.PartnerID, doc.ID, int64(session.Id), req.Approve, req.Notes); err != nil {
-		h.writeDocumentError(w, r, err)
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -181,7 +193,7 @@ func (h *DocumentHandler) authorizedDocument(w http.ResponseWriter, r *http.Requ
 	}
 	doc, err := h.Documents.Get(r.Context(), partnerID, id)
 	if err != nil {
-		h.writeDocumentError(w, r, err)
+		h.WriteServiceError(w, r, err)
 		return nil, false
 	}
 	if err := authorize(r.Context(), session, doc); err != nil {
@@ -189,23 +201,4 @@ func (h *DocumentHandler) authorizedDocument(w http.ResponseWriter, r *http.Requ
 		return nil, false
 	}
 	return doc, true
-}
-
-func (h *DocumentHandler) writeDocumentError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, document.ErrNotFound):
-		h.WriteError(w, http.StatusNotFound, "Not Found", err.Error())
-	case errors.Is(err, document.ErrUnknownType):
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", err.Error())
-	case errors.Is(err, document.ErrMediaType):
-		h.WriteError(w, http.StatusUnsupportedMediaType, "Unsupported Media Type", err.Error())
-	case errors.Is(err, document.ErrTooLarge):
-		h.WriteError(w, http.StatusRequestEntityTooLarge, "Payload Too Large", err.Error())
-	case errors.Is(err, document.ErrInvalidState):
-		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
-	case errors.Is(err, document.ErrTenantMismatch), errors.Is(err, document.ErrSelfReview), errors.Is(err, scan.ErrContentRejected):
-		h.WriteError(w, http.StatusForbidden, "Forbidden", err.Error())
-	default:
-		h.WriteServiceError(w, r, err)
-	}
 }

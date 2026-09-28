@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"mime"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -82,7 +81,7 @@ func (s *DocumentService) checkTenant(ctx context.Context, contRepID string, par
 // sniff returns the media type detected from the bytes, refusing one the
 // type does not allow. The client's claim is never used.
 func sniff(raw []byte, allowed []string) (string, error) {
-	mediaType, _, err := mime.ParseMediaType(http.DetectContentType(raw))
+	mediaType, _, err := mime.ParseMediaType(common.DetectMediaType(raw))
 	if err != nil || !slices.Contains(allowed, mediaType) {
 		return "", fmt.Errorf("%w: %s", ErrMediaType, mediaType)
 	}

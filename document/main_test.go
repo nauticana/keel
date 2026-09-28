@@ -173,6 +173,7 @@ func newService(t *testing.T) (*DocumentService, *memStore) {
 			"attachment": {"docs", int64(64), "image/png", false, false, false},
 			"cold":       {"cold", int64(64), "image/png", false, true, false},
 			"foreign":    {"other", int64(64), "image/png", false, true, false},
+			"brief":      {"docs", int64(4096), mediaDOCX, false, true, false},
 		},
 		owners: map[string]any{"docs": nil, "other": int64(99), "cold": nil},
 		rows:   map[int64][]any{},

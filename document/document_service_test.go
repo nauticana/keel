@@ -1,6 +1,7 @@
 package document
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -292,4 +293,45 @@ func TestRetire(t *testing.T) {
 	if err := s.Retire(ctx, 7, 12345); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown id: %v", err)
 	}
+}
+
+const mediaDOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+func TestStoreDOCXWithoutAllowingEveryZip(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	docx := zippedFiles(t, map[string]string{
+		"[Content_Types].xml": `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+			`<Override PartName="/word/document.xml" ContentType="` + mediaDOCX + `.main+xml"/></Types>`,
+		"word/document.xml": "",
+	})
+	doc, err := s.Store(ctx, upload("brief", 0, docx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := s.Read(ctx, 7, doc.ID); err != nil || got.Content.ContentType != mediaDOCX {
+		t.Errorf("stored media type: %+v %v", got.Content, err)
+	}
+	if _, err := s.Store(ctx, upload("brief", 0, zippedFiles(t, map[string]string{"a.txt": "a"}))); !errors.Is(err, ErrMediaType) {
+		t.Errorf("a plain zip must not pass as DOCX: %v", err)
+	}
+}
+
+func zippedFiles(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

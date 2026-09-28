@@ -114,3 +114,13 @@ func TestWriteServiceError_RegisteredSentinelTextWithoutWrapChain(t *testing.T) 
 		t.Fatalf("warnings = %v", journal.warnings)
 	}
 }
+
+func TestWriteServiceError_RegisteredMessageReplacesSentinelText(t *testing.T) {
+	errQuota := errors.New("quota: partner 7 exhausted plan limit")
+	RegisterErrorMessage(errQuota, http.StatusTooManyRequests, "quota_exhausted", "Plan limit reached")
+	rec := httptest.NewRecorder()
+	(&AbstractHandler{}).WriteServiceError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), errQuota)
+	if problem := decodeProblem(t, rec); rec.Code != http.StatusTooManyRequests || problem.Detail != "Plan limit reached" || problem.Code != "quota_exhausted" {
+		t.Fatalf("problem = %d %+v", rec.Code, problem)
+	}
+}
