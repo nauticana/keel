@@ -62,6 +62,7 @@ func TestWorker_Outcomes(t *testing.T) {
 	}{
 		{"duplicate is a prior delivery", fmt.Errorf("%w: k", port.ErrNotificationDuplicate), 0, StatusSent, 0},
 		{"suppressed is terminal", &port.SuppressedError{Channel: "email", Reason: "bounce"}, 0, StatusSuppressed, 0},
+		{"no address is suppressed, not sent", fmt.Errorf("email: user 7: %w", port.ErrNotificationNoAddress), 0, StatusSuppressed, 0},
 		{"transient retries with backoff", transient, 2, StatusPending, 8},
 		{"transient at the limit fails", transient, 4, StatusFailed, 0},
 	} {

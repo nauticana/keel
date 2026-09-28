@@ -21,9 +21,9 @@ import (
 // downstream consumers can wire a thinner address-only resolver to
 // keep the user package out of dispatcher's import graph.
 //
-// Returns nil when the user has no usable email (deleted account, social
-// account that never set one) — the channel-level "nobody to notify" no-op.
-// Returns a wrapped error for transport failures the caller should retry.
+// Returns port.ErrNotificationNoAddress when the user has no usable email
+// (deleted account, social account that never set one), and a wrapped error
+// for transport failures the caller should retry.
 type EmailDispatcher struct {
 	Mail  *MailClient
 	Users port.RecipientResolver
@@ -49,7 +49,7 @@ func (d *EmailDispatcher) Dispatch(ctx context.Context, userID int, title, body 
 	}
 	to = strings.TrimSpace(to)
 	if to == "" {
-		return nil
+		return fmt.Errorf("email: user %d: %w", userID, port.ErrNotificationNoAddress)
 	}
 	if err := d.Mail.SendEmail(ctx, title, body, []string{to}, nil); err != nil {
 		return fmt.Errorf("email: send to user %d: %w", userID, err)
@@ -59,14 +59,15 @@ func (d *EmailDispatcher) Dispatch(ctx context.Context, userID int, title, body 
 
 // Send delivers an email to an explicit address, skipping userID resolution —
 // for recipients that aren't users (e.g. a business contact during claim
-// verification). title is the subject, body is plain text; empty to is a no-op.
+// verification). title is the subject, body is plain text; empty to is
+// port.ErrNotificationNoAddress.
 func (d *EmailDispatcher) Send(ctx context.Context, to, title, body string, _ map[string]string) error {
 	if d.Mail == nil {
 		return fmt.Errorf("EmailDispatcher: Mail must be set")
 	}
 	to = strings.TrimSpace(to)
 	if to == "" {
-		return nil
+		return fmt.Errorf("email: %w", port.ErrNotificationNoAddress)
 	}
 	if err := d.Mail.SendEmail(ctx, title, body, []string{to}, nil); err != nil {
 		return fmt.Errorf("email: send to %q: %w", to, err)

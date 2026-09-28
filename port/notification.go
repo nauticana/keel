@@ -57,7 +57,13 @@ var (
 	ErrNotificationDuplicate = errors.New("notification: duplicate of an already-sent notification")
 	// ErrNotificationChannel: no dispatcher is registered for the request's channel.
 	ErrNotificationChannel = errors.New("notification: channel not configured")
+	// ErrNotificationNoAddress: the recipient has no address on the request's channel.
+	ErrNotificationNoAddress = errors.New("notification: recipient has no address on this channel")
 )
+
+// NotificationTypeOTP is the type keel's one-time-passcode delivery is sent
+// under; consumers route it by the request's Channel, never by type defaults.
+const NotificationTypeOTP = "otp"
 
 // SuppressedError names the channel and why, never the contact.
 type SuppressedError struct {

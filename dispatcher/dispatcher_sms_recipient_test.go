@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -32,32 +33,26 @@ func (l *capturingLogger) Fatal(string)                    {}
 
 var _ logger.ApplicationLogger = (*capturingLogger)(nil)
 
-// A user with no phone on file stays a no-op, but must leave a trace:
-// a silently dead SMS channel is indistinguishable from a delivered one.
-func TestSMSDispatchEmptyRecipientIsJournalledNoOp(t *testing.T) {
-	journal := &capturingLogger{}
+func TestSMSDispatchEmptyRecipientIsNoAddress(t *testing.T) {
 	posted := false
 	d := &smsDispatcher{
-		users:   stubRecipientResolver{phone: ""},
-		journal: journal,
-		name:    "testsms",
+		users: stubRecipientResolver{phone: ""},
+		name:  "testsms",
 		postFn: func(context.Context, string, string) error {
 			posted = true
 			return nil
 		},
 	}
 
-	if err := d.Dispatch(context.Background(), 42, "", "hello", nil); err != nil {
-		t.Fatalf("Dispatch: %v", err)
+	err := d.Dispatch(context.Background(), 42, "", "hello", nil)
+	if !errors.Is(err, port.ErrNotificationNoAddress) {
+		t.Fatalf("Dispatch = %v, want ErrNotificationNoAddress", err)
+	}
+	if !strings.Contains(err.Error(), "42") {
+		t.Errorf("error = %q, want it to name user 42", err)
 	}
 	if posted {
 		t.Error("postFn was called for an empty recipient")
-	}
-	if len(journal.warnings) != 1 {
-		t.Fatalf("warnings = %v, want exactly one", journal.warnings)
-	}
-	if !strings.Contains(journal.warnings[0], "42") {
-		t.Errorf("warning = %q, want it to name user 42", journal.warnings[0])
 	}
 }
 

@@ -9,10 +9,9 @@ import "context"
 // FCM/APNs; an SMS dispatcher resolves userID -> phone and sends via
 // Twilio or Telnyx.
 //
-// Returning nil when the user has no usable address for this channel
-// ("no email on file", "no active devices") is correct — that is the
-// channel-level no-op signal. Reserve non-nil errors for transport
-// failures the caller should retry or alert on.
+// An address-based channel (email, SMS) returns ErrNotificationNoAddress when
+// the user has no address on it; a fan-out channel with no active devices
+// returns nil. Other errors are transport failures to retry or alert on.
 //
 // PushProvider is a deprecated alias retained so legacy consumers
 // continue to compile during migration. New code should depend on

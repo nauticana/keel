@@ -34,7 +34,7 @@ type OTPHandler struct {
 	Cache           cache.CacheService
 	// Mail is the synchronous email-send transport used when a SendOTP
 	// request specifies contactType="email". Optional — when nil, the
-	// email path falls back to NotificationSvc.Send with Channel="E"
+	// email path falls back to NotificationSvc.Send on dispatcher.EmailChannel
 	// (which goes through the consumer's async dispatch pipeline). Most
 	// consumers should set Mail directly: OTP timing matters and the
 	// async-Pub/Sub round-trip adds avoidable latency to a security
@@ -457,8 +457,8 @@ func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, otp string) {
 	}
 	if err := h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
 		UserID:  userID,
-		Type:    "S",
-		Channel: "S", // SMS
+		Type:    port.NotificationTypeOTP,
+		Channel: dispatcher.SMSChannel,
 		Title:   "Verification Code",
 		Body:    h.otpSMSBody(otp),
 	}); err != nil {
@@ -468,7 +468,7 @@ func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, otp string) {
 
 // dispatchOTPEmail prefers the synchronous MailClient path because OTP
 // timing matters and the user is actively waiting. Falls back to the
-// async NotificationSvc with Channel="E" when MailClient isn't wired.
+// async NotificationSvc on dispatcher.EmailChannel when MailClient isn't wired.
 //
 // Errors are NOT propagated to the caller — the OTP row already exists
 // in user_otp so the user can resend, and a 5xx here would leak
@@ -487,8 +487,8 @@ func (h *OTPHandler) dispatchOTPEmail(r *http.Request, userID int, email, otp st
 	if h.NotificationSvc != nil {
 		if err := h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
 			UserID:  userID,
-			Type:    "S",
-			Channel: "E", // Email
+			Type:    port.NotificationTypeOTP,
+			Channel: dispatcher.EmailChannel,
 			Title:   subject,
 			Body:    body,
 		}); err != nil {

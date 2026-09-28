@@ -72,7 +72,7 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 	switch {
 	case sendErr == nil || errors.Is(sendErr, port.ErrNotificationDuplicate):
 		return w.transition(ctx, qs, journal, jobID, qSent, jobID, token)
-	case errors.Is(sendErr, port.ErrNotificationSuppressed):
+	case errors.Is(sendErr, port.ErrNotificationSuppressed), errors.Is(sendErr, port.ErrNotificationNoAddress):
 		return w.transition(ctx, qs, journal, jobID, qSuppressed, truncErr(sendErr), jobID, token)
 	case errors.Is(sendErr, port.ErrNotificationChannel) || attempts+1 >= w.maxAttempts():
 		journal.Error(fmt.Sprintf("notify %d: %s delivery failed after %d attempts: %v", jobID, req.Channel, attempts+1, sendErr))

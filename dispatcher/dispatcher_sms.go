@@ -19,7 +19,7 @@ const smsHTTPTimeout = 15 * time.Second
 
 // smsDispatcher is the provider-agnostic SMS dispatch flow shared by every SMS
 // provider. Providers supply postFn (the wire call to their API); the
-// userID→phone resolution, E.164 normalization, and no-op-on-empty semantics
+// userID→phone resolution, E.164 normalization, and no-address refusal
 // are identical across providers and live here once.
 type smsDispatcher struct {
 	users   port.RecipientResolver
@@ -31,8 +31,7 @@ type smsDispatcher struct {
 var _ port.MessageDispatcher = (*smsDispatcher)(nil)
 
 // Dispatch resolves userID -> E.164 phone via the RecipientResolver and sends.
-// Returns nil when the user has no phone on file (the channel-level no-op
-// documented on port.MessageDispatcher) and journals a warning.
+// Returns port.ErrNotificationNoAddress when the user has no phone on file.
 func (d *smsDispatcher) Dispatch(ctx context.Context, userID int, _ string, body string, _ map[string]string) error {
 	if d.users == nil {
 		return fmt.Errorf("%s: users not set", d.name)
@@ -43,10 +42,7 @@ func (d *smsDispatcher) Dispatch(ctx context.Context, userID int, _ string, body
 	}
 	to = strings.TrimSpace(to)
 	if to == "" {
-		if d.journal != nil {
-			d.journal.Warning(fmt.Sprintf("%s: no phone on file for user %d, SMS not sent", d.name, userID))
-		}
-		return nil
+		return fmt.Errorf("%s: user %d: %w", d.name, userID, port.ErrNotificationNoAddress)
 	}
 	if err := d.postFn(ctx, to, body); err != nil {
 		return fmt.Errorf("%s: user %d: %w", d.name, userID, err)
@@ -56,11 +52,12 @@ func (d *smsDispatcher) Dispatch(ctx context.Context, userID int, _ string, body
 
 // Send delivers to an explicit recipient, skipping userID resolution — for
 // recipients that aren't users. to may be E.164 or national; data["country"]
-// is the ISO-3166 region used to normalize a national number. Empty to = no-op.
+// is the ISO-3166 region used to normalize a national number. Empty to is
+// port.ErrNotificationNoAddress.
 func (d *smsDispatcher) Send(ctx context.Context, to, _, body string, data map[string]string) error {
 	to = strings.TrimSpace(to)
 	if to == "" {
-		return nil
+		return fmt.Errorf("%s: %w", d.name, port.ErrNotificationNoAddress)
 	}
 	e164, err := ToE164(to, data["country"])
 	if err != nil {

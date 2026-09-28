@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.85",
+   "title": "OTP routes to its channel; a missing address is suppressed, not sent",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "OTPHandler sends on dispatcher.SMSChannel / EmailChannel under port.NotificationTypeOTP; notify.Message.Channel delivers on exactly that channel. Email and SMS dispatchers return port.ErrNotificationNoAddress instead of nil for a user with no address, and notify.Worker records that row suppressed. user.NewSQLRecipients is an address-only RecipientResolver.",
+   "body_markdown": "### OTP delivery (breaking)\n\n- `OTPHandler` sent `Type: \"S\", Channel: \"S\"` (SMS) and `Type: \"S\", Channel: \"E\"` (email fallback). Neither channel name matches a registered dispatcher, and `\"S\"` collides with consumers' own type codes. It now sends `Type: port.NotificationTypeOTP` (`\"otp\"`) with `Channel: dispatcher.SMSChannel` / `dispatcher.EmailChannel`.\n- A `port.NotificationService` that enqueues through `notify.Queue` must pass the request's channel on: `notify.Message{Channel: req.Channel, ...}`. A custom `Channels` callback no longer needs an entry for OTP.\n- A consumer that seeds a `notification_type` catalog adds `otp`.\n\n### Notifications\n\n- `notify.Message.Channel`: when set, the queue delivers on only that channel. Preferences, `Channels` and `ForcedChannels` are skipped; `Addressable` still applies.\n- `port.ErrNotificationNoAddress`. `EmailDispatcher` and the SMS dispatchers return it (wrapped) from `Dispatch` for a user with no address, and from `Send` for an empty `to`, where they used to return nil. `notify.Worker` records the row as `X` (suppressed) with `last_error` set, not `S`. Direct callers of `LocalNotificationService.Send` that treated a missing address as success check `errors.Is(err, port.ErrNotificationNoAddress)`.\n- The SMS dispatcher no longer journals a warning for a missing phone; the error replaces it.\n- `user.NewSQLRecipients(ctx, db)` returns an address-only `port.RecipientResolver` (`user_account.user_email` / `phone`) for binaries that build no `LocalUserService`: `queue.Addressable = notify.RecipientAddressable(user.NewSQLRecipients(ctx, db))`. An unknown user resolves to no address. Unlike `LocalUserService`, it does not reject locked or suspended accounts."
+  },
+  {
    "version": "v1.2.84",
    "title": "payout_instruction_resolution sequence fits table_sequence_usage",
    "tags": [

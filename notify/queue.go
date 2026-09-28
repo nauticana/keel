@@ -13,8 +13,9 @@ import (
 )
 
 // Queue enqueues a notification as one pending row per resolved channel. A
-// channel is resolved when it is forced for the type, or the user enabled it,
-// or it is one of the type's Channels and the user has not disabled it.
+// channel is resolved when the Message names it, or else when it is forced for
+// the type, or the user enabled it, or it is one of the type's Channels and the
+// user has not disabled it.
 type Queue struct {
 	DB port.DatabaseRepository
 	// Channels lists the channels a type is delivered on unless the user opts out.
@@ -63,7 +64,7 @@ func (q *Queue) EnqueueTx(ctx context.Context, tx port.TxQueryService, userID in
 	if userID <= 0 || notificationType == "" || msg.Title == "" {
 		return nil, ErrInvalidMessage
 	}
-	channels, err := q.resolveChannels(ctx, tx, userID, notificationType)
+	channels, err := q.resolveChannels(ctx, tx, userID, notificationType, msg.Channel)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +91,10 @@ func (q *Queue) EnqueueTx(ctx context.Context, tx port.TxQueryService, userID in
 	return ids, nil
 }
 
-func (q *Queue) resolveChannels(ctx context.Context, qs port.QueryService, userID int, notificationType string) ([]string, error) {
+func (q *Queue) resolveChannels(ctx context.Context, qs port.QueryService, userID int, notificationType, explicit string) ([]string, error) {
+	if explicit != "" {
+		return q.reachable(ctx, userID, []string{explicit})
+	}
 	res, err := qs.Query(ctx, qTypePreferences, userID, notificationType)
 	if err != nil {
 		return nil, fmt.Errorf("notify: read preferences: %w", err)
@@ -121,11 +125,15 @@ func (q *Queue) resolveChannels(ctx context.Context, qs port.QueryService, userI
 			add(channel)
 		}
 	}
+	return q.reachable(ctx, userID, resolved)
+}
+
+func (q *Queue) reachable(ctx context.Context, userID int, channels []string) ([]string, error) {
 	if q.Addressable == nil {
-		return resolved, nil
+		return channels, nil
 	}
-	reachable := resolved[:0]
-	for _, channel := range resolved {
+	reachable := channels[:0]
+	for _, channel := range channels {
 		ok, err := q.Addressable(ctx, userID, channel)
 		if err != nil {
 			return nil, fmt.Errorf("notify: %s address for user %d: %w", channel, userID, err)

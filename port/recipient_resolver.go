@@ -12,8 +12,8 @@ package port
 // user-service surface.
 //
 // Implementations return ("", nil) — empty address, no error — when
-// the user has no contact for that channel. Dispatchers treat that
-// as "nobody to notify" and short-circuit the channel-level no-op.
+// the user has no contact for that channel. Dispatchers refuse that
+// with ErrNotificationNoAddress.
 // Reserve non-nil errors for transport failures the caller should
 // retry on (DB outage, ID lookup failure).
 type RecipientResolver interface {

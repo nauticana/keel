@@ -163,3 +163,32 @@ func TestEnqueue_SkipsUnaddressableChannels(t *testing.T) {
 		t.Fatalf("channels = %v, want inbox and sms; forced email has no address", got)
 	}
 }
+
+func TestEnqueue_ExplicitChannelSkipsTypeResolution(t *testing.T) {
+	store := newMemStore()
+	q := newQueue(store)
+	ctx := context.Background()
+	if err := q.SetPreference(ctx, 7, "security", "push", true); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := q.Enqueue(ctx, 7, "security", Message{Title: "Code", Channel: "sms"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := channelsOf(store, ids); !slices.Equal(got, []string{"sms"}) {
+		t.Fatalf("channels = %v, want only the explicit sms", got)
+	}
+}
+
+func TestEnqueue_ExplicitChannelStillAddressable(t *testing.T) {
+	store := newMemStore()
+	q := newQueue(store)
+	q.Addressable = RecipientAddressable(fakeRecipients{})
+	ids, err := q.Enqueue(context.Background(), 7, "order", Message{Title: "Code", Channel: "sms"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("channels = %v, want none; user has no phone", channelsOf(store, ids))
+	}
+}
