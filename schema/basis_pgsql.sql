@@ -1054,8 +1054,8 @@ CREATE TABLE IF NOT EXISTS payout_instruction_resolution (
 );
 CREATE INDEX IF NOT EXISTS idx_payout_instruction_resolution_leg ON payout_instruction_resolution(instruction_id, leg_no, resolved_at);
 
-CREATE SEQUENCE IF NOT EXISTS payout_instruction_resolution_seq INCREMENT BY 1 START WITH 1;
-INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payout_instruction_resolution', 'id', 'payout_instruction_resolution_seq') ON CONFLICT DO NOTHING;
+CREATE SEQUENCE IF NOT EXISTS payout_resolution_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payout_instruction_resolution', 'id', 'payout_resolution_seq') ON CONFLICT DO NOTHING;
 
 -- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
 CREATE TABLE IF NOT EXISTS outbox_event (

@@ -29,3 +29,14 @@ func TestValidateSeedsRejectsMissingParent(t *testing.T) {
 		t.Fatal("child without its foreign_key_lookup accepted")
 	}
 }
+
+func TestValidateRejectsLongSequenceName(t *testing.T) {
+	s, err := ParseDir("core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.GetTable("consent_event").Sequence.Name = "consent_event_sequence_name_too_long"
+	if err := s.Validate(); err == nil {
+		t.Fatal("sequence name over 32 characters accepted")
+	}
+}

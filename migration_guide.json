@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.84",
+   "title": "payout_instruction_resolution sequence fits table_sequence_usage",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "payout_instruction_resolution's sequence is renamed to payout_resolution_seq; the v1.2.83 name exceeded table_sequence_usage.sequence_name (VARCHAR(32)) and aborted the basis load. Schema.Validate now rejects sequence table, column or name over 32 characters.",
+   "body_markdown": "### Payout — resolution sequence\n\n`payout_instruction_resolution_seq` → `payout_resolution_seq`. A database whose v1.2.83 load stopped at that row: `DROP SEQUENCE IF EXISTS payout_instruction_resolution_seq;` and reload. `schemagen` now fails on any sequence identifier longer than 32 characters."
+  },
+  {
    "version": "v1.2.83",
    "title": "Seed lookups; storage region; scoped payout operations; transactional refunds; addressable notifications",
    "tags": [

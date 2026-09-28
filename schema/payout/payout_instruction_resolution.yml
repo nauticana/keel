@@ -23,7 +23,7 @@ columns:
     default: CURRENT_TIMESTAMP
 primary_key: [id]
 sequence:
-  name: payout_instruction_resolution_seq
+  name: payout_resolution_seq
   column: id
 checks:
   - name: chk_payout_instruction_resolution_outcome

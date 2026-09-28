@@ -348,9 +348,13 @@ func (s *Schema) GetTable(name string) *Table {
 //   - every FK target table exists in the schema
 //   - FK source/target column counts match
 //   - sequence column exists in the table
+//   - sequence table, column and name fit table_sequence_usage
 //   - index columns exist in the table
 //   - constraint / index / FK / check names are unique within a table
 //   - every FK parent is ordered before its child (required by MySQL)
+// maxSequenceUsageName is the VARCHAR size of table_sequence_usage's columns.
+const maxSequenceUsageName = 32
+
 func (s *Schema) Validate() error {
 	position := make(map[string]int, len(s.Tables))
 	for index, table := range s.Tables {
@@ -422,6 +426,12 @@ func (s *Schema) Validate() error {
 			if _, ok := colSet[t.Sequence.Column]; !ok {
 				return fmt.Errorf("schema: sequence on table %q references unknown column %q",
 					t.Name, t.Sequence.Column)
+			}
+			for _, name := range []string{t.Name, t.Sequence.Column, t.Sequence.Name} {
+				if len(name) > maxSequenceUsageName {
+					return fmt.Errorf("schema: %q on table %q exceeds %d characters, the table_sequence_usage limit",
+						name, t.Name, maxSequenceUsageName)
+				}
 			}
 		}
 		checkNames := map[string]struct{}{}
