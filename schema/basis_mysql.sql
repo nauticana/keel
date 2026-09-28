@@ -1039,6 +1039,25 @@ CREATE TABLE IF NOT EXISTS payout_instruction_event (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_payout_instruction_event_leg ON payout_instruction_event(instruction_id, leg_no);
 
+-- Operator-confirmed outcomes for payout instructions in manual review.
+CREATE TABLE IF NOT EXISTS payout_instruction_resolution (
+    id                                   BIGINT        NOT NULL,
+    instruction_id                       BIGINT        NOT NULL,
+    leg_no                               INT           NOT NULL,
+    outcome                              VARCHAR(20)   NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    note                                 VARCHAR(500)  NOT NULL,
+    provider_reference                   VARCHAR(255)  NOT NULL,
+    reversed_minor                       BIGINT        NOT NULL DEFAULT 0,
+    resolved_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT payout_leg_resolutions FOREIGN KEY (instruction_id, leg_no) REFERENCES payout_instruction_leg(instruction_id, leg_no),
+    CONSTRAINT payout_resolution_actor FOREIGN KEY (actor_id) REFERENCES user_account(id),
+    CONSTRAINT chk_payout_instruction_resolution_outcome CHECK (outcome IN ('paid', 'failed', 'returned', 'reversed')),
+    CONSTRAINT chk_payout_instruction_resolution_reversed CHECK ((outcome = 'reversed' AND reversed_minor > 0) OR (outcome <> 'reversed' AND reversed_minor = 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_payout_instruction_resolution_leg ON payout_instruction_resolution(instruction_id, leg_no, resolved_at);
+
 -- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
 CREATE TABLE IF NOT EXISTS outbox_event (
     id                                   BIGINT        NOT NULL,

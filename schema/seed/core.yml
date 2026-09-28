@@ -88,6 +88,7 @@ seeds:
       - [extract_max_bytes, int64, false, '67108864', Largest decompressed document part or extracted text (bytes)]
       - [storage_public_base_url, string, true, '', Public base URL for ObjectStorage.PublicURL]
       - [storage_account_url, string, true, '', Azure Blob service endpoint]
+      - [storage_region, string, true, '', 'S3 region or GCS location; empty = provider default chain (R2: auto)']
       - [messaging_mode, string, true, '', 'Messaging: gcp or aws']
       - [max_request_size, int64, false, '16777216', Maximum request body size (bytes)]
       - [http_read_timeout, int, true, '15', HTTP read timeout in seconds]

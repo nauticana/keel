@@ -3,6 +3,7 @@ package document
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -30,19 +31,36 @@ type memStore struct {
 	owners     map[string]any   // contrep_id → partner_id or nil
 	rows       map[int64][]any  // partner_document in selectFields order
 	nextID     int64
-	inserted   []int64 // rows written in the open transaction
+	inserted   []int64         // rows written in the open transaction
+	updated    map[int64][]any // pre-update copies of rows changed in the open transaction
 	groupLocks int
 	heldUsers  map[int64]bool // subjects under an unreleased legal hold
 }
 
-func (m *memStore) GenID() int64                 { m.nextID++; return m.nextID }
-func (m *memStore) Commit(context.Context) error { m.inserted = nil; return nil }
+func (m *memStore) GenID() int64 { m.nextID++; return m.nextID }
+func (m *memStore) Commit(context.Context) error {
+	m.inserted, m.updated = nil, nil
+	return nil
+}
 func (m *memStore) Rollback(context.Context) error {
+	for id, original := range m.updated {
+		m.rows[id] = original
+	}
 	for _, id := range m.inserted {
 		delete(m.rows, id)
 	}
-	m.inserted = nil
+	m.inserted, m.updated = nil, nil
 	return nil
+}
+
+func (m *memStore) beforeUpdate(id int64) []any {
+	if m.updated == nil {
+		m.updated = map[int64][]any{}
+	}
+	if _, saved := m.updated[id]; !saved {
+		m.updated[id] = slices.Clone(m.rows[id])
+	}
+	return m.rows[id]
 }
 
 func same(a, b any) bool {
@@ -130,7 +148,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			}
 		}
 	case qSetReview:
-		r := m.rows[args[3].(int64)]
+		r := m.beforeUpdate(args[3].(int64))
 		r[14], r[15], r[16], r[17] = args[0], args[1], time.Now(), args[2]
 	case qRetire:
 		r := m.rows[args[0].(int64)]

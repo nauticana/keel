@@ -21,6 +21,7 @@ func NewFromConfig(ctx context.Context, secrets secret.SecretProvider, bucket st
 		Mode:             mode,
 		Bucket:           bucket,
 		Endpoint:         c.S3Endpoint,
+		Region:           c.StorageRegion,
 		AccountURL:       c.StorageAccountURL,
 		PublicBaseURL:    c.StoragePublicBaseURL,
 		CredentialSecret: c.StorageCredentialSecret,

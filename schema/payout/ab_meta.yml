@@ -5,3 +5,4 @@ tables:
   - payout_instruction
   - payout_instruction_leg
   - payout_instruction_event
+  - payout_instruction_resolution

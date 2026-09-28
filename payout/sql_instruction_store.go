@@ -11,17 +11,18 @@ import (
 )
 
 const (
-	qInstructionInsert       = "payout_instruction_insert"
-	qInstructionByKey        = "payout_instruction_by_key"
-	qInstructionLock         = "payout_instruction_lock"
-	qInstructionLegs         = "payout_instruction_legs"
-	qInstructionByTransfer   = "payout_instruction_by_transfer"
-	qInstructionUpdateStatus = "payout_instruction_update_status"
-	qInstructionDestination  = "payout_instruction_destination"
-	qInstructionLegInsert    = "payout_instruction_leg_insert"
-	qInstructionLegUpdate    = "payout_instruction_leg_update"
-	qInstructionEventRecord  = "payout_instruction_event_record"
-	qInstructionInFlight     = "payout_instruction_in_flight"
+	qInstructionInsert           = "payout_instruction_insert"
+	qInstructionByKey            = "payout_instruction_by_key"
+	qInstructionLock             = "payout_instruction_lock"
+	qInstructionLegs             = "payout_instruction_legs"
+	qInstructionByTransfer       = "payout_instruction_by_transfer"
+	qInstructionUpdateStatus     = "payout_instruction_update_status"
+	qInstructionDestination      = "payout_instruction_destination"
+	qInstructionLegInsert        = "payout_instruction_leg_insert"
+	qInstructionLegUpdate        = "payout_instruction_leg_update"
+	qInstructionEventRecord      = "payout_instruction_event_record"
+	qInstructionResolutionRecord = "payout_instruction_resolution_record"
+	qInstructionInFlight         = "payout_instruction_in_flight"
 )
 
 var instructionQueries = map[string]string{
@@ -85,16 +86,21 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (provider, event_id) DO NOTHING
 RETURNING event_id`,
 
+	qInstructionResolutionRecord: `
+INSERT INTO payout_instruction_resolution
+ (id, instruction_id, leg_no, outcome, actor_id, note, provider_reference, reversed_minor)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+
 	qInstructionInFlight: `
 SELECT id
   FROM payout_instruction
  WHERE status IN ('D', 'P') AND updated_at < ?
+   AND (?::bigint[] IS NULL OR partner_id = ANY(?::bigint[]))
  ORDER BY updated_at
  LIMIT ?`,
 }
 
-// SQLInstructionStore is the PostgreSQL InstructionStore over
-// payout_instruction, payout_instruction_leg and payout_instruction_event.
+// SQLInstructionStore is the PostgreSQL InstructionStore.
 type SQLInstructionStore struct {
 	DB port.DatabaseRepository
 
@@ -134,8 +140,12 @@ func (s *SQLInstructionStore) InTx(ctx context.Context, fn func(InstructionTx) e
 	return nil
 }
 
-func (s *SQLInstructionStore) InFlight(ctx context.Context, updatedBefore time.Time, limit int) ([]int64, error) {
-	res, err := s.queryService(ctx).Query(ctx, qInstructionInFlight, updatedBefore, limit)
+func (s *SQLInstructionStore) InFlight(ctx context.Context, updatedBefore time.Time, limit int, partnerIDs []int64) ([]int64, error) {
+	var partners any
+	if len(partnerIDs) > 0 {
+		partners = partnerIDs
+	}
+	res, err := s.queryService(ctx).Query(ctx, qInstructionInFlight, updatedBefore, partners, partners, limit)
 	if err != nil {
 		return nil, err
 	}

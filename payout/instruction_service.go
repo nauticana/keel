@@ -80,7 +80,17 @@ func (s *InstructionService) Create(ctx context.Context, req InstructionRequest)
 // leg once funding is recorded). Other states are returned unchanged; a
 // provider error is returned alongside the recorded instruction.
 func (s *InstructionService) Execute(ctx context.Context, id int64) (*Instruction, error) {
-	plan, current, err := s.claimDispatch(ctx, id)
+	return s.execute(ctx, id, false)
+}
+
+// Retry dispatches only a new or failed instruction. It is the operator-facing
+// form of Execute; in-flight and terminal instructions are rejected.
+func (s *InstructionService) Retry(ctx context.Context, id int64) (*Instruction, error) {
+	return s.execute(ctx, id, true)
+}
+
+func (s *InstructionService) execute(ctx context.Context, id int64, retryOnly bool) (*Instruction, error) {
+	plan, current, err := s.claimDispatch(ctx, id, retryOnly)
 	if err != nil || plan == nil {
 		return current, err
 	}
@@ -88,7 +98,7 @@ func (s *InstructionService) Execute(ctx context.Context, id int64) (*Instructio
 	return s.recordDispatch(ctx, id, plan.leg.LegNo, result, callErr)
 }
 
-func (s *InstructionService) claimDispatch(ctx context.Context, id int64) (*dispatchPlan, *Instruction, error) {
+func (s *InstructionService) claimDispatch(ctx context.Context, id int64, retryOnly bool) (*dispatchPlan, *Instruction, error) {
 	var plan *dispatchPlan
 	var current *Instruction
 	unresolved := false
@@ -98,6 +108,9 @@ func (s *InstructionService) claimDispatch(ctx context.Context, id int64) (*disp
 			return err
 		}
 		current = instr
+		if retryOnly && instr.Status != InstructionNew && instr.Status != InstructionFailed {
+			return fmt.Errorf("%w: instruction %d is %s", ErrInstructionNotRetryable, id, instr.Status)
+		}
 		switch instr.Status {
 		case InstructionNew, InstructionFailed:
 			plan, err = s.openLeg(ctx, tx, instr)
@@ -286,12 +299,6 @@ func (s *InstructionService) ApplyTransferEvent(ctx context.Context, ev *PayoutW
 }
 
 func (s *InstructionService) applyOutcome(ctx context.Context, tx InstructionTx, instr *Instruction, leg *InstructionLeg, outcome PayoutWebhookEventType, amountMinor, reversedMinor int64) error {
-	conflict := func() error {
-		return fmt.Errorf("%w: %s on instruction %d leg %d in state %s", ErrTransferConflict, outcome, instr.ID, leg.LegNo, leg.Status)
-	}
-	if outcome == PayoutEventTransferFailed && leg.Status == LegSettled {
-		outcome = PayoutEventTransferReturned // a provider may fail a payout after reporting it paid
-	}
 	switch outcome {
 	case PayoutEventTransferPaid:
 		switch leg.Status {
@@ -301,14 +308,14 @@ func (s *InstructionService) applyOutcome(ctx context.Context, tx InstructionTx,
 			leg.Status = LegSettled
 			instr.Status = InstructionSettled
 		default:
-			return conflict()
+			return s.contradicted(ctx, tx, instr, leg, outcome)
 		}
 	case PayoutEventTransferFailed:
 		switch {
 		case leg.Status == LegFailed:
 			return nil
 		case leg.Status != LegDispatching && leg.Status != LegPending:
-			return conflict()
+			return s.contradicted(ctx, tx, instr, leg, outcome)
 		}
 		leg.Status = LegFailed
 		instr.Status = InstructionFailed
@@ -318,14 +325,14 @@ func (s *InstructionService) applyOutcome(ctx context.Context, tx InstructionTx,
 		case leg.Status == LegReturned:
 			return nil
 		case leg.Status == LegFailed || leg.Status == LegReversed || leg.ReversedMinor > 0:
-			return conflict()
+			return s.contradicted(ctx, tx, instr, leg, outcome)
 		}
 		leg.Status = LegReturned
 		instr.Status = InstructionFailed
 		instr.FailureReason = fmt.Sprintf("leg %d %s", leg.LegNo, outcome)
 	case PayoutEventTransferReversed:
 		if leg.Status == LegFailed || leg.Status == LegReturned {
-			return conflict()
+			return s.contradicted(ctx, tx, instr, leg, outcome)
 		}
 		if amountMinor > 0 && amountMinor != leg.AmountMinor {
 			return fmt.Errorf("%w: event amount %d, leg amount %d", ErrTransferConflict, amountMinor, leg.AmountMinor)
@@ -424,9 +431,10 @@ func (s *InstructionService) Reconcile(ctx context.Context, id int64) error {
 }
 
 // ReconcileInFlight reconciles instructions left dispatching or pending
-// since before updatedBefore, up to limit.
-func (s *InstructionService) ReconcileInFlight(ctx context.Context, updatedBefore time.Time, limit int) error {
-	ids, err := s.Store.InFlight(ctx, updatedBefore, limit)
+// since before updatedBefore, up to limit; partnerIDs limits it to those
+// partners, empty means all.
+func (s *InstructionService) ReconcileInFlight(ctx context.Context, updatedBefore time.Time, limit int, partnerIDs []int64) error {
+	ids, err := s.Store.InFlight(ctx, updatedBefore, limit, partnerIDs)
 	if err != nil {
 		return err
 	}
@@ -438,6 +446,28 @@ func (s *InstructionService) ReconcileInFlight(ctx context.Context, updatedBefor
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Get returns the instruction with its legs.
+func (s *InstructionService) Get(ctx context.Context, id int64) (*Instruction, error) {
+	var instr *Instruction
+	err := s.Store.InTx(ctx, func(tx InstructionTx) error {
+		var err error
+		instr, err = tx.Lock(ctx, id)
+		return err
+	})
+	return instr, err
+}
+
+// contradicted parks the instruction for ResolveReview, unless its allocation
+// is already released (cancelled, reversed) or the event names a superseded
+// leg; reopening those could release or pay twice, so the event fails loudly.
+func (s *InstructionService) contradicted(ctx context.Context, tx InstructionTx, instr *Instruction, leg *InstructionLeg, outcome PayoutWebhookEventType) error {
+	latest := instr.Legs[len(instr.Legs)-1].LegNo
+	if instr.Status == InstructionCancelled || instr.Status == InstructionReversed || leg.LegNo != latest {
+		return fmt.Errorf("%w: %s on instruction %d leg %d in state %s", ErrTransferConflict, outcome, instr.ID, leg.LegNo, leg.Status)
+	}
+	return s.review(ctx, tx, instr, fmt.Sprintf("leg %d reported %s in state %s", leg.LegNo, outcome, leg.Status))
 }
 
 func (s *InstructionService) review(ctx context.Context, tx InstructionTx, instr *Instruction, reason string) error {

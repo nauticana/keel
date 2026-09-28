@@ -25,7 +25,7 @@ const (
 	qSetMediaPurged       = "set_media_purged"
 
 	selectSessionFields = "SELECT id, partner_id, context_ref, consent_type, status, capture_token_hash, capture_expires_at, policy_id, attempt, created_at FROM recording_session"
-	selectMediaFields   = "SELECT id, session_id, bucket, object_key, content_type, size_bytes, status FROM recording_media"
+	selectMediaFields   = "SELECT id, session_id, bucket, object_key, content_type, size_bytes, status, completed_at FROM recording_media"
 )
 
 var queries = map[string]string{

@@ -3,6 +3,7 @@ package payout
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -190,6 +191,7 @@ type memInstructionStore struct {
 	mu           sync.Mutex
 	instructions map[int64]*Instruction
 	events       map[string]bool
+	resolutions  []ReviewResolutionRecord
 	destinations map[[2]int64]*Destination
 	nextID       int64
 	inTx         bool
@@ -226,24 +228,26 @@ func (s *memInstructionStore) InTx(ctx context.Context, fn func(InstructionTx) e
 	for k, v := range s.events {
 		snapshotEvents[k] = v
 	}
+	snapshotResolutions := append([]ReviewResolutionRecord(nil), s.resolutions...)
 	snapshotNext := s.nextID
 	s.inTx = true
 	err := fn(&memInstructionTx{s: s})
 	s.inTx = false
 	if err != nil {
-		s.instructions, s.events, s.nextID = snapshotInstructions, snapshotEvents, snapshotNext
+		s.instructions, s.events, s.resolutions, s.nextID = snapshotInstructions, snapshotEvents, snapshotResolutions, snapshotNext
 		return err
 	}
 	s.commits++
 	return nil
 }
 
-func (s *memInstructionStore) InFlight(_ context.Context, _ time.Time, limit int) ([]int64, error) {
+func (s *memInstructionStore) InFlight(_ context.Context, _ time.Time, limit int, partnerIDs []int64) ([]int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var ids []int64
 	for id, instr := range s.instructions {
-		if (instr.Status == InstructionDispatching || instr.Status == InstructionPending) && len(ids) < limit {
+		inScope := len(partnerIDs) == 0 || slices.Contains(partnerIDs, instr.PartnerID)
+		if inScope && (instr.Status == InstructionDispatching || instr.Status == InstructionPending) && len(ids) < limit {
 			ids = append(ids, id)
 		}
 	}
@@ -343,6 +347,11 @@ func (t *memInstructionTx) RecordEvent(_ context.Context, _ int64, _ int, ev *Pa
 	}
 	t.s.events[k] = true
 	return false, nil
+}
+
+func (t *memInstructionTx) RecordResolution(_ context.Context, resolution ReviewResolutionRecord) error {
+	t.s.resolutions = append(t.s.resolutions, resolution)
+	return nil
 }
 
 var _ InstructionTx = (*memInstructionTx)(nil)

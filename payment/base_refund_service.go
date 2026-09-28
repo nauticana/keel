@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 const (
 	qRefundByID            = "payment_refund_by_id"
 	qRefundByKey           = "payment_refund_by_key"
+	qRefundByPayment       = "payment_refund_by_payment"
 	qRefundBalanceID       = "payment_refund_balance_id"
 	qRefundInsertBalance   = "payment_refund_insert_balance"
 	qRefundLockBalance     = "payment_refund_lock_balance"
@@ -42,6 +44,7 @@ SELECT r.id, b.provider, b.payment_id, b.currency, r.requester_id, r.approver_id
 var refundQueries = map[string]string{
 	qRefundByID:      refundRecordSelect + ` WHERE r.id = ?`,
 	qRefundByKey:     refundRecordSelect + ` WHERE r.idempotency_key = ?`,
+	qRefundByPayment: refundRecordSelect + ` WHERE b.provider = ? AND b.payment_id = ? ORDER BY r.id`,
 	qRefundBalanceID: `SELECT id FROM refund_balance WHERE provider = ? AND payment_id = ?`,
 	qRefundInsertBalance: `
 INSERT INTO refund_balance (id, provider, payment_id, currency, captured_minor, refunded_minor)
@@ -254,7 +257,7 @@ func lockRefundBalance(ctx context.Context, tx port.TxQueryService, provider, pa
 		return refundBalance{}, fmt.Errorf("refund: lock balance: %w", err)
 	}
 	if len(res.Rows) == 0 {
-		return refundBalance{}, fmt.Errorf("refund: balance for %s/%s missing", provider, paymentID)
+		return refundBalance{}, fmt.Errorf("%w: %s/%s", ErrRefundBalanceNotPrepared, provider, paymentID)
 	}
 	row := res.Rows[0]
 	return refundBalance{
@@ -361,20 +364,24 @@ func (s *BaseRefundService) withRecord(ctx context.Context, requestID int64, out
 	return rec, outcome
 }
 
-// ApplyRefundEvent converts a cumulative provider refund total into the delta
-// not yet applied. Stale or replayed totals yield a zero delta.
-func (s *BaseRefundService) ApplyRefundEvent(ctx context.Context, event *PaymentEvent) (RefundDelta, error) {
-	switch {
-	case event == nil || !event.RefundCumulative:
-		return RefundDelta{}, ErrRefundEventNotCumulative
-	case event.Provider != s.Provider:
-		return RefundDelta{}, fmt.Errorf("refund: event provider %q, service provider %q", event.Provider, s.Provider)
-	case event.PaymentID == "":
-		return RefundDelta{}, fmt.Errorf("refund: event %s has no payment id", event.ProviderEventID)
-	case event.MinorUnits > 0:
-		return RefundDelta{}, fmt.Errorf("refund: event %s cumulative total is positive", event.ProviderEventID)
+// RefundQueries returns the named queries a caller's transaction must merge
+// before calling ApplyRefundEventTx.
+func RefundQueries() map[string]string { return maps.Clone(refundQueries) }
+
+// PreparePayment ensures the captured balance exists before a caller-owned transaction begins.
+func (s *BaseRefundService) PreparePayment(ctx context.Context, paymentID string) error {
+	if paymentID == "" {
+		return fmt.Errorf("refund: payment id is required")
 	}
-	if err := s.ensureBalance(ctx, event.Provider, event.PaymentID); err != nil {
+	return s.ensureBalance(ctx, s.Provider, paymentID)
+}
+
+// ApplyRefundEvent prepares the payment, then runs ApplyRefundEventTx in its own transaction.
+func (s *BaseRefundService) ApplyRefundEvent(ctx context.Context, event *PaymentEvent) (RefundDelta, error) {
+	if err := s.validateRefundEvent(event); err != nil {
+		return RefundDelta{}, err
+	}
+	if err := s.PreparePayment(ctx, event.PaymentID); err != nil {
 		return RefundDelta{}, err
 	}
 	tx, err := s.DB.BeginTx(ctx, refundQueries)
@@ -387,6 +394,25 @@ func (s *BaseRefundService) ApplyRefundEvent(ctx context.Context, event *Payment
 			_ = data.RollbackDetached(tx)
 		}
 	}()
+	delta, err := s.ApplyRefundEventTx(ctx, tx, event)
+	if err != nil {
+		return RefundDelta{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return RefundDelta{}, fmt.Errorf("refund: commit: %w", err)
+	}
+	committed = true
+	return delta, nil
+}
+
+// ApplyRefundEventTx converts a cumulative provider refund total into the
+// delta not yet applied, inside the caller's transaction so the app can
+// allocate the delta atomically. Stale or replayed totals yield a zero delta.
+// PreparePayment must be called before the caller opens tx.
+func (s *BaseRefundService) ApplyRefundEventTx(ctx context.Context, tx port.TxQueryService, event *PaymentEvent) (RefundDelta, error) {
+	if err := s.validateRefundEvent(event); err != nil {
+		return RefundDelta{}, err
+	}
 	bal, err := lockRefundBalance(ctx, tx, event.Provider, event.PaymentID)
 	if err != nil {
 		return RefundDelta{}, err
@@ -401,11 +427,34 @@ func (s *BaseRefundService) ApplyRefundEvent(ctx context.Context, event *Payment
 		}
 		delta.CumulativeMinor, delta.DeltaMinor = cumulative, cumulative-bal.refundedMinor
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return RefundDelta{}, fmt.Errorf("refund: commit: %w", err)
-	}
-	committed = true
 	return delta, nil
+}
+
+func (s *BaseRefundService) validateRefundEvent(event *PaymentEvent) error {
+	switch {
+	case event == nil || !event.RefundCumulative:
+		return ErrRefundEventNotCumulative
+	case event.Provider != s.Provider:
+		return fmt.Errorf("refund: event provider %q, service provider %q", event.Provider, s.Provider)
+	case event.PaymentID == "":
+		return fmt.Errorf("refund: event %s has no payment id", event.ProviderEventID)
+	case event.MinorUnits > 0:
+		return fmt.Errorf("refund: event %s cumulative total is positive", event.ProviderEventID)
+	}
+	return nil
+}
+
+// ListByPayment returns the payment's refund requests, oldest first.
+func (s *BaseRefundService) ListByPayment(ctx context.Context, paymentID string) ([]RefundRecord, error) {
+	res, err := s.queryService(ctx).Query(ctx, qRefundByPayment, s.Provider, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("refund: list requests: %w", err)
+	}
+	out := make([]RefundRecord, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		out = append(out, refundRecordFromRow(row))
+	}
+	return out, nil
 }
 
 func (s *BaseRefundService) Get(ctx context.Context, requestID int64) (RefundRecord, error) {

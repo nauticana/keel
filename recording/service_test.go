@@ -291,7 +291,7 @@ func TestPrivilegedMediaAccess(t *testing.T) {
 	s, token := readySession(t, svc, "order:11")
 	ready, _ := svc.Upload(ctx, s.ID, 1, token, "clip", "video/mp4", strings.NewReader("x"))
 	list, err := svc.ListMedia(ctx, s.ID)
-	if err != nil || len(list) != 1 || list[0].ID != ready.ID {
+	if err != nil || len(list) != 1 || list[0].ID != ready.ID || list[0].CompletedAt.IsZero() {
 		t.Fatalf("list=%+v err=%v", list, err)
 	}
 	if _, err := svc.ListMedia(ctx, 999); !errors.Is(err, ErrNotFound) {

@@ -374,3 +374,21 @@ func TestSweepKeepsLegalHoldSubject(t *testing.T) {
 		t.Fatalf("released hold is swept on the next pass: %d %v", n, err)
 	}
 }
+
+func TestOnReviewedRunsInTheTransaction(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	doc, _ := s.Store(ctx, upload("licence", 5, png))
+	s.OnReviewed = func(_ context.Context, _ port.TxQueryService, reviewed *PartnerDocument) error {
+		if reviewed.Status != StatusApproved || reviewed.ReviewerID != 9 {
+			t.Errorf("hook saw %+v", reviewed)
+		}
+		return errors.New("approval submit failed")
+	}
+	if err := s.Review(ctx, 7, doc.ID, 9, true, ""); err == nil {
+		t.Fatal("hook error must fail the review")
+	}
+	if got, _ := s.Get(ctx, 7, doc.ID); got.Status != StatusPending {
+		t.Errorf("a failed hook must roll the review back: %s", got.Status)
+	}
+}

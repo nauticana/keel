@@ -356,7 +356,7 @@ type Allocator interface {
 // posting made through the InstructionTx commits together or not at all.
 type InstructionStore interface {
 	InTx(ctx context.Context, fn func(InstructionTx) error) error
-	InFlight(ctx context.Context, updatedBefore time.Time, limit int) ([]int64, error)
+	InFlight(ctx context.Context, updatedBefore time.Time, limit int, partnerIDs []int64) ([]int64, error)
 }
 
 // InstructionTx is the transaction-scoped view of an InstructionStore.
@@ -375,6 +375,7 @@ type InstructionTx interface {
 	UpdateLeg(ctx context.Context, instructionID int64, leg *InstructionLeg) error
 	// RecordEvent returns true when the provider event id was already applied.
 	RecordEvent(ctx context.Context, instructionID int64, legNo int, ev *PayoutWebhookEvent) (bool, error)
+	RecordResolution(ctx context.Context, resolution ReviewResolutionRecord) error
 }
 
 var (
@@ -386,4 +387,7 @@ var (
 	ErrTransferConflict          = errors.New("payout: transfer outcome conflicts with the recorded state")
 	ErrReversalExceedsLeg        = errors.New("payout: reversal exceeds the payout leg amount")
 	ErrInstructionNotCancellable = errors.New("payout: payout instruction cannot be cancelled in its current state")
+	ErrInstructionNotRetryable   = errors.New("payout: payout instruction cannot be retried in its current state")
+	ErrInstructionNotReviewable  = errors.New("payout: payout instruction is not in manual review")
+	ErrInvalidReviewResolution   = errors.New("payout: invalid manual review resolution")
 )

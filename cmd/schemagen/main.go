@@ -92,6 +92,10 @@ func main() {
 				}
 				allSeeds = append(allSeeds, seeds...)
 			}
+			if err := schema.ValidateSeeds(allSeeds, s); err != nil {
+				fmt.Fprintf(os.Stderr, "seed validation failed: %v\n", err)
+				os.Exit(1)
+			}
 			if len(allSeeds) > 0 {
 				output += "\n" + schema.GenerateSeedSQL(allSeeds, s)
 			}

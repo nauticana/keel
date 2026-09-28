@@ -1037,6 +1037,26 @@ CREATE TABLE IF NOT EXISTS payout_instruction_event (
 );
 CREATE INDEX IF NOT EXISTS idx_payout_instruction_event_leg ON payout_instruction_event(instruction_id, leg_no);
 
+-- Operator-confirmed outcomes for payout instructions in manual review.
+CREATE TABLE IF NOT EXISTS payout_instruction_resolution (
+    id                                   BIGINT        NOT NULL,
+    instruction_id                       BIGINT        NOT NULL,
+    leg_no                               INTEGER       NOT NULL,
+    outcome                              VARCHAR(20)   NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    note                                 VARCHAR(500)  NOT NULL,
+    provider_reference                   VARCHAR(255)  NOT NULL,
+    reversed_minor                       BIGINT        NOT NULL DEFAULT 0,
+    resolved_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT payout_instruction_resolution_pk PRIMARY KEY (id),
+    CONSTRAINT chk_payout_instruction_resolution_outcome CHECK (outcome IN ('paid', 'failed', 'returned', 'reversed')),
+    CONSTRAINT chk_payout_instruction_resolution_reversed CHECK ((outcome = 'reversed' AND reversed_minor > 0) OR (outcome <> 'reversed' AND reversed_minor = 0))
+);
+CREATE INDEX IF NOT EXISTS idx_payout_instruction_resolution_leg ON payout_instruction_resolution(instruction_id, leg_no, resolved_at);
+
+CREATE SEQUENCE IF NOT EXISTS payout_instruction_resolution_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payout_instruction_resolution', 'id', 'payout_instruction_resolution_seq') ON CONFLICT DO NOTHING;
+
 -- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
 CREATE TABLE IF NOT EXISTS outbox_event (
     id                                   BIGINT        NOT NULL,
@@ -2262,6 +2282,24 @@ BEGIN
      WHERE constraint_name = 'payout_leg_events' AND table_name = 'payout_instruction_event'
   ) THEN
     ALTER TABLE payout_instruction_event ADD CONSTRAINT payout_leg_events FOREIGN KEY (instruction_id, leg_no) REFERENCES payout_instruction_leg(instruction_id, leg_no);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_leg_resolutions' AND table_name = 'payout_instruction_resolution'
+  ) THEN
+    ALTER TABLE payout_instruction_resolution ADD CONSTRAINT payout_leg_resolutions FOREIGN KEY (instruction_id, leg_no) REFERENCES payout_instruction_leg(instruction_id, leg_no);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_resolution_actor' AND table_name = 'payout_instruction_resolution'
+  ) THEN
+    ALTER TABLE payout_instruction_resolution ADD CONSTRAINT payout_resolution_actor FOREIGN KEY (actor_id) REFERENCES user_account(id);
   END IF;
 END $$;
 DO $$

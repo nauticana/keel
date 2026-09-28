@@ -37,7 +37,7 @@ func (c *TableCatalog) Repositories(ctx context.Context) ([]dms.RepositoryDefini
 			Caption: common.AsString(r[1]),
 			Storage: storage.Spec{
 				Mode: common.AsString(r[2]), Bucket: common.AsString(r[3]), Project: common.AsString(r[4]),
-				Region: common.AsString(r[5]), Endpoint: orFlag(r[6], flags.S3Endpoint), AccountURL: orFlag(r[7], flags.StorageAccountURL),
+				Region: orFlag(r[5], flags.StorageRegion), Endpoint: orFlag(r[6], flags.S3Endpoint), AccountURL: orFlag(r[7], flags.StorageAccountURL),
 				PublicBaseURL: orFlag(r[8], flags.StoragePublicBaseURL), CredentialSecret: orFlag(r[9], flags.StorageCredentialSecret),
 			},
 			PathPrefix:     common.AsString(r[10]),

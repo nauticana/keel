@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
@@ -35,6 +36,9 @@ type DocumentService struct {
 	// licence number on the holder's profile, an outbox event). An error
 	// rolls the row back and removes the objects.
 	OnStored func(ctx context.Context, tx port.TxQueryService, doc *PartnerDocument) error
+	// OnReviewed runs inside Review's transaction after the decision is
+	// written; an error rolls the decision back.
+	OnReviewed func(ctx context.Context, tx port.TxQueryService, doc *PartnerDocument) error
 
 	once sync.Once
 	qs   port.QueryService
@@ -247,8 +251,14 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 				}
 			}
 		}
-		_, err = tx.Query(ctx, qSetReview, status, reviewerID, notes, id)
-		return err
+		if _, err := tx.Query(ctx, qSetReview, status, reviewerID, notes, id); err != nil {
+			return err
+		}
+		if s.OnReviewed == nil {
+			return nil
+		}
+		doc.Status, doc.ReviewerID, doc.ReviewedAt, doc.ReviewerNotes = status, reviewerID, time.Now(), notes
+		return s.OnReviewed(ctx, tx, doc)
 	})
 }
 

@@ -145,3 +145,21 @@ func TestPreferences_ListsExplicitChoices(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalidChannel", err)
 	}
 }
+
+type fakeRecipients struct{ email, phone string }
+
+func (r fakeRecipients) EmailFor(int) (string, error) { return r.email, nil }
+func (r fakeRecipients) PhoneFor(int) (string, error) { return r.phone, nil }
+
+func TestEnqueue_SkipsUnaddressableChannels(t *testing.T) {
+	store := newMemStore()
+	q := newQueue(store)
+	q.Addressable = RecipientAddressable(fakeRecipients{phone: "+15550100"})
+	ids, err := q.Enqueue(context.Background(), 7, "security", Message{Title: "Sign-in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := channelsOf(store, ids); !slices.Equal(got, []string{"inbox", "sms"}) {
+		t.Fatalf("channels = %v, want inbox and sms; forced email has no address", got)
+	}
+}

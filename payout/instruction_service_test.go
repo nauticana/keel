@@ -130,6 +130,17 @@ func TestInstructionExecute_PaidOutsideTransaction(t *testing.T) {
 	}
 }
 
+func TestInstructionRetryRejectsInFlightAndTerminalStates(t *testing.T) {
+	f := newInstructionFixture(t)
+	instr := f.settle(t, 1000)
+	if _, err := f.svc.Retry(context.Background(), instr.ID); !errors.Is(err, ErrInstructionNotRetryable) {
+		t.Fatalf("settled retry err=%v, want ErrInstructionNotRetryable", err)
+	}
+	if len(f.provider.requests) != 1 {
+		t.Fatalf("settled retry dispatched again: %d calls", len(f.provider.requests))
+	}
+}
+
 func TestInstructionExecute_AmbiguousErrorRetriesSameKeyThenParks(t *testing.T) {
 	f := newInstructionFixture(t)
 	instr := f.create(t, "k1", 1000)
@@ -154,6 +165,12 @@ func TestInstructionExecute_AmbiguousErrorRetriesSameKeyThenParks(t *testing.T) 
 	}
 	if got := f.store.get(instr.ID); got.Status != InstructionReview || len(f.provider.requests) != 2 {
 		t.Fatalf("status=%s requests=%d, want review without a third dispatch", got.Status, len(f.provider.requests))
+	}
+	if _, err := f.svc.Retry(context.Background(), instr.ID); !errors.Is(err, ErrInstructionNotRetryable) {
+		t.Fatalf("review retry err=%v, want ErrInstructionNotRetryable", err)
+	}
+	if err := f.svc.Cancel(context.Background(), instr.ID); !errors.Is(err, ErrInstructionNotCancellable) {
+		t.Fatalf("review cancel err=%v, want ErrInstructionNotCancellable", err)
 	}
 }
 
@@ -248,7 +265,7 @@ func TestInstructionApplyTransferEvent_PaidAndDedupe(t *testing.T) {
 	}
 }
 
-func TestInstructionApplyTransferEvent_FailureAfterSettlementIsReturn(t *testing.T) {
+func TestInstructionApplyTransferEvent_FailureAfterSettlementNeedsReview(t *testing.T) {
 	f := newInstructionFixture(t)
 	instr := f.settle(t, 1000)
 	err := f.svc.ApplyTransferEvent(context.Background(), &PayoutWebhookEvent{
@@ -258,7 +275,7 @@ func TestInstructionApplyTransferEvent_FailureAfterSettlementIsReturn(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := f.store.get(instr.ID); got.Status != InstructionFailed || got.Legs[0].Status != LegReturned {
+	if got := f.store.get(instr.ID); got.Status != InstructionReview || got.Legs[0].Status != LegSettled {
 		t.Fatalf("failure after settlement: %+v", got)
 	}
 }
@@ -298,7 +315,7 @@ func TestInstructionApplyTransferEvent_ReversalBoundedAndDeduplicated(t *testing
 	}
 }
 
-func TestInstructionApplyTransferEvent_ReturnedAfterPaidReopens(t *testing.T) {
+func TestInstructionApplyTransferEvent_ContradictionNeedsReview(t *testing.T) {
 	f := newInstructionFixture(t)
 	instr := f.settle(t, 1000)
 	if err := f.svc.ApplyTransferEvent(context.Background(), &PayoutWebhookEvent{
@@ -311,8 +328,71 @@ func TestInstructionApplyTransferEvent_ReturnedAfterPaidReopens(t *testing.T) {
 	}
 	if err := f.svc.ApplyTransferEvent(context.Background(), &PayoutWebhookEvent{
 		Type: PayoutEventTransferPaid, Provider: ProviderCodeStripeConnect, ProviderTransferID: "acct_1:po_1", RawEventID: "evt_late",
-	}); !errors.Is(err, ErrTransferConflict) {
-		t.Fatalf("paid after returned err=%v, want ErrTransferConflict", err)
+	}); err != nil {
+		t.Fatalf("paid after returned: %v", err)
+	}
+	if got := f.store.get(instr.ID); got.Status != InstructionReview || got.Legs[0].Status != LegReturned {
+		t.Fatalf("contradictory event state: %+v", got)
+	}
+}
+
+func TestInstructionResolveReview(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		outcome     ReviewResolution
+		reversed    int64
+		wantStatus  string
+		wantLeg     string
+		wantRelease int64
+	}{
+		{name: "paid", outcome: ReviewConfirmedPaid, wantStatus: InstructionSettled, wantLeg: LegSettled},
+		{name: "failed", outcome: ReviewConfirmedFailed, wantStatus: InstructionFailed, wantLeg: LegFailed},
+		{name: "returned", outcome: ReviewConfirmedReturned, wantStatus: InstructionFailed, wantLeg: LegReturned},
+		{name: "partial reversal", outcome: ReviewConfirmedReversed, reversed: 300, wantStatus: InstructionSettled, wantLeg: LegSettled, wantRelease: 300},
+		{name: "full reversal", outcome: ReviewConfirmedReversed, reversed: 1000, wantStatus: InstructionReversed, wantLeg: LegReversed, wantRelease: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newInstructionFixture(t)
+			instr := f.settle(t, 1000)
+			if err := f.svc.ApplyTransferEvent(context.Background(), &PayoutWebhookEvent{
+				Type: PayoutEventTransferFailed, Provider: ProviderCodeStripeConnect,
+				ProviderTransferID: "acct_1:po_1", RawEventID: "evt_review",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := f.svc.ResolveReview(context.Background(), instr.ID, ReviewResolutionRequest{
+				Outcome: tc.outcome, ActorID: 9, Note: "confirmed with provider",
+				ProviderReference: "case-123", ReversedMinor: tc.reversed,
+			})
+			if err != nil {
+				t.Fatalf("ResolveReview: %v", err)
+			}
+			if got.Status != tc.wantStatus || got.Legs[0].Status != tc.wantLeg {
+				t.Fatalf("resolved instruction=%+v", got)
+			}
+			if len(f.store.resolutions) != 1 || f.store.resolutions[0].ActorID != 9 || f.store.resolutions[0].Outcome != tc.outcome {
+				t.Fatalf("resolutions=%+v", f.store.resolutions)
+			}
+			if len(f.allocator.released) > 0 && f.allocator.released[0].amountMinor != tc.wantRelease {
+				t.Fatalf("released=%+v", f.allocator.released)
+			}
+			if tc.wantRelease == 0 && len(f.allocator.released) != 0 {
+				t.Fatalf("unexpected release=%+v", f.allocator.released)
+			}
+		})
+	}
+}
+
+func TestInstructionResolveReviewGuards(t *testing.T) {
+	f := newInstructionFixture(t)
+	instr := f.create(t, "k1", 1000)
+	valid := ReviewResolutionRequest{Outcome: ReviewConfirmedFailed, ActorID: 9, Note: "checked", ProviderReference: "case-123"}
+	if _, err := f.svc.ResolveReview(context.Background(), instr.ID, valid); !errors.Is(err, ErrInstructionNotReviewable) {
+		t.Fatalf("new instruction err=%v, want ErrInstructionNotReviewable", err)
+	}
+	valid.ActorID = 0
+	if _, err := f.svc.ResolveReview(context.Background(), instr.ID, valid); !errors.Is(err, ErrInvalidReviewResolution) {
+		t.Fatalf("invalid request err=%v, want ErrInvalidReviewResolution", err)
 	}
 }
 
@@ -371,10 +451,74 @@ func TestInstructionReconcile_PollsPendingLeg(t *testing.T) {
 	f.provider.result = &InstantPayoutResult{ProviderPayoutID: "acct_1:po_1", ProviderFundingID: "tr_1", Status: "pending"}
 	_, _ = f.svc.Execute(context.Background(), instr.ID)
 	f.provider.status = &InstantPayoutResult{Status: "paid"}
-	if err := f.svc.ReconcileInFlight(context.Background(), f.now, 10); err != nil {
+	if err := f.svc.ReconcileInFlight(context.Background(), f.now, 10, []int64{instr.PartnerID + 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.store.get(instr.ID); got.Status != InstructionPending {
+		t.Fatalf("another partner's reconcile touched it: %s", got.Status)
+	}
+	if err := f.svc.ReconcileInFlight(context.Background(), f.now, 10, nil); err != nil {
 		t.Fatalf("ReconcileInFlight: %v", err)
 	}
 	if got := f.store.get(instr.ID); got.Status != InstructionSettled {
 		t.Fatalf("status=%s, want settled from the polled status", got.Status)
+	}
+}
+
+func TestInstructionApplyTransferEvent_ReleasedAllocationIsNotReopened(t *testing.T) {
+	ctx := context.Background()
+	event := func(typ PayoutWebhookEventType, id string) *PayoutWebhookEvent {
+		return &PayoutWebhookEvent{Type: typ, Provider: ProviderCodeStripeConnect, ProviderTransferID: "acct_1:po_1", RawEventID: id}
+	}
+
+	f := newInstructionFixture(t)
+	instr := f.create(t, "k1", 1000)
+	f.provider.result = &InstantPayoutResult{ProviderPayoutID: "acct_1:po_1", ProviderFundingID: "tr_1", Status: "pending"}
+	_, _ = f.svc.Execute(ctx, instr.ID)
+	if err := f.svc.ApplyTransferEvent(ctx, event(PayoutEventTransferFailed, "evt_f")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Cancel(ctx, instr.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.ApplyTransferEvent(ctx, event(PayoutEventTransferPaid, "evt_late")); !errors.Is(err, ErrTransferConflict) {
+		t.Fatalf("paid after cancel err=%v, want ErrTransferConflict", err)
+	}
+	if got := f.store.get(instr.ID); got.Status != InstructionCancelled {
+		t.Fatalf("cancelled instruction reopened: %s", got.Status)
+	}
+
+	f = newInstructionFixture(t)
+	instr = f.settle(t, 1000)
+	if err := f.svc.ApplyTransferEvent(ctx, &PayoutWebhookEvent{Type: PayoutEventTransferReversed, Provider: ProviderCodeStripeConnect,
+		ProviderTransferID: "tr_1", RawEventID: "evt_r", AmountMinor: 1000, AmountReversedMinor: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.ApplyTransferEvent(ctx, event(PayoutEventTransferPaid, "evt_paid_replay")); err != nil {
+		t.Fatalf("paid after reversal must be a no-op: %v", err)
+	}
+	if err := f.svc.ApplyTransferEvent(ctx, event(PayoutEventTransferFailed, "evt_failed_late")); !errors.Is(err, ErrTransferConflict) {
+		t.Fatalf("failed after full reversal err=%v, want ErrTransferConflict", err)
+	}
+	if got := f.store.get(instr.ID); got.Status != InstructionReversed {
+		t.Fatalf("reversed instruction reopened: %s", got.Status)
+	}
+}
+
+func TestInstructionResolveReview_PartialReversalCannotBecomeFailed(t *testing.T) {
+	ctx := context.Background()
+	f := newInstructionFixture(t)
+	instr := f.settle(t, 1000)
+	if err := f.svc.ApplyTransferEvent(ctx, &PayoutWebhookEvent{Type: PayoutEventTransferReversed, Provider: ProviderCodeStripeConnect,
+		ProviderTransferID: "tr_1", RawEventID: "evt_r", AmountMinor: 1000, AmountReversedMinor: 300}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.ApplyTransferEvent(ctx, &PayoutWebhookEvent{Type: PayoutEventTransferFailed, Provider: ProviderCodeStripeConnect,
+		ProviderTransferID: "acct_1:po_1", RawEventID: "evt_f"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.svc.ResolveReview(ctx, instr.ID, ReviewResolutionRequest{Outcome: ReviewConfirmedFailed, ActorID: 9, Note: "checked", ProviderReference: "case-1"})
+	if !errors.Is(err, ErrInvalidReviewResolution) {
+		t.Fatalf("failed resolution after partial reversal err=%v, want ErrInvalidReviewResolution", err)
 	}
 }

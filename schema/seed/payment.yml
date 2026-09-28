@@ -27,6 +27,7 @@ seeds:
     columns: [constraint_name, lookup_style, display_column]
     rows:
       - [partner_payment_methods, S, "*"]
+      - [refund_requests, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
     rows:

@@ -54,6 +54,7 @@ const (
 	extract_max_bytes             = "extract_max_bytes"
 	storage_public_base_url       = "storage_public_base_url"
 	storage_account_url           = "storage_account_url"
+	storage_region                = "storage_region"
 	messaging_mode                = "messaging_mode"
 	max_request_size              = "max_request_size"
 	http_read_timeout             = "http_read_timeout"
@@ -170,6 +171,7 @@ type KeelConfig struct {
 	ExtractMaxBytes             int64         // extract_max_bytes             67108864           Largest decompressed document part or extracted text (bytes)
 	StoragePublicBaseURL        string        // storage_public_base_url       ""                 Public base URL for ObjectStorage.PublicURL
 	StorageAccountURL           string        // storage_account_url           ""                 Azure Blob service endpoint
+	StorageRegion               string        // storage_region                ""                 S3 region or GCS location; empty = provider default chain (R2: auto)
 	MessagingMode               string        // messaging_mode                ""                 Messaging: noop, gcp, aws or nats (empty = error)
 	OutboundMaxResponseSize     int64         // outbound_max_response_size    16777216           Response body cap for common.RequestJSON (bytes)
 	MaxRequestSize              int64         // max_request_size              16777216           Maximum request body size (bytes)
@@ -284,6 +286,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.ExtractMaxBytes = c.Int64(m, extract_max_bytes)
 	c.StoragePublicBaseURL = c.String(m, storage_public_base_url)
 	c.StorageAccountURL = c.String(m, storage_account_url)
+	c.StorageRegion = c.String(m, storage_region)
 	c.MessagingMode = c.String(m, messaging_mode)
 	c.MaxRequestSize = c.Int64(m, max_request_size)
 	c.HttpReadTimeout = c.Int(m, http_read_timeout)

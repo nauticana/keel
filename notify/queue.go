@@ -21,6 +21,8 @@ type Queue struct {
 	Channels func(notificationType string) []string
 	// ForcedChannels lists the channels a type is always delivered on, whatever the preferences.
 	ForcedChannels func(notificationType string) []string
+	// Addressable drops channels userID cannot be reached on, forced or not; nil keeps every channel.
+	Addressable func(ctx context.Context, userID int, channel string) (bool, error)
 
 	once sync.Once
 	qs   port.QueryService
@@ -119,7 +121,20 @@ func (q *Queue) resolveChannels(ctx context.Context, qs port.QueryService, userI
 			add(channel)
 		}
 	}
-	return resolved, nil
+	if q.Addressable == nil {
+		return resolved, nil
+	}
+	reachable := resolved[:0]
+	for _, channel := range resolved {
+		ok, err := q.Addressable(ctx, userID, channel)
+		if err != nil {
+			return nil, fmt.Errorf("notify: %s address for user %d: %w", channel, userID, err)
+		}
+		if ok {
+			reachable = append(reachable, channel)
+		}
+	}
+	return reachable, nil
 }
 
 // SetPreference records whether userID wants notificationType on channel. A

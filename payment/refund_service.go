@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/nauticana/keel/port"
 )
 
 // Refund request status values stored in refund_request.status.
@@ -26,6 +28,7 @@ var (
 	ErrRefundEventNotCumulative   = errors.New("refund: event does not carry a cumulative refunded total")
 	ErrRefundInvalidInstruction   = errors.New("refund: invalid refund instruction")
 	ErrRefundCapturedAmountAbsent = errors.New("refund: captured amount unavailable")
+	ErrRefundBalanceNotPrepared   = errors.New("refund: payment balance must be prepared before starting the transaction")
 	ErrRefundNeedsReconciliation  = errors.New("refund: earlier attempt is outside the provider idempotency window; reconcile before retrying")
 )
 
@@ -83,5 +86,8 @@ type RefundService interface {
 	// is recorded as succeeded with the provider amount and never resubmitted.
 	Execute(ctx context.Context, requestID int64) (RefundRecord, error)
 	Get(ctx context.Context, requestID int64) (RefundRecord, error)
+	ListByPayment(ctx context.Context, paymentID string) ([]RefundRecord, error)
+	PreparePayment(ctx context.Context, paymentID string) error
 	ApplyRefundEvent(ctx context.Context, event *PaymentEvent) (RefundDelta, error)
+	ApplyRefundEventTx(ctx context.Context, tx port.TxQueryService, event *PaymentEvent) (RefundDelta, error)
 }

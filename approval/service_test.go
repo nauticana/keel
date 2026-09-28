@@ -140,3 +140,11 @@ func TestSubmitValidatesInput(t *testing.T) {
 		t.Fatal("blank object type accepted")
 	}
 }
+
+func TestAllowsSinglePerson(t *testing.T) {
+	store := newStore()
+	svc := &Service{DB: memRepo{store: store}}
+	if ok, err := svc.AllowsSinglePerson(context.Background(), 1); err != nil || ok {
+		t.Fatalf("no policy row: %v %v", ok, err)
+	}
+}

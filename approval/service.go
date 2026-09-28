@@ -194,6 +194,11 @@ func (s *Service) Events(ctx context.Context, partnerID, id int64) ([]*Event, er
 	return out, nil
 }
 
+// AllowsSinglePerson reports whether the partner lets the maker decide their own request.
+func (s *Service) AllowsSinglePerson(ctx context.Context, partnerID int64) (bool, error) {
+	return s.allowsSinglePerson(ctx, s.query(ctx), partnerID)
+}
+
 func (s *Service) allowsSinglePerson(ctx context.Context, qs port.QueryService, partnerID int64) (bool, error) {
 	res, err := qs.Query(ctx, qAllowSingle, partnerID)
 	if err != nil {

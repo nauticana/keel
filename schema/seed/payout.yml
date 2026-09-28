@@ -9,6 +9,7 @@ seeds:
       - [bank_info_status, Bank Info Status]
       - [payout_instruction_status, Payout Instruction Status]
       - [payout_leg_status, Payout Leg Status]
+      - [payout_review_outcome, Payout Review Outcome]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -36,6 +37,10 @@ seeds:
       - [payout_leg_status, F, Failed]
       - [payout_leg_status, R, Returned]
       - [payout_leg_status, V, Reversed]
+      - [payout_review_outcome, paid, Confirmed paid]
+      - [payout_review_outcome, failed, Confirmed failed]
+      - [payout_review_outcome, returned, Confirmed returned]
+      - [payout_review_outcome, reversed, Confirmed reversed]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
@@ -48,6 +53,7 @@ seeds:
       - [payout_provider, payout_instruction_leg, provider]
       - [payout_leg_status, payout_instruction_leg, status]
       - [payout_provider, payout_instruction_event, provider]
+      - [payout_review_outcome, payout_instruction_resolution, outcome]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
@@ -55,11 +61,41 @@ seeds:
       - [payout_webhook_log, payout_webhook_log]
       - [partner_payout_provider, partner_payout_provider]
       - [payout_instruction, payout_instruction]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [payout_instruction_legs, S, "*"]
+      - [payout_leg_events, S, "*"]
+      - [payout_leg_resolutions, S, "*"]
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
     rows:
       - [payout_instruction, 1, 0, payout_instruction_legs]
       - [payout_instruction, 2, 1, payout_leg_events]
+      - [payout_instruction, 3, 1, payout_leg_resolutions]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [PAYOUT_INSTRUCTION, Payout Instruction Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [PAYOUT_INSTRUCTION, CANCEL, Cancel]
+      - [PAYOUT_INSTRUCTION, EXECUTE, Retry]
+      - [PAYOUT_INSTRUCTION, RESOLVE, Resolve review]
+  - table: table_action
+    columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
+    rows:
+      - [payout_instruction, execute, Retry, replay, P, true, 10]
+      - [payout_instruction, cancel, Cancel, cancel, P, true, 20]
+      - [payout_instruction, resolve, Resolve review, fact_check, P, true, 30]
+  - table: table_action_parameter
+    columns: [table_name, action_name, seq, param_name, caption, data_type, required]
+    rows:
+      - [payout_instruction, resolve, 1, outcome, Confirmed outcome, string, true]
+      - [payout_instruction, resolve, 2, note, Resolution note, string, true]
+      - [payout_instruction, resolve, 3, provider_reference, Provider reference, string, true]
+      - [payout_instruction, resolve, 4, reversed_minor, Reversed minor units, integer, false]
   - table: application_menu
     columns: [display_order, id, caption]
     rows:
@@ -85,6 +121,7 @@ seeds:
       - [payout_instruction_leg, created_at, R]
       - [payout_instruction_leg, updated_at, U]
       - [payout_instruction_event, applied_at, R]
+      - [payout_instruction_resolution, resolved_at, R]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
@@ -99,3 +136,6 @@ seeds:
       - [PAYMENT_ADMIN, TABLE, UPDATE, partner_payout_provider]
       - [PAYMENT_ADMIN, PAGE, ACCESS, payout_instructions]
       - [PAYMENT_ADMIN, TABLE, SELECT, payout_instruction]
+      - [PAYMENT_ADMIN, PAYOUT_INSTRUCTION, CANCEL, payout_instruction]
+      - [PAYMENT_ADMIN, PAYOUT_INSTRUCTION, EXECUTE, payout_instruction]
+      - [PAYMENT_ADMIN, PAYOUT_INSTRUCTION, RESOLVE, payout_instruction]

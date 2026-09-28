@@ -63,10 +63,15 @@ func optionalString(v any) string {
 func (m *memRefundStore) query(inTx bool, name string, args ...any) (*model.QueryResult, error) {
 	res := &model.QueryResult{}
 	switch name {
-	case qRefundByID, qRefundByKey:
-		for _, r := range m.requests {
-			if (name == qRefundByID && r.id == args[0]) || (name == qRefundByKey && r.key == args[0]) {
-				b := m.balances[r.balanceID]
+	case qRefundByID, qRefundByKey, qRefundByPayment:
+		for id := int64(1); id <= m.nextID; id++ {
+			r, ok := m.requests[id]
+			if !ok {
+				continue
+			}
+			b := m.balances[r.balanceID]
+			if (name == qRefundByID && r.id == args[0]) || (name == qRefundByKey && r.key == args[0]) ||
+				(name == qRefundByPayment && b.provider == args[0] && b.paymentID == args[1]) {
 				var approver, providerAmount any
 				if r.approver != 0 {
 					approver = r.approver

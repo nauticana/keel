@@ -151,6 +151,15 @@ func (t *sqlInstructionTx) RecordEvent(ctx context.Context, instructionID int64,
 	return len(res.Rows) == 0, nil
 }
 
+func (t *sqlInstructionTx) RecordResolution(ctx context.Context, resolution ReviewResolutionRecord) error {
+	if _, err := t.tx.Query(ctx, qInstructionResolutionRecord, t.tx.GenID(), resolution.InstructionID,
+		resolution.LegNo, resolution.Outcome, resolution.ActorID, resolution.Note,
+		resolution.ProviderReference, resolution.ReversedMinor); err != nil {
+		return fmt.Errorf("record payout instruction %d resolution: %w", resolution.InstructionID, err)
+	}
+	return nil
+}
+
 func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil

@@ -268,3 +268,47 @@ func TestRefundExecuteStopsAfterIdempotencyWindow(t *testing.T) {
 		t.Fatalf("provider calls = %d, attempts = %d, want 2 each", len(f.client.calls), got.AttemptCount)
 	}
 }
+
+func TestApplyRefundEventTxUsesCallerTransactionAndListByPayment(t *testing.T) {
+	f := newRefundFixture()
+	ctx := context.Background()
+	f.request(t, "k1", 100)
+	f.request(t, "k2", 200)
+	tx, _ := f.svc.DB.BeginTx(ctx, RefundQueries())
+	got, err := f.svc.ApplyRefundEventTx(ctx, tx, &PaymentEvent{Provider: ProviderStripe, PaymentID: "pi_1", MinorUnits: -300, RefundCumulative: true})
+	if err != nil || got.DeltaMinor != 300 {
+		t.Fatalf("delta = %+v, %v", got, err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := f.svc.ListByPayment(ctx, "pi_1")
+	if err != nil || len(list) != 2 || list[0].IdempotencyKey != "k1" || list[1].IdempotencyKey != "k2" {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	if list, _ := f.svc.ListByPayment(ctx, "pi_other"); len(list) != 0 {
+		t.Fatalf("other payment list = %+v", list)
+	}
+}
+
+func TestApplyRefundEventTxRequiresPreparedPayment(t *testing.T) {
+	f := newRefundFixture()
+	ctx := context.Background()
+	event := &PaymentEvent{Provider: ProviderStripe, PaymentID: "pi_1", MinorUnits: -100, RefundCumulative: true}
+	tx, _ := f.svc.DB.BeginTx(ctx, RefundQueries())
+	if _, err := f.svc.ApplyRefundEventTx(ctx, tx, event); !errors.Is(err, ErrRefundBalanceNotPrepared) {
+		t.Fatalf("unprepared event err=%v, want ErrRefundBalanceNotPrepared", err)
+	}
+	_ = tx.Rollback(ctx)
+	if f.captures.calls != 0 {
+		t.Fatalf("capture reader called with transaction open: %d", f.captures.calls)
+	}
+	if err := f.svc.PreparePayment(ctx, "pi_1"); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ = f.svc.DB.BeginTx(ctx, RefundQueries())
+	if _, err := f.svc.ApplyRefundEventTx(ctx, tx, event); err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.Rollback(ctx)
+}
