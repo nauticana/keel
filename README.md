@@ -591,7 +591,7 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 
 `ProviderSubscriptionEngine` lets Stripe Billing / LemonSqueezy run the recurring cycle (you only react to webhooks via `AbstractWebhookEventHandler`); it carries the provider's recurring fee but is the least code and handles SCA/dunning/retries for you. `SelfScheduledEngine` runs the cycle itself (a systemd-timer billing-run that charges off-session via `ChargeClient`, writes its own `invoice`, and owns dunning + SCA) — it avoids the recurring fee and is maximally provider-agnostic, but you own the money-critical SCA/dunning/proration logic. **Test self-scheduled exhaustively in provider test mode before enabling**, and keep it behind a per-plan flag (it is inert until its closures are wired).
 
-**Money is integer minor units.** Amounts on the charge path are `int64` minor units, never floats: `InvoiceDraft` lines and the authoritative `invoice.total_minor` column carry the exact value, while `invoice.subtotal`/`total` are a display-only major-unit projection. Conversions go through `payment.CurrencyExponent` / `payment.MinorToMajor` / `payment.MajorToMinor`, which derive the decimal places from the ISO‑4217 currency — so JPY (0 minor digits) and BHD (3) are correct, not a hardcoded ×100. Stripe's `amount` is already minor units, so `ChargeRequest.AmountMinor` passes straight through.
+**Money is integer minor units.** Amounts on the charge path are `int64` minor units, never floats: `InvoiceDraft` lines and the authoritative `invoice.total_minor` column carry the exact value, while `invoice.subtotal`/`total` are a display-only major-unit projection. Conversions go through `common.CurrencyExponent` / `common.ParseMinorUnits` / `common.FormatMinorUnits`, which derive the decimal places from the ISO‑4217 currency — so JPY (0 minor digits) and BHD (3) are correct, not a hardcoded ×100 — and refuse an unknown code instead of assuming two. Stripe's `amount` is already minor units, so `ChargeRequest.AmountMinor` passes straight through.
 
 **Off-session charge idempotency & atomicity.** `SelfScheduledEngine` charges with the invoice id as Stripe's `Idempotency-Key` (threaded via `StripeCheckoutClient.PostRaw(ctx, path, form, idemKey)`), so a charge retried after an ambiguous transport failure resolves to the original PaymentIntent instead of double-charging. Stripe remembers a key for 24h; a dunning retry past that window is treated as new, so the engine still stops once the invoice flips to paid. The `invoice` header + its lines are written in one `TxQueryService` transaction, so a half-written invoice is never charged.
 
@@ -622,7 +622,7 @@ These four are mutually-exclusive **policies**. Orthogonal to them are **modifie
 
 - **`billing_cycle`** (`PERIOD_TYPE`: `W`/`M`/`Q`/`A`) — *how often money is taken*. Drives `next_charge_date`.
 - **`term_count` × `term_type`** — *the commitment*. Drives `renewal_date` (= **term end**, when it renews or ends) and the no-refund-on-early-cancel behavior. `term_count` is usually 1; `auto_renew` continues past it.
-- **`amount_minor`** — *the price for one `term_type` unit* (e.g. $/year), authoritative integer minor units (`payment.MinorToMajor`), never a float. Per-charge = `amount ÷ installments(term_type→billing_cycle)`; contract total = `amount × term_count`.
+- **`amount_minor`** — *the price for one `term_type` unit* (e.g. $/year), authoritative integer minor units, never a float. Per-charge = `amount ÷ installments(term_type→billing_cycle)`; contract total = `amount × term_count`.
 
 This expresses every real shape, e.g. **$1000/yr billed monthly** (`billing_cycle=M`, `term=1·A`, `amount=$1000` → twelve $83.33 charges, the last truing up the remainder) or **a 3-year fixed-price contract paid monthly** (`term=3·A`). The offers a plan sells are rows in `subscription_plan_price(plan_id, billing_cycle, term_count, term_type, amount_minor, currency, provider_price_id)` (Stripe Product→Prices), nested under `subscription_plan` via `rest_api_child`; each offer has its own `provider_price_id`. The customer picks one **at checkout** — the terms belong to the *subscription*, not the plan.
 
@@ -1758,6 +1758,7 @@ Channel names are opaque strings to keel; choose them per aggregate (`order:42`,
 
 - From the process that holds the hub: `hub.SendToUser(userID, payload)` and `hub.Broadcast(channel, payload)`. With `Cache` set both go through the relay so every pod delivers to its own sockets; without it they reach local sockets only, and `SendToUser` errors when the user is not connected.
 - From a worker or any other process: `realtime.PublishUser(ctx, cacheSvc, userID, payload)` and `realtime.PublishChannel(ctx, cacheSvc, channel, payload)`. Relay delivery is fire-and-forget; a user with no live socket is not an error, so keep a REST read path for state a client may have missed.
+- As a notification channel: `notif.Register(realtime.NotificationChannel, &realtime.UserDispatcher{Cache: cacheSvc})` delivers `{"op":"notification","type","title","body","data"}` to the recipient's sockets. A channel that implements `port.TypedMessageDispatcher` (this one and `InboxService`) receives `req.Type`.
 
 ### What the downstream owns
 
@@ -2132,6 +2133,8 @@ type IntentClient interface {
 ```
 
 Set `AbstractPaymentHandler.Intents` and mount `CreateSetupIntent`, by convention at `POST /api/billing/setup-intent`. It is always JWT-gated, takes no body, derives the email and `metadata[user_id]` from the authenticated session, and answers `{setupIntentId, clientSecret, customerId, ephemeralKey}` with `Cache-Control: no-store`. It never accepts a caller-supplied provider customer ID: wire `payment.UserCustomerService{DB, Provider: payment.ProviderStripe}` into the `CustomerID` and `LinkCustomer` hooks — the first intent's customer is stored in `user_billing_customer` and reused; with `CustomerID` unset every call creates a new provider customer. `UserPaymentMethodService.RecordFromSetupIntent` stores `currency` as NULL unless one is passed: a SetupIntent carries none, so charge in the order's currency, not the card's. Payment intents carry an amount, so there is no HTTP route for them: the service that knows the price calls `CreatePaymentIntent` and hands the client secret to the app only when Stripe reports `requires_action` (3DS). `StripeCheckoutClient.APIVersion` pins the `Stripe-Version` header used to create ephemeral keys; other Stripe calls retain the account's configured API version.
+
+**Removing a saved method.** `UserPaymentMethodService.Remove(ctx, userID, id)` detaches the method at the provider through `Detacher` (`payment.PaymentMethodDetacher`, implemented by `StripeChargeClient`; a `seti_…` token is resolved to its PaymentMethod, and an already-detached or missing method is success), then deletes the row; a failed detach keeps it. `UserPaymentMethodHandler` serves it as the `remove` table action (`POST …/user_payment_method/remove`, `{id}`, 404 for a method the user does not own). Generic REST DELETE on `user_payment_method` is not granted, so a client cannot skip the detach. Removing the default leaves none; the charge path takes the newest method. A restricted Stripe key needs **Payment Methods: write**.
 
 ### What each project still owns
 
@@ -2532,7 +2535,7 @@ Selection is driven by flag variables:
 The client-application layer over `dms`, for applications with a database (schema group `document`, depends on `core` and `tenant_management`).
 
 - **`content_repository`** is the table form of a `dms.RepositoryDefinition` (`storage_mode`, `bucket`, `project`, `region`, `endpoint`, `account_url`, `public_base_url`, `credential_secret` — a secret *name* — `path_prefix`, `default_doc_prot`, `status`, and a nullable `partner_id` owner; null means shared). `document.TableCatalog{DB}` serves it to `dms.ContentRepositoryService`; `storage_mode` and `bucket` are the repository's location and are always recorded on the row (the location guards in `dms` compare them; a location derived from a flag could move silently between restarts). The access-path columns `endpoint`, `account_url`, `public_base_url` and `credential_secret` fall back to `s3_endpoint`, `storage_account_url`, `storage_public_base_url` and `storage_credential_secret` when empty. Seed one row per environment when buckets differ. Route edits through that service (`Add` / `Remove` / `Reload`), which enforces the location, prefix-overlap and delete rules; a direct row edit bypasses them, so do not expose the table for writes through generic REST.
-- **`document_type`** names the repository a kind of document is routed to, its `max_bytes` and comma-separated `media_types`, and whether it `requires_review`. Each application seeds its own types.
+- **`document_type`** names the repository a kind of document is routed to, its `max_bytes` and comma-separated `media_types`, whether it `requires_review`, and whether it needs `independent_review` (the uploader cannot review it: `ErrSelfReview`). Each application seeds its own types.
 - **`partner_document`** is the partner's business record for one dms document (`contrep_id` + `doc_key`): `document_type`, a nullable `user_id` subject (the member the document is about, for example a licence holder; null = the partner itself), `title`, `file_name`, `version_no`, `document_number`, `expires_on`, the trace columns `origin_ip`, `uploaded_by`, `uploaded_at`, and the review columns. Content type, size and digest are read from the component attributes, not stored twice. Applications link their own records to documents with real foreign keys to `partner_document.id`; keel ships no polymorphic relation table.
 - **`document.DocumentService{DB, Repos, Docs, Scanner}`**:
   - `Store(ctx, Upload{PartnerID, UserID, DocumentType, Title, FileName, DocumentNumber, ExpiresOn, OriginIP, UploadedBy, Body})` refuses an unknown type (`ErrUnknownType`), a repository owned by another partner (`ErrTenantMismatch`), a body over `max_bytes` (`ErrTooLarge`), a sniffed media type outside `media_types` (`ErrMediaType`; the client's claim is never used) and scanner rejections. It writes a one-component dms document (`data`), then the row in one transaction with the version number (`max + 1` per partner, subject and type); a failed row removes the objects.
@@ -2542,7 +2545,7 @@ The client-application layer over `dms`, for applications with a database (schem
   - Authorization is the caller's: the service checks tenancy only. Who may upload for a subject, who may review, and separation of duties between uploader and reviewer are the application's rules, enforced before calling `Store` / `Review`. The `document` seed ships `rest_api_header` rows but no role permissions; each application grants them.
   - Links to an application's own aggregate (a driver, a vehicle) are the application's foreign keys **to** `partner_document.id`, or a link table with a `rest_api_child` row; keel's table cannot reference application tables, so nested REST from the aggregate to its documents is generated from the application's side.
   - `Store` buffers the body up to `max_bytes` (the digest and the scan need the whole content); `storage.UploadService` streams when no scanner is set.
-  - **HTTP surface**: `handler.DocumentHandler{Documents, Authorize, MaxBytes, SignedURLSeconds}` exposes `Upload` (multipart field `file` plus `document_type`, `title`, `document_number`, `expires_on`, `user_id` → 201 with the stored document; 400 / 413 / 415 / 403 on a refused type / size / media type / tenant or scan) and `Preview` (`?id=` → `{url}`, `no-store`). The app mounts both; `Authorize` decides whether the session may store that upload. Generic REST create on `partner_document` stays JSON and cannot carry a file.
+  - **HTTP surface**: `handler.DocumentHandler{Documents, Authorize, AuthorizeRead, AuthorizeReview, MaxBytes, SignedURLSeconds}` exposes `Upload` (multipart field `file` plus `document_type`, `title`, `document_number`, `expires_on`, `user_id` → 201 with the stored document; 400 / 413 / 415 / 403 on a refused type / size / media type / tenant or scan), `Preview` (`?id=` → `{url}`, `no-store`) and `Review` (`POST {"id":"…","approve":true,"notes":"…"}` → 204 with the session user as reviewer; 409 when not pending, 403 on self-review). The app mounts them; `Authorize` decides whether the session may store that upload, and `AuthorizeRead` / `AuthorizeReview` whether it may read or review that document. An endpoint whose hook is unset refuses every request. Generic REST create on `partner_document` stays JSON and cannot carry a file.
 
 ## Messaging (publisher / subscriber)
 
@@ -3060,7 +3063,7 @@ All methods are stateless — they only inspect the JWT or request context and w
 | `RequireScope(w, r, scope) bool` | 403 if scope missing. |
 | `WriteError(w, status, title, detail)` | RFC 7807 problem+json envelope writer used by every method above. The single canonical error path — handlers should never call `http.Error`. |
 
-In-repo demos: [handler/rest_handler.go](handler/rest_handler.go) `Post` uses `ReadRequest`. [handler/payment_handler.go](handler/payment_handler.go) keeps a bespoke 256 KiB cap for webhook traffic — that's a deliberate exception, not a pattern to copy. `RequireMethod` and `RequireQueryInt64` are not yet used inside keel (added for downstream consumers that have many `?id=<int>` and method-restricted endpoints); when an in-keel handler adopts them, add a citation here.
+In-repo demos: [handler/rest_handler.go](handler/rest_handler.go) `Post` uses `ReadRequest`. [handler/payment_handler.go](handler/payment_handler.go) keeps a bespoke 256 KiB cap for webhook traffic — that's a deliberate exception, not a pattern to copy. [handler/document_handler.go](handler/document_handler.go) uses `RequireMethod`.
 
 #### Query-result projection
 
@@ -3450,10 +3453,15 @@ read will be rejected.
   `ReadAuthRequest`, `WriteError`, `WriteJSON` — not their hand-rolled
   equivalents. If you find yourself reading `Authorization` directly,
   stop and use `ParseSession`.
-- 4xx responses pass the caller's `detail` through (validation messages
-  are intentionally user-facing); 5xx responses replace `detail` with a
-  generic message and surface a `request_id` so the user-visible error
-  correlates to the application log.
+- `WriteError` passes a 4xx `detail` through (validation messages are
+  intentionally user-facing). `WriteServiceError` never sends `err.Error()`:
+  the client gets the registered sentinel's own text, else the
+  `*model.AppError`'s `Message`, else the status text, and `AppError.Code`
+  fills `code` when no registration sets one; the full cause (with
+  `AppError.Detail`, which is never serialized) is logged at warning with the
+  `request_id` and user (`-1` when unavailable). 5xx responses replace `detail` with a generic message
+  and surface a `request_id` so the user-visible error correlates to the
+  application log.
 - **Allowlists default to empty = deny.** `AllowedPriceIDs`,
   `AllowedRedirectHosts`, `AllowedEventTypes`, `TrustedProxyCIDR` — every
   one of these is permissive ONLY when the operator explicitly populates

@@ -69,9 +69,12 @@ func TestMinorToDecimal(t *testing.T) {
 		{1, "KWD", "0.001"},
 	}
 	for _, c := range cases {
-		if got := minorToDecimal(c.amount, c.currency); got != c.want {
-			t.Errorf("minorToDecimal(%d, %s)=%q, want %q", c.amount, c.currency, got, c.want)
+		if got, err := minorToDecimal(c.amount, c.currency); err != nil || got != c.want {
+			t.Errorf("minorToDecimal(%d, %s)=%q, %v, want %q", c.amount, c.currency, got, err, c.want)
 		}
+	}
+	if _, err := minorToDecimal(599, "XYZ"); err == nil {
+		t.Error("unknown currency must fail, not assume two decimals")
 	}
 }
 

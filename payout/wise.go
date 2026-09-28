@@ -209,7 +209,11 @@ func (p *WiseProvider) RequestInstantPayout(ctx context.Context, in InstantPayou
 	}
 
 	// Quote first — Wise rejects /v1/transfers without a quote uuid.
-	srcAmt := json.Number(minorToDecimal(in.Amount, in.Currency))
+	amount, err := minorToDecimal(in.Amount, in.Currency)
+	if err != nil {
+		return nil, fmt.Errorf("wise payout: %w", err)
+	}
+	srcAmt := json.Number(amount)
 	quote := wiseQuoteReq{
 		SourceCurrency: strings.ToUpper(in.Currency),
 		TargetCurrency: strings.ToUpper(in.Currency),

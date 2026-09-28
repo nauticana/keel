@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -19,31 +20,39 @@ type SetupIntentCardClient interface {
 	GetSetupIntentCard(ctx context.Context, setupIntentID string) (last4, brand string, expMonth, expYear int, ok bool)
 }
 
-// UserPaymentMethodService owns the two operations on basis
+// ErrPaymentMethodNotFound: no saved method with that id belongs to the user.
+var ErrPaymentMethodNotFound = errors.New("payment: saved payment method not found")
+
+// UserPaymentMethodService owns the operations on basis
 // user_payment_method that can't be served by abstract REST CRUD:
 //
 //   - SetDefault: atomic multi-row UPDATE — flips the chosen row to
 //     is_default and clears every other row owned by the same user
 //     in a single statement. Abstract single-row UPDATE would race
 //     two-step "clear all + set one" against rapid taps.
+//   - Remove: detaches the method at the provider, then deletes the row.
 //   - RecordFromSetupIntent: invoked by downstream PaymentEventHandler
 //     impls when a Stripe (or compatible) SetupIntent.succeeded webhook
 //     lands. Pulls card metadata via CardClient (optional) and inserts.
 //
-// List + Delete are served by keel's generic REST CRUD against the
-// UserSpecific basis table — no service method needed.
+// List is served by keel's generic REST CRUD against the UserSpecific
+// basis table.
 //
 // CardClient is optional — when nil, RecordFromSetupIntent persists the
-// provider_token alone and the UI degrades to "Card on file".
+// provider_token alone and the UI degrades to "Card on file". Detacher is
+// required by Remove.
 type UserPaymentMethodService struct {
 	DB         port.DatabaseRepository
 	CardClient SetupIntentCardClient
+	Detacher   PaymentMethodDetacher
 	Journal    logger.ApplicationLogger
 }
 
 const (
 	qUPMInsert     = "qUPMInsert"
 	qUPMSetDefault = "qUPMSetDefault"
+	qUPMToken      = "qUPMToken"
+	qUPMDelete     = "qUPMDelete"
 )
 
 var userPaymentMethodQueries = map[string]string{
@@ -61,6 +70,14 @@ VALUES
 UPDATE user_payment_method
    SET is_default = (id = ?)
  WHERE user_id = ?`,
+
+	qUPMToken: `
+SELECT provider_token FROM user_payment_method
+ WHERE id = ? AND user_id = ?`,
+
+	qUPMDelete: `
+DELETE FROM user_payment_method
+ WHERE id = ? AND user_id = ?`,
 }
 
 // SetDefault flips the chosen row to default and clears every other
@@ -73,6 +90,33 @@ func (s *UserPaymentMethodService) SetDefault(ctx context.Context, userID int, m
 	}
 	if _, err := qs.Query(ctx, qUPMSetDefault, methodID, userID); err != nil {
 		return fmt.Errorf("set default user payment method: %w", err)
+	}
+	return nil
+}
+
+// Remove detaches the user's saved method at the provider, then deletes its
+// row. A failed detach keeps the row so the removal can be retried. Removing
+// the default leaves none; the charge path then takes the newest method.
+func (s *UserPaymentMethodService) Remove(ctx context.Context, userID int, methodID int64) error {
+	if s.Detacher == nil {
+		return fmt.Errorf("remove user payment method: Detacher not configured")
+	}
+	qs := s.DB.GetQueryService(ctx, userPaymentMethodQueries)
+	if qs == nil {
+		return fmt.Errorf("query service not available")
+	}
+	res, err := qs.Query(ctx, qUPMToken, methodID, userID)
+	if err != nil {
+		return fmt.Errorf("read user payment method: %w", err)
+	}
+	if len(res.Rows) == 0 {
+		return ErrPaymentMethodNotFound
+	}
+	if err := s.Detacher.DetachPaymentMethod(ctx, common.AsString(res.Rows[0][0])); err != nil {
+		return fmt.Errorf("detach user payment method: %w", err)
+	}
+	if _, err := qs.Query(ctx, qUPMDelete, methodID, userID); err != nil {
+		return fmt.Errorf("delete user payment method: %w", err)
 	}
 	return nil
 }

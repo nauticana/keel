@@ -357,7 +357,9 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 			Currency:     common.AsString(row[9]),
 			PriceID:      common.AsString(row[10]),
 		}
-		price.Amount = payment.MinorToMajor(price.AmountMinor, price.Currency)
+		if err := price.FillAmount(); err != nil {
+			return nil, fmt.Errorf("plan %s: %w", id, err)
+		}
 		p.Prices = append(p.Prices, price)
 	}
 	plans := make([]Plan, len(order))
@@ -383,8 +385,11 @@ func (s *AbstractBillingService) RecordProviderInvoice(ctx context.Context, part
 		return nil
 	}
 	s.init(ctx)
-	major := payment.MinorToMajor(e.MinorUnits, e.Currency)
-	_, err := s.qs.Query(ctx, qBillRecordInvoice,
+	major, err := decimalAmount(e.MinorUnits, e.Currency)
+	if err != nil {
+		return err
+	}
+	_, err = s.qs.Query(ctx, qBillRecordInvoice,
 		s.qs.GenID(), partnerID, e.InvoiceID, major, major, e.MinorUnits, e.Currency, e.PaidAt, e.InvoiceID)
 	return err
 }

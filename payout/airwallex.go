@@ -320,9 +320,13 @@ func (p *AirwallexProvider) RequestInstantPayout(ctx context.Context, in Instant
 	if in.Currency == "" {
 		return nil, fmt.Errorf("airwallex payout: Currency required")
 	}
+	amount, err := minorToDecimal(in.Amount, in.Currency)
+	if err != nil {
+		return nil, fmt.Errorf("airwallex payout: %w", err)
+	}
 	req := airwallexTransferReq{
 		RequestID:        in.IdempotencyKey,
-		TransferAmount:   json.Number(minorToDecimal(in.Amount, in.Currency)),
+		TransferAmount:   json.Number(amount),
 		TransferCurrency: strings.ToUpper(in.Currency),
 		SourceCurrency:   strings.ToUpper(in.Currency),
 		TransferMethod:   p.transferMethod,

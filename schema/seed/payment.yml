@@ -35,10 +35,12 @@ seeds:
     columns: [authorization_object_id, action, caption]
     rows:
       - [USER_PAYMENT_METHOD, SET_DEFAULT, Set Default]
+      - [USER_PAYMENT_METHOD, REMOVE, Remove]
   - table: table_action
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
     rows:
       - [user_payment_method, set_default, Set Default, star, P, true, 10]
+      - [user_payment_method, remove, Remove, delete, P, true, 20]
   - table: application_menu
     columns: [display_order, id, caption]
     rows:
@@ -75,5 +77,5 @@ seeds:
       - [PAYMENT_ADMIN, TABLE, UPDATE, payment_method]
       - [PAYMENT_ADMIN, TABLE, DELETE, payment_method]
       - [PAYMENT_ADMIN, TABLE, SELECT, user_payment_method]
-      - [PAYMENT_ADMIN, TABLE, DELETE, user_payment_method]
       - [PAYMENT_ADMIN, USER_PAYMENT_METHOD, SET_DEFAULT, user_payment_method]
+      - [PAYMENT_ADMIN, USER_PAYMENT_METHOD, REMOVE, user_payment_method]

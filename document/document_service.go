@@ -218,7 +218,8 @@ func (s *DocumentService) lock(ctx context.Context, tx port.TxQueryService, part
 
 // Review approves or rejects a pending document. An approval supersedes the
 // previously approved version of the same type and subject in the same
-// transaction, unless the type keeps every approved document.
+// transaction, unless the type keeps every approved document. A type with
+// independent review refuses its uploader with ErrSelfReview.
 func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID int64, approve bool, notes string) error {
 	return s.transact(ctx, func(tx port.TxQueryService) error {
 		doc, err := s.lock(ctx, tx, partnerID, id)
@@ -228,13 +229,16 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 		if doc.Status != StatusPending {
 			return fmt.Errorf("%w: %d is %s", ErrInvalidState, id, doc.Status)
 		}
+		typ, err := s.documentType(ctx, doc.DocumentType)
+		if err != nil {
+			return err
+		}
+		if typ.IndependentReview && reviewerID == doc.UploadedBy {
+			return fmt.Errorf("%w: %d", ErrSelfReview, id)
+		}
 		status := StatusRejected
 		if approve {
 			status = StatusApproved
-			typ, err := s.documentType(ctx, doc.DocumentType)
-			if err != nil {
-				return err
-			}
 			if err := s.lockGroup(ctx, tx, doc); err != nil {
 				return err
 			}

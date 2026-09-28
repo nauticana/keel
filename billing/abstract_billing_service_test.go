@@ -81,9 +81,7 @@ func TestRecordProviderInvoice_WritesRow(t *testing.T) {
 	if c.args[1] != int64(7) || c.args[2] != "in_123" || c.args[5] != int64(1999) || c.args[6] != "USD" || c.args[8] != "in_123" {
 		t.Fatalf("bad args: %v", c.args)
 	}
-	sub, ok1 := c.args[3].(float64)
-	tot, ok2 := c.args[4].(float64)
-	if !ok1 || !ok2 || sub != tot || sub <= 0 {
+	if c.args[3] != "19.99" || c.args[4] != "19.99" {
 		t.Fatalf("major projection should equal subtotal==total>0: %v / %v", c.args[3], c.args[4])
 	}
 	if c.args[7] != paid {
@@ -169,7 +167,7 @@ func TestActivate_MonthlyCreateActive(t *testing.T) {
 	c := lastCall(t, qs, qLcInsertActive)
 	want := map[int]any{
 		0: int64(7), 1: "pro",
-		iaCost: 100.0, iaCurrency: "USD", iaBillingCycle: "M",
+		iaCost: "100.00", iaCurrency: "USD", iaBillingCycle: "M",
 		iaTermCount: int64(1), iaTermType: "M", iaAmountMinor: int64(10000),
 		iaRenewal:     time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC), // +1 month term
 		iaNextCharge:  time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC), // due now
@@ -200,7 +198,7 @@ func TestActivate_AnnualPaidMonthly(t *testing.T) {
 	if c.args[iaAmountMinor] != int64(100000) {
 		t.Fatalf("per-unit amount snapshot 100000 expected, got %#v", c.args[iaAmountMinor])
 	}
-	if c.args[iaCost] != payment.MinorToMajor(8333, "USD") { // 100000/12 floored
+	if c.args[iaCost] != "83.33" { // 100000/12 floored
 		t.Fatalf("per-charge should be 83.33, got %#v", c.args[iaCost])
 	}
 	if c.args[iaRenewal] != time.Date(2027, 6, 8, 12, 0, 0, 0, time.UTC) {

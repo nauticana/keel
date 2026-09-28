@@ -84,6 +84,9 @@ func TestPatch_Forbidden(t *testing.T) {
 	if !errors.As(err, &appErr) || appErr.Status != 403 {
 		t.Fatalf("err = %v, want 403 AppError", err)
 	}
+	if appErr.Message != model.NoAuthorizationMessage || appErr.Detail != "no authorization for UPDATE on invoice" {
+		t.Fatalf("public/internal detail = %q / %q", appErr.Message, appErr.Detail)
+	}
 }
 
 func TestPatch_PartnerUserScopedGuardsMembership(t *testing.T) {

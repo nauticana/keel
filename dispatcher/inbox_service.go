@@ -54,7 +54,7 @@ UPDATE user_notification
 }
 
 // InboxService persists the in-app inbox. Registered under InboxChannel it is
-// also a notification channel; LocalNotificationService stores req.Type with it.
+// also a notification channel that stores req.Type.
 type InboxService struct {
 	DB port.DatabaseRepository
 
@@ -63,8 +63,8 @@ type InboxService struct {
 }
 
 var (
-	_ port.NotificationInbox = (*InboxService)(nil)
-	_ port.MessageDispatcher = (*InboxService)(nil)
+	_ port.NotificationInbox      = (*InboxService)(nil)
+	_ port.TypedMessageDispatcher = (*InboxService)(nil)
 )
 
 func (s *InboxService) queries(ctx context.Context) (port.QueryService, error) {
@@ -170,7 +170,11 @@ func (s *InboxService) MarkAllRead(ctx context.Context, userID int) error {
 }
 
 func (s *InboxService) Dispatch(ctx context.Context, userID int, title, body string, data map[string]string) error {
-	_, err := s.Add(ctx, userID, "", title, body, data)
+	return s.DispatchTyped(ctx, userID, "", title, body, data)
+}
+
+func (s *InboxService) DispatchTyped(ctx context.Context, userID int, notificationType, title, body string, data map[string]string) error {
+	_, err := s.Add(ctx, userID, notificationType, title, body, data)
 	return err
 }
 

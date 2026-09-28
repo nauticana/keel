@@ -57,19 +57,18 @@ func TestLocalNotificationService_RoutesByTo(t *testing.T) {
 	}
 }
 
-type recordingInbox struct {
+type recordingTyped struct {
 	recordingDispatcher
-	port.NotificationInbox
 	addedType string
 }
 
-func (r *recordingInbox) Add(_ context.Context, _ int, notificationType, _, _ string, _ map[string]string) (int64, error) {
+func (r *recordingTyped) DispatchTyped(_ context.Context, _ int, notificationType, _, _ string, _ map[string]string) error {
 	r.addedType = notificationType
-	return 1, nil
+	return nil
 }
 
-func TestLocalNotificationService_InboxKeepsType(t *testing.T) {
-	inbox := &recordingInbox{}
+func TestLocalNotificationService_TypedChannelKeepsType(t *testing.T) {
+	inbox := &recordingTyped{}
 	notif := NewLocalNotificationService()
 	notif.Register(InboxChannel, inbox)
 	if err := notif.Send(context.Background(), port.NotificationRequest{

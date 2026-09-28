@@ -26,7 +26,7 @@ func (c *catalog) Repositories(context.Context) ([]dms.RepositoryDefinition, err
 
 // memStore is an in-memory stand-in for the document tables, driven by query name.
 type memStore struct {
-	types      map[string][]any // contrep_id, max_bytes, media_types, requires_review
+	types      map[string][]any // contrep_id, max_bytes, media_types, requires_review, supersedes, independent_review
 	owners     map[string]any   // contrep_id → partner_id or nil
 	rows       map[int64][]any  // partner_document in selectFields order
 	nextID     int64
@@ -167,11 +167,12 @@ func newService(t *testing.T) (*DocumentService, *memStore) {
 	t.Helper()
 	store := &memStore{
 		types: map[string][]any{
-			"licence":    {"docs", int64(64), "image/png, application/pdf", true, true},
-			"logo":       {"docs", int64(64), "image/png", false, true},
-			"attachment": {"docs", int64(64), "image/png", false, false},
-			"cold":       {"cold", int64(64), "image/png", false, true},
-			"foreign":    {"other", int64(64), "image/png", false, true},
+			"licence":    {"docs", int64(64), "image/png, application/pdf", true, true, false},
+			"permit":     {"docs", int64(64), "image/png", true, true, true},
+			"logo":       {"docs", int64(64), "image/png", false, true, false},
+			"attachment": {"docs", int64(64), "image/png", false, false, false},
+			"cold":       {"cold", int64(64), "image/png", false, true, false},
+			"foreign":    {"other", int64(64), "image/png", false, true, false},
 		},
 		owners: map[string]any{"docs": nil, "other": int64(99), "cold": nil},
 		rows:   map[int64][]any{},

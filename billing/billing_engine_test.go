@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/nauticana/keel/payment"
 )
 
 func newEngine(qs *fakeQS) *SelfScheduledEngine {
@@ -57,7 +55,7 @@ func TestAdvanceSubscription_TermEndAutoRenewRefreshesPrice(t *testing.T) {
 	if c.args[2] != int64(110000) { // refreshed per-unit amount
 		t.Fatalf("amount_minor should refresh to 110000, got %#v", c.args[2])
 	}
-	if c.args[3] != payment.MinorToMajor(110000/12, "USD") {
+	if c.args[3] != "91.66" {
 		t.Fatalf("monthly_cost should be the new per-installment, got %#v", c.args[3])
 	}
 }

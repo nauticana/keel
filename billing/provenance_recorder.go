@@ -153,10 +153,14 @@ func (s *BaseProvenanceRecorder) RecordPayment(ctx context.Context, partnerID in
 	if !strings.EqualFold(common.AsString(invoice.Rows[0][1]), currency) {
 		return fmt.Errorf("billing: payment currency %s differs from invoice currency %s", currency, common.AsString(invoice.Rows[0][1]))
 	}
+	paymentMajor, err := decimalAmount(event.MinorUnits, currency)
+	if err != nil {
+		return err
+	}
 	paymentID := tx.GenID()
 	inserted, err := tx.Query(ctx, qProvenanceInsertPayment,
 		paymentID, partnerID, event.Provider, providerPaymentID, event.EventType,
-		event.ChargeID, payment.MinorToMajor(event.MinorUnits, currency),
+		event.ChargeID, paymentMajor,
 		event.MinorUnits, currency, invoiceID, event.PaidAt, event.RawPayload)
 	if err != nil {
 		return fmt.Errorf("billing: insert payment provenance: %w", err)
@@ -178,7 +182,10 @@ func (s *BaseProvenanceRecorder) RecordPayment(ctx context.Context, partnerID in
 	for index, line := range lines {
 		sequence := index + 1
 		amountMinor := amounts[index]
-		major := payment.MinorToMajor(line.AmountMinor, currency)
+		major, err := decimalAmount(line.AmountMinor, currency)
+		if err != nil {
+			return err
+		}
 		result, insertErr := tx.Query(ctx, qProvenanceInsertLine,
 			invoiceID, sequence, line.Description, major, major,
 			line.AmountMinor, line.ServiceFrom, line.ServiceTo)

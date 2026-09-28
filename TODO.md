@@ -25,7 +25,7 @@ This file consolidates the v0.6 deferral notes plus the downstream-consumer revi
 | C2 | Distributed lock on `CacheService` for OTP issuance race | C | MED | ⏳ open — driven by demand |
 | C3 | Paddle payment provider (ed25519) | C | MED | ⏳ open — driven by demand |
 | C4 | Subscription mutation API | C | MED | ✅ done — shipped on `billing.SubscriptionLifecycle`, not `CheckoutClient` |
-| C5 | `CreateRefund` + `SubmitDisputeEvidence` | C | MED | ⏳ open — premise strengthened by v1.2.39/40 |
+| C5 | `SubmitDisputeEvidence` | C | MED | ⏳ open — `CreateRefund` shipped in v1.2.58 |
 | C6 | Operator-initiated webhook replay + dead-letter | C | **HIGH** | ✅ done |
 | C7 | Tax + coupon on `CheckoutRequest` | C | MED | ⏳ open — driven by demand |
 | C12 | Remote ArchiveLink `document.ContentStore` | C | LOW | ⏳ open — driven by demand |
@@ -99,7 +99,7 @@ Real value but no concrete consumer asking yet. Defer until a downstream project
 |---|---|---|
 | C2 | Distributed lock on `cache.CacheService` (`Lock(ctx, key, ttl)`) to close the multi-instance OTP race | 4–6 hr |
 | C3 | Paddle payment provider (ed25519 signatures) — stress-tests the `SignatureVerifier` abstraction | 2–3 days |
-| C5 | Refund + dispute creation API — `CreateRefund` + `SubmitDisputeEvidence` on `ChargeClient` (additive only; a rename to `PaymentClient` is v2.0 territory). v1.2.39/40 added inbound refund/dispute **provenance** (`billing.BaseProvenanceReverser`, typed `ChargeID`/`DisputeID`), so keel now reconciles refunds it cannot itself create — the asymmetry is the argument for closing this | 4–6 hr |
+| C5 | Dispute evidence API — `SubmitDisputeEvidence` on `StripeChargeClient`. The refund half shipped in v1.2.58 as `payment.RefundClient.CreateRefund`; inbound dispute provenance (`billing.BaseProvenanceReverser`, typed `DisputeID`) exists, but keel cannot answer a dispute it reconciles | 2–3 hr |
 | C7 | Tax + coupon on `CheckoutRequest` — `CouponID`, `AutomaticTax`, `CustomerTaxID` | 1 day |
 | C8 | IP allowlist on webhook endpoints — defence-in-depth + CPU savings (not the DoS fix originally claimed; that was closed in v0.5.0) | 3–4 hr |
 | C10 | Property-based parser tests (`rapid`). Lower value since C9: `payment/parser_test.go` and `signature_test.go` carry four fuzz targets covering adjacent ground | 2 hr |

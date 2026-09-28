@@ -29,7 +29,7 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 		if !off.paymentRequired || off.amountMinor != int64(1000) {
 			t.Fatalf("want cheapest 1000, got %+v", off)
 		}
-		if off.monthlyCost != 10.0 { // $10/mo, 1 installment
+		if off.monthlyCost != "10.00" { // $10/mo, 1 installment
 			t.Fatalf("monthlyCost = %v, want 10", off.monthlyCost)
 		}
 	})
@@ -43,7 +43,7 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 			t.Fatalf("amount_minor = %v, want 10000", off.amountMinor)
 		}
 		// $100.00/yr = 10000 cents ÷ 12 = 833 cents (floor) = $8.33 per installment
-		if off.monthlyCost != 8.33 {
+		if off.monthlyCost != "8.33" {
 			t.Fatalf("monthlyCost = %v, want 8.33", off.monthlyCost)
 		}
 		if off.renewalDate != now.AddDate(1, 0, 0) {

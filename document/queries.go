@@ -32,7 +32,7 @@ SELECT id, contrep_id, doc_key, partner_id, document_type, user_id, title, file_
   FROM partner_document`
 
 var queries = map[string]string{
-	qGetType:         `SELECT contrep_id, max_bytes, media_types, requires_review, supersedes FROM document_type WHERE id = ?`,
+	qGetType:         `SELECT contrep_id, max_bytes, media_types, requires_review, supersedes, independent_review FROM document_type WHERE id = ?`,
 	qRepositoryOwner: `SELECT partner_id FROM content_repository WHERE id = ?`,
 	qListRepositories: `
 SELECT id, caption, storage_mode, bucket, project, region, endpoint, account_url, public_base_url,

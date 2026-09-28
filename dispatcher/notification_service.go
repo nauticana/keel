@@ -112,9 +112,8 @@ func (s *LocalNotificationService) deliver(ctx context.Context, d port.MessageDi
 	if req.To != "" {
 		return d.Send(ctx, req.To, req.Title, req.Body, req.Data)
 	}
-	if inbox, ok := d.(port.NotificationInbox); ok {
-		_, err := inbox.Add(ctx, req.UserID, req.Type, req.Title, req.Body, req.Data)
-		return err
+	if typed, ok := d.(port.TypedMessageDispatcher); ok {
+		return typed.DispatchTyped(ctx, req.UserID, req.Type, req.Title, req.Body, req.Data)
 	}
 	return d.Dispatch(ctx, req.UserID, req.Title, req.Body, req.Data)
 }

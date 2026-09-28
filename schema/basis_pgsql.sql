@@ -1290,6 +1290,89 @@ CREATE UNIQUE INDEX IF NOT EXISTS recording_media_key_uq ON recording_media(sess
 CREATE SEQUENCE IF NOT EXISTS recording_media_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('recording_media', 'id', 'recording_media_seq') ON CONFLICT DO NOTHING;
 
+-- A logical storage space in front of one bucket (see the dms package). Its
+-- storage location (storage_mode, bucket, path_prefix) never changes while
+-- documents exist, and a row with documents is never deleted; edits go
+-- through dms.ContentRepositoryService, not generic REST. storage_mode and
+-- bucket are the location and are always recorded here; a null endpoint,
+-- account_url, public_base_url or credential_secret means "use the matching
+-- flag" (s3_endpoint, storage_account_url, storage_public_base_url,
+-- storage_credential_secret). credential_secret is the NAME of a keystore
+-- secret. partner_id null means shared.
+CREATE TABLE IF NOT EXISTS content_repository (
+    id                                   VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    storage_mode                         VARCHAR(10)   NOT NULL,
+    bucket                               VARCHAR(200)  NOT NULL,
+    project                              VARCHAR(100) ,
+    region                               VARCHAR(40)  ,
+    endpoint                             VARCHAR(200) ,
+    account_url                          VARCHAR(200) ,
+    public_base_url                      VARCHAR(200) ,
+    credential_secret                    VARCHAR(100) ,
+    path_prefix                          VARCHAR(100) ,
+    partner_id                           BIGINT       ,
+    default_doc_prot                     VARCHAR(4)   ,
+    status                               VARCHAR(10)   NOT NULL DEFAULT 'active',
+    CONSTRAINT content_repository_pk PRIMARY KEY (id)
+);
+
+-- A kind of partner document: which repository it is routed to, its upload
+-- limits, whether it starts pending review and whether a new approval
+-- supersedes the previous one (false for a type that is a set, where every
+-- approved document stands alone). independent_review refuses a review by
+-- the document's uploader. Seeded by each application.
+CREATE TABLE IF NOT EXISTS document_type (
+    id                                   VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    contrep_id                           VARCHAR(30)   NOT NULL,
+    max_bytes                            BIGINT        NOT NULL,
+    media_types                          VARCHAR(500)  NOT NULL,
+    requires_review                      BOOLEAN       NOT NULL DEFAULT FALSE,
+    supersedes                           BOOLEAN       NOT NULL DEFAULT TRUE,
+    independent_review                   BOOLEAN       NOT NULL DEFAULT FALSE,
+    CONSTRAINT document_type_pk PRIMARY KEY (id)
+);
+
+-- A partner's business record for one dms document (the objects under
+-- <path_prefix>/<doc_key>/). user_id names the member the document is about
+-- (a licence holder); null means the partner itself. A new version is a new
+-- row. status P=pending review, Y=approved, N=rejected, X=superseded by a
+-- newer approval, R=retired (retired_at; purged_at once the RetentionSweeper
+-- deleted its objects). Content type, size and digest live in the document's
+-- component attributes. One approved row per partner, subject and type is
+-- kept by DocumentService in the review transaction, not by an index: a type
+-- with supersedes=false keeps every approved row.
+CREATE TABLE IF NOT EXISTS partner_document (
+    id                                   BIGINT        NOT NULL,
+    contrep_id                           VARCHAR(30)   NOT NULL,
+    doc_key                              VARCHAR(64)   NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    document_type                        VARCHAR(30)   NOT NULL,
+    user_id                              BIGINT       ,
+    title                                VARCHAR(200)  NOT NULL,
+    file_name                            VARCHAR(200)  NOT NULL,
+    version_no                           INTEGER       NOT NULL DEFAULT 1,
+    document_number                      VARCHAR(50)  ,
+    expires_on                           DATE         ,
+    origin_ip                            VARCHAR(45)  ,
+    uploaded_by                          BIGINT       ,
+    uploaded_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    reviewer_id                          BIGINT       ,
+    reviewed_at                          TIMESTAMP    ,
+    reviewer_notes                       TEXT         ,
+    superseded_at                        TIMESTAMP    ,
+    retired_at                           TIMESTAMP    ,
+    purged_at                            TIMESTAMP    ,
+    CONSTRAINT partner_document_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS partner_document_key_uq ON partner_document(contrep_id, doc_key);
+CREATE INDEX IF NOT EXISTS partner_document_ix1 ON partner_document(partner_id, document_type, version_no);
+
+CREATE SEQUENCE IF NOT EXISTS partner_document_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('partner_document', 'id', 'partner_document_seq') ON CONFLICT DO NOTHING;
+
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
 BEGIN
@@ -2117,5 +2200,77 @@ BEGIN
      WHERE constraint_name = 'recording_media_uploader' AND table_name = 'recording_media'
   ) THEN
     ALTER TABLE recording_media ADD CONSTRAINT recording_media_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'content_repository_owner' AND table_name = 'content_repository'
+  ) THEN
+    ALTER TABLE content_repository ADD CONSTRAINT content_repository_owner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'document_type_repository' AND table_name = 'document_type'
+  ) THEN
+    ALTER TABLE document_type ADD CONSTRAINT document_type_repository FOREIGN KEY (contrep_id) REFERENCES content_repository(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_documents' AND table_name = 'partner_document'
+  ) THEN
+    ALTER TABLE partner_document ADD CONSTRAINT partner_documents FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_document_repository' AND table_name = 'partner_document'
+  ) THEN
+    ALTER TABLE partner_document ADD CONSTRAINT partner_document_repository FOREIGN KEY (contrep_id) REFERENCES content_repository(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_document_type' AND table_name = 'partner_document'
+  ) THEN
+    ALTER TABLE partner_document ADD CONSTRAINT partner_document_type FOREIGN KEY (document_type) REFERENCES document_type(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_document_subject' AND table_name = 'partner_document'
+  ) THEN
+    ALTER TABLE partner_document ADD CONSTRAINT partner_document_subject FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_document_uploader' AND table_name = 'partner_document'
+  ) THEN
+    ALTER TABLE partner_document ADD CONSTRAINT partner_document_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_document_reviewer' AND table_name = 'partner_document'
+  ) THEN
+    ALTER TABLE partner_document ADD CONSTRAINT partner_document_reviewer FOREIGN KEY (reviewer_id) REFERENCES user_account(id);
   END IF;
 END $$;

@@ -266,7 +266,10 @@ func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invI
 
 func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64, draft *InvoiceDraft) (int64, error) {
 	totalMinor := draft.TotalMinor() // authoritative; subtotal/total are major-unit display
-	totalMajor := payment.MinorToMajor(totalMinor, draft.Currency)
+	totalMajor, err := decimalAmount(totalMinor, draft.Currency)
+	if err != nil {
+		return 0, err
+	}
 
 	// Header + lines in one tx, so the charge path never sees a half-written invoice.
 	tx, err := e.Repo.BeginTx(ctx, selfSchedQueries)
@@ -286,9 +289,15 @@ func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64
 		return 0, err
 	}
 	for i, l := range draft.Lines {
-		unit := payment.MinorToMajor(l.UnitPriceMinor, draft.Currency)
 		amountMinor := l.UnitPriceMinor * l.Quantity
-		amount := payment.MinorToMajor(amountMinor, draft.Currency)
+		unit, err := decimalAmount(l.UnitPriceMinor, draft.Currency)
+		if err != nil {
+			return 0, err
+		}
+		amount, err := decimalAmount(amountMinor, draft.Currency)
+		if err != nil {
+			return 0, err
+		}
 		var svcFrom, svcTo any
 		if !l.ServiceFrom.IsZero() {
 			svcFrom = l.ServiceFrom
@@ -413,7 +422,11 @@ func (e *SelfScheduledEngine) advanceSubscription(ctx context.Context, partnerID
 		return
 	}
 	newUnit := common.AsInt64(res.Rows[0][0])
-	perCharge := payment.MinorToMajor(InstallmentMinor(terms.ContractTotalMinor(newUnit), n, 0), currency)
+	perCharge, err := decimalAmount(InstallmentMinor(terms.ContractTotalMinor(newUnit), n, 0), currency)
+	if err != nil {
+		e.logErr(fmt.Sprintf("self-scheduled: renew partner %d plan %s: %s", partnerID, planID, err.Error()))
+		return
+	}
 	newRenewal := terms.TermType.AddUnits(renewal, terms.TermCount)
 	e.exec(ctx, qSSRenewTerm, newRenewal, renewal, newUnit, perCharge, partnerID, planID, begda)
 }

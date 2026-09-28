@@ -1302,3 +1302,91 @@ CREATE TABLE IF NOT EXISTS recording_media (
     CONSTRAINT recording_media_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX recording_media_key_uq ON recording_media(session_id, object_key);
+
+-- A logical storage space in front of one bucket (see the dms package). Its
+-- storage location (storage_mode, bucket, path_prefix) never changes while
+-- documents exist, and a row with documents is never deleted; edits go
+-- through dms.ContentRepositoryService, not generic REST. storage_mode and
+-- bucket are the location and are always recorded here; a null endpoint,
+-- account_url, public_base_url or credential_secret means "use the matching
+-- flag" (s3_endpoint, storage_account_url, storage_public_base_url,
+-- storage_credential_secret). credential_secret is the NAME of a keystore
+-- secret. partner_id null means shared.
+CREATE TABLE IF NOT EXISTS content_repository (
+    id                                   VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    storage_mode                         VARCHAR(10)   NOT NULL,
+    bucket                               VARCHAR(200)  NOT NULL,
+    project                              VARCHAR(100) ,
+    region                               VARCHAR(40)  ,
+    endpoint                             VARCHAR(200) ,
+    account_url                          VARCHAR(200) ,
+    public_base_url                      VARCHAR(200) ,
+    credential_secret                    VARCHAR(100) ,
+    path_prefix                          VARCHAR(100) ,
+    partner_id                           BIGINT       ,
+    default_doc_prot                     VARCHAR(4)   ,
+    status                               VARCHAR(10)   NOT NULL DEFAULT 'active',
+    PRIMARY KEY (id),
+    CONSTRAINT content_repository_owner FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A kind of partner document: which repository it is routed to, its upload
+-- limits, whether it starts pending review and whether a new approval
+-- supersedes the previous one (false for a type that is a set, where every
+-- approved document stands alone). independent_review refuses a review by
+-- the document's uploader. Seeded by each application.
+CREATE TABLE IF NOT EXISTS document_type (
+    id                                   VARCHAR(30)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    contrep_id                           VARCHAR(30)   NOT NULL,
+    max_bytes                            BIGINT        NOT NULL,
+    media_types                          VARCHAR(500)  NOT NULL,
+    requires_review                      TINYINT(1)    NOT NULL DEFAULT 0,
+    supersedes                           TINYINT(1)    NOT NULL DEFAULT 1,
+    independent_review                   TINYINT(1)    NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    CONSTRAINT document_type_repository FOREIGN KEY (contrep_id) REFERENCES content_repository(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A partner's business record for one dms document (the objects under
+-- <path_prefix>/<doc_key>/). user_id names the member the document is about
+-- (a licence holder); null means the partner itself. A new version is a new
+-- row. status P=pending review, Y=approved, N=rejected, X=superseded by a
+-- newer approval, R=retired (retired_at; purged_at once the RetentionSweeper
+-- deleted its objects). Content type, size and digest live in the document's
+-- component attributes. One approved row per partner, subject and type is
+-- kept by DocumentService in the review transaction, not by an index: a type
+-- with supersedes=false keeps every approved row.
+CREATE TABLE IF NOT EXISTS partner_document (
+    id                                   BIGINT        NOT NULL,
+    contrep_id                           VARCHAR(30)   NOT NULL,
+    doc_key                              VARCHAR(64)   NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    document_type                        VARCHAR(30)   NOT NULL,
+    user_id                              BIGINT       ,
+    title                                VARCHAR(200)  NOT NULL,
+    file_name                            VARCHAR(200)  NOT NULL,
+    version_no                           INT           NOT NULL DEFAULT 1,
+    document_number                      VARCHAR(50)  ,
+    expires_on                           DATE         ,
+    origin_ip                            VARCHAR(45)  ,
+    uploaded_by                          BIGINT       ,
+    uploaded_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    reviewer_id                          BIGINT       ,
+    reviewed_at                          DATETIME     ,
+    reviewer_notes                       TEXT         ,
+    superseded_at                        DATETIME     ,
+    retired_at                           DATETIME     ,
+    purged_at                            DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_documents FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT partner_document_repository FOREIGN KEY (contrep_id) REFERENCES content_repository(id),
+    CONSTRAINT partner_document_type FOREIGN KEY (document_type) REFERENCES document_type(id),
+    CONSTRAINT partner_document_subject FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT partner_document_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id),
+    CONSTRAINT partner_document_reviewer FOREIGN KEY (reviewer_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX partner_document_key_uq ON partner_document(contrep_id, doc_key);
+CREATE INDEX partner_document_ix1 ON partner_document(partner_id, document_type, version_no);

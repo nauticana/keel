@@ -11,6 +11,7 @@ var (
 	ErrTooLarge       = errors.New("document: file exceeds the type's size limit")
 	ErrTenantMismatch = errors.New("document: repository belongs to another partner")
 	ErrInvalidState   = errors.New("document: operation not allowed in the document's status")
+	ErrSelfReview     = errors.New("document: the uploader cannot review this document")
 )
 
 const (

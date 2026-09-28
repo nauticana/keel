@@ -38,36 +38,62 @@ func RegisterErrorCode(sentinel error, status int, code string) {
 	errorStatusRegistry[sentinel] = errorRegistration{status: status, code: code}
 }
 
-// registrationForError returns the registration for err (matched with
-// errors.Is), or the zero value when no registered sentinel matches.
-func registrationForError(err error) errorRegistration {
+// registrationForError returns the registered sentinel err matches (with
+// errors.Is) and its registration, or nil when none matches.
+func registrationForError(err error) (error, errorRegistration) {
 	errorStatusMu.RLock()
 	defer errorStatusMu.RUnlock()
 	for sentinel, registration := range errorStatusRegistry {
 		if errors.Is(err, sentinel) {
-			return registration
+			return sentinel, registration
 		}
 	}
-	return errorRegistration{}
+	return nil, errorRegistration{}
 }
 
 // WriteServiceError writes an RFC 7807 response whose status comes from the
-// registry (errors.Is), defaulting to 500. Like WriteError, 5xx is sanitized +
-// logged; 4xx passes the error text through.
+// registry (errors.Is), else from a *model.AppError, defaulting to 500. The
+// client never sees err.Error(): its detail is the registered sentinel's own
+// text, else the AppError's Message, else the status text. The full cause is
+// logged with the request_id — at warning for 4xx, at error for 5xx.
 func (h *AbstractHandler) WriteServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	if err == nil {
 		return
 	}
-	// A typed *model.AppError carries its own status (e.g. a FORBIDDEN
-	// authorization failure); honor it before the sentinel registry.
-	registration := registrationForError(err)
-	status := registration.status
+	sentinel, registration := registrationForError(err)
+	status, code, detail := registration.status, registration.code, publicText(sentinel)
+	cause := err.Error()
 	var appErr *model.AppError
-	if status == 0 && errors.As(err, &appErr) {
-		status = appErr.Status
+	if errors.As(err, &appErr) {
+		if status == 0 {
+			status = appErr.Status
+		}
+		if code == "" {
+			code = appErr.Code
+		}
+		if detail == "" {
+			detail = appErr.Message
+		}
+		if appErr.Detail != "" {
+			cause += " (" + appErr.Detail + ")"
+		}
 	}
 	if status == 0 {
 		status = http.StatusInternalServerError
 	}
-	h.writeProblem(r, w, status, http.StatusText(status), err.Error(), registration.code)
+	if detail == "" {
+		detail = http.StatusText(status)
+	}
+	h.writeProblem(r, w, status, http.StatusText(status), detail, code, cause)
+}
+
+func publicText(sentinel error) string {
+	var appErr *model.AppError
+	if errors.As(sentinel, &appErr) {
+		return appErr.Message
+	}
+	if sentinel == nil {
+		return ""
+	}
+	return sentinel.Error()
 }

@@ -139,6 +139,22 @@ func TestReviewWorkflow(t *testing.T) {
 	}
 }
 
+func TestIndependentReview(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	doc, _ := s.Store(ctx, upload("permit", 5, png))
+	if err := s.Review(ctx, 7, doc.ID, 3, true, ""); !errors.Is(err, ErrSelfReview) {
+		t.Errorf("the uploader must not review: %v", err)
+	}
+	if err := s.Review(ctx, 7, doc.ID, 9, true, ""); err != nil {
+		t.Errorf("another reviewer may: %v", err)
+	}
+	own, _ := s.Store(ctx, upload("licence", 5, png))
+	if err := s.Review(ctx, 7, own.ID, 3, true, ""); err != nil {
+		t.Errorf("a type without independent review allows the uploader: %v", err)
+	}
+}
+
 func TestClientAddressingAndReviewerQueries(t *testing.T) {
 	s, _ := newService(t)
 	ctx := context.Background()

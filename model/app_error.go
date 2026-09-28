@@ -11,10 +11,13 @@ const (
 	ErrConflict     = "CONFLICT"
 )
 
+// AppError is a typed failure with its HTTP status. Message is the public
+// text; Detail is internal context for the log and is never sent to a client.
 type AppError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Status  int    `json:"status"`
+	Detail  string `json:"-"`
 }
 
 func (e *AppError) Error() string {
@@ -24,6 +27,9 @@ func (e *AppError) Error() string {
 func NewAppError(code string, status int, message string) *AppError {
 	return &AppError{Code: code, Status: status, Message: message}
 }
+
+// NoAuthorizationMessage is the public text of a missing-permission refusal.
+const NoAuthorizationMessage = "You don't have permission to perform this action"
 
 // NewForbidden is an authorization failure (403) — a caller lacking a required
 // permission, not a server fault. Handlers surface its message and status

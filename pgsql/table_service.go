@@ -268,7 +268,7 @@ func (s *TableServicePgsql) planSelect(ctx context.Context, partnerID int64, use
 	if userID > 0 {
 		allowed, ownScope = s.CheckPermission(ctx, model.UserPrincipal(userID), "SELECT")
 		if !allowed {
-			return nil, model.NewForbidden(fmt.Sprintf("No authorization for SELECT on %s", s.Table.TableName))
+			return nil, noAuthorization("SELECT", s.Table.TableName)
 		}
 	}
 	plan := &selectPlan{}
@@ -653,7 +653,7 @@ func isPositiveID(v any) bool {
 func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID int, item any) ([]int64, error) {
 	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "INSERT")
 	if !allowed {
-		return nil, model.NewForbidden(fmt.Sprintf("No authorization for INSERT on %s", s.Table.TableName))
+		return nil, noAuthorization("INSERT", s.Table.TableName)
 	}
 	val := reflect.ValueOf(item)
 	// UserSpecific writes are STRICT: the user_id column is force-set
@@ -696,7 +696,7 @@ func (s *TableServicePgsql) Insert(ctx context.Context, partnerID int64, userID 
 func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID int, item any) error {
 	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "UPDATE")
 	if !allowed {
-		return model.NewForbidden(fmt.Sprintf("No authorization for UPDATE on %s", s.Table.TableName))
+		return noAuthorization("UPDATE", s.Table.TableName)
 	}
 	if s.sqlUpdateByID == "" {
 		return nil // no updatable columns
@@ -772,7 +772,7 @@ func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID 
 func (s *TableServicePgsql) Patch(ctx context.Context, partnerID int64, userID int, key map[string]any, changes map[string]any) error {
 	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "UPDATE")
 	if !allowed {
-		return model.NewForbidden(fmt.Sprintf("No authorization for UPDATE on %s", s.Table.TableName))
+		return noAuthorization("UPDATE", s.Table.TableName)
 	}
 	globalRole := s.IsGlobalRole(ctx, userID)
 	applyPartner := s.Table.PartnerSpecific && !(userID <= 0 && partnerID <= 0) && !globalRole
@@ -869,7 +869,7 @@ func hasColumn(m map[string]any, col *model.TableColumn) bool {
 func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID int, where map[string]any) error {
 	allowed, _ := s.CheckPermission(ctx, model.UserPrincipal(userID), "DELETE")
 	if !allowed {
-		return model.NewForbidden(fmt.Sprintf("No authorization for DELETE on %s", s.Table.TableName))
+		return noAuthorization("DELETE", s.Table.TableName)
 	}
 	// PartnerUserScoped DELETE defense-in-depth: bar a PARTNER_ADMIN
 	// from deleting a user_account belonging to another partner via a
@@ -985,3 +985,9 @@ func (s *TableServicePgsql) Post(ctx context.Context, partnerID int64, userID in
 
 var _ port.TableService = (*TableServicePgsql)(nil)
 var _ port.PagedTableService = (*TableServicePgsql)(nil)
+
+func noAuthorization(action, table string) *model.AppError {
+	err := model.NewForbidden(model.NoAuthorizationMessage)
+	err.Detail = "no authorization for " + action + " on " + table
+	return err
+}

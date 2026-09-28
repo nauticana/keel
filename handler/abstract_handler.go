@@ -33,9 +33,9 @@ type sessionMissCtxKey struct{}
 
 type AbstractHandler struct {
 	UserService user.UserService
-	// Journal, when wired by the including handler, receives the real 5xx
-	// detail server-side (correlated by request_id) before writeError
-	// sanitises it out of the client response. Left nil → no server-side log.
+	// Journal, when wired by the including handler, receives the real cause
+	// of every 5xx and every WriteServiceError 4xx, correlated by request_id,
+	// since neither reaches the client. Left nil → no server-side log.
 	Journal logger.ApplicationLogger
 }
 
@@ -399,10 +399,12 @@ func (h *AbstractHandler) WriteRequestError(r *http.Request, w http.ResponseWrit
 }
 
 func (h *AbstractHandler) writeError(r *http.Request, w http.ResponseWriter, status int, title, detail string) {
-	h.writeProblem(r, w, status, title, detail, "")
+	h.writeProblem(r, w, status, title, detail, "", "")
 }
 
-func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, status int, title, detail, code string) {
+// writeProblem logs cause (for 5xx, detail when cause is empty) with the
+// request_id; a 4xx is logged only when a cause is given.
+func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, status int, title, detail, code, cause string) {
 	requestID := ""
 	if r != nil {
 		requestID = common.RequestIDFromContext(r.Context())
@@ -411,18 +413,14 @@ func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, s
 		requestID = newRequestID()
 	}
 	if status >= http.StatusInternalServerError {
-		// 5xx is operator-territory: record the real cause server-side
-		// (correlated by request_id) before sanitising it out of the client
-		// response. Without this the request_id maps to nothing in any log.
-		if h.Journal != nil {
-			where := ""
-			if r != nil {
-				where = " " + r.Method + " " + r.URL.Path
-			}
-			h.Journal.Error(fmt.Sprintf("request_id=%s status=%d%s %s: %s", requestID, status, where, title, detail))
+		if cause == "" {
+			cause = detail
 		}
+		h.logProblem(r, requestID, status, title, cause)
 		// Never echo internal context to the client.
 		detail = "internal server error — see request_id in your logs"
+	} else if cause != "" {
+		h.logProblem(r, requestID, status, title, cause)
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
@@ -515,4 +513,23 @@ func ScrubAuthHeader(r *http.Request) *http.Request {
 		cloned.Header.Set("Cookie", "<scrubbed>")
 	}
 	return cloned
+}
+
+func (h *AbstractHandler) logProblem(r *http.Request, requestID string, status int, title, cause string) {
+	if h.Journal == nil {
+		return
+	}
+	log := h.Journal.Warning
+	if status >= http.StatusInternalServerError {
+		log = h.Journal.Error
+	}
+	userID := -1
+	where := ""
+	if r != nil {
+		where = " " + r.Method + " " + r.URL.Path
+		if session, ok := r.Context().Value(sessionCtxKey{}).(*model.UserSession); ok && session != nil {
+			userID = session.Id
+		}
+	}
+	log(fmt.Sprintf("request_id=%s status=%d user=%d%s %s: %s", requestID, status, userID, where, title, cause))
 }

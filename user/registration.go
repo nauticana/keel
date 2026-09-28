@@ -13,7 +13,6 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
-	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/port"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -214,8 +213,8 @@ type PublicPlan struct {
 // registration creates. The NULLable fields are nil for a free plan.
 type subscriptionOffer struct {
 	paymentRequired bool
-	monthlyCost     float64 // per-installment display (major); 0 for free
-	currency        string  // offer currency ("" for free → caller keeps plan currency)
+	monthlyCost     string // per-installment display, exact major-unit decimal
+	currency        string // offer currency ("" for free → caller keeps plan currency)
 	billingCycle    any
 	termType        any
 	termCount       any
@@ -224,6 +223,8 @@ type subscriptionOffer struct {
 	nextChargeDate  any
 }
 
+var freeOffer = subscriptionOffer{monthlyCost: "0"}
+
 // resolveSubscriptionOffer picks the offer a registration should snapshot from a
 // plan's subscription_plan_price rows. No rows (or a zero-priced match) → free.
 // Requested terms must match an offer; with none requested, the cheapest is used.
@@ -231,7 +232,7 @@ type subscriptionOffer struct {
 // next_charge_date is the SECOND installment (the engine takes over from there).
 func resolveSubscriptionOffer(rows [][]any, data *PartnerRegistration, currency string, now time.Time) (subscriptionOffer, error) {
 	if len(rows) == 0 {
-		return subscriptionOffer{}, nil // free plan
+		return freeOffer, nil
 	}
 	idx := -1
 	if data.BillingCycle != "" || data.TermType != "" || data.TermCount > 0 {
@@ -261,7 +262,7 @@ func resolveSubscriptionOffer(rows [][]any, data *PartnerRegistration, currency 
 	row := rows[idx]
 	amount := common.AsInt64(row[3])
 	if amount <= 0 {
-		return subscriptionOffer{}, nil // zero-priced offer = free
+		return freeOffer, nil
 	}
 	terms := billing.BillingTerms{
 		BillingCycle: billing.ParseBillingPeriod(common.AsString(row[0])),
@@ -276,9 +277,13 @@ func resolveSubscriptionOffer(rows [][]any, data *PartnerRegistration, currency 
 	if tc < 1 {
 		tc = 1
 	}
+	monthlyCost, ok := common.FormatMinorUnits(billing.InstallmentMinor(terms.ContractTotalMinor(amount), n, 0), common.AsString(row[4]))
+	if !ok {
+		return subscriptionOffer{}, fmt.Errorf("plan price has unknown currency %q", common.AsString(row[4]))
+	}
 	return subscriptionOffer{
 		paymentRequired: true,
-		monthlyCost:     payment.MinorToMajor(billing.InstallmentMinor(terms.ContractTotalMinor(amount), n, 0), common.AsString(row[4])),
+		monthlyCost:     monthlyCost,
 		currency:        common.AsString(row[4]),
 		billingCycle:    terms.BillingCycle.Code(),
 		termType:        terms.TermType.Code(),
@@ -596,7 +601,9 @@ func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, erro
 			Currency:     common.AsString(row[8]),
 			PriceID:      common.AsString(row[9]),
 		}
-		price.Amount = payment.MinorToMajor(price.AmountMinor, price.Currency)
+		if err := price.FillAmount(); err != nil {
+			return nil, err
+		}
 		p.Prices = append(p.Prices, price)
 	}
 	out := make([]PublicPlan, len(order))

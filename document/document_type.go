@@ -15,6 +15,8 @@ type DocumentType struct {
 	MediaTypes     []string
 	RequiresReview bool
 	Supersedes     bool // a new approval supersedes the previous one; false keeps every approved row
+	// IndependentReview refuses a review by the document's uploader.
+	IndependentReview bool
 }
 
 func documentTypeFromRow(id string, r []any) *DocumentType {
@@ -24,5 +26,5 @@ func documentTypeFromRow(id string, r []any) *DocumentType {
 			media = append(media, m)
 		}
 	}
-	return &DocumentType{ID: id, ContRepID: common.AsString(r[0]), MaxBytes: common.AsInt64(r[1]), MediaTypes: media, RequiresReview: common.AsBool(r[3]), Supersedes: common.AsBool(r[4])}
+	return &DocumentType{ID: id, ContRepID: common.AsString(r[0]), MaxBytes: common.AsInt64(r[1]), MediaTypes: media, RequiresReview: common.AsBool(r[3]), Supersedes: common.AsBool(r[4]), IndependentReview: common.AsBool(r[5])}
 }

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	"github.com/nauticana/keel/payment"
 	"github.com/nauticana/keel/port"
 )
 
@@ -193,8 +192,8 @@ func (s *AbstractBillingService) loadPlanPolicy(ctx context.Context, planID stri
 
 // planCharge is the priced+scheduled result of a (plan, terms) selection.
 type planCharge struct {
-	amountUnitMinor int64   // price for one term_type unit (snapshot)
-	perChargeMajor  float64 // one installment, major units (display monthly_cost)
+	amountUnitMinor int64  // price for one term_type unit (snapshot)
+	perChargeMajor  string // one installment, exact major-unit decimal (display monthly_cost)
 	currency        string
 	termCount       int64
 	termType        string
@@ -220,10 +219,13 @@ func (s *AbstractBillingService) loadPlanCharge(ctx context.Context, planID stri
 	row := res.Rows[0]
 	amountUnit := common.AsInt64(row[0])
 	currency := common.AsString(row[1])
-	total := terms.ContractTotalMinor(amountUnit)
+	perCharge, err := decimalAmount(InstallmentMinor(terms.ContractTotalMinor(amountUnit), n, 0), currency)
+	if err != nil {
+		return planCharge{}, err
+	}
 	return planCharge{
 		amountUnitMinor: amountUnit,
-		perChargeMajor:  payment.MinorToMajor(InstallmentMinor(total, n, 0), currency),
+		perChargeMajor:  perCharge,
 		currency:        currency,
 		termCount:       int64(terms.TermCount),
 		termType:        terms.TermType.Code(),

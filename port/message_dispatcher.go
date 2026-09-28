@@ -24,6 +24,14 @@ type MessageDispatcher interface {
 	Send(ctx context.Context, to string, title, body string, data map[string]string) error
 }
 
+// TypedMessageDispatcher is a user-addressed channel that also receives the
+// notification type; LocalNotificationService calls DispatchTyped instead of
+// Dispatch when a channel implements it.
+type TypedMessageDispatcher interface {
+	MessageDispatcher
+	DispatchTyped(ctx context.Context, userID int, notificationType, title, body string, data map[string]string) error
+}
+
 // PushProvider is the legacy name for MessageDispatcher kept as a
 // type alias so v0.4.x code continues to satisfy the contract.
 // Deprecated: use MessageDispatcher.

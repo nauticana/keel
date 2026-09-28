@@ -3,10 +3,12 @@ package handler
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/keel/document"
@@ -14,9 +16,10 @@ import (
 )
 
 type fakeDocuments struct {
-	last document.Upload
-	body []byte
-	err  error
+	last     document.Upload
+	body     []byte
+	err      error
+	reviewed []any
 }
 
 func (f *fakeDocuments) Store(_ context.Context, up document.Upload) (*document.PartnerDocument, error) {
@@ -28,8 +31,20 @@ func (f *fakeDocuments) Store(_ context.Context, up document.Upload) (*document.
 	return &document.PartnerDocument{ID: 42, PartnerID: up.PartnerID, DocumentType: up.DocumentType, Status: document.StatusPending}, nil
 }
 
+func (f *fakeDocuments) Get(_ context.Context, partnerID, id int64) (*document.PartnerDocument, error) {
+	if id != 42 {
+		return nil, document.ErrNotFound
+	}
+	return &document.PartnerDocument{ID: id, PartnerID: partnerID, UploadedBy: 3, Status: document.StatusPending}, nil
+}
+
 func (f *fakeDocuments) SignedURL(_ context.Context, partnerID, id int64, _ int) (string, error) {
 	return "https://signed/" + document.StatusPending, nil
+}
+
+func (f *fakeDocuments) Review(_ context.Context, partnerID, id, reviewerID int64, approve bool, notes string) error {
+	f.reviewed = []any{partnerID, id, reviewerID, approve, notes}
+	return f.err
 }
 
 func multipartUpload(t *testing.T, fields map[string]string, file []byte) *http.Request {
@@ -94,5 +109,68 @@ func TestDocumentHandlerUpload(t *testing.T) {
 	h.Upload(w, multipartUpload(t, map[string]string{"document_type": "DF"}, []byte("x")))
 	if w.Code != http.StatusForbidden {
 		t.Errorf("authorize refusal: %d", w.Code)
+	}
+}
+
+func onlyUploader(_ context.Context, s *model.UserSession, doc *document.PartnerDocument) error {
+	if doc.UploadedBy != int64(s.Id) {
+		return model.NewForbidden("not yours")
+	}
+	return nil
+}
+
+func sessionRequest(method, target, body string, userID int) *http.Request {
+	r := httptest.NewRequest(method, target, strings.NewReader(body))
+	stashSession(r, &model.UserSession{Id: userID, PartnerId: 7})
+	return r
+}
+
+func TestDocumentHandlerPreview(t *testing.T) {
+	h := &DocumentHandler{Documents: &fakeDocuments{}, SignedURLSeconds: 60}
+	w := httptest.NewRecorder()
+	h.Preview(w, sessionRequest(http.MethodGet, "/documents/preview?id=42", "", 3))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("preview without AuthorizeRead must fail closed: %d", w.Code)
+	}
+	h.AuthorizeRead = onlyUploader
+	w = httptest.NewRecorder()
+	h.Preview(w, sessionRequest(http.MethodGet, "/documents/preview?id=42", "", 3))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "https://signed/") {
+		t.Errorf("owner preview: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.Preview(w, sessionRequest(http.MethodGet, "/documents/preview?id=42", "", 4))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("another member's preview: %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.Preview(w, sessionRequest(http.MethodGet, "/documents/preview?id=41", "", 3))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("missing document: %d", w.Code)
+	}
+}
+
+func TestDocumentHandlerReview(t *testing.T) {
+	docs := &fakeDocuments{}
+	h := &DocumentHandler{Documents: docs}
+	body := `{"id":"42","approve":true,"notes":"ok"}`
+	w := httptest.NewRecorder()
+	h.Review(w, sessionRequest(http.MethodPost, "/documents/review", body, 9))
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("review without AuthorizeReview must fail closed: %d", w.Code)
+	}
+	h.AuthorizeReview = func(context.Context, *model.UserSession, *document.PartnerDocument) error { return nil }
+	w = httptest.NewRecorder()
+	h.Review(w, sessionRequest(http.MethodPost, "/documents/review", body, 9))
+	if w.Code != http.StatusNoContent || fmt.Sprint(docs.reviewed) != "[7 42 9 true ok]" {
+		t.Errorf("review: %d %v", w.Code, docs.reviewed)
+	}
+	for err, code := range map[error]int{document.ErrInvalidState: http.StatusConflict, document.ErrSelfReview: http.StatusForbidden} {
+		docs.err = err
+		w = httptest.NewRecorder()
+		h.Review(w, sessionRequest(http.MethodPost, "/documents/review", body, 9))
+		if w.Code != code {
+			t.Errorf("%v: %d, want %d", err, w.Code, code)
+		}
 	}
 }
