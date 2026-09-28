@@ -50,7 +50,7 @@ UPDATE partner_document SET status = 'X', superseded_at = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND document_type = ? AND user_id IS NOT DISTINCT FROM ? AND status = 'Y' AND id <> ?`,
 	qGet:           selectFields + ` WHERE partner_id = ? AND id = ?`,
 	qLock:          selectFields + ` WHERE partner_id = ? AND id = ? FOR UPDATE`,
-	qLockGroup:     `SELECT pg_advisory_xact_lock(hashtext(?::text || ':' || ? || ':' || COALESCE(?::text, '')))`,
+	qLockGroup:     `SELECT pg_advisory_xact_lock(hashtext(?::bigint::text || ':' || ? || ':' || COALESCE(?::bigint::text, '')))`,
 	qListByPartner: selectFields + ` WHERE partner_id = ? AND status <> 'R' ORDER BY document_type, user_id, version_no DESC`,
 	qListByUser:    selectFields + ` WHERE partner_id = ? AND user_id = ? AND status <> 'R' ORDER BY document_type, version_no DESC`,
 	qApproved:      selectFields + ` WHERE partner_id = ? AND document_type = ? AND user_id IS NOT DISTINCT FROM ? AND status = 'Y' ORDER BY version_no DESC`,

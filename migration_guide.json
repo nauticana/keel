@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.81",
+   "title": "Postgres document group locks accept integer IDs",
+   "tags": [
+    "additive"
+   ],
+   "summary": "DocumentService.Store and approving Review now bind group-lock IDs as bigint before converting them to text, avoiding pgx encoding errors. No API or schema change.",
+   "body_markdown": "### Documents — group lock\n\nThe lock key is unchanged. No consumer action is needed."
+  },
+  {
    "version": "v1.2.80",
    "title": "Client-safe upload errors; DOCX is sniffed by its main part",
    "tags": [

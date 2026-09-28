@@ -6,8 +6,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
-
 	"time"
 
 	"github.com/nauticana/keel/dms"
@@ -334,4 +334,15 @@ func zippedFiles(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+func TestQueriesDoNotBindIDsAsText(t *testing.T) {
+	if got := strings.Count(queries[qLockGroup], "?::bigint::text"); got != 2 {
+		t.Errorf("lock_group has %d bigint ID parameters, want 2: %s", got, queries[qLockGroup])
+	}
+	for name, sql := range queries {
+		if strings.Contains(sql, "?::text") {
+			t.Errorf("%s casts a placeholder to text: %s", name, sql)
+		}
+	}
 }
