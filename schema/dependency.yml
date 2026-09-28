@@ -99,3 +99,21 @@ groups:
     seed: seed/document.yml
     depends_on: [core, tenant_management]
     seed_depends_on: [core]
+
+  - name: approval
+    path: approval
+    seed: seed/approval.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: [core]
+
+  - name: notification
+    path: notification
+    seed: seed/notification.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: [core]
+
+  - name: erasure
+    path: erasure
+    seed: seed/erasure.yml
+    depends_on: [core]
+    seed_depends_on: [core]

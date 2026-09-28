@@ -1,0 +1,35 @@
+table: payout_instruction_event
+comment: |
+  Provider transfer events applied to payout instruction legs. The primary
+  key is the event-id dedupe guard; each row commits in the same
+  transaction as the leg's state and monetary effect.
+columns:
+  - name: provider
+    type: CHAR(2)
+  - name: event_id
+    type: VARCHAR(255)
+  - name: instruction_id
+    type: BIGINT
+  - name: leg_no
+    type: INTEGER
+  - name: event_type
+    type: VARCHAR(100)
+  - name: amount_minor
+    type: BIGINT
+    default: "0"
+  - name: amount_reversed_minor
+    type: BIGINT
+    default: "0"
+  - name: applied_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [provider, event_id]
+indexes:
+  - name: idx_payout_instruction_event_leg
+    columns: [instruction_id, leg_no]
+foreign_keys:
+  - name: payout_leg_events
+    columns: [instruction_id, leg_no]
+    references:
+      table: payout_instruction_leg
+      columns: [instruction_id, leg_no]

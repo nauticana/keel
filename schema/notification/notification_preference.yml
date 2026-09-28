@@ -1,0 +1,22 @@
+table: notification_preference
+comment: A user's explicit opt-in or opt-out of one notification type on one channel; absent rows fall back to the application's channels for the type
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: notification_type
+    type: VARCHAR(20)
+  - name: channel
+    type: VARCHAR(20)
+  - name: enabled
+    type: BOOLEAN
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [user_id, notification_type, channel]
+foreign_keys:
+  - name: user_notification_preferences
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+    on_delete: CASCADE

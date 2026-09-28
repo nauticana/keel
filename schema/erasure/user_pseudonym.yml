@@ -1,0 +1,24 @@
+table: user_pseudonym
+comment: |
+  The random pseudonym anonymized rows carry in place of a user. Read only
+  through erasure.Service (never exposed through REST); dropped when an
+  erasure completes without held rows.
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: pseudonym
+    type: VARCHAR(64)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [user_id]
+indexes:
+  - name: user_pseudonym_uq
+    columns: [pseudonym]
+    unique: true
+foreign_keys:
+  - name: user_pseudonym_subject
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

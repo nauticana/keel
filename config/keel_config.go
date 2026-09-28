@@ -14,6 +14,7 @@ const (
 	metrics_addr                  = "metrics_addr"
 	session_timeout               = "session_timeout"
 	refresh_token_ttl             = "refresh_token_ttl"
+	access_revocation_cache_ttl   = "access_revocation_cache_ttl"
 	otp_ttl_seconds               = "otp_ttl_seconds"
 	mail_mode                     = "mail_mode"
 	smtp_host                     = "smtp_host"
@@ -130,6 +131,7 @@ type KeelConfig struct {
 	MetricsAddr                 string        // metrics_addr                  ""                 Prometheus /metrics listen address; empty disables
 	SessionTimeout              int           // session_timeout               300                Session timeout in seconds
 	RefreshTokenTTL             time.Duration // refresh_token_ttl             2592000            Login refresh-token lifetime (seconds)
+	AccessRevocationCacheTTL    time.Duration // access_revocation_cache_ttl   30                 How long a node trusts its cached access-token revocation cutoff; 0 reads it on every request
 	OTPTTLSeconds               int           // otp_ttl_seconds               300                OTP code time-to-live in seconds
 	MailMode                    string        // mail_mode                     smtp               Mail delivery mode: smtp or api
 	SmtpHost                    string        // smtp_host                     smtp.gmail.com     SMTP server host
@@ -242,6 +244,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.MetricsAddr = c.String(m, metrics_addr)
 	c.SessionTimeout = c.Int(m, session_timeout)
 	c.RefreshTokenTTL = c.Duration(m, refresh_token_ttl)
+	c.AccessRevocationCacheTTL = c.Duration(m, access_revocation_cache_ttl)
 	c.OTPTTLSeconds = c.Int(m, otp_ttl_seconds)
 	c.MailMode = c.String(m, mail_mode)
 	c.SmtpHost = c.String(m, smtp_host)
@@ -345,6 +348,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 
 	if c.RefreshTokenTTL <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", refresh_token_ttl))
+	}
+	if c.AccessRevocationCacheTTL < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", access_revocation_cache_ttl))
 	}
 	if c.OAuthAccessTokenCacheTTL < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_access_token_cache_ttl))

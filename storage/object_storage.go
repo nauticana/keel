@@ -12,6 +12,7 @@ var (
 	ErrPreconditionFailed = errors.New("storage: object changed since it was read")
 	ErrBucketNotFound     = errors.New("storage: bucket not found")
 	ErrUnsupported        = errors.New("storage: operation not supported by this backend")
+	ErrEmptyPrefix        = errors.New("storage: refusing to delete under an empty prefix")
 )
 
 // ObjectStorage is one bucket (container, or root folder for the file backend).

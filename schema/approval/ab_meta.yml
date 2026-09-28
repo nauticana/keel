@@ -1,0 +1,4 @@
+tables:
+  - approval_policy
+  - approval_request
+  - approval_event

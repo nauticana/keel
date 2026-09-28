@@ -52,7 +52,7 @@ SELECT ubi.partner_id, bp.caption, ubi.provider, ubi.provider_account_id,
    )`,
 
 	// One atomic, provider- and currency-scoped statement: the source row
-	// must be the same user's activated account on the CONFIGURED provider
+	// must be the same user's activated account on the partner's provider
 	// with the target row's currency, and the copy carries its real
 	// provider state — linking must never manufacture provider_agreement
 	// or an onboarding timestamp. RETURNING lets the caller verify a
@@ -162,7 +162,7 @@ SELECT indexdef
 
 // OnboardingService orchestrates the user-side payout-provider
 // onboarding flow. It owns:
-//   - starting a hosted-KYC session against the configured PayoutProvider;
+//   - starting a hosted-KYC session against the partner's PayoutProvider;
 //   - persisting the returned external account id placeholder on
 //     user_bank_info;
 //   - handling the provider's webhook to back-fill activation;
@@ -178,9 +178,9 @@ SELECT indexdef
 // raw SQL for cross-actor flows where the auto-filter would block.
 type OnboardingService struct {
 	DB                  port.DatabaseRepository
-	Provider            PayoutProvider // single active provider, picked at startup via PAYOUT_PROVIDER flag
-	OnboardingReturnURL string         // deep-link the provider redirects back to
-	WebhookCallbackURL  string         // public-facing URL the provider POSTs events to
+	Providers           ProviderResolver
+	OnboardingReturnURL string // deep-link the provider redirects back to
+	WebhookCallbackURL  string // public-facing URL the provider POSTs events to
 	Journal             logger.ApplicationLogger
 
 	// WebhookLog is the durable event-id dedup record (basis
@@ -281,8 +281,9 @@ type ReusableAccount struct {
 // provider, and persists the returned ExternalAccountID placeholder.
 // Returns the URL the calling application should open.
 func (s *OnboardingService) StartOnboarding(ctx context.Context, userID int, partnerID int64) (*StartOnboardingResult, error) {
-	if s.Provider == nil {
-		return nil, fmt.Errorf("payout provider not configured")
+	provider, err := s.forPartner(ctx, partnerID)
+	if err != nil {
+		return nil, err
 	}
 	bank, err := s.loadBankInfo(ctx, userID, partnerID)
 	if err != nil {
@@ -291,7 +292,10 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, userID int, par
 	if bank.ProviderAccountID != "" {
 		return nil, fmt.Errorf("provider account already linked")
 	}
-	sess, err := s.Provider.StartOnboarding(ctx, StartOnboardingInput{
+	if bank.Provider != provider.Code() {
+		return nil, fmt.Errorf("bank info provider %q does not match partner provider %q", bank.Provider, provider.Code())
+	}
+	sess, err := provider.StartOnboarding(ctx, StartOnboardingInput{
 		UserID:         int64(userID),
 		PartnerID:      partnerID,
 		Email:          bank.Email,
@@ -306,7 +310,7 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, userID int, par
 		return nil, fmt.Errorf("provider StartOnboarding: %w", err)
 	}
 	if sess.ExternalAccountID != "" {
-		if err := s.writeExternalAccountID(ctx, int64(userID), partnerID, sess.ExternalAccountID, false); err != nil {
+		if err := s.writeExternalAccountID(ctx, provider.Code(), int64(userID), partnerID, sess.ExternalAccountID, false); err != nil {
 			return nil, fmt.Errorf("persist external account id: %w", err)
 		}
 	}
@@ -317,30 +321,27 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, userID int, par
 	}, nil
 }
 
-// HandleWebhook is invoked by the provider-facing webhook handler.
-// providerCode is taken from the URL path (e.g. POST
-// /api/v1/webhook/payout/AW); it MUST match the active provider's
-// Code() — otherwise stale-config-on-other-side or an attacker probing
-// endpoints. Verifies signature + parses event via the provider impl,
-// dedupes on the provider's raw event id via WebhookLog, then applies:
-// account events back-fill user_bank_info; transfer events dispatch to
-// TransferSink; Ignored events are ACKed.
+// HandleWebhook verifies and applies one provider webhook. providerCode comes
+// from the route and selects the provider via ByCode; events are deduped on
+// the raw event id, and transfer events reach TransferSink with ev.Provider set.
 func (s *OnboardingService) HandleWebhook(ctx context.Context, providerCode string, headers map[string][]string, rawBody []byte) error {
-	if s.Provider == nil {
-		return fmt.Errorf("payout provider not configured")
+	if s.Providers == nil {
+		return fmt.Errorf("%w: no provider resolver wired", ErrProviderNotConfigured)
 	}
-	if providerCode != s.Provider.Code() {
-		return fmt.Errorf("webhook provider %q does not match configured %q", providerCode, s.Provider.Code())
+	provider, err := s.Providers.ByCode(providerCode)
+	if err != nil {
+		return err
 	}
-	ev, err := s.Provider.VerifyAndParseWebhook(headers, rawBody)
+	ev, err := provider.VerifyAndParseWebhook(headers, rawBody)
 	if err != nil {
 		return err
 	}
 	if ev.Type == PayoutEventIgnored {
 		return nil
 	}
+	ev.Provider = provider.Code()
 	if s.WebhookLog == nil || ev.RawEventID == "" {
-		return s.applyEvent(ctx, ev)
+		return s.applyEvent(ctx, provider, ev)
 	}
 	logID, duplicate, err := s.WebhookLog.Claim(ctx, providerCode, ev, rawBody)
 	if err != nil {
@@ -352,7 +353,7 @@ func (s *OnboardingService) HandleWebhook(ctx context.Context, providerCode stri
 	// A failed apply is recorded 'F' and the claim above re-claims it on
 	// the provider's next retry — a transient sink/database outage never
 	// permanently swallows a financial event.
-	if applyErr := s.applyEvent(ctx, ev); applyErr != nil {
+	if applyErr := s.applyEvent(ctx, provider, ev); applyErr != nil {
 		_ = s.WebhookLog.UpdateStatus(ctx, logID, WebhookStatusFailed, applyErr.Error())
 		return applyErr
 	}
@@ -369,14 +370,15 @@ func (s *OnboardingService) HandleWebhook(ctx context.Context, providerCode stri
 // partner asking for USD. Cross-currency reuse is provider-specific
 // and an opt-in upgrade; out of scope.
 func (s *OnboardingService) ListReusableAccounts(ctx context.Context, userID int, targetPartnerID int64) ([]ReusableAccount, error) {
-	if s.Provider == nil {
-		return nil, fmt.Errorf("payout provider not configured")
+	provider, err := s.forPartner(ctx, targetPartnerID)
+	if err != nil {
+		return nil, err
 	}
 	qs, err := s.ready(ctx)
 	if err != nil {
 		return nil, err
 	}
-	res, err := qs.Query(ctx, qPayoutReusableAccounts, userID, targetPartnerID, s.Provider.Code(), userID, targetPartnerID)
+	res, err := qs.Query(ctx, qPayoutReusableAccounts, userID, targetPartnerID, provider.Code(), userID, targetPartnerID)
 	if err != nil {
 		return nil, fmt.Errorf("list reusable accounts: %w", err)
 	}
@@ -402,21 +404,22 @@ func (s *OnboardingService) ListReusableAccounts(ctx context.Context, userID int
 // already cleared this user's KYC under the shared account id.
 //
 // One atomic statement validates and links: the source must be the same
-// user's fully activated account on the CONFIGURED provider with the
+// user's fully activated account on the target partner's provider with the
 // target row's currency, and the copy carries the source's real
 // provider state — linking never manufactures provider_agreement or an
 // onboarding timestamp. Zero affected rows (no valid source, no active
 // target, currency/provider mismatch) is a loud error.
 func (s *OnboardingService) LinkReusableAccount(ctx context.Context, userID int, targetPartnerID int64, providerAccountID string) error {
-	if s.Provider == nil {
-		return fmt.Errorf("payout provider not configured")
+	provider, err := s.forPartner(ctx, targetPartnerID)
+	if err != nil {
+		return err
 	}
 	qs, err := s.ready(ctx)
 	if err != nil {
 		return err
 	}
 	res, err := qs.Query(ctx, qPayoutLinkExisting,
-		userID, targetPartnerID, providerAccountID, s.Provider.Code())
+		userID, targetPartnerID, providerAccountID, provider.Code())
 	if err != nil {
 		return fmt.Errorf("link existing account: %w", err)
 	}
@@ -452,11 +455,12 @@ func (s *OnboardingService) IsOnboardingComplete(ctx context.Context, userID int
 // Eligibility is enforced here: the amount must be positive, the
 // currency must match the destination row (it drives the minor-unit
 // exponent — a mismatch silently rescales the amount), and the active
-// bank row must be on the configured provider with an account id,
+// bank row must be on the partner's provider with an account id,
 // provider_agreement, and a provider-confirmed onboarding timestamp.
 func (s *OnboardingService) RequestInstantPayout(ctx context.Context, userID int, partnerID int64, amount int64, currency, idempotencyKey string) (*InstantPayoutResult, error) {
-	if s.Provider == nil {
-		return nil, fmt.Errorf("payout provider not configured")
+	provider, err := s.forPartner(ctx, partnerID)
+	if err != nil {
+		return nil, err
 	}
 	if amount <= 0 {
 		return nil, fmt.Errorf("payout amount must be positive, got %d", amount)
@@ -471,13 +475,13 @@ func (s *OnboardingService) RequestInstantPayout(ctx context.Context, userID int
 	if bank.ProviderAccountID == "" {
 		return nil, fmt.Errorf("user has no linked provider account")
 	}
-	if bank.Provider != s.Provider.Code() {
-		return nil, fmt.Errorf("bank info provider %q does not match configured %q", bank.Provider, s.Provider.Code())
+	if bank.Provider != provider.Code() {
+		return nil, fmt.Errorf("bank info provider %q does not match partner provider %q", bank.Provider, provider.Code())
 	}
 	if !bank.ProviderAgreement || bank.OnboardedAt == "" {
 		return nil, fmt.Errorf("provider onboarding not completed for this account")
 	}
-	return s.Provider.RequestInstantPayout(ctx, InstantPayoutInput{
+	return provider.RequestInstantPayout(ctx, InstantPayoutInput{
 		UserID:            int64(userID),
 		PartnerID:         partnerID,
 		ProviderAccountID: bank.ProviderAccountID,
@@ -494,12 +498,13 @@ func (s *OnboardingService) RequestInstantPayout(ctx context.Context, userID int
 // A created beneficiary is immediately payable, so the row is marked
 // onboarded.
 func (s *OnboardingService) RegisterBeneficiary(ctx context.Context, userID int, partnerID int64, beneficiary json.RawMessage) (string, error) {
-	if s.Provider == nil {
-		return "", fmt.Errorf("payout provider not configured")
+	provider, err := s.forPartner(ctx, partnerID)
+	if err != nil {
+		return "", err
 	}
-	creator, ok := s.Provider.(BeneficiaryCreator)
+	creator, ok := provider.(BeneficiaryCreator)
 	if !ok {
-		return "", fmt.Errorf("provider %s does not support beneficiary registration", s.Provider.Code())
+		return "", fmt.Errorf("provider %s does not support beneficiary registration", provider.Code())
 	}
 	qs, err := s.ready(ctx)
 	if err != nil {
@@ -511,8 +516,8 @@ func (s *OnboardingService) RegisterBeneficiary(ctx context.Context, userID int,
 	if err != nil {
 		return "", err
 	}
-	if bank.Provider != s.Provider.Code() {
-		return "", fmt.Errorf("bank info provider %q does not match configured %q", bank.Provider, s.Provider.Code())
+	if bank.Provider != provider.Code() {
+		return "", fmt.Errorf("bank info provider %q does not match partner provider %q", bank.Provider, provider.Code())
 	}
 	if bank.ProviderAccountID != "" {
 		return "", fmt.Errorf("destination already registered — replace the bank info version first")
@@ -524,7 +529,7 @@ func (s *OnboardingService) RegisterBeneficiary(ctx context.Context, userID int,
 	// Conditional claim pinned to the validated version id: a row
 	// replaced while the provider call was in flight makes the claim
 	// return zero rows instead of linking the new version.
-	res, err := qs.Query(ctx, qPayoutClaimDestination, id, bank.ID, userID, partnerID, s.Provider.Code())
+	res, err := qs.Query(ctx, qPayoutClaimDestination, id, bank.ID, userID, partnerID, provider.Code())
 	if err != nil {
 		return "", fmt.Errorf("persist beneficiary id: %w", err)
 	}
@@ -535,7 +540,8 @@ func (s *OnboardingService) RegisterBeneficiary(ctx context.Context, userID int,
 }
 
 // NewBankInfo is the identity payload for a replacement destination
-// version. The provider account starts unlinked; onboarding fills it.
+// version. The provider is the partner's resolved provider, never the
+// caller's; the provider account starts unlinked and onboarding fills it.
 type NewBankInfo struct {
 	CountryCode       string
 	Currency          string
@@ -543,18 +549,21 @@ type NewBankInfo struct {
 	BillingAddress    string
 	TaxIDType         string
 	TaxIDEncrypted    []byte
-	Provider          string
 }
 
 // ReplaceBankInfo supersedes the active version and inserts the new one
 // in a single transaction, so a failed insert never leaves the user
 // without an active destination.
 func (s *OnboardingService) ReplaceBankInfo(ctx context.Context, userID int, partnerID int64, info NewBankInfo) error {
-	if _, err := s.ready(ctx); err != nil {
+	if info.CountryCode == "" || info.Currency == "" || info.AccountHolderName == "" {
+		return fmt.Errorf("replace bank info: country, currency, and holder are required")
+	}
+	provider, err := s.forPartner(ctx, partnerID)
+	if err != nil {
 		return err
 	}
-	if info.CountryCode == "" || info.Currency == "" || info.Provider == "" || info.AccountHolderName == "" {
-		return fmt.Errorf("replace bank info: country, currency, provider, and holder are required")
+	if _, err := s.ready(ctx); err != nil {
+		return err
 	}
 	tx, err := s.DB.BeginTx(ctx, onboardingQueries)
 	if err != nil {
@@ -571,7 +580,7 @@ func (s *OnboardingService) ReplaceBankInfo(ctx context.Context, userID int, par
 	}
 	if _, err := tx.Query(ctx, qPayoutInsertBankInfo, tx.GenID(), userID, partnerID,
 		info.CountryCode, info.Currency, info.AccountHolderName, info.BillingAddress,
-		info.TaxIDType, info.TaxIDEncrypted, info.Provider); err != nil {
+		info.TaxIDType, info.TaxIDEncrypted, provider.Code()); err != nil {
 		return fmt.Errorf("replace bank info: insert: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -603,6 +612,13 @@ func (s *OnboardingService) VerifySchema(ctx context.Context) error {
 }
 
 // --- internals ---
+
+func (s *OnboardingService) forPartner(ctx context.Context, partnerID int64) (PayoutProvider, error) {
+	if s.Providers == nil {
+		return nil, fmt.Errorf("%w: no provider resolver wired", ErrProviderNotConfigured)
+	}
+	return s.Providers.ForPartner(ctx, partnerID)
+}
 
 type bankInfoRow struct {
 	ID                int64
@@ -641,17 +657,17 @@ func (s *OnboardingService) loadBankInfo(ctx context.Context, userID int, partne
 	}, nil
 }
 
-func (s *OnboardingService) writeExternalAccountID(ctx context.Context, userID int64, partnerID int64, externalID string, activated bool) error {
+func (s *OnboardingService) writeExternalAccountID(ctx context.Context, providerCode string, userID int64, partnerID int64, externalID string, activated bool) error {
 	qs, err := s.ready(ctx)
 	if err != nil {
 		return err
 	}
-	res, err := qs.Query(ctx, qPayoutWriteExternal, externalID, activated, activated, userID, partnerID, s.Provider.Code())
+	res, err := qs.Query(ctx, qPayoutWriteExternal, externalID, activated, activated, userID, partnerID, providerCode)
 	if err != nil {
 		return err
 	}
 	if len(res.Rows) == 0 {
-		return fmt.Errorf("no active %s bank row for user %d partner %d", s.Provider.Code(), userID, partnerID)
+		return fmt.Errorf("no active %s bank row for user %d partner %d", providerCode, userID, partnerID)
 	}
 	return nil
 }
@@ -663,7 +679,7 @@ func (s *OnboardingService) writeExternalAccountID(ctx context.Context, userID i
 // clears the id so the calling application can prompt the user to retry.
 // Transfer events dispatch to TransferSink; with no sink wired the
 // event stays durably logged and is ACKed for later reconciliation.
-func (s *OnboardingService) applyEvent(ctx context.Context, ev *PayoutWebhookEvent) error {
+func (s *OnboardingService) applyEvent(ctx context.Context, provider PayoutProvider, ev *PayoutWebhookEvent) error {
 	switch ev.Type {
 	case PayoutEventAccountCreated, PayoutEventAccountUpdated:
 		activated := ev.Activated
@@ -671,7 +687,7 @@ func (s *OnboardingService) applyEvent(ctx context.Context, ev *PayoutWebhookEve
 			// Providers whose events carry no activation flag are
 			// reconciled against the live account state; an error keeps
 			// the claim retryable.
-			if c, ok := s.Provider.(AccountStatusChecker); ok {
+			if c, ok := provider.(AccountStatusChecker); ok {
 				a, err := c.IsAccountActive(ctx, ev.ExternalAccountID)
 				if err != nil {
 					return err
@@ -679,11 +695,11 @@ func (s *OnboardingService) applyEvent(ctx context.Context, ev *PayoutWebhookEve
 				activated = a
 			}
 		}
-		return s.backFillByExternalID(ctx, ev.ExternalAccountID, activated)
+		return s.backFillByExternalID(ctx, provider.Code(), ev.ExternalAccountID, activated)
 	case PayoutEventAccountActivated:
-		return s.backFillByExternalID(ctx, ev.ExternalAccountID, true)
+		return s.backFillByExternalID(ctx, provider.Code(), ev.ExternalAccountID, true)
 	case PayoutEventAccountRejected:
-		return s.clearByExternalID(ctx, ev.ExternalAccountID)
+		return s.clearByExternalID(ctx, provider.Code(), ev.ExternalAccountID)
 	case PayoutEventTransferPaid, PayoutEventTransferFailed,
 		PayoutEventTransferReturned, PayoutEventTransferReversed:
 		// A missing sink is a configuration error, not success: returning
@@ -701,32 +717,32 @@ func (s *OnboardingService) applyEvent(ctx context.Context, ev *PayoutWebhookEve
 
 // Zero affected rows is an error so the webhook claim stays retryable
 // instead of ACKing an update that landed nowhere.
-func (s *OnboardingService) backFillByExternalID(ctx context.Context, externalID string, activated bool) error {
+func (s *OnboardingService) backFillByExternalID(ctx context.Context, providerCode, externalID string, activated bool) error {
 	qs, err := s.ready(ctx)
 	if err != nil {
 		return err
 	}
-	res, err := qs.Query(ctx, qPayoutBackFillExternal, activated, activated, externalID, s.Provider.Code())
+	res, err := qs.Query(ctx, qPayoutBackFillExternal, activated, activated, externalID, providerCode)
 	if err != nil {
 		return fmt.Errorf("back-fill by external_id: %w", err)
 	}
 	if len(res.Rows) == 0 {
-		return fmt.Errorf("back-fill: no active %s row for account %s", s.Provider.Code(), externalID)
+		return fmt.Errorf("back-fill: no active %s row for account %s", providerCode, externalID)
 	}
 	return nil
 }
 
-func (s *OnboardingService) clearByExternalID(ctx context.Context, externalID string) error {
+func (s *OnboardingService) clearByExternalID(ctx context.Context, providerCode, externalID string) error {
 	qs, err := s.ready(ctx)
 	if err != nil {
 		return err
 	}
-	res, err := qs.Query(ctx, qPayoutClearExternal, externalID, s.Provider.Code())
+	res, err := qs.Query(ctx, qPayoutClearExternal, externalID, providerCode)
 	if err != nil {
 		return err
 	}
 	if len(res.Rows) == 0 {
-		return fmt.Errorf("clear: no active %s row for account %s", s.Provider.Code(), externalID)
+		return fmt.Errorf("clear: no active %s row for account %s", providerCode, externalID)
 	}
 	return nil
 }

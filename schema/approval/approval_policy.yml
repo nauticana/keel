@@ -1,0 +1,20 @@
+table: approval_policy
+comment: |
+  Per-partner maker-checker policy. allow_single_person lets the maker decide
+  their own request; a partner without a row requires a second person.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: allow_single_person
+    type: BOOLEAN
+    default: false
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id]
+foreign_keys:
+  - name: approval_policy_partner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

@@ -1,0 +1,22 @@
+comment: Maker-checker approval seed data
+order: 210
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [approval_request_status, Approval Request Status]
+      - [approval_event_type, Approval Event Type]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [approval_request_status, P, Pending]
+      - [approval_request_status, A, Approved]
+      - [approval_request_status, R, Rejected]
+      - [approval_event_type, S, Submitted]
+      - [approval_event_type, A, Approved]
+      - [approval_event_type, R, Rejected]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [approval_request_status, approval_request, status]
+      - [approval_event_type, approval_event, event_type]

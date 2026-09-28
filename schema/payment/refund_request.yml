@@ -1,0 +1,81 @@
+table: refund_request
+comment: |
+  One requested refund against a refund_balance. Status: P=pending approval,
+  A=approved, S=accepted by the provider, F=rejected or declined. P and A
+  reserve balance. idempotency_key dedupes both the request and the provider
+  call; provider_amount_minor is what the provider actually refunded.
+columns:
+  - name: id
+    type: BIGINT
+  - name: refund_balance_id
+    type: BIGINT
+  - name: requester_id
+    type: BIGINT
+  - name: approver_id
+    type: BIGINT
+    nullable: true
+  - name: reason
+    type: VARCHAR(500)
+    nullable: true
+  - name: amount_minor
+    type: BIGINT
+  - name: provider_amount_minor
+    type: BIGINT
+    nullable: true
+  - name: idempotency_key
+    type: VARCHAR(255)
+  - name: status
+    type: CHAR(1)
+    default: P
+  - name: provider_refund_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: last_error
+    type: TEXT
+    nullable: true
+  - name: attempt_count
+    type: INTEGER
+    default: "0"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: decided_at
+    type: TIMESTAMP
+    nullable: true
+  - name: executed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: first_attempt_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: refund_request_seq
+  column: id
+indexes:
+  - name: refund_request_idem_uq
+    columns: [idempotency_key]
+    unique: true
+  - name: idx_refund_request_balance
+    columns: [refund_balance_id, status]
+checks:
+  - name: chk_refund_request_status
+    expression: "status IN ('P', 'A', 'S', 'F')"
+  - name: chk_refund_request_amount
+    expression: "amount_minor > 0"
+foreign_keys:
+  - name: refund_requests
+    columns: [refund_balance_id]
+    references:
+      table: refund_balance
+      columns: [id]
+  - name: refund_request_requester
+    columns: [requester_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: refund_request_approver
+    columns: [approver_id]
+    references:
+      table: user_account
+      columns: [id]

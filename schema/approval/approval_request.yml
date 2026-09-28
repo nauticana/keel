@@ -1,0 +1,58 @@
+table: approval_request
+comment: |
+  Maker-checker decision on an application record (object_type, object_id).
+  status P=pending, A=approved, R=rejected. A decided request is final; a
+  rejected record is resubmitted as a new request.
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: object_type
+    type: VARCHAR(50)
+  - name: object_id
+    type: BIGINT
+  - name: status
+    type: CHAR(1)
+    default: P
+  - name: maker_id
+    type: BIGINT
+  - name: submitted_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: checker_id
+    type: BIGINT
+    nullable: true
+  - name: decided_at
+    type: TIMESTAMP
+    nullable: true
+  - name: decision_note
+    type: VARCHAR(500)
+    nullable: true
+primary_key: [id]
+sequence:
+  name: approval_request_seq
+  column: id
+indexes:
+  - name: approval_request_open_uq
+    columns: [partner_id, object_type, object_id]
+    unique: true
+    where: "status = 'P'"
+  - name: idx_approval_request_object
+    columns: [partner_id, object_type, object_id, submitted_at]
+foreign_keys:
+  - name: approval_request_partner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: approval_request_maker
+    columns: [maker_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: approval_request_checker
+    columns: [checker_id]
+    references:
+      table: user_account
+      columns: [id]

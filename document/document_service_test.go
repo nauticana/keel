@@ -346,3 +346,31 @@ func TestQueriesDoNotBindIDsAsText(t *testing.T) {
 		}
 	}
 }
+
+func TestSweepKeepsLegalHoldSubject(t *testing.T) {
+	s, store := newService(t)
+	ctx := context.Background()
+	held, _ := s.Store(ctx, upload("logo", 5, png))
+	free, _ := s.Store(ctx, upload("attachment", 6, png))
+	for _, id := range []int64{held.ID, free.ID} {
+		if err := s.Retire(ctx, 7, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.heldUsers = map[int64]bool{5: true}
+	sweeper := &RetentionSweeper{DB: memRepo{store: store}, Docs: s.Docs, After: time.Hour,
+		Now: func() time.Time { return time.Now().Add(2 * time.Hour) }}
+	if n, err := sweeper.Sweep(ctx); n != 1 || err != nil {
+		t.Fatalf("only the unheld document is purged: %d %v", n, err)
+	}
+	if store.rows[held.ID][20] != nil {
+		t.Fatal("a held subject's document must keep its objects")
+	}
+	if _, err := s.Docs.Info(ctx, held.ContRepID, held.DocKey); err != nil {
+		t.Errorf("held objects must survive: %v", err)
+	}
+	store.heldUsers = nil
+	if n, err := sweeper.Sweep(ctx); n != 1 || err != nil {
+		t.Fatalf("released hold is swept on the next pass: %d %v", n, err)
+	}
+}

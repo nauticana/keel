@@ -88,8 +88,7 @@ func (s *LocalNotificationService) Channels() []string {
 
 // Send routes the request to the dispatcher registered under req.Channel,
 // after refusing a suppressed recipient and a repeat of an already-sent
-// DedupeKey. Returns a wrapped error when the channel is unknown so callers can
-// detect "channel not configured" without string-matching.
+// DedupeKey. An unknown channel returns port.ErrNotificationChannel.
 func (s *LocalNotificationService) Send(ctx context.Context, req port.NotificationRequest) error {
 	if req.Channel == "" {
 		return fmt.Errorf("notification: empty channel in request")
@@ -98,7 +97,7 @@ func (s *LocalNotificationService) Send(ctx context.Context, req port.Notificati
 	d, ok := s.dispatchers[req.Channel]
 	s.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("notification: no dispatcher registered for channel %q", req.Channel)
+		return fmt.Errorf("%w: %q", port.ErrNotificationChannel, req.Channel)
 	}
 	if err := s.checkSuppressed(ctx, req); err != nil {
 		return err

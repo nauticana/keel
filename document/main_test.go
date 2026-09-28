@@ -32,6 +32,7 @@ type memStore struct {
 	nextID     int64
 	inserted   []int64 // rows written in the open transaction
 	groupLocks int
+	heldUsers  map[int64]bool // subjects under an unreleased legal hold
 }
 
 func (m *memStore) GenID() int64                 { m.nextID++; return m.nextID }
@@ -140,7 +141,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			at := r[19].(time.Time)
 			if r[14] == StatusRetired && r[20] == nil && at.Before(args[0].(time.Time)) &&
 				(at.After(cursorAt) || (at.Equal(cursorAt) && r[0].(int64) > cursorID)) {
-				out.Rows = append(out.Rows, []any{r[0], r[1], r[2], at})
+				out.Rows = append(out.Rows, []any{r[0], r[1], r[2], at, r[5] != nil && m.heldUsers[r[5].(int64)]})
 			}
 		}
 	case qSetPurged:

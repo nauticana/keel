@@ -1,0 +1,37 @@
+table: refund_balance
+comment: |
+  Refund bound per provider payment. captured_minor is the captured amount
+  every refund is limited by; refunded_minor is the provider-reported
+  cumulative refunded total, used to turn cumulative refund events into
+  deltas. The row lock serializes refund requests for one payment.
+columns:
+  - name: id
+    type: BIGINT
+  - name: provider
+    type: VARCHAR(30)
+  - name: payment_id
+    type: VARCHAR(255)
+  - name: currency
+    type: CHAR(3)
+  - name: captured_minor
+    type: BIGINT
+  - name: refunded_minor
+    type: BIGINT
+    default: "0"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: refund_balance_seq
+  column: id
+indexes:
+  - name: refund_balance_payment_uq
+    columns: [provider, payment_id]
+    unique: true
+checks:
+  - name: chk_refund_balance_amounts
+    expression: "captured_minor >= 0 AND refunded_minor >= 0"

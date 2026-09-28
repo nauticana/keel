@@ -11,8 +11,10 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
@@ -35,6 +37,8 @@ var (
 	ErrDuplicateEmail      = errors.New("user_account.user_email already exists")
 	ErrDuplicatePhone      = errors.New("user_account.phone already exists")
 	ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
+	ErrAccessTokenRevoked  = errors.New("access token revoked")
+	ErrLegalHold           = errors.New("user: account is under legal hold")
 )
 
 // classifyUniqueViolation maps a pgx unique-index error from user_account
@@ -138,6 +142,10 @@ const (
 	qAnonymizeUserAccount            = "anonymize_user_account"
 	qDeleteSocialLinks               = "delete_social_links_for_user"
 	qDeleteTrustedDevices            = "delete_trusted_devices_for_user"
+	qLockUserAccount                 = "lock_user_account"
+	qActiveLegalHold                 = "active_legal_hold"
+	qTokensValidAfter                = "tokens_valid_after"
+	qRevokeAccessTokens              = "revoke_access_tokens"
 	qSetSingleDevicePolicy           = "set_single_device_policy"
 	qRevokePriorOnSingleDevicePolicy = "revoke_prior_on_single_device_policy"
 
@@ -480,9 +488,14 @@ UPDATE user_account
        twofa_backup_codes = NULL,
        twofa_enabled_at = NULL,
        status = 'D',
-       deleted_at = CURRENT_TIMESTAMP
+       deleted_at = CURRENT_TIMESTAMP,
+       tokens_valid_after = CURRENT_TIMESTAMP
  WHERE id = ?
 `,
+	qLockUserAccount:    `SELECT id FROM user_account WHERE id = ? FOR UPDATE`,
+	qActiveLegalHold:    `SELECT 1 FROM user_legal_hold WHERE user_id = ? AND released_at IS NULL LIMIT 1`,
+	qTokensValidAfter:   `SELECT tokens_valid_after FROM user_account WHERE id = ?`,
+	qRevokeAccessTokens: `UPDATE user_account SET tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ? RETURNING tokens_valid_after`,
 
 	qDeleteSocialLinks: `
 DELETE FROM user_social_provider WHERE user_id = ?
@@ -639,7 +652,12 @@ type LocalUserService struct {
 	// because pgxpool reaps idle connections aggressively and queries
 	// that genuinely take >5s under load are rare in this codebase.
 	Ctx context.Context
+
+	tokenCutoffLocks [64]sync.Mutex         // per-user stripes: a cache fill must not overwrite a newer revocation
+	tokenCutoffs     *cache.LRU[int, int64] // user id → tokens_valid_after (unix s, 0 = none)
 }
+
+const tokenCutoffCacheEntries = 100_000
 
 // ctx returns the active service context, defaulting to
 // context.Background() when the field is unset. Centralized so the
@@ -694,6 +712,7 @@ func (r *LocalUserService) Init(ctx context.Context, database port.DatabaseRepos
 	r.Ctx = ctx
 	r.queryService = database.GetQueryService(ctx, LocalUserQueries)
 	r.jwtSecret = []byte(jwtSecret)
+	r.tokenCutoffs = cache.NewLRU[int, int64](tokenCutoffCacheEntries, nil)
 	if r.Issuer == "" {
 		r.Issuer = "keel"
 	}
@@ -1120,7 +1139,81 @@ func (s *LocalUserService) ParseJWT(tokenString string) (*model.UserSession, err
 	// directly need those mirrors hydrated from the validated
 	// claims before we hand the session back.
 	claims.HydrateFromRegisteredClaims()
+	if err := s.checkAccessTokenCutoff(claims); err != nil {
+		return nil, err
+	}
 	return claims, nil
+}
+
+// checkAccessTokenCutoff fails closed: a cutoff that cannot be read rejects the token.
+func (s *LocalUserService) checkAccessTokenCutoff(session *model.UserSession) error {
+	if session.Id <= 0 {
+		return nil
+	}
+	cutoff, cached := int64(0), false
+	if s.tokenCutoffs != nil {
+		cutoff, cached = s.tokenCutoffs.Get(session.Id)
+	}
+	if !cached && s.tokenCutoffs != nil {
+		lock := s.tokenCutoffLock(session.Id)
+		lock.Lock()
+		defer lock.Unlock()
+		cutoff, cached = s.tokenCutoffs.Get(session.Id)
+	}
+	if !cached {
+		res, err := s.queryService.Query(s.ctx(), qTokensValidAfter, session.Id)
+		if err != nil {
+			return fmt.Errorf("access token cutoff: %w", err)
+		}
+		if len(res.Rows) > 0 {
+			if at, ok := common.AsTimeOK(res.Rows[0][0]); ok {
+				cutoff = at.Unix()
+			}
+		}
+		if ttl := config.Config().AccessRevocationCacheTTL; ttl > 0 && s.tokenCutoffs != nil {
+			s.tokenCutoffs.Set(session.Id, cutoff, ttl)
+		}
+	}
+	// iat has whole-second precision, so a token minted in the cutoff second is revoked too.
+	if cutoff > 0 && session.IssuedAt <= cutoff {
+		return ErrAccessTokenRevoked
+	}
+	return nil
+}
+
+// RevokeAccessTokens invalidates every access token issued to the user so far.
+// Other nodes honor it within access_revocation_cache_ttl.
+func (s *LocalUserService) RevokeAccessTokens(userID int) error {
+	lock := s.tokenCutoffLock(userID)
+	lock.Lock()
+	defer lock.Unlock()
+	res, err := s.queryService.Query(s.ctx(), qRevokeAccessTokens, userID)
+	if err != nil {
+		return err
+	}
+	if len(res.Rows) == 0 {
+		return fmt.Errorf("revoke access tokens: user %d not found", userID)
+	}
+	if ttl := config.Config().AccessRevocationCacheTTL; ttl > 0 && s.tokenCutoffs != nil {
+		at, ok := common.AsTimeOK(res.Rows[0][0])
+		if !ok {
+			return fmt.Errorf("revoke access tokens: invalid cutoff for user %d", userID)
+		}
+		s.tokenCutoffs.Set(userID, at.Unix(), ttl)
+	} else {
+		s.forgetTokenCutoff(userID)
+	}
+	return nil
+}
+
+func (s *LocalUserService) tokenCutoffLock(userID int) *sync.Mutex {
+	return &s.tokenCutoffLocks[uint(userID)%uint(len(s.tokenCutoffLocks))]
+}
+
+func (s *LocalUserService) forgetTokenCutoff(userID int) {
+	if s.tokenCutoffs != nil {
+		s.tokenCutoffs.Delete(userID)
+	}
 }
 
 // --- Refresh Token ---
@@ -2207,48 +2300,62 @@ func (s *LocalUserService) recordSignupConsent(userID int, email string, sc *Sig
 // --- Account Deletion (M-3) ---
 
 // DeleteAccount anonymizes the user_account row in place (preserving FK
-// integrity for historical rows — ride history, invoices, payment records,
-// etc. — that legal retention requires), revokes all refresh tokens,
-// deletes trusted devices, and deletes social-provider links. Records a
-// UserActivityDelete history entry with the supplied reason.
-//
-// NOT a hard DELETE. Consumers that own domain tables cascading off user_id
-// should wrap this method and run their own anonymization in the same flow.
+// integrity for history rows that legal retention requires), revokes every
+// access and refresh token, deletes trusted devices and social-provider links,
+// and records a UserActivityDelete history entry. Refuses with ErrLegalHold
+// while the user has an unreleased legal hold.
 func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
 	if userID <= 0 {
 		return fmt.Errorf("delete: user id is required")
 	}
+	lock := s.tokenCutoffLock(userID)
+	lock.Lock()
+	defer lock.Unlock()
 	ctx := s.ctx()
-	anonEmail := fmt.Sprintf("deleted+%d@local.invalid", userID)
-	anonUsername := fmt.Sprintf("deleted-%d", userID)
-
 	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Query(ctx, qAnonymizeUserAccount, anonEmail, anonUsername, userID); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("delete: anonymize user_account: %w", err)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = data.RollbackDetached(tx)
+		}
+	}()
+	locked, err := tx.Query(ctx, qLockUserAccount, userID)
+	if err != nil {
+		return fmt.Errorf("delete: lock user_account: %w", err)
 	}
-	if _, err := tx.Query(ctx, qDeleteSocialLinks, userID); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("delete: remove social links: %w", err)
+	if len(locked.Rows) == 0 {
+		return fmt.Errorf("delete: user %d not found", userID)
 	}
-	if _, err := tx.Query(ctx, qDeleteTrustedDevices, userID); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("delete: remove trusted devices: %w", err)
+	hold, err := tx.Query(ctx, qActiveLegalHold, userID)
+	if err != nil {
+		return fmt.Errorf("delete: check legal hold: %w", err)
 	}
-	if _, err := tx.Query(ctx, qDeactivateDeviceTokensForUser, userID); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("delete: deactivate device tokens: %w", err)
+	if len(hold.Rows) > 0 {
+		return ErrLegalHold
 	}
-	if _, err := tx.Query(ctx, qRevokeAllRefreshTokensForID, userID); err != nil {
-		_ = tx.Rollback(ctx)
-		return fmt.Errorf("delete: revoke refresh tokens: %w", err)
+	steps := []struct {
+		query, what string
+		args        []any
+	}{
+		{qAnonymizeUserAccount, "anonymize user_account", []any{fmt.Sprintf("deleted+%d@local.invalid", userID), fmt.Sprintf("deleted-%d", userID), userID}},
+		{qDeleteSocialLinks, "remove social links", []any{userID}},
+		{qDeleteTrustedDevices, "remove trusted devices", []any{userID}},
+		{qDeactivateDeviceTokensForUser, "deactivate device tokens", []any{userID}},
+		{qRevokeAllRefreshTokensForID, "revoke refresh tokens", []any{userID}},
+	}
+	for _, step := range steps {
+		if _, err := tx.Query(ctx, step.query, step.args...); err != nil {
+			return fmt.Errorf("delete: %s: %w", step.what, err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("delete: commit: %w", err)
 	}
+	committed = true
+	s.forgetTokenCutoff(userID)
 	return s.AddUserHistory(userID, 0, "", UserActivityDelete, UserStatusDeleted, reason)
 }
 

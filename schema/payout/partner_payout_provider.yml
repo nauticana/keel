@@ -1,0 +1,20 @@
+table: partner_payout_provider
+comment: |
+  The payout provider each partner onboards payees and disburses through.
+  A partner without a row has no payout provider under the table-backed
+  resolver; single-provider deployments use the static resolver instead.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: provider
+    type: CHAR(2)
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id]
+foreign_keys:
+  - name: partner_payout_provider_partner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

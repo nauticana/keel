@@ -1,0 +1,76 @@
+table: notification
+comment: |
+  Durable per-channel notification delivery, drained by a lease worker.
+  status P=pending, A=active (claimed; lease_until guards a crashed claim),
+  S=sent, X=suppressed, F=failed after the attempt limit.
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+    comment: Scopes the suppression check; NULL consults only fleet-wide entries
+  - name: notification_type
+    type: VARCHAR(20)
+  - name: channel
+    type: VARCHAR(20)
+  - name: title
+    type: VARCHAR(200)
+  - name: body
+    type: TEXT
+    nullable: true
+  - name: data
+    type: TEXT
+    nullable: true
+    comment: JSON object of string values
+  - name: status
+    type: CHAR(1)
+    default: P
+  - name: attempts
+    type: INTEGER
+    default: "0"
+  - name: available_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: lease_until
+    type: TIMESTAMP
+    nullable: true
+  - name: lease_token
+    type: BIGINT
+    nullable: true
+  - name: last_error
+    type: TEXT
+    nullable: true
+  - name: sent_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: notification_seq
+  column: id
+foreign_keys:
+  - name: notification_recipient
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+    on_delete: CASCADE
+  - name: notification_partner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: SET NULL
+indexes:
+  - name: idx_notification_drain
+    columns: [status, available_at]
+  - name: idx_notification_user
+    columns: [user_id, created_at]

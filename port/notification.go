@@ -55,6 +55,8 @@ var (
 	ErrNotificationSuppressed = errors.New("notification: recipient is suppressed")
 	// ErrNotificationDuplicate: another Send already carried this DedupeKey.
 	ErrNotificationDuplicate = errors.New("notification: duplicate of an already-sent notification")
+	// ErrNotificationChannel: no dispatcher is registered for the request's channel.
+	ErrNotificationChannel = errors.New("notification: channel not configured")
 )
 
 // SuppressedError names the channel and why, never the contact.

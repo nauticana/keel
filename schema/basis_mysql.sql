@@ -218,6 +218,7 @@ CREATE TABLE IF NOT EXISTS user_account (
     twofa_last_step                      BIGINT        NOT NULL DEFAULT 0,
     deleted_at                           DATETIME     ,
     single_device_session                TINYINT(1)    NOT NULL DEFAULT 0,
+    tokens_valid_after                   DATETIME     ,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX user_account_email_uq ON user_account(user_email);
@@ -234,6 +235,25 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     PRIMARY KEY (user_id, action_time),
     CONSTRAINT user_historic_actions FOREIGN KEY (user_id) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A legal hold on a user's data. While any hold of the user is unreleased,
+-- DeleteAccount refuses, the RetentionSweeper keeps the user's documents and
+-- erasure requests wait. The reason is free text; which incidents justify a
+-- hold is the application's decision.
+CREATE TABLE IF NOT EXISTS user_legal_hold (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    reason                               VARCHAR(500)  NOT NULL,
+    placed_by                            BIGINT        NOT NULL,
+    placed_at                            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_by                          BIGINT       ,
+    released_at                          DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT user_legal_holds FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT user_legal_hold_placer FOREIGN KEY (placed_by) REFERENCES user_account(id),
+    CONSTRAINT user_legal_hold_releaser FOREIGN KEY (released_by) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX user_legal_hold_ix1 ON user_legal_hold(user_id, released_at);
 
 -- Pending user registrations, password reset tokens, and 2FA login tokens
 CREATE TABLE IF NOT EXISTS user_registration (
@@ -825,6 +845,55 @@ CREATE TABLE IF NOT EXISTS user_billing_customer (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_user_billing_customer_token ON user_billing_customer(provider, customer_token);
 
+-- Refund bound per provider payment. captured_minor is the captured amount
+-- every refund is limited by; refunded_minor is the provider-reported
+-- cumulative refunded total, used to turn cumulative refund events into
+-- deltas. The row lock serializes refund requests for one payment.
+CREATE TABLE IF NOT EXISTS refund_balance (
+    id                                   BIGINT        NOT NULL,
+    provider                             VARCHAR(30)   NOT NULL,
+    payment_id                           VARCHAR(255)  NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    captured_minor                       BIGINT        NOT NULL,
+    refunded_minor                       BIGINT        NOT NULL DEFAULT 0,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT chk_refund_balance_amounts CHECK (captured_minor >= 0 AND refunded_minor >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX refund_balance_payment_uq ON refund_balance(provider, payment_id);
+
+-- One requested refund against a refund_balance. Status: P=pending approval,
+-- A=approved, S=accepted by the provider, F=rejected or declined. P and A
+-- reserve balance. idempotency_key dedupes both the request and the provider
+-- call; provider_amount_minor is what the provider actually refunded.
+CREATE TABLE IF NOT EXISTS refund_request (
+    id                                   BIGINT        NOT NULL,
+    refund_balance_id                    BIGINT        NOT NULL,
+    requester_id                         BIGINT        NOT NULL,
+    approver_id                          BIGINT       ,
+    reason                               VARCHAR(500) ,
+    amount_minor                         BIGINT        NOT NULL,
+    provider_amount_minor                BIGINT       ,
+    idempotency_key                      VARCHAR(255)  NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    provider_refund_id                   VARCHAR(255) ,
+    last_error                           TEXT         ,
+    attempt_count                        INT           NOT NULL DEFAULT 0,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at                           DATETIME     ,
+    executed_at                          DATETIME     ,
+    first_attempt_at                     DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT refund_requests FOREIGN KEY (refund_balance_id) REFERENCES refund_balance(id),
+    CONSTRAINT refund_request_requester FOREIGN KEY (requester_id) REFERENCES user_account(id),
+    CONSTRAINT refund_request_approver FOREIGN KEY (approver_id) REFERENCES user_account(id),
+    CONSTRAINT chk_refund_request_status CHECK (status IN ('P', 'A', 'S', 'F')),
+    CONSTRAINT chk_refund_request_amount CHECK (amount_minor > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX refund_request_idem_uq ON refund_request(idempotency_key);
+CREATE INDEX idx_refund_request_balance ON refund_request(refund_balance_id, status);
+
 -- Versioned (user, partner) bank account details for out-bound payouts.
 -- Owned by keel/payout. Raw routing details live with the provider
 -- (Airwallex / Stripe Connect / Wise); this row carries only the
@@ -883,6 +952,92 @@ CREATE TABLE IF NOT EXISTS payout_webhook_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX payout_webhook_log_uq ON payout_webhook_log(provider, event_id);
 CREATE INDEX idx_payout_webhook_transfer ON payout_webhook_log(provider_transfer_id);
+
+-- The payout provider each partner onboards payees and disburses through.
+-- A partner without a row has no payout provider under the table-backed
+-- resolver; single-provider deployments use the static resolver instead.
+CREATE TABLE IF NOT EXISTS partner_payout_provider (
+    partner_id                           BIGINT        NOT NULL,
+    provider                             CHAR(2)       NOT NULL,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (partner_id),
+    CONSTRAINT partner_payout_provider_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One idempotent payout to a partner's payee, allocated against the
+-- application's earnings at creation. Status: N=new, D=dispatching,
+-- P=provider-pending, S=settled, F=failed (re-executable or cancellable),
+-- V=fully reversed, X=cancelled, M=manual review.
+CREATE TABLE IF NOT EXISTS payout_instruction (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    idempotency_key                      VARCHAR(200)  NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'N',
+    failure_reason                       TEXT         ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_payout_instructions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT payee_payout_instructions FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT chk_payout_instruction_amount CHECK (amount_minor > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX payout_instruction_key_uq ON payout_instruction(partner_id, idempotency_key);
+-- idx_payout_instruction_in_flight is a partial index on PostgreSQL (WHERE status IN ('D', 'P')); MySQL cannot enforce it — service-enforced
+CREATE INDEX idx_payout_instruction_in_flight ON payout_instruction(status, updated_at);
+CREATE INDEX idx_payout_instruction_payee ON payout_instruction(user_id);
+
+-- One provider dispatch of a payout instruction under its own provider
+-- idempotency key; a new leg is opened only after the previous one failed
+-- or returned. Destination fields are immutable snapshots. Funding and
+-- bank-payout ids are equal on single-step providers. reversed_minor is the
+-- cumulative provider-reported reversal. Status: D=dispatching,
+-- P=provider-pending, S=settled, F=failed, R=returned, V=fully reversed.
+CREATE TABLE IF NOT EXISTS payout_instruction_leg (
+    instruction_id                       BIGINT        NOT NULL,
+    leg_no                               INT           NOT NULL,
+    provider                             CHAR(2)       NOT NULL,
+    user_bank_info_id                    BIGINT        NOT NULL,
+    provider_account_id                  VARCHAR(100)  NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    provider_idempotency_key             VARCHAR(200)  NOT NULL,
+    provider_funding_id                  VARCHAR(255) ,
+    provider_payout_id                   VARCHAR(255) ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'D',
+    reversed_minor                       BIGINT        NOT NULL DEFAULT 0,
+    attempts                             INT           NOT NULL DEFAULT 0,
+    failure_reason                       TEXT         ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (instruction_id, leg_no),
+    CONSTRAINT payout_instruction_legs FOREIGN KEY (instruction_id) REFERENCES payout_instruction(id),
+    CONSTRAINT payout_leg_destination FOREIGN KEY (user_bank_info_id) REFERENCES user_bank_info(id),
+    CONSTRAINT chk_payout_instruction_leg_amount CHECK (amount_minor > 0),
+    CONSTRAINT chk_payout_instruction_leg_reversed CHECK (reversed_minor >= 0 AND reversed_minor <= amount_minor)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX payout_instruction_leg_key_uq ON payout_instruction_leg(provider_idempotency_key);
+CREATE UNIQUE INDEX payout_instruction_leg_payout_uq ON payout_instruction_leg(provider, provider_payout_id);
+CREATE UNIQUE INDEX payout_instruction_leg_funding_uq ON payout_instruction_leg(provider, provider_funding_id);
+CREATE INDEX idx_payout_instruction_leg_destination ON payout_instruction_leg(user_bank_info_id);
+
+-- Provider transfer events applied to payout instruction legs. The primary
+-- key is the event-id dedupe guard; each row commits in the same
+-- transaction as the leg's state and monetary effect.
+CREATE TABLE IF NOT EXISTS payout_instruction_event (
+    provider                             CHAR(2)       NOT NULL,
+    event_id                             VARCHAR(255)  NOT NULL,
+    instruction_id                       BIGINT        NOT NULL,
+    leg_no                               INT           NOT NULL,
+    event_type                           VARCHAR(100)  NOT NULL,
+    amount_minor                         BIGINT        NOT NULL DEFAULT 0,
+    amount_reversed_minor                BIGINT        NOT NULL DEFAULT 0,
+    applied_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (provider, event_id),
+    CONSTRAINT payout_leg_events FOREIGN KEY (instruction_id, leg_no) REFERENCES payout_instruction_leg(instruction_id, leg_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_payout_instruction_event_leg ON payout_instruction_event(instruction_id, leg_no);
 
 -- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
 CREATE TABLE IF NOT EXISTS outbox_event (
@@ -1254,7 +1409,8 @@ CREATE INDEX agency_payout_line_live_uq ON agency_payout_line(commission_id);
 
 -- Consent-gated capture session over an application-defined context.
 -- status W=awaiting consent, A=authorized, R=recording (capture acknowledged),
--- F=finalizing, D=ready, S=stopped without media, X=failed.
+-- F=finalizing, D=ready, S=stopped without media, X=failed. attempt counts
+-- reopenings; consent is scoped to the attempt.
 CREATE TABLE IF NOT EXISTS recording_session (
     id                                   BIGINT        NOT NULL,
     partner_id                           BIGINT        NOT NULL,
@@ -1262,6 +1418,7 @@ CREATE TABLE IF NOT EXISTS recording_session (
     consent_type                         VARCHAR(30)   NOT NULL,
     policy_id                            BIGINT        NOT NULL,
     status                               CHAR(1)       NOT NULL DEFAULT 'W',
+    attempt                              INT           NOT NULL DEFAULT 1,
     capture_token_hash                   VARCHAR(64)  ,
     capture_expires_at                   DATETIME     ,
     created_by                           BIGINT        NOT NULL,
@@ -1285,7 +1442,7 @@ CREATE TABLE IF NOT EXISTS recording_participant (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Stored objects of a session, by object reference only. status P=pending
--- upload, U=uploaded and ready, X=failed.
+-- upload, U=uploaded and ready, X=failed, R=purged by retention.
 CREATE TABLE IF NOT EXISTS recording_media (
     id                                   BIGINT        NOT NULL,
     session_id                           BIGINT        NOT NULL,
@@ -1297,11 +1454,24 @@ CREATE TABLE IF NOT EXISTS recording_media (
     uploaded_by                          BIGINT        NOT NULL,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at                         DATETIME     ,
+    purged_at                            DATETIME     ,
     PRIMARY KEY (id),
     CONSTRAINT recording_media_session FOREIGN KEY (session_id) REFERENCES recording_session(id),
     CONSTRAINT recording_media_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX recording_media_key_uq ON recording_media(session_id, object_key);
+
+-- Join tokens for a session, stored as SHA-256 hashes; reusable until expires_at.
+CREATE TABLE IF NOT EXISTS recording_invite (
+    token_hash                           VARCHAR(64)   NOT NULL,
+    session_id                           BIGINT        NOT NULL,
+    expires_at                           DATETIME      NOT NULL,
+    created_by                           BIGINT        NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (token_hash),
+    CONSTRAINT recording_session_invites FOREIGN KEY (session_id) REFERENCES recording_session(id),
+    CONSTRAINT recording_invite_creator FOREIGN KEY (created_by) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A logical storage space in front of one bucket (see the dms package). Its
 -- storage location (storage_mode, bucket, path_prefix) never changes while
@@ -1390,3 +1560,151 @@ CREATE TABLE IF NOT EXISTS partner_document (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX partner_document_key_uq ON partner_document(contrep_id, doc_key);
 CREATE INDEX partner_document_ix1 ON partner_document(partner_id, document_type, version_no);
+
+-- Per-partner maker-checker policy. allow_single_person lets the maker decide
+-- their own request; a partner without a row requires a second person.
+CREATE TABLE IF NOT EXISTS approval_policy (
+    partner_id                           BIGINT        NOT NULL,
+    allow_single_person                  TINYINT(1)    NOT NULL DEFAULT 0,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (partner_id),
+    CONSTRAINT approval_policy_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Maker-checker decision on an application record (object_type, object_id).
+-- status P=pending, A=approved, R=rejected. A decided request is final; a
+-- rejected record is resubmitted as a new request.
+CREATE TABLE IF NOT EXISTS approval_request (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    object_type                          VARCHAR(50)   NOT NULL,
+    object_id                            BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    maker_id                             BIGINT        NOT NULL,
+    submitted_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    checker_id                           BIGINT       ,
+    decided_at                           DATETIME     ,
+    decision_note                        VARCHAR(500) ,
+    PRIMARY KEY (id),
+    CONSTRAINT approval_request_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT approval_request_maker FOREIGN KEY (maker_id) REFERENCES user_account(id),
+    CONSTRAINT approval_request_checker FOREIGN KEY (checker_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- approval_request_open_uq is a partial index on PostgreSQL (WHERE status = 'P'); MySQL cannot enforce it — service-enforced
+CREATE INDEX approval_request_open_uq ON approval_request(partner_id, object_type, object_id);
+CREATE INDEX idx_approval_request_object ON approval_request(partner_id, object_type, object_id, submitted_at);
+
+-- Append-only audit of an approval request. event_type S=submitted,
+-- A=approved, R=rejected; actor_id is the user who acted.
+CREATE TABLE IF NOT EXISTS approval_event (
+    id                                   BIGINT        NOT NULL,
+    request_id                           BIGINT        NOT NULL,
+    event_type                           CHAR(1)       NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    note                                 VARCHAR(500) ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT approval_request_events FOREIGN KEY (request_id) REFERENCES approval_request(id),
+    CONSTRAINT approval_event_actor FOREIGN KEY (actor_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_approval_event_request ON approval_event(request_id, id);
+
+-- Durable per-channel notification delivery, drained by a lease worker.
+-- status P=pending, A=active (claimed; lease_until guards a crashed claim),
+-- S=sent, X=suppressed, F=failed after the attempt limit.
+CREATE TABLE IF NOT EXISTS notification (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    notification_type                    VARCHAR(20)   NOT NULL,
+    channel                              VARCHAR(20)   NOT NULL,
+    title                                VARCHAR(200)  NOT NULL,
+    body                                 TEXT         ,
+    data                                 TEXT         ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    attempts                             INT           NOT NULL DEFAULT 0,
+    available_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    lease_until                          DATETIME     ,
+    lease_token                          BIGINT       ,
+    last_error                           TEXT         ,
+    sent_at                              DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT notification_recipient FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE,
+    CONSTRAINT notification_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_notification_drain ON notification(status, available_at);
+CREATE INDEX idx_notification_user ON notification(user_id, created_at);
+
+-- A user's explicit opt-in or opt-out of one notification type on one channel; absent rows fall back to the application's channels for the type
+CREATE TABLE IF NOT EXISTS notification_preference (
+    user_id                              BIGINT        NOT NULL,
+    notification_type                    VARCHAR(20)   NOT NULL,
+    channel                              VARCHAR(20)   NOT NULL,
+    enabled                              TINYINT(1)    NOT NULL,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, notification_type, channel),
+    CONSTRAINT user_notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A request to erase one user's personal data, executed by the erasure
+-- Worker. status P=pending, A=active (claimed; lease_token/lease_until),
+-- H=held (the user has an unreleased legal hold; resumes on release),
+-- D=done, F=failed after the retry budget, X=cancelled.
+CREATE TABLE IF NOT EXISTS erasure_request (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    requested_by                         BIGINT        NOT NULL,
+    requested_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    available_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    attempts                             INT           NOT NULL DEFAULT 0,
+    lease_token                          BIGINT       ,
+    lease_until                          DATETIME     ,
+    completed_at                         DATETIME     ,
+    last_error                           TEXT         ,
+    PRIMARY KEY (id),
+    CONSTRAINT erasure_requests FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT erasure_requester FOREIGN KEY (requested_by) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX erasure_request_ix1 ON erasure_request(status, available_at);
+CREATE INDEX erasure_request_ix2 ON erasure_request(user_id, status);
+
+-- One row per data row an erasure request handled, written in the same
+-- transaction as the change. action D=deleted, A=anonymized, H=held (kept;
+-- reason says why). The key makes a re-run skip rows already handled.
+CREATE TABLE IF NOT EXISTS erasure_audit (
+    request_id                           BIGINT        NOT NULL,
+    table_name                           VARCHAR(64)   NOT NULL,
+    row_key                              VARCHAR(200)  NOT NULL,
+    action                               CHAR(1)       NOT NULL,
+    reason                               VARCHAR(500) ,
+    executed_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (request_id, table_name, row_key),
+    CONSTRAINT erasure_request_audit FOREIGN KEY (request_id) REFERENCES erasure_request(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The random pseudonym anonymized rows carry in place of a user. Read only
+-- through erasure.Service (never exposed through REST); dropped when an
+-- erasure completes without held rows.
+CREATE TABLE IF NOT EXISTS user_pseudonym (
+    user_id                              BIGINT        NOT NULL,
+    pseudonym                            VARCHAR(64)   NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id),
+    CONSTRAINT user_pseudonym_subject FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX user_pseudonym_uq ON user_pseudonym(pseudonym);
+
+-- Every re-identification of a pseudonym, with who asked and why.
+CREATE TABLE IF NOT EXISTS user_pseudonym_lookup (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    reason                               VARCHAR(500)  NOT NULL,
+    looked_up_at                         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT user_pseudonym_lookups FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT user_pseudonym_lookup_actor FOREIGN KEY (actor_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

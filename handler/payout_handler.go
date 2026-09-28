@@ -34,9 +34,8 @@ type PayoutHandler struct {
 
 // Routes returns the path → handler map for both onboarding and
 // webhook endpoints. Mount under your application's REST prefix
-// (typically "/api/v1"). All three configured provider webhook paths
-// are pre-registered — non-active codes 401 inside the service when
-// the signature header doesn't match the configured provider.
+// (typically "/api/v1"). All three provider webhook paths are
+// pre-registered; the service rejects codes its resolver does not serve.
 func (h *PayoutHandler) Routes(prefix string) map[string]func(w http.ResponseWriter, r *http.Request) {
 	if h.PayoutService == nil {
 		return map[string]func(w http.ResponseWriter, r *http.Request){}
@@ -134,16 +133,12 @@ type replaceBankRequest struct {
 }
 
 // ReplaceBank runs the atomic supersede+insert for an identity-bearing
-// bank-info change. Provider comes from the configured service, never
+// bank-info change. The service assigns the partner's provider, never
 // the client.
 func (h *PayoutHandler) ReplaceBank(w http.ResponseWriter, r *http.Request) {
 	var req replaceBankRequest
 	session, ok := h.ReadAuthRequest(w, r, &req)
 	if !ok {
-		return
-	}
-	if h.PayoutService.Provider == nil {
-		h.WriteError(w, http.StatusConflict, "Conflict", "payout provider not configured")
 		return
 	}
 	var sealed []byte
@@ -165,7 +160,6 @@ func (h *PayoutHandler) ReplaceBank(w http.ResponseWriter, r *http.Request) {
 		BillingAddress:    req.BillingAddress,
 		TaxIDType:         req.TaxIDType,
 		TaxIDEncrypted:    sealed,
-		Provider:          h.PayoutService.Provider.Code(),
 	})
 	if err != nil {
 		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())

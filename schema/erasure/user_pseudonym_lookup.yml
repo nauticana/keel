@@ -1,0 +1,29 @@
+table: user_pseudonym_lookup
+comment: Every re-identification of a pseudonym, with who asked and why.
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: actor_id
+    type: BIGINT
+  - name: reason
+    type: VARCHAR(500)
+  - name: looked_up_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: user_pseudonym_lookup_seq
+  column: id
+foreign_keys:
+  - name: user_pseudonym_lookups
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: user_pseudonym_lookup_actor
+    columns: [actor_id]
+    references:
+      table: user_account
+      columns: [id]

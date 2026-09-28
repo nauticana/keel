@@ -7,6 +7,8 @@ seeds:
       - [payout_provider, Payout Provider]
       - [tax_id_type, Tax ID Type]
       - [bank_info_status, Bank Info Status]
+      - [payout_instruction_status, Payout Instruction Status]
+      - [payout_leg_status, Payout Leg Status]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -20,6 +22,20 @@ seeds:
       - [tax_id_type, O, Other]
       - [bank_info_status, A, Active]
       - [bank_info_status, S, Superseded]
+      - [payout_instruction_status, N, New]
+      - [payout_instruction_status, D, Dispatching]
+      - [payout_instruction_status, P, Pending]
+      - [payout_instruction_status, S, Settled]
+      - [payout_instruction_status, F, Failed]
+      - [payout_instruction_status, V, Reversed]
+      - [payout_instruction_status, X, Cancelled]
+      - [payout_instruction_status, M, Manual review]
+      - [payout_leg_status, D, Dispatching]
+      - [payout_leg_status, P, Pending]
+      - [payout_leg_status, S, Settled]
+      - [payout_leg_status, F, Failed]
+      - [payout_leg_status, R, Returned]
+      - [payout_leg_status, V, Reversed]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
@@ -27,11 +43,23 @@ seeds:
       - [tax_id_type, user_bank_info, tax_id_type]
       - [bank_info_status, user_bank_info, status]
       - [payout_provider, payout_webhook_log, provider]
+      - [payout_provider, partner_payout_provider, provider]
+      - [payout_instruction_status, payout_instruction, status]
+      - [payout_provider, payout_instruction_leg, provider]
+      - [payout_leg_status, payout_instruction_leg, status]
+      - [payout_provider, payout_instruction_event, provider]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
       - [user_bank_info, user_bank_info]
       - [payout_webhook_log, payout_webhook_log]
+      - [partner_payout_provider, partner_payout_provider]
+      - [payout_instruction, payout_instruction]
+  - table: rest_api_child
+    columns: [api_id, seq, parent_seq, constraint_name]
+    rows:
+      - [payout_instruction, 1, 0, payout_instruction_legs]
+      - [payout_instruction, 2, 1, payout_leg_events]
   - table: application_menu
     columns: [display_order, id, caption]
     rows:
@@ -41,6 +69,8 @@ seeds:
     rows:
       - [10, true, payouts, user_bank_infos, user_bank_info, Bank Accounts]
       - [20, false, payouts, payout_webhook_logs, payout_webhook_log, Webhook Logs]
+      - [30, false, payouts, partner_payout_providers, partner_payout_provider, Partner Payout Providers]
+      - [40, true, payouts, payout_instructions, payout_instruction, Payout Instructions]
   - table: column_display_attribute
     columns: [table_name, column_name, display_mode]
     rows:
@@ -49,6 +79,12 @@ seeds:
       - [user_bank_info, superseded_at, R]
       - [user_bank_info, tax_id_encrypted, S]
       - [payout_webhook_log, received_at, R]
+      - [partner_payout_provider, updated_at, U]
+      - [payout_instruction, created_at, R]
+      - [payout_instruction, updated_at, U]
+      - [payout_instruction_leg, created_at, R]
+      - [payout_instruction_leg, updated_at, U]
+      - [payout_instruction_event, applied_at, R]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
@@ -57,3 +93,9 @@ seeds:
       - [PAYMENT_ADMIN, TABLE, UPDATE, user_bank_info]
       - [PAYMENT_ADMIN, PAGE, ACCESS, payout_webhook_logs]
       - [PAYMENT_ADMIN, TABLE, SELECT, payout_webhook_log]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, partner_payout_providers]
+      - [PAYMENT_ADMIN, TABLE, SELECT, partner_payout_provider]
+      - [PAYMENT_ADMIN, TABLE, INSERT, partner_payout_provider]
+      - [PAYMENT_ADMIN, TABLE, UPDATE, partner_payout_provider]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, payout_instructions]
+      - [PAYMENT_ADMIN, TABLE, SELECT, payout_instruction]

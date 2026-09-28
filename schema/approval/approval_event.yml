@@ -1,0 +1,37 @@
+table: approval_event
+comment: |
+  Append-only audit of an approval request. event_type S=submitted,
+  A=approved, R=rejected; actor_id is the user who acted.
+columns:
+  - name: id
+    type: BIGINT
+  - name: request_id
+    type: BIGINT
+  - name: event_type
+    type: CHAR(1)
+  - name: actor_id
+    type: BIGINT
+  - name: note
+    type: VARCHAR(500)
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: approval_event_seq
+  column: id
+indexes:
+  - name: idx_approval_event_request
+    columns: [request_id, id]
+foreign_keys:
+  - name: approval_request_events
+    columns: [request_id]
+    references:
+      table: approval_request
+      columns: [id]
+  - name: approval_event_actor
+    columns: [actor_id]
+    references:
+      table: user_account
+      columns: [id]

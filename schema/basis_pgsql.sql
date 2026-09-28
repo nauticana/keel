@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS user_account (
     twofa_last_step                      BIGINT        NOT NULL DEFAULT 0,
     deleted_at                           TIMESTAMP    ,
     single_device_session                BOOLEAN       NOT NULL DEFAULT FALSE,
+    tokens_valid_after                   TIMESTAMP    ,
     CONSTRAINT user_account_pk PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS user_account_email_uq ON user_account(user_email);
@@ -222,6 +223,25 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     client_address                       VARCHAR(15)  ,
     CONSTRAINT user_account_history_pk PRIMARY KEY (user_id, action_time)
 );
+
+-- A legal hold on a user's data. While any hold of the user is unreleased,
+-- DeleteAccount refuses, the RetentionSweeper keeps the user's documents and
+-- erasure requests wait. The reason is free text; which incidents justify a
+-- hold is the application's decision.
+CREATE TABLE IF NOT EXISTS user_legal_hold (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    reason                               VARCHAR(500)  NOT NULL,
+    placed_by                            BIGINT        NOT NULL,
+    placed_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_by                          BIGINT       ,
+    released_at                          TIMESTAMP    ,
+    CONSTRAINT user_legal_hold_pk PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS user_legal_hold_ix1 ON user_legal_hold(user_id, released_at);
+
+CREATE SEQUENCE IF NOT EXISTS user_legal_hold_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_legal_hold', 'id', 'user_legal_hold_seq') ON CONFLICT DO NOTHING;
 
 -- Pending user registrations, password reset tokens, and 2FA login tokens
 CREATE TABLE IF NOT EXISTS user_registration (
@@ -821,6 +841,58 @@ CREATE TABLE IF NOT EXISTS user_billing_customer (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_billing_customer_token ON user_billing_customer(provider, customer_token);
 
+-- Refund bound per provider payment. captured_minor is the captured amount
+-- every refund is limited by; refunded_minor is the provider-reported
+-- cumulative refunded total, used to turn cumulative refund events into
+-- deltas. The row lock serializes refund requests for one payment.
+CREATE TABLE IF NOT EXISTS refund_balance (
+    id                                   BIGINT        NOT NULL,
+    provider                             VARCHAR(30)   NOT NULL,
+    payment_id                           VARCHAR(255)  NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    captured_minor                       BIGINT        NOT NULL,
+    refunded_minor                       BIGINT        NOT NULL DEFAULT 0,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP    ,
+    CONSTRAINT refund_balance_pk PRIMARY KEY (id),
+    CONSTRAINT chk_refund_balance_amounts CHECK (captured_minor >= 0 AND refunded_minor >= 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS refund_balance_payment_uq ON refund_balance(provider, payment_id);
+
+CREATE SEQUENCE IF NOT EXISTS refund_balance_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('refund_balance', 'id', 'refund_balance_seq') ON CONFLICT DO NOTHING;
+
+-- One requested refund against a refund_balance. Status: P=pending approval,
+-- A=approved, S=accepted by the provider, F=rejected or declined. P and A
+-- reserve balance. idempotency_key dedupes both the request and the provider
+-- call; provider_amount_minor is what the provider actually refunded.
+CREATE TABLE IF NOT EXISTS refund_request (
+    id                                   BIGINT        NOT NULL,
+    refund_balance_id                    BIGINT        NOT NULL,
+    requester_id                         BIGINT        NOT NULL,
+    approver_id                          BIGINT       ,
+    reason                               VARCHAR(500) ,
+    amount_minor                         BIGINT        NOT NULL,
+    provider_amount_minor                BIGINT       ,
+    idempotency_key                      VARCHAR(255)  NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    provider_refund_id                   VARCHAR(255) ,
+    last_error                           TEXT         ,
+    attempt_count                        INTEGER       NOT NULL DEFAULT 0,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at                           TIMESTAMP    ,
+    executed_at                          TIMESTAMP    ,
+    first_attempt_at                     TIMESTAMP    ,
+    CONSTRAINT refund_request_pk PRIMARY KEY (id),
+    CONSTRAINT chk_refund_request_status CHECK (status IN ('P', 'A', 'S', 'F')),
+    CONSTRAINT chk_refund_request_amount CHECK (amount_minor > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS refund_request_idem_uq ON refund_request(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_refund_request_balance ON refund_request(refund_balance_id, status);
+
+CREATE SEQUENCE IF NOT EXISTS refund_request_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('refund_request', 'id', 'refund_request_seq') ON CONFLICT DO NOTHING;
+
 -- Versioned (user, partner) bank account details for out-bound payouts.
 -- Owned by keel/payout. Raw routing details live with the provider
 -- (Airwallex / Stripe Connect / Wise); this row carries only the
@@ -882,6 +954,88 @@ CREATE INDEX IF NOT EXISTS idx_payout_webhook_transfer ON payout_webhook_log(pro
 
 CREATE SEQUENCE IF NOT EXISTS payout_webhook_log_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payout_webhook_log', 'id', 'payout_webhook_log_seq') ON CONFLICT DO NOTHING;
+
+-- The payout provider each partner onboards payees and disburses through.
+-- A partner without a row has no payout provider under the table-backed
+-- resolver; single-provider deployments use the static resolver instead.
+CREATE TABLE IF NOT EXISTS partner_payout_provider (
+    partner_id                           BIGINT        NOT NULL,
+    provider                             CHAR(2)       NOT NULL,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT partner_payout_provider_pk PRIMARY KEY (partner_id)
+);
+
+-- One idempotent payout to a partner's payee, allocated against the
+-- application's earnings at creation. Status: N=new, D=dispatching,
+-- P=provider-pending, S=settled, F=failed (re-executable or cancellable),
+-- V=fully reversed, X=cancelled, M=manual review.
+CREATE TABLE IF NOT EXISTS payout_instruction (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    currency                             CHAR(3)       NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    idempotency_key                      VARCHAR(200)  NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'N',
+    failure_reason                       TEXT         ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT payout_instruction_pk PRIMARY KEY (id),
+    CONSTRAINT chk_payout_instruction_amount CHECK (amount_minor > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payout_instruction_key_uq ON payout_instruction(partner_id, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_payout_instruction_in_flight ON payout_instruction(status, updated_at) WHERE status IN ('D', 'P');
+CREATE INDEX IF NOT EXISTS idx_payout_instruction_payee ON payout_instruction(user_id);
+
+CREATE SEQUENCE IF NOT EXISTS payout_instruction_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payout_instruction', 'id', 'payout_instruction_seq') ON CONFLICT DO NOTHING;
+
+-- One provider dispatch of a payout instruction under its own provider
+-- idempotency key; a new leg is opened only after the previous one failed
+-- or returned. Destination fields are immutable snapshots. Funding and
+-- bank-payout ids are equal on single-step providers. reversed_minor is the
+-- cumulative provider-reported reversal. Status: D=dispatching,
+-- P=provider-pending, S=settled, F=failed, R=returned, V=fully reversed.
+CREATE TABLE IF NOT EXISTS payout_instruction_leg (
+    instruction_id                       BIGINT        NOT NULL,
+    leg_no                               INTEGER       NOT NULL,
+    provider                             CHAR(2)       NOT NULL,
+    user_bank_info_id                    BIGINT        NOT NULL,
+    provider_account_id                  VARCHAR(100)  NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
+    provider_idempotency_key             VARCHAR(200)  NOT NULL,
+    provider_funding_id                  VARCHAR(255) ,
+    provider_payout_id                   VARCHAR(255) ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'D',
+    reversed_minor                       BIGINT        NOT NULL DEFAULT 0,
+    attempts                             INTEGER       NOT NULL DEFAULT 0,
+    failure_reason                       TEXT         ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT payout_instruction_leg_pk PRIMARY KEY (instruction_id, leg_no),
+    CONSTRAINT chk_payout_instruction_leg_amount CHECK (amount_minor > 0),
+    CONSTRAINT chk_payout_instruction_leg_reversed CHECK (reversed_minor >= 0 AND reversed_minor <= amount_minor)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payout_instruction_leg_key_uq ON payout_instruction_leg(provider_idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS payout_instruction_leg_payout_uq ON payout_instruction_leg(provider, provider_payout_id) WHERE provider_payout_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS payout_instruction_leg_funding_uq ON payout_instruction_leg(provider, provider_funding_id) WHERE provider_funding_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_payout_instruction_leg_destination ON payout_instruction_leg(user_bank_info_id);
+
+-- Provider transfer events applied to payout instruction legs. The primary
+-- key is the event-id dedupe guard; each row commits in the same
+-- transaction as the leg's state and monetary effect.
+CREATE TABLE IF NOT EXISTS payout_instruction_event (
+    provider                             CHAR(2)       NOT NULL,
+    event_id                             VARCHAR(255)  NOT NULL,
+    instruction_id                       BIGINT        NOT NULL,
+    leg_no                               INTEGER       NOT NULL,
+    event_type                           VARCHAR(100)  NOT NULL,
+    amount_minor                         BIGINT        NOT NULL DEFAULT 0,
+    amount_reversed_minor                BIGINT        NOT NULL DEFAULT 0,
+    applied_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT payout_instruction_event_pk PRIMARY KEY (provider, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_payout_instruction_event_leg ON payout_instruction_event(instruction_id, leg_no);
 
 -- Transactional outbox — events captured in the same tx as a domain write, then drained by a lease worker for reliable at-least-once delivery
 CREATE TABLE IF NOT EXISTS outbox_event (
@@ -1242,7 +1396,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS agency_payout_line_live_uq ON agency_payout_li
 
 -- Consent-gated capture session over an application-defined context.
 -- status W=awaiting consent, A=authorized, R=recording (capture acknowledged),
--- F=finalizing, D=ready, S=stopped without media, X=failed.
+-- F=finalizing, D=ready, S=stopped without media, X=failed. attempt counts
+-- reopenings; consent is scoped to the attempt.
 CREATE TABLE IF NOT EXISTS recording_session (
     id                                   BIGINT        NOT NULL,
     partner_id                           BIGINT        NOT NULL,
@@ -1250,6 +1405,7 @@ CREATE TABLE IF NOT EXISTS recording_session (
     consent_type                         VARCHAR(30)   NOT NULL,
     policy_id                            BIGINT        NOT NULL,
     status                               CHAR(1)       NOT NULL DEFAULT 'W',
+    attempt                              INTEGER       NOT NULL DEFAULT 1,
     capture_token_hash                   VARCHAR(64)  ,
     capture_expires_at                   TIMESTAMP    ,
     created_by                           BIGINT        NOT NULL,
@@ -1271,7 +1427,7 @@ CREATE TABLE IF NOT EXISTS recording_participant (
 );
 
 -- Stored objects of a session, by object reference only. status P=pending
--- upload, U=uploaded and ready, X=failed.
+-- upload, U=uploaded and ready, X=failed, R=purged by retention.
 CREATE TABLE IF NOT EXISTS recording_media (
     id                                   BIGINT        NOT NULL,
     session_id                           BIGINT        NOT NULL,
@@ -1283,12 +1439,23 @@ CREATE TABLE IF NOT EXISTS recording_media (
     uploaded_by                          BIGINT        NOT NULL,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at                         TIMESTAMP    ,
+    purged_at                            TIMESTAMP    ,
     CONSTRAINT recording_media_pk PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS recording_media_key_uq ON recording_media(session_id, object_key);
 
 CREATE SEQUENCE IF NOT EXISTS recording_media_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('recording_media', 'id', 'recording_media_seq') ON CONFLICT DO NOTHING;
+
+-- Join tokens for a session, stored as SHA-256 hashes; reusable until expires_at.
+CREATE TABLE IF NOT EXISTS recording_invite (
+    token_hash                           VARCHAR(64)   NOT NULL,
+    session_id                           BIGINT        NOT NULL,
+    expires_at                           TIMESTAMP     NOT NULL,
+    created_by                           BIGINT        NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT recording_invite_pk PRIMARY KEY (token_hash)
+);
 
 -- A logical storage space in front of one bucket (see the dms package). Its
 -- storage location (storage_mode, bucket, path_prefix) never changes while
@@ -1372,6 +1539,153 @@ CREATE INDEX IF NOT EXISTS partner_document_ix1 ON partner_document(partner_id, 
 
 CREATE SEQUENCE IF NOT EXISTS partner_document_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('partner_document', 'id', 'partner_document_seq') ON CONFLICT DO NOTHING;
+
+-- Per-partner maker-checker policy. allow_single_person lets the maker decide
+-- their own request; a partner without a row requires a second person.
+CREATE TABLE IF NOT EXISTS approval_policy (
+    partner_id                           BIGINT        NOT NULL,
+    allow_single_person                  BOOLEAN       NOT NULL DEFAULT FALSE,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT approval_policy_pk PRIMARY KEY (partner_id)
+);
+
+-- Maker-checker decision on an application record (object_type, object_id).
+-- status P=pending, A=approved, R=rejected. A decided request is final; a
+-- rejected record is resubmitted as a new request.
+CREATE TABLE IF NOT EXISTS approval_request (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    object_type                          VARCHAR(50)   NOT NULL,
+    object_id                            BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    maker_id                             BIGINT        NOT NULL,
+    submitted_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    checker_id                           BIGINT       ,
+    decided_at                           TIMESTAMP    ,
+    decision_note                        VARCHAR(500) ,
+    CONSTRAINT approval_request_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS approval_request_open_uq ON approval_request(partner_id, object_type, object_id) WHERE status = 'P';
+CREATE INDEX IF NOT EXISTS idx_approval_request_object ON approval_request(partner_id, object_type, object_id, submitted_at);
+
+CREATE SEQUENCE IF NOT EXISTS approval_request_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('approval_request', 'id', 'approval_request_seq') ON CONFLICT DO NOTHING;
+
+-- Append-only audit of an approval request. event_type S=submitted,
+-- A=approved, R=rejected; actor_id is the user who acted.
+CREATE TABLE IF NOT EXISTS approval_event (
+    id                                   BIGINT        NOT NULL,
+    request_id                           BIGINT        NOT NULL,
+    event_type                           CHAR(1)       NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    note                                 VARCHAR(500) ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT approval_event_pk PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_approval_event_request ON approval_event(request_id, id);
+
+CREATE SEQUENCE IF NOT EXISTS approval_event_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('approval_event', 'id', 'approval_event_seq') ON CONFLICT DO NOTHING;
+
+-- Durable per-channel notification delivery, drained by a lease worker.
+-- status P=pending, A=active (claimed; lease_until guards a crashed claim),
+-- S=sent, X=suppressed, F=failed after the attempt limit.
+CREATE TABLE IF NOT EXISTS notification (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    notification_type                    VARCHAR(20)   NOT NULL,
+    channel                              VARCHAR(20)   NOT NULL,
+    title                                VARCHAR(200)  NOT NULL,
+    body                                 TEXT         ,
+    data                                 TEXT         ,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    attempts                             INTEGER       NOT NULL DEFAULT 0,
+    available_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    lease_until                          TIMESTAMP    ,
+    lease_token                          BIGINT       ,
+    last_error                           TEXT         ,
+    sent_at                              TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT notification_pk PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_drain ON notification(status, available_at);
+CREATE INDEX IF NOT EXISTS idx_notification_user ON notification(user_id, created_at);
+
+CREATE SEQUENCE IF NOT EXISTS notification_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('notification', 'id', 'notification_seq') ON CONFLICT DO NOTHING;
+
+-- A user's explicit opt-in or opt-out of one notification type on one channel; absent rows fall back to the application's channels for the type
+CREATE TABLE IF NOT EXISTS notification_preference (
+    user_id                              BIGINT        NOT NULL,
+    notification_type                    VARCHAR(20)   NOT NULL,
+    channel                              VARCHAR(20)   NOT NULL,
+    enabled                              BOOLEAN       NOT NULL,
+    updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT notification_preference_pk PRIMARY KEY (user_id, notification_type, channel)
+);
+
+-- A request to erase one user's personal data, executed by the erasure
+-- Worker. status P=pending, A=active (claimed; lease_token/lease_until),
+-- H=held (the user has an unreleased legal hold; resumes on release),
+-- D=done, F=failed after the retry budget, X=cancelled.
+CREATE TABLE IF NOT EXISTS erasure_request (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'P',
+    requested_by                         BIGINT        NOT NULL,
+    requested_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    available_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    attempts                             INTEGER       NOT NULL DEFAULT 0,
+    lease_token                          BIGINT       ,
+    lease_until                          TIMESTAMP    ,
+    completed_at                         TIMESTAMP    ,
+    last_error                           TEXT         ,
+    CONSTRAINT erasure_request_pk PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS erasure_request_ix1 ON erasure_request(status, available_at);
+CREATE INDEX IF NOT EXISTS erasure_request_ix2 ON erasure_request(user_id, status);
+
+CREATE SEQUENCE IF NOT EXISTS erasure_request_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('erasure_request', 'id', 'erasure_request_seq') ON CONFLICT DO NOTHING;
+
+-- One row per data row an erasure request handled, written in the same
+-- transaction as the change. action D=deleted, A=anonymized, H=held (kept;
+-- reason says why). The key makes a re-run skip rows already handled.
+CREATE TABLE IF NOT EXISTS erasure_audit (
+    request_id                           BIGINT        NOT NULL,
+    table_name                           VARCHAR(64)   NOT NULL,
+    row_key                              VARCHAR(200)  NOT NULL,
+    action                               CHAR(1)       NOT NULL,
+    reason                               VARCHAR(500) ,
+    executed_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT erasure_audit_pk PRIMARY KEY (request_id, table_name, row_key)
+);
+
+-- The random pseudonym anonymized rows carry in place of a user. Read only
+-- through erasure.Service (never exposed through REST); dropped when an
+-- erasure completes without held rows.
+CREATE TABLE IF NOT EXISTS user_pseudonym (
+    user_id                              BIGINT        NOT NULL,
+    pseudonym                            VARCHAR(64)   NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT user_pseudonym_pk PRIMARY KEY (user_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS user_pseudonym_uq ON user_pseudonym(pseudonym);
+
+-- Every re-identification of a pseudonym, with who asked and why.
+CREATE TABLE IF NOT EXISTS user_pseudonym_lookup (
+    id                                   BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    reason                               VARCHAR(500)  NOT NULL,
+    looked_up_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT user_pseudonym_lookup_pk PRIMARY KEY (id)
+);
+
+CREATE SEQUENCE IF NOT EXISTS user_pseudonym_lookup_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_pseudonym_lookup', 'id', 'user_pseudonym_lookup_seq') ON CONFLICT DO NOTHING;
 
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
@@ -1462,6 +1776,33 @@ BEGIN
      WHERE constraint_name = 'user_historic_actions' AND table_name = 'user_account_history'
   ) THEN
     ALTER TABLE user_account_history ADD CONSTRAINT user_historic_actions FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_legal_holds' AND table_name = 'user_legal_hold'
+  ) THEN
+    ALTER TABLE user_legal_hold ADD CONSTRAINT user_legal_holds FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_legal_hold_placer' AND table_name = 'user_legal_hold'
+  ) THEN
+    ALTER TABLE user_legal_hold ADD CONSTRAINT user_legal_hold_placer FOREIGN KEY (placed_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_legal_hold_releaser' AND table_name = 'user_legal_hold'
+  ) THEN
+    ALTER TABLE user_legal_hold ADD CONSTRAINT user_legal_hold_releaser FOREIGN KEY (released_by) REFERENCES user_account(id);
   END IF;
 END $$;
 DO $$
@@ -1828,6 +2169,33 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'refund_requests' AND table_name = 'refund_request'
+  ) THEN
+    ALTER TABLE refund_request ADD CONSTRAINT refund_requests FOREIGN KEY (refund_balance_id) REFERENCES refund_balance(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'refund_request_requester' AND table_name = 'refund_request'
+  ) THEN
+    ALTER TABLE refund_request ADD CONSTRAINT refund_request_requester FOREIGN KEY (requester_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'refund_request_approver' AND table_name = 'refund_request'
+  ) THEN
+    ALTER TABLE refund_request ADD CONSTRAINT refund_request_approver FOREIGN KEY (approver_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'user_bank_info_users' AND table_name = 'user_bank_info'
   ) THEN
     ALTER TABLE user_bank_info ADD CONSTRAINT user_bank_info_users FOREIGN KEY (user_id) REFERENCES user_account(id);
@@ -1840,6 +2208,60 @@ BEGIN
      WHERE constraint_name = 'user_bank_info_partners' AND table_name = 'user_bank_info'
   ) THEN
     ALTER TABLE user_bank_info ADD CONSTRAINT user_bank_info_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_payout_provider_partner' AND table_name = 'partner_payout_provider'
+  ) THEN
+    ALTER TABLE partner_payout_provider ADD CONSTRAINT partner_payout_provider_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_payout_instructions' AND table_name = 'payout_instruction'
+  ) THEN
+    ALTER TABLE payout_instruction ADD CONSTRAINT partner_payout_instructions FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payee_payout_instructions' AND table_name = 'payout_instruction'
+  ) THEN
+    ALTER TABLE payout_instruction ADD CONSTRAINT payee_payout_instructions FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_instruction_legs' AND table_name = 'payout_instruction_leg'
+  ) THEN
+    ALTER TABLE payout_instruction_leg ADD CONSTRAINT payout_instruction_legs FOREIGN KEY (instruction_id) REFERENCES payout_instruction(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_leg_destination' AND table_name = 'payout_instruction_leg'
+  ) THEN
+    ALTER TABLE payout_instruction_leg ADD CONSTRAINT payout_leg_destination FOREIGN KEY (user_bank_info_id) REFERENCES user_bank_info(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_leg_events' AND table_name = 'payout_instruction_event'
+  ) THEN
+    ALTER TABLE payout_instruction_event ADD CONSTRAINT payout_leg_events FOREIGN KEY (instruction_id, leg_no) REFERENCES payout_instruction_leg(instruction_id, leg_no);
   END IF;
 END $$;
 DO $$
@@ -2206,6 +2628,24 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_session_invites' AND table_name = 'recording_invite'
+  ) THEN
+    ALTER TABLE recording_invite ADD CONSTRAINT recording_session_invites FOREIGN KEY (session_id) REFERENCES recording_session(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'recording_invite_creator' AND table_name = 'recording_invite'
+  ) THEN
+    ALTER TABLE recording_invite ADD CONSTRAINT recording_invite_creator FOREIGN KEY (created_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'content_repository_owner' AND table_name = 'content_repository'
   ) THEN
     ALTER TABLE content_repository ADD CONSTRAINT content_repository_owner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
@@ -2272,5 +2712,140 @@ BEGIN
      WHERE constraint_name = 'partner_document_reviewer' AND table_name = 'partner_document'
   ) THEN
     ALTER TABLE partner_document ADD CONSTRAINT partner_document_reviewer FOREIGN KEY (reviewer_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'approval_policy_partner' AND table_name = 'approval_policy'
+  ) THEN
+    ALTER TABLE approval_policy ADD CONSTRAINT approval_policy_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'approval_request_partner' AND table_name = 'approval_request'
+  ) THEN
+    ALTER TABLE approval_request ADD CONSTRAINT approval_request_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'approval_request_maker' AND table_name = 'approval_request'
+  ) THEN
+    ALTER TABLE approval_request ADD CONSTRAINT approval_request_maker FOREIGN KEY (maker_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'approval_request_checker' AND table_name = 'approval_request'
+  ) THEN
+    ALTER TABLE approval_request ADD CONSTRAINT approval_request_checker FOREIGN KEY (checker_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'approval_request_events' AND table_name = 'approval_event'
+  ) THEN
+    ALTER TABLE approval_event ADD CONSTRAINT approval_request_events FOREIGN KEY (request_id) REFERENCES approval_request(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'approval_event_actor' AND table_name = 'approval_event'
+  ) THEN
+    ALTER TABLE approval_event ADD CONSTRAINT approval_event_actor FOREIGN KEY (actor_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'notification_recipient' AND table_name = 'notification'
+  ) THEN
+    ALTER TABLE notification ADD CONSTRAINT notification_recipient FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'notification_partner' AND table_name = 'notification'
+  ) THEN
+    ALTER TABLE notification ADD CONSTRAINT notification_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_notification_preferences' AND table_name = 'notification_preference'
+  ) THEN
+    ALTER TABLE notification_preference ADD CONSTRAINT user_notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'erasure_requests' AND table_name = 'erasure_request'
+  ) THEN
+    ALTER TABLE erasure_request ADD CONSTRAINT erasure_requests FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'erasure_requester' AND table_name = 'erasure_request'
+  ) THEN
+    ALTER TABLE erasure_request ADD CONSTRAINT erasure_requester FOREIGN KEY (requested_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'erasure_request_audit' AND table_name = 'erasure_audit'
+  ) THEN
+    ALTER TABLE erasure_audit ADD CONSTRAINT erasure_request_audit FOREIGN KEY (request_id) REFERENCES erasure_request(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_pseudonym_subject' AND table_name = 'user_pseudonym'
+  ) THEN
+    ALTER TABLE user_pseudonym ADD CONSTRAINT user_pseudonym_subject FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_pseudonym_lookups' AND table_name = 'user_pseudonym_lookup'
+  ) THEN
+    ALTER TABLE user_pseudonym_lookup ADD CONSTRAINT user_pseudonym_lookups FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_pseudonym_lookup_actor' AND table_name = 'user_pseudonym_lookup'
+  ) THEN
+    ALTER TABLE user_pseudonym_lookup ADD CONSTRAINT user_pseudonym_lookup_actor FOREIGN KEY (actor_id) REFERENCES user_account(id);
   END IF;
 END $$;

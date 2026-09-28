@@ -10,7 +10,7 @@ import (
 // these tests with a missing-flag error.
 var keelTestFlagIDs = []string{
 	http_api_port, https_port, tls_cert, tls_key, max_tls_version, metrics_addr,
-	session_timeout, refresh_token_ttl, otp_ttl_seconds, mail_mode, smtp_host, smtp_port,
+	session_timeout, refresh_token_ttl, access_revocation_cache_ttl, otp_ttl_seconds, mail_mode, smtp_host, smtp_port,
 	smtp_user, smtp_from, cors_origin, google_client_id, apple_client_id,
 	oauth_issuer, oauth_jwks_url, oauth_audience, oauth_resource,
 	oauth_resources, oauth_scopes_supported, oauth_as_mode,

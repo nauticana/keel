@@ -58,6 +58,9 @@ type UserService interface {
 	// SetPassword / Setup2FA / Disable2FA / RevokeTrustedDevice as a
 	// security-posture defense.
 	LogoutEverywhere(userID int) error
+	// RevokeAccessTokens rejects every access token (JWT) issued to the user
+	// up to now; ParseJWT enforces it.
+	RevokeAccessTokens(userID int) error
 
 	// Device push tokens (P-2). Idempotent register on re-login, explicit
 	// revoke on logout. ListActive is used by PushProvider implementations
@@ -72,11 +75,10 @@ type UserService interface {
 	SetSingleDevicePolicy(userID int, on bool) error
 
 	// DeleteAccount soft-deletes: anonymizes the user_account row in place,
-	// revokes tokens, deletes trusted devices and social links. Preserves
-	// referential integrity for history/audit rows. Consumers that own
-	// domain tables keyed on user_id should wrap this method and add their
-	// own cascade; the keel version alone is enough for App Store / Play
-	// Store compliance.
+	// revokes access and refresh tokens, deletes trusted devices and social
+	// links. Preserves referential integrity for history/audit rows. Returns
+	// ErrLegalHold while the user has an unreleased legal hold. Domain tables
+	// keyed on user_id are erased through the erasure package.
 	DeleteAccount(userID int, reason string) error
 
 	// 2FA (TOTP)

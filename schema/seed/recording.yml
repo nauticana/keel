@@ -19,6 +19,7 @@ seeds:
       - [recording_media_status, P, Pending upload]
       - [recording_media_status, U, Ready]
       - [recording_media_status, X, Failed]
+      - [recording_media_status, R, Purged]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

@@ -3,3 +3,5 @@ tables:
   - payment_method
   - user_payment_method
   - user_billing_customer
+  - refund_balance
+  - refund_request

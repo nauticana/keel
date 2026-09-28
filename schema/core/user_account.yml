@@ -60,6 +60,9 @@ columns:
   - name: single_device_session
     type: BOOLEAN
     default: FALSE
+  - name: tokens_valid_after
+    type: TIMESTAMP
+    nullable: true
 primary_key: [id]
 indexes:
   - name: user_account_email_uq

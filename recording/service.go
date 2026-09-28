@@ -5,9 +5,6 @@ package recording
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,96 +20,6 @@ import (
 	"github.com/nauticana/keel/user"
 )
 
-var (
-	ErrNotFound       = errors.New("recording: session not found")
-	ErrForbidden      = errors.New("recording: actor is not a participant")
-	ErrConsentMissing = errors.New("recording: a required participant has not consented")
-	ErrInvalidState   = errors.New("recording: operation not allowed in the session's state")
-	ErrCaptureToken   = errors.New("recording: invalid or expired capture token")
-	ErrMediaNotReady  = errors.New("recording: media is not ready")
-	ErrMediaTooLarge  = errors.New("recording: media exceeds size limit")
-	ErrConflict       = errors.New("recording: context already has a session with different terms")
-)
-
-const (
-	StatusAwaitingConsent = "W"
-	StatusAuthorized      = "A"
-	StatusRecording       = "R"
-	StatusFinalizing      = "F"
-	StatusReady           = "D"
-	StatusStopped         = "S"
-	StatusFailed          = "X"
-
-	MediaPending = "P"
-	MediaReady   = "U"
-	MediaFailed  = "X"
-)
-
-type Participant struct {
-	UserID int
-	Role   string
-}
-
-type Session struct {
-	ID               int64
-	PartnerID        int64
-	ContextRef       string
-	ConsentType      string
-	PolicyID         int64
-	Status           string
-	CaptureExpiresAt time.Time
-	Participants     []Participant
-}
-
-type Media struct {
-	ID          int64
-	SessionID   int64
-	Bucket      string
-	ObjectKey   string
-	ContentType string
-	SizeBytes   int64
-	Status      string
-}
-
-const (
-	qInsertSession      = "insert_session"
-	qInsertParticipant  = "insert_participant"
-	qGetSession         = "get_session"
-	qGetSessionByCtx    = "get_session_by_context"
-	qLockSession        = "lock_session"
-	qListParticipants   = "list_participants"
-	qSetStatus          = "set_status"
-	qSetCapture         = "set_capture"
-	qInsertMedia        = "insert_media"
-	qGetMediaByKey      = "get_media_by_key"
-	qResetMedia         = "reset_media"
-	qSetMediaStatus     = "set_media_status"
-	qGetMedia           = "get_media"
-	qMediaCounts        = "media_counts"
-	selectSessionFields = "SELECT id, partner_id, context_ref, consent_type, status, capture_token_hash, capture_expires_at, policy_id FROM recording_session"
-)
-
-var queries = map[string]string{
-	qInsertSession: `
-INSERT INTO recording_session (id, partner_id, context_ref, consent_type, policy_id, created_by)
-VALUES (?, ?, ?, ?, ?, ?)`,
-	qInsertParticipant: `INSERT INTO recording_participant (session_id, user_id, role) VALUES (?, ?, ?)`,
-	qGetSession:        selectSessionFields + ` WHERE id = ?`,
-	qGetSessionByCtx:   selectSessionFields + ` WHERE partner_id = ? AND context_ref = ?`,
-	qLockSession:       selectSessionFields + ` WHERE id = ? FOR UPDATE`,
-	qListParticipants:  `SELECT user_id, role FROM recording_participant WHERE session_id = ? ORDER BY user_id`,
-	qSetStatus:         `UPDATE recording_session SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-	qSetCapture:        `UPDATE recording_session SET capture_token_hash = ?, capture_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-	qInsertMedia: `
-INSERT INTO recording_media (id, session_id, bucket, object_key, content_type, size_bytes, uploaded_by)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
-	qGetMediaByKey:  `SELECT id, session_id, bucket, object_key, content_type, size_bytes, status FROM recording_media WHERE session_id = ? AND object_key = ?`,
-	qResetMedia:     `UPDATE recording_media SET status = 'P', size_bytes = 0, content_type = ?, uploaded_by = ?, completed_at = NULL WHERE id = ?`,
-	qSetMediaStatus: `UPDATE recording_media SET status = ?, size_bytes = ?, completed_at = CASE WHEN ? = 'U' THEN CURRENT_TIMESTAMP ELSE completed_at END WHERE id = ?`,
-	qGetMedia:       `SELECT id, session_id, bucket, object_key, content_type, size_bytes, status FROM recording_media WHERE id = ? AND session_id = ?`,
-	qMediaCounts:    `SELECT COALESCE(SUM(CASE WHEN status = 'U' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'P' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'X' THEN 1 ELSE 0 END), 0) FROM recording_media WHERE session_id = ?`,
-}
-
 // Service is the consent-gated session state machine. Storage is required for
 // uploads; CaptureTTL bounds a capture authorization.
 type Service struct {
@@ -122,6 +29,9 @@ type Service struct {
 	CaptureTTL         time.Duration
 	MaxMediaBytes      int64
 	AllowedContentType map[string]bool
+	// ObjectKey overrides the default "recording/<sessionID>/<key>" layout. It
+	// must be deterministic and unique per (session, key), and stay under "recording/".
+	ObjectKey func(s Session, key string) string
 
 	once sync.Once
 	qs   port.QueryService
@@ -138,10 +48,6 @@ func (s *Service) captureTTL() time.Duration {
 	}
 	return 15 * time.Minute
 }
-
-// EventRef is the consent_event reference for a session; consent recorded
-// against any other reference does not authorize it.
-func EventRef(sessionID int64) string { return fmt.Sprintf("recording_session:%d", sessionID) }
 
 // CreateSession returns the session for (partnerID, contextRef), creating
 // it with the given required participants when absent.
@@ -166,7 +72,7 @@ func (s *Service) CreateSession(ctx context.Context, partnerID int64, contextRef
 	if err != nil {
 		return nil, err
 	}
-	if existing, err := s.sessionBy(ctx, s.query(ctx), qGetSessionByCtx, partnerID, contextRef); err == nil {
+	if existing, err := loadSession(ctx, s.query(ctx), qGetSessionByCtx, partnerID, contextRef); err == nil {
 		if existing.ConsentType != consentType || existing.PolicyID != policyID {
 			return nil, ErrConflict
 		}
@@ -174,30 +80,23 @@ func (s *Service) CreateSession(ctx context.Context, partnerID int64, contextRef
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
-	tx, err := s.DB.BeginTx(ctx, queries)
+	var id int64
+	err = s.inTx(ctx, func(tx port.TxQueryService) error {
+		id = tx.GenID()
+		if _, err := tx.Query(ctx, qInsertSession, id, partnerID, contextRef, consentType, policyID, createdBy); err != nil {
+			return err
+		}
+		for _, p := range participants {
+			if _, err := tx.Query(ctx, qInsertParticipant, id, p.UserID, p.Role); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
-		}
-	}()
-	id := tx.GenID()
-	if _, err := tx.Query(ctx, qInsertSession, id, partnerID, contextRef, consentType, policyID, createdBy); err != nil {
-		return nil, err
-	}
-	for _, p := range participants {
-		if _, err := tx.Query(ctx, qInsertParticipant, id, p.UserID, p.Role); err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	committed = true
-	created, err := s.sessionBy(ctx, s.query(ctx), qGetSession, id)
+	created, err := loadSession(ctx, s.query(ctx), qGetSession, id)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +105,7 @@ func (s *Service) CreateSession(ctx context.Context, partnerID int64, contextRef
 
 // GetSession returns a session to one of its participants.
 func (s *Service) GetSession(ctx context.Context, sessionID int64, actorID int) (*Session, error) {
-	session, err := s.sessionBy(ctx, s.query(ctx), qGetSession, sessionID)
+	session, err := loadSession(ctx, s.query(ctx), qGetSession, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -216,109 +115,62 @@ func (s *Service) GetSession(ctx context.Context, sessionID int64, actorID int) 
 	return &session.Session, nil
 }
 
-// Decide records a participant's consent for this session. Declining or
-// withdrawing while authorized or recording stops the session.
+// Decide records a participant's consent for the session's current attempt.
+// Declining or withdrawing while authorized or recording stops the session.
 func (s *Service) Decide(ctx context.Context, sessionID int64, actorID int, consented bool, meta user.ConsentRequest) error {
-	tx, err := s.DB.BeginTx(ctx, queries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
+	return s.withLocked(ctx, sessionID, actorID, func(tx port.TxQueryService, session *sessionRow) error {
+		if err := s.recordConsent(ctx, &session.Session, actorID, consented, meta); err != nil {
+			return err
 		}
-	}()
-	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
-	if err != nil {
-		return err
-	}
-	if !session.has(actorID) {
-		return ErrForbidden
-	}
-	meta.UserID = actorID
-	meta.ConsentType = session.ConsentType
-	meta.EventRef = EventRef(sessionID)
-	meta.Consented = consented
-	meta.PolicyID = session.PolicyID
-	if consented {
-		err = s.Consents.Record(ctx, meta)
-	} else {
-		err = s.Consents.Withdraw(ctx, meta)
-	}
-	if err != nil {
-		return err
-	}
-	if !consented {
+		if consented {
+			return nil
+		}
 		switch session.Status {
 		case StatusAuthorized:
 			if _, err := tx.Query(ctx, qSetCapture, nil, nil, sessionID); err != nil {
 				return err
 			}
-			if _, err := tx.Query(ctx, qSetStatus, StatusStopped, sessionID); err != nil {
-				return err
-			}
+			_, err := tx.Query(ctx, qSetStatus, StatusStopped, sessionID)
+			return err
 		case StatusRecording:
-			if _, err := tx.Query(ctx, qSetStatus, StatusFinalizing, sessionID); err != nil {
-				return err
-			}
+			_, err := tx.Query(ctx, qSetStatus, StatusFinalizing, sessionID)
+			return err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 // Start authorizes capture once every participant's current decision for
-// this session is affirmative. Returns the capture token the client must
+// this attempt is affirmative. Returns the capture token the client must
 // present to Acknowledge, Renew and Upload.
 func (s *Service) Start(ctx context.Context, sessionID int64, actorID int) (token string, expiresAt time.Time, err error) {
-	tx, err := s.DB.BeginTx(ctx, queries)
+	err = s.withLocked(ctx, sessionID, actorID, func(tx port.TxQueryService, session *sessionRow) error {
+		if session.Status != StatusAwaitingConsent && session.Status != StatusAuthorized {
+			return ErrInvalidState
+		}
+		for _, p := range session.Participants {
+			consented, found, err := s.Consents.LatestConsentFor(ctx, p.UserID, session.ConsentType, EventRef(sessionID, session.Attempt), session.PolicyID)
+			if err != nil {
+				return err
+			}
+			if !found || !consented {
+				return ErrConsentMissing
+			}
+		}
+		var hash string
+		if token, hash, err = newToken(); err != nil {
+			return err
+		}
+		expiresAt = time.Now().Add(s.captureTTL())
+		if _, err := tx.Query(ctx, qSetCapture, hash, expiresAt, sessionID); err != nil {
+			return err
+		}
+		_, err := tx.Query(ctx, qSetStatus, StatusAuthorized, sessionID)
+		return err
+	})
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
-		}
-	}()
-	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	if !session.has(actorID) {
-		return "", time.Time{}, ErrForbidden
-	}
-	if session.Status != StatusAwaitingConsent && session.Status != StatusAuthorized {
-		return "", time.Time{}, ErrInvalidState
-	}
-	for _, p := range session.Participants {
-		consented, found, err := s.Consents.LatestConsentFor(ctx, p.UserID, session.ConsentType, EventRef(sessionID), session.PolicyID)
-		if err != nil {
-			return "", time.Time{}, err
-		}
-		if !found || !consented {
-			return "", time.Time{}, ErrConsentMissing
-		}
-	}
-	token, hash, err := newCaptureToken()
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	expiresAt = time.Now().Add(s.captureTTL())
-	if _, err := tx.Query(ctx, qSetCapture, hash, expiresAt, sessionID); err != nil {
-		return "", time.Time{}, err
-	}
-	if _, err := tx.Query(ctx, qSetStatus, StatusAuthorized, sessionID); err != nil {
-		return "", time.Time{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return "", time.Time{}, err
-	}
-	committed = true
 	return token, expiresAt, nil
 }
 
@@ -350,52 +202,120 @@ func (s *Service) Renew(ctx context.Context, sessionID int64, actorID int, captu
 // Stop ends capture authorization. Idempotent: recording moves to
 // finalizing (ready once media exists), authorized-but-never-captured to stopped.
 func (s *Service) Stop(ctx context.Context, sessionID int64, actorID int) error {
-	tx, err := s.DB.BeginTx(ctx, queries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
+	return s.withLocked(ctx, sessionID, actorID, func(tx port.TxQueryService, session *sessionRow) error {
+		next := ""
+		switch session.Status {
+		case StatusAwaitingConsent, StatusAuthorized:
+			next = StatusStopped
+		case StatusRecording:
+			next = StatusFinalizing
+			ready, pending, _, err := s.mediaCounts(ctx, tx, sessionID)
+			if err != nil {
+				return err
+			}
+			if ready > 0 && pending == 0 {
+				next = StatusReady
+			}
 		}
-	}()
-	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
-	if err != nil {
-		return err
-	}
-	if !session.has(actorID) {
-		return ErrForbidden
-	}
-	next := ""
-	switch session.Status {
-	case StatusAwaitingConsent, StatusAuthorized:
-		next = StatusStopped
-	case StatusRecording:
-		next = StatusFinalizing
-		ready, pending, _, err := s.mediaCounts(ctx, tx, sessionID)
-		if err != nil {
-			return err
+		if next == "" {
+			return nil
 		}
-		if ready > 0 && pending == 0 {
-			next = StatusReady
-		}
-	}
-	if next != "" {
 		if next == StatusStopped || next == StatusReady {
 			if _, err := tx.Query(ctx, qSetCapture, nil, nil, sessionID); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Query(ctx, qSetStatus, next, sessionID); err != nil {
+		_, err := tx.Query(ctx, qSetStatus, next, sessionID)
+		return err
+	})
+}
+
+// Reopen returns a stopped or ready session to awaiting consent under a new
+// attempt, so every participant must consent again. Media is kept.
+func (s *Service) Reopen(ctx context.Context, sessionID int64, actorID int) (*Session, error) {
+	err := s.withLocked(ctx, sessionID, actorID, func(tx port.TxQueryService, session *sessionRow) error {
+		if session.Status != StatusStopped && session.Status != StatusReady {
+			return ErrInvalidState
+		}
+		_, err := tx.Query(ctx, qReopen, sessionID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetSession(ctx, sessionID, actorID)
+}
+
+// Invite mints a join token for a session that is still capturable; only a
+// participant may mint. The token is reusable until it expires.
+func (s *Service) Invite(ctx context.Context, sessionID int64, actorID int, ttl time.Duration) (token string, expiresAt time.Time, err error) {
+	if ttl <= 0 {
+		return "", time.Time{}, fmt.Errorf("recording: invite ttl must be positive")
+	}
+	session, err := s.GetSession(ctx, sessionID, actorID)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if !session.joinable() {
+		return "", time.Time{}, ErrInvalidState
+	}
+	token, hash, err := newToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expiresAt = time.Now().Add(ttl)
+	if _, err := s.query(ctx).Query(ctx, qInsertInvite, hash, sessionID, expiresAt, actorID); err != nil {
+		return "", time.Time{}, err
+	}
+	return token, expiresAt, nil
+}
+
+// InviteSession resolves an unexpired invite token without consuming it.
+func (s *Service) InviteSession(ctx context.Context, token string) (*Session, error) {
+	sessionID, err := s.inviteSessionID(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	session, err := loadSession(ctx, s.query(ctx), qGetSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return &session.Session, nil
+}
+
+// JoinWithConsent adds userID under role and records its affirmative consent
+// in the same session lock, so no state holds an unconsented participant. An
+// existing participant keeps its role and re-records consent.
+func (s *Service) JoinWithConsent(ctx context.Context, token string, userID int, role string, meta user.ConsentRequest) (*Session, error) {
+	if userID <= 0 || role == "" {
+		return nil, fmt.Errorf("recording: user id and role are required")
+	}
+	sessionID, err := s.inviteSessionID(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	var joined Session
+	err = s.inTx(ctx, func(tx port.TxQueryService) error {
+		session, err := loadSession(ctx, tx, qLockSession, sessionID)
+		if err != nil {
 			return err
 		}
+		if !session.joinable() {
+			return ErrInvalidState
+		}
+		if !session.has(userID) {
+			if _, err := tx.Query(ctx, qInsertParticipant, sessionID, userID, role); err != nil {
+				return err
+			}
+			session.Participants = append(session.Participants, Participant{UserID: userID, Role: role})
+		}
+		joined = session.Session
+		return s.recordConsent(ctx, &session.Session, userID, true, meta)
+	})
+	if err != nil {
+		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	committed = true
-	return nil
+	return &joined, nil
 }
 
 // Upload stores one object for a recording or finalizing session. The media
@@ -411,19 +331,21 @@ func (s *Service) Upload(ctx context.Context, sessionID int64, actorID int, capt
 	if cleanKey == "." || cleanKey == ".." || strings.HasPrefix(cleanKey, "../") || strings.HasPrefix(cleanKey, "/") {
 		return nil, fmt.Errorf("recording: invalid object key")
 	}
-	storageKey := fmt.Sprintf("recording/%d/%s", sessionID, cleanKey)
 	var media *Media
 	err := s.withCapture(ctx, sessionID, actorID, captureToken, func(tx port.TxQueryService, session *sessionRow) error {
 		if session.Status != StatusRecording && session.Status != StatusFinalizing {
 			return ErrInvalidState
+		}
+		storageKey, err := s.storageKey(session.Session, cleanKey)
+		if err != nil {
+			return err
 		}
 		existing, err := tx.Query(ctx, qGetMediaByKey, sessionID, storageKey)
 		if err != nil {
 			return err
 		}
 		if len(existing.Rows) > 0 {
-			row := existing.Rows[0]
-			media = mediaFromRow(row)
+			media = mediaFromRow(existing.Rows[0])
 			if media.Status == MediaReady {
 				return nil
 			}
@@ -444,8 +366,8 @@ func (s *Service) Upload(ctx context.Context, sessionID int64, actorID int, capt
 		return media, nil
 	}
 	counter := &countingReader{r: io.LimitReader(body, s.MaxMediaBytes+1)}
-	if err := s.Storage.PutObject(ctx, storageKey, counter, contentType, nil); err != nil || counter.n > s.MaxMediaBytes {
-		_ = s.Storage.DeleteObject(ctx, storageKey)
+	if err := s.Storage.PutObject(ctx, media.ObjectKey, counter, contentType, nil); err != nil || counter.n > s.MaxMediaBytes {
+		_ = s.Storage.DeleteObject(ctx, media.ObjectKey)
 		_, updateErr := s.query(ctx).Query(ctx, qSetMediaStatus, MediaFailed, counter.n, MediaFailed, media.ID)
 		media.Status = MediaFailed
 		if counter.n > s.MaxMediaBytes {
@@ -462,30 +384,98 @@ func (s *Service) Upload(ctx context.Context, sessionID int64, actorID int, capt
 
 // MediaURL returns a short-lived read URL for ready media to a participant.
 func (s *Service) MediaURL(ctx context.Context, sessionID int64, actorID int, mediaID int64, expirySeconds int) (string, error) {
-	if s.Storage == nil || expirySeconds <= 0 {
-		return "", fmt.Errorf("recording: storage and positive expiry are required")
-	}
 	if _, err := s.GetSession(ctx, sessionID, actorID); err != nil {
 		return "", err
 	}
-	res, err := s.query(ctx).Query(ctx, qGetMedia, mediaID, sessionID)
+	return s.signedMediaURL(ctx, expirySeconds, qGetMedia, mediaID, sessionID)
+}
+
+// ListMedia returns every media row of a session without a participant
+// check; the caller must already have authorized the actor.
+func (s *Service) ListMedia(ctx context.Context, sessionID int64) ([]Media, error) {
+	if _, err := loadSession(ctx, s.query(ctx), qGetSession, sessionID); err != nil {
+		return nil, err
+	}
+	res, err := s.query(ctx).Query(ctx, qListMedia, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	media := make([]Media, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		media = append(media, *mediaFromRow(row))
+	}
+	return media, nil
+}
+
+// PrivilegedMediaURL is MediaURL without the participant check, for a caller
+// the application has already authorized (e.g. a reviewer role).
+func (s *Service) PrivilegedMediaURL(ctx context.Context, mediaID int64, expirySeconds int) (string, error) {
+	return s.signedMediaURL(ctx, expirySeconds, qGetMediaByID, mediaID)
+}
+
+func (s *Service) signedMediaURL(ctx context.Context, expirySeconds int, query string, args ...any) (string, error) {
+	if s.Storage == nil || expirySeconds <= 0 {
+		return "", fmt.Errorf("recording: storage and positive expiry are required")
+	}
+	res, err := s.query(ctx).Query(ctx, query, args...)
 	if err != nil {
 		return "", err
 	}
 	if len(res.Rows) == 0 {
-		return "", ErrNotFound
+		return "", ErrMediaNotFound
 	}
-	row := res.Rows[0]
-	if common.AsString(row[6]) != MediaReady {
+	media := mediaFromRow(res.Rows[0])
+	switch media.Status {
+	case MediaReady:
+	case MediaPurged:
+		return "", ErrMediaPurged
+	default:
 		return "", ErrMediaNotReady
 	}
-	if bucket := common.AsString(row[2]); bucket != s.Storage.Bucket() {
-		return "", fmt.Errorf("recording: media %d is in bucket %q, storage is bound to %q", mediaID, bucket, s.Storage.Bucket())
+	if media.Bucket != s.Storage.Bucket() {
+		return "", fmt.Errorf("recording: media %d is in bucket %q, storage is bound to %q", media.ID, media.Bucket, s.Storage.Bucket())
 	}
-	return s.Storage.GetSignedURL(ctx, common.AsString(row[3]), expirySeconds)
+	return s.Storage.GetSignedURL(ctx, media.ObjectKey, expirySeconds)
 }
 
-func (s *Service) withCapture(ctx context.Context, sessionID int64, actorID int, captureToken string, fn func(port.TxQueryService, *sessionRow) error) error {
+func (s *Service) storageKey(session Session, key string) (string, error) {
+	if s.ObjectKey == nil {
+		return fmt.Sprintf("recording/%d/%s", session.ID, key), nil
+	}
+	custom := path.Clean(s.ObjectKey(session, key))
+	if !strings.HasPrefix(custom, "recording/") {
+		return "", fmt.Errorf("recording: ObjectKey %q is outside recording/", custom)
+	}
+	return custom, nil
+}
+
+func (s *Service) recordConsent(ctx context.Context, session *Session, userID int, consented bool, meta user.ConsentRequest) error {
+	meta.UserID = userID
+	meta.ConsentType = session.ConsentType
+	meta.EventRef = EventRef(session.ID, session.Attempt)
+	meta.Consented = consented
+	meta.PolicyID = session.PolicyID
+	if consented {
+		return s.Consents.Record(ctx, meta)
+	}
+	return s.Consents.Withdraw(ctx, meta)
+}
+
+func (s *Service) inviteSessionID(ctx context.Context, token string) (int64, error) {
+	if token == "" {
+		return 0, ErrInviteToken
+	}
+	res, err := s.query(ctx).Query(ctx, qInviteSession, sha256Hex(token), time.Now())
+	if err != nil {
+		return 0, err
+	}
+	if len(res.Rows) == 0 {
+		return 0, ErrInviteToken
+	}
+	return common.AsInt64(res.Rows[0][0]), nil
+}
+
+func (s *Service) inTx(ctx context.Context, fn func(port.TxQueryService) error) error {
 	tx, err := s.DB.BeginTx(ctx, queries)
 	if err != nil {
 		return err
@@ -496,17 +486,7 @@ func (s *Service) withCapture(ctx context.Context, sessionID int64, actorID int,
 			_ = data.RollbackDetached(tx)
 		}
 	}()
-	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
-	if err != nil {
-		return err
-	}
-	if session.captureHash == "" || session.captureHash != sha256Hex(captureToken) || time.Now().After(session.CaptureExpiresAt) {
-		return ErrCaptureToken
-	}
-	if !session.has(actorID) {
-		return ErrForbidden
-	}
-	if err := fn(tx, session); err != nil {
+	if err := fn(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -516,40 +496,52 @@ func (s *Service) withCapture(ctx context.Context, sessionID int64, actorID int,
 	return nil
 }
 
-func (s *Service) promoteIfFinalizing(ctx context.Context, sessionID int64) error {
-	tx, err := s.DB.BeginTx(ctx, queries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
-		}
-	}()
-	session, err := s.sessionBy(ctx, tx, qLockSession, sessionID)
-	if err != nil {
-		return err
-	}
-	if session.Status == StatusFinalizing {
-		ready, pending, _, err := s.mediaCounts(ctx, tx, sessionID)
+// withLocked runs fn under the session row lock for a participant actor.
+func (s *Service) withLocked(ctx context.Context, sessionID int64, actorID int, fn func(port.TxQueryService, *sessionRow) error) error {
+	return s.inTx(ctx, func(tx port.TxQueryService) error {
+		session, err := loadSession(ctx, tx, qLockSession, sessionID)
 		if err != nil {
 			return err
 		}
-		if ready > 0 && pending == 0 {
-			if _, err := tx.Query(ctx, qSetCapture, nil, nil, sessionID); err != nil {
-				return err
-			}
-			if _, err := tx.Query(ctx, qSetStatus, StatusReady, sessionID); err != nil {
-				return err
-			}
+		if !session.has(actorID) {
+			return ErrForbidden
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
+		return fn(tx, session)
+	})
+}
+
+func (s *Service) withCapture(ctx context.Context, sessionID int64, actorID int, captureToken string, fn func(port.TxQueryService, *sessionRow) error) error {
+	return s.inTx(ctx, func(tx port.TxQueryService) error {
+		session, err := loadSession(ctx, tx, qLockSession, sessionID)
+		if err != nil {
+			return err
+		}
+		if session.captureHash == "" || session.captureHash != sha256Hex(captureToken) || time.Now().After(session.CaptureExpiresAt) {
+			return ErrCaptureToken
+		}
+		if !session.has(actorID) {
+			return ErrForbidden
+		}
+		return fn(tx, session)
+	})
+}
+
+func (s *Service) promoteIfFinalizing(ctx context.Context, sessionID int64) error {
+	return s.inTx(ctx, func(tx port.TxQueryService) error {
+		session, err := loadSession(ctx, tx, qLockSession, sessionID)
+		if err != nil || session.Status != StatusFinalizing {
+			return err
+		}
+		ready, pending, _, err := s.mediaCounts(ctx, tx, sessionID)
+		if err != nil || ready == 0 || pending > 0 {
+			return err
+		}
+		if _, err := tx.Query(ctx, qSetCapture, nil, nil, sessionID); err != nil {
+			return err
+		}
+		_, err = tx.Query(ctx, qSetStatus, StatusReady, sessionID)
 		return err
-	}
-	committed = true
-	return nil
+	})
 }
 
 func (s *Service) mediaCounts(ctx context.Context, qs port.QueryService, sessionID int64) (int64, int64, int64, error) {
@@ -561,77 +553,4 @@ func (s *Service) mediaCounts(ctx context.Context, qs port.QueryService, session
 		return 0, 0, 0, nil
 	}
 	return common.AsInt64(res.Rows[0][0]), common.AsInt64(res.Rows[0][1]), common.AsInt64(res.Rows[0][2]), nil
-}
-
-type sessionRow struct {
-	Session
-	captureHash string
-}
-
-func (s *Service) sessionBy(ctx context.Context, qs port.QueryService, query string, args ...any) (*sessionRow, error) {
-	res, err := qs.Query(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	if len(res.Rows) == 0 {
-		return nil, ErrNotFound
-	}
-	row := res.Rows[0]
-	session := &sessionRow{Session: Session{
-		ID:          common.AsInt64(row[0]),
-		PartnerID:   common.AsInt64(row[1]),
-		ContextRef:  common.AsString(row[2]),
-		ConsentType: common.AsString(row[3]),
-		Status:      common.AsString(row[4]),
-	}, captureHash: common.AsString(row[5])}
-	if t, ok := row[6].(time.Time); ok {
-		session.CaptureExpiresAt = t
-	}
-	session.PolicyID = common.AsInt64(row[7])
-	parts, err := qs.Query(ctx, qListParticipants, session.ID)
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range parts.Rows {
-		session.Participants = append(session.Participants, Participant{UserID: int(common.AsInt64(p[0])), Role: common.AsString(p[1])})
-	}
-	return session, nil
-}
-
-func (r *sessionRow) has(userID int) bool {
-	for _, p := range r.Participants {
-		if p.UserID == userID {
-			return true
-		}
-	}
-	return false
-}
-
-func mediaFromRow(row []any) *Media {
-	return &Media{ID: common.AsInt64(row[0]), SessionID: common.AsInt64(row[1]), Bucket: common.AsString(row[2]), ObjectKey: common.AsString(row[3]), ContentType: common.AsString(row[4]), SizeBytes: common.AsInt64(row[5]), Status: common.AsString(row[6])}
-}
-
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
-}
-
-func newCaptureToken() (raw, hash string, err error) {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", "", err
-	}
-	raw = hex.EncodeToString(b[:])
-	return raw, sha256Hex(raw), nil
-}
-
-func sha256Hex(v string) string {
-	sum := sha256.Sum256([]byte(v))
-	return hex.EncodeToString(sum[:])
 }

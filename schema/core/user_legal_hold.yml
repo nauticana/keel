@@ -1,0 +1,47 @@
+table: user_legal_hold
+comment: |
+  A legal hold on a user's data. While any hold of the user is unreleased,
+  DeleteAccount refuses, the RetentionSweeper keeps the user's documents and
+  erasure requests wait. The reason is free text; which incidents justify a
+  hold is the application's decision.
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: reason
+    type: VARCHAR(500)
+  - name: placed_by
+    type: BIGINT
+  - name: placed_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: released_by
+    type: BIGINT
+    nullable: true
+  - name: released_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: user_legal_hold_seq
+  column: id
+indexes:
+  - name: user_legal_hold_ix1
+    columns: [user_id, released_at]
+foreign_keys:
+  - name: user_legal_holds
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: user_legal_hold_placer
+    columns: [placed_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: user_legal_hold_releaser
+    columns: [released_by]
+    references:
+      table: user_account
+      columns: [id]

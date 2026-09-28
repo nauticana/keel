@@ -1,0 +1,27 @@
+table: erasure_audit
+comment: |
+  One row per data row an erasure request handled, written in the same
+  transaction as the change. action D=deleted, A=anonymized, H=held (kept;
+  reason says why). The key makes a re-run skip rows already handled.
+columns:
+  - name: request_id
+    type: BIGINT
+  - name: table_name
+    type: VARCHAR(64)
+  - name: row_key
+    type: VARCHAR(200)
+  - name: action
+    type: CHAR(1)
+  - name: reason
+    type: VARCHAR(500)
+    nullable: true
+  - name: executed_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [request_id, table_name, row_key]
+foreign_keys:
+  - name: erasure_request_audit
+    columns: [request_id]
+    references:
+      table: erasure_request
+      columns: [id]

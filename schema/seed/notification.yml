@@ -1,0 +1,19 @@
+comment: Notification delivery seed data
+order: 220
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [notification_status, Notification Status]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [notification_status, P, Pending]
+      - [notification_status, A, Active]
+      - [notification_status, S, Sent]
+      - [notification_status, X, Suppressed]
+      - [notification_status, F, Failed]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [notification_status, notification, status]

@@ -1,0 +1,57 @@
+table: erasure_request
+comment: |
+  A request to erase one user's personal data, executed by the erasure
+  Worker. status P=pending, A=active (claimed; lease_token/lease_until),
+  H=held (the user has an unreleased legal hold; resumes on release),
+  D=done, F=failed after the retry budget, X=cancelled.
+columns:
+  - name: id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: status
+    type: CHAR(1)
+    default: P
+  - name: requested_by
+    type: BIGINT
+  - name: requested_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: available_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: attempts
+    type: INTEGER
+    default: 0
+  - name: lease_token
+    type: BIGINT
+    nullable: true
+  - name: lease_until
+    type: TIMESTAMP
+    nullable: true
+  - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: last_error
+    type: TEXT
+    nullable: true
+primary_key: [id]
+sequence:
+  name: erasure_request_seq
+  column: id
+indexes:
+  - name: erasure_request_ix1
+    columns: [status, available_at]
+  - name: erasure_request_ix2
+    columns: [user_id, status]
+foreign_keys:
+  - name: erasure_requests
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: erasure_requester
+    columns: [requested_by]
+    references:
+      table: user_account
+      columns: [id]

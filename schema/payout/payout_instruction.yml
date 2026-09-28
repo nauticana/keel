@@ -1,0 +1,58 @@
+table: payout_instruction
+comment: |
+  One idempotent payout to a partner's payee, allocated against the
+  application's earnings at creation. Status: N=new, D=dispatching,
+  P=provider-pending, S=settled, F=failed (re-executable or cancellable),
+  V=fully reversed, X=cancelled, M=manual review.
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: currency
+    type: CHAR(3)
+  - name: amount_minor
+    type: BIGINT
+  - name: idempotency_key
+    type: VARCHAR(200)
+  - name: status
+    type: CHAR(1)
+    default: N
+  - name: failure_reason
+    type: TEXT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: payout_instruction_seq
+  column: id
+checks:
+  - name: chk_payout_instruction_amount
+    expression: "amount_minor > 0"
+indexes:
+  - name: payout_instruction_key_uq
+    columns: [partner_id, idempotency_key]
+    unique: true
+  - name: idx_payout_instruction_in_flight
+    columns: [status, updated_at]
+    where: "status IN ('D', 'P')"
+  - name: idx_payout_instruction_payee
+    columns: [user_id]
+foreign_keys:
+  - name: partner_payout_instructions
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: payee_payout_instructions
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

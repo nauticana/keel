@@ -5,6 +5,7 @@ seeds:
     columns: [id, caption]
     rows:
       - [payment_method_type, Payment Method Type]
+      - [refund_request_status, Refund Request Status]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -13,10 +14,15 @@ seeds:
       - [payment_method_type, wallet, Wallet]
       - [payment_method_type, apple_pay, Apple Pay]
       - [payment_method_type, google_pay, Google Pay]
+      - [refund_request_status, P, Pending Approval]
+      - [refund_request_status, A, Approved]
+      - [refund_request_status, S, Succeeded]
+      - [refund_request_status, F, Failed]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
       - [payment_method_type, user_payment_method, method_type]
+      - [refund_request_status, refund_request, status]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:
@@ -27,6 +33,11 @@ seeds:
       - [payment_webhook_log, payment_webhook_log]
       - [payment_method, payment_method]
       - [user_payment_method, user_payment_method]
+      - [refund_balance, refund_balance]
+  - table: rest_api_child
+    columns: [api_id, seq, parent_seq, constraint_name]
+    rows:
+      - [refund_balance, 1, 0, refund_requests]
   - table: authorization_object
     columns: [id, caption]
     rows:
@@ -51,6 +62,7 @@ seeds:
       - [20, false, payments, payment_methods, payment_method, Payment Methods]
       - [30, false, payments, payment_webhook_logs, payment_webhook_log, Webhook Logs]
       - [40, true, payments, user_payment_methods, user_payment_method, User Payment Methods]
+      - [50, false, payments, refund_balances, refund_balance, Refunds]
   - table: column_display_attribute
     columns: [table_name, column_name, display_mode]
     rows:
@@ -79,3 +91,6 @@ seeds:
       - [PAYMENT_ADMIN, TABLE, SELECT, user_payment_method]
       - [PAYMENT_ADMIN, USER_PAYMENT_METHOD, SET_DEFAULT, user_payment_method]
       - [PAYMENT_ADMIN, USER_PAYMENT_METHOD, REMOVE, user_payment_method]
+      - [PAYMENT_ADMIN, PAGE, ACCESS, refund_balances]
+      - [PAYMENT_ADMIN, TABLE, SELECT, refund_balance]
+      - [PAYMENT_ADMIN, TABLE, SELECT, refund_request]

@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -225,9 +226,9 @@ func TestWise_Payout_FundingRejectedKeepsTransferIdentity(t *testing.T) {
 func TestOnboardingService_HandleWebhook_NilSinkIsRetryableError(t *testing.T) {
 	log := newFakeWebhookLog()
 	svc := &OnboardingService{
-		Provider: &fakeProvider{event: &PayoutWebhookEvent{
+		Providers: NewStaticProviderResolver(&fakeProvider{event: &PayoutWebhookEvent{
 			Type: PayoutEventTransferPaid, ProviderTransferID: "po_x", RawEventID: "ev_x",
-		}},
+		}}),
 		WebhookLog: log,
 	}
 	// No sink wired: a terminal event must fail (claim stays retryable),
@@ -421,75 +422,6 @@ func TestGetPayoutStatus_AllProviders(t *testing.T) {
 // OnboardingService.HandleWebhook — durable dedup + transfer dispatch
 // -----------------------------------------------------------------------------
 
-type fakeProvider struct {
-	AbstractProvider
-	event *PayoutWebhookEvent
-}
-
-func (f *fakeProvider) Code() string { return "AW" }
-func (f *fakeProvider) StartOnboarding(context.Context, StartOnboardingInput) (*PayoutOnboardingSession, error) {
-	return nil, ErrNotImplemented
-}
-func (f *fakeProvider) VerifyAndParseWebhook(map[string][]string, []byte) (*PayoutWebhookEvent, error) {
-	return f.event, nil
-}
-func (f *fakeProvider) RequestInstantPayout(context.Context, InstantPayoutInput) (*InstantPayoutResult, error) {
-	return nil, ErrNotImplemented
-}
-func (f *fakeProvider) GetPayoutStatus(context.Context, string) (*InstantPayoutResult, error) {
-	return nil, ErrNotImplemented
-}
-
-// fakeWebhookLog mirrors SQLWebhookLog's Claim semantics: P/R rows are
-// duplicates, F rows are re-claimed.
-type fakeWebhookLog struct {
-	status map[string]string // key → last processing status
-	ids    map[string]int64
-	next   int64
-}
-
-func newFakeWebhookLog() *fakeWebhookLog {
-	return &fakeWebhookLog{status: map[string]string{}, ids: map[string]int64{}}
-}
-
-func (f *fakeWebhookLog) Claim(_ context.Context, provider string, ev *PayoutWebhookEvent, _ []byte) (int64, bool, error) {
-	k := provider + "/" + ev.RawEventID
-	switch f.status[k] {
-	case WebhookStatusProcessed, WebhookStatusReceived:
-		return 0, true, nil
-	case WebhookStatusFailed:
-		f.status[k] = WebhookStatusReceived
-		return f.ids[k], false, nil
-	}
-	f.next++
-	f.ids[k] = f.next
-	f.status[k] = WebhookStatusReceived
-	return f.next, false, nil
-}
-
-func (f *fakeWebhookLog) UpdateStatus(_ context.Context, logID int64, status, _ string) error {
-	for k, id := range f.ids {
-		if id == logID {
-			f.status[k] = status
-		}
-	}
-	return nil
-}
-
-type fakeSink struct {
-	events   []*PayoutWebhookEvent
-	failNext bool
-}
-
-func (f *fakeSink) ApplyTransferEvent(_ context.Context, ev *PayoutWebhookEvent) error {
-	if f.failNext {
-		f.failNext = false
-		return fmt.Errorf("ledger temporarily unavailable")
-	}
-	f.events = append(f.events, ev)
-	return nil
-}
-
 func TestOnboardingService_HandleWebhook_DedupAndSink(t *testing.T) {
 	ev := &PayoutWebhookEvent{
 		Type:               PayoutEventTransferPaid,
@@ -499,7 +431,7 @@ func TestOnboardingService_HandleWebhook_DedupAndSink(t *testing.T) {
 	log := newFakeWebhookLog()
 	sink := &fakeSink{}
 	svc := &OnboardingService{
-		Provider:     &fakeProvider{event: ev},
+		Providers:    NewStaticProviderResolver(&fakeProvider{event: ev}),
 		WebhookLog:   log,
 		TransferSink: sink,
 	}
@@ -529,7 +461,7 @@ func TestOnboardingService_HandleWebhook_TransientFailureIsRetryable(t *testing.
 	log := newFakeWebhookLog()
 	sink := &fakeSink{failNext: true}
 	svc := &OnboardingService{
-		Provider:     &fakeProvider{event: ev},
+		Providers:    NewStaticProviderResolver(&fakeProvider{event: ev}),
 		WebhookLog:   log,
 		TransferSink: sink,
 	}
@@ -550,7 +482,7 @@ func TestOnboardingService_HandleWebhook_TransientFailureIsRetryable(t *testing.
 func TestOnboardingService_HandleWebhook_IgnoredEventIsAcked(t *testing.T) {
 	log := newFakeWebhookLog()
 	svc := &OnboardingService{
-		Provider:   &fakeProvider{event: &PayoutWebhookEvent{Type: PayoutEventIgnored, RawEventID: "ev_i"}},
+		Providers:  NewStaticProviderResolver(&fakeProvider{event: &PayoutWebhookEvent{Type: PayoutEventIgnored, RawEventID: "ev_i"}}),
 		WebhookLog: log,
 	}
 	if err := svc.HandleWebhook(context.Background(), "AW", nil, []byte(`{}`)); err != nil {
@@ -560,8 +492,6 @@ func TestOnboardingService_HandleWebhook_IgnoredEventIsAcked(t *testing.T) {
 		t.Errorf("ignored event must not be logged, claims=%d", log.next)
 	}
 }
-
-var _ PayoutProvider = (*fakeProvider)(nil)
 
 func TestAirwallex_RejectsConnectedAccountAsDestination(t *testing.T) {
 	p, _ := NewAirwallexProvider("key", "secret", nil)
@@ -745,11 +675,34 @@ func TestStripeConnect_ResumePayout_FindsPayoutOnLaterPage(t *testing.T) {
 
 func TestOnboardingService_RegisterBeneficiary_Guards(t *testing.T) {
 	svc := &OnboardingService{}
-	if _, err := svc.RegisterBeneficiary(context.Background(), 1, 2, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "not configured") {
-		t.Fatalf("err=%v, want provider-not-configured (not a panic)", err)
+	if _, err := svc.RegisterBeneficiary(context.Background(), 1, 2, []byte(`{}`)); !errors.Is(err, ErrProviderNotConfigured) {
+		t.Fatalf("err=%v, want ErrProviderNotConfigured (not a panic)", err)
 	}
-	svc.Provider = &fakeProvider{}
+	svc.Providers = NewStaticProviderResolver(&fakeProvider{})
 	if _, err := svc.RegisterBeneficiary(context.Background(), 1, 2, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "does not support") {
 		t.Fatalf("err=%v, want capability error", err)
+	}
+}
+
+func TestOnboardingService_HandleWebhook_RoutesByProviderCode(t *testing.T) {
+	stripe := &fakeProvider{code: ProviderCodeStripeConnect, event: &PayoutWebhookEvent{
+		Type: PayoutEventTransferPaid, ProviderTransferID: "acct_1:po_1", RawEventID: "evt_s",
+	}}
+	wise := &fakeProvider{code: ProviderCodeWise, event: &PayoutWebhookEvent{
+		Type: PayoutEventTransferPaid, ProviderTransferID: "9001", RawEventID: "evt_w",
+	}}
+	sink := &fakeSink{}
+	svc := &OnboardingService{
+		Providers:    newFakeResolver(map[int64]PayoutProvider{1: stripe, 2: wise}),
+		TransferSink: sink,
+	}
+	if err := svc.HandleWebhook(context.Background(), ProviderCodeWise, nil, []byte(`{}`)); err != nil {
+		t.Fatalf("wise webhook: %v", err)
+	}
+	if len(sink.events) != 1 || sink.events[0].Provider != ProviderCodeWise || sink.events[0].ProviderTransferID != "9001" {
+		t.Fatalf("sink events=%+v, want the Wise event tagged with its provider", sink.events)
+	}
+	if err := svc.HandleWebhook(context.Background(), ProviderCodeAirwallex, nil, []byte(`{}`)); !errors.Is(err, ErrUnknownProvider) {
+		t.Fatalf("unserved code err=%v, want ErrUnknownProvider", err)
 	}
 }

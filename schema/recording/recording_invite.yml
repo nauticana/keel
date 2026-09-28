@@ -1,0 +1,26 @@
+table: recording_invite
+comment: Join tokens for a session, stored as SHA-256 hashes; reusable until expires_at.
+columns:
+  - name: token_hash
+    type: VARCHAR(64)
+  - name: session_id
+    type: BIGINT
+  - name: expires_at
+    type: TIMESTAMP
+  - name: created_by
+    type: BIGINT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [token_hash]
+foreign_keys:
+  - name: recording_session_invites
+    columns: [session_id]
+    references:
+      table: recording_session
+      columns: [id]
+  - name: recording_invite_creator
+    columns: [created_by]
+    references:
+      table: user_account
+      columns: [id]

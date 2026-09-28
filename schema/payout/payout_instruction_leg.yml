@@ -1,0 +1,78 @@
+table: payout_instruction_leg
+comment: |
+  One provider dispatch of a payout instruction under its own provider
+  idempotency key; a new leg is opened only after the previous one failed
+  or returned. Destination fields are immutable snapshots. Funding and
+  bank-payout ids are equal on single-step providers. reversed_minor is the
+  cumulative provider-reported reversal. Status: D=dispatching,
+  P=provider-pending, S=settled, F=failed, R=returned, V=fully reversed.
+columns:
+  - name: instruction_id
+    type: BIGINT
+  - name: leg_no
+    type: INTEGER
+  - name: provider
+    type: CHAR(2)
+  - name: user_bank_info_id
+    type: BIGINT
+  - name: provider_account_id
+    type: VARCHAR(100)
+  - name: amount_minor
+    type: BIGINT
+  - name: provider_idempotency_key
+    type: VARCHAR(200)
+  - name: provider_funding_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: provider_payout_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: status
+    type: CHAR(1)
+    default: D
+  - name: reversed_minor
+    type: BIGINT
+    default: "0"
+  - name: attempts
+    type: INTEGER
+    default: "0"
+  - name: failure_reason
+    type: TEXT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [instruction_id, leg_no]
+checks:
+  - name: chk_payout_instruction_leg_amount
+    expression: "amount_minor > 0"
+  - name: chk_payout_instruction_leg_reversed
+    expression: "reversed_minor >= 0 AND reversed_minor <= amount_minor"
+indexes:
+  - name: payout_instruction_leg_key_uq
+    columns: [provider_idempotency_key]
+    unique: true
+  - name: payout_instruction_leg_payout_uq
+    columns: [provider, provider_payout_id]
+    unique: true
+    where: "provider_payout_id IS NOT NULL"
+  - name: payout_instruction_leg_funding_uq
+    columns: [provider, provider_funding_id]
+    unique: true
+    where: "provider_funding_id IS NOT NULL"
+  - name: idx_payout_instruction_leg_destination
+    columns: [user_bank_info_id]
+foreign_keys:
+  - name: payout_instruction_legs
+    columns: [instruction_id]
+    references:
+      table: payout_instruction
+      columns: [id]
+  - name: payout_leg_destination
+    columns: [user_bank_info_id]
+    references:
+      table: user_bank_info
+      columns: [id]

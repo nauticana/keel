@@ -1,0 +1,25 @@
+comment: Personal-data erasure seed data
+order: 230
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [erasure_request_status, Erasure Request Status]
+      - [erasure_audit_action, Erasure Action]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [erasure_request_status, P, Pending]
+      - [erasure_request_status, A, Active]
+      - [erasure_request_status, H, Held]
+      - [erasure_request_status, D, Done]
+      - [erasure_request_status, F, Failed]
+      - [erasure_request_status, X, Cancelled]
+      - [erasure_audit_action, D, Deleted]
+      - [erasure_audit_action, A, Anonymized]
+      - [erasure_audit_action, H, Held]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [erasure_request_status, erasure_request, status]
+      - [erasure_audit_action, erasure_audit, action]

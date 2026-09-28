@@ -72,18 +72,21 @@ graph TD
 | `storage` | Object storage bound to one bucket: S3 (AWS + Cloudflare R2), GCS (Google Cloud Storage), Azure Blob, local file system. `New(ctx, Spec, secrets)` takes a per-bucket spec (endpoint, credential secret, …); `CreateBucket` is the separate admin call. Objects carry string attributes; `PutObjectIfAbsent`, bounded `ListObjects`, `ListPrefixes`; typed `ErrNotFound` / `ErrExists` / `ErrPreconditionFailed` / `ErrBucketNotFound`. `UploadService` adds a size cap, a sniffed content-type allow-list, optional malware scanning and short-lived signed read URLs |
 | `messaging` | Pluggable publish/subscribe backends behind `port.MessagePublisher` / `port.MessageSubscriber`. Ships GCP Pub/Sub, AWS SNS+SQS, and NATS JetStream impls plus a mode-driven factory (`NewMessagePublisher` / `NewMessageSubscriber`). |
 | `metrics` | Optional Prometheus adapter for `port.MetricsRecorder`. It records into a downstream-owned registerer; keel creates no registry or scrape endpoint. |
-| `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository, `UserCustomerService` (user ↔ provider customer) |
+| `payment` | Stripe / LemonSqueezy webhook processor, signature verifiers, event parsers, Stripe checkout + billing-portal client, SQL-backed webhook log repository, `UserCustomerService` (user ↔ provider customer), `BaseRefundService` (approved refund requests bounded by the captured balance, cumulative-to-delta reconciliation) |
 | `billing` | SaaS billing glue over the basis tables: `AbstractBillingService` (`BillingService` + `SubscriptionLifecycle` + `ProviderBillingStore`), `BillingTerms`/`BillingPeriod` + installment math, `BillingEngine` (`ProviderSubscriptionEngine` / `SelfScheduledEngine`), `ProviderSubscriptionEventHandler` |
 | `agency` | Agency/reseller lifecycle, frozen per-client percentage rates, append-only commission/reversal ledger, and monthly payout state machine over billing provenance |
 | `payout` | Out-bound payouts to partner users: hosted-KYC onboarding, webhook-driven activation, instant cash-out. Pluggable providers (Airwallex / Stripe Connect / Wise) behind `PayoutProvider`, plus `OnboardingService` orchestrating the `user_bank_info` basis table |
 | `push` | `port.MessageDispatcher` push implementations — FCM, native APNs, per-platform router, NoOp fallback + factory |
-| `recording` | Consent-gated capture sessions: participants, `Start` fails closed unless every party's current session-scoped consent is affirmative, capture tokens with renewal, media stored by object reference, signed read URLs for participants |
+| `recording` | Consent-gated capture sessions: participants, `Start` fails closed unless every party's current session-scoped consent is affirmative, capture tokens with renewal, invite-and-join with consent, reopen under a fresh consent round, media stored by object reference, signed read URLs, retention sweeper |
 | `realtime` | WebSocket hub (`port.WebSocketHub`): per-user sockets, channel subscribe/unsubscribe protocol, cache-backed relay so workers and other pods deliver to a connected user (`PublishUser` / `PublishChannel`) |
 | `worker` | `JobExecutor` — runs background workers with service registry and heartbeat — `AbstractWorker`, the embed-only one-call worker bootstrap, `JobLoop` for queue-shaped work and `Scheduler` for recurring per-tenant work over `work_schedule` |
 | `content` | Read, edit, create and delete objects on external content platforms, and upload files to them: `ResourceWriter` / `ResourceCreator` / `ResourceDeleter` / `MediaUploader` / `FieldReader` ports, `Writers` provider selection with capability accessors, typed provider errors, `ConnectionFieldReader`, and `ShopifyWriter` with an injected field map |
 | `browser` | Headless Chrome via chromedp: `Launcher` (profile-dir lifecycle, stale-profile sweep, crashpad-safe flags), `Session` (tabs on one Chrome), `Renderer` / `DOMRenderer` (load, evaluate JS, capture cookies). Chrome is a runtime requirement of binaries that import it |
 | `reference` | Public reference-data clients over `common.RequestJSON`: `CrUXClient` (Chrome UX Report p75 field data), `KGClient` (Google Knowledge Graph), `WikidataClient`, `IndexNowClient` (changed-URL submission), `Geocoder` / `GoogleGeocodeClient` (address ↔ point with a precision the caller can reject on); keys are named keystore secrets |
 | `geo` | `AddressService` fills `partner_address.latitude` / `longitude` from a `reference.Geocoder`, refusing a placement coarser than `MinPrecision` |
+| `notify` | Durable multi-channel notification delivery: `Queue.Enqueue`/`EnqueueTx` write one `notification` row per channel resolved from `notification_preference`, type defaults and app-forced channels; `Worker` is a leased QueueWorker that sends through a `port.NotificationService` (typically `dispatcher.LocalNotificationService`) with backoff and a terminal failed state |
+| `approval` | Maker-checker approval of an application record: `Service.Submit` / `Decide` with `ErrSameActor` unless the partner's `approval_policy.allow_single_person` is set, one open request per record, `approval_event` audit, `OnDecided` hook inside the decision transaction |
+| `erasure` | Personal-data erasure: `Service.Request` plans per-table actions from app `Classifier`s (delete / anonymize / hold with reason), `Worker` executes them with one `erasure_audit` row per changed row, legal holds (`user_legal_hold`) that block erasure, `DeleteAccount` and document retention, pseudonyms resolvable only through an audited lookup |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
@@ -1363,6 +1366,8 @@ These tables must exist (defined in `schema/core/`):
 
 `DeleteAccount` is a **soft delete**, not a hard DELETE. Ride history, invoices, payment records, audit rows — anything that FK's back to `user_account(id)` — stays pointing at the same row. What changes: PII is anonymized (`first_name`→`Deleted`, `last_name`→`User`, `user_email`→`deleted+<id>@local.invalid`, `phone`→NULL, `passtext`→NULL, 2FA cleared, `user_name`→`deleted-<id>`), status flips to `'D'`, `deleted_at` stamps, all refresh tokens revoked, trusted devices deleted, social-provider links deleted, `UserActivityDelete` history row written with the supplied reason.
 
+`DeleteAccount` also sets `user_account.tokens_valid_after`, so `ParseJWT` rejects every access token issued before it (`RevokeAccessTokens` does this alone; nodes cache the cutoff for `access_revocation_cache_ttl` seconds and fail closed when it cannot be read). It refuses with `user.ErrLegalHold` (409 on the account endpoint) while `user_legal_hold` has an unreleased row for the user. For a full, audited erasure across application tables, see the `erasure` package.
+
 Consumers that own domain tables cascading off `user_id` (e.g. profiles, history rows, payment records) should implement their own `DeleteAccount` wrapper that runs keel's method plus their cascade in a coordinated flow.
 
 ## OTP Authentication (Phone/Email)
@@ -1692,6 +1697,10 @@ _ = rec.Acknowledge(ctx, s.ID, actorID, token)            // client confirms cap
 media, _ := rec.Upload(ctx, s.ID, actorID, token, "clip1.mp4", "video/mp4", body)
 _ = rec.Stop(ctx, s.ID, 9)                                // finalizing → ready once media is stored
 url, _ := rec.MediaURL(ctx, s.ID, 7, media.ID, 300)       // participants only, ready media only
+
+invite, _, _ := rec.Invite(ctx, s.ID, 9, 10*time.Minute)  // a participant shares a join token (e.g. QR)
+_, _ = rec.JoinWithConsent(ctx, invite, 12, "guest", user.ConsentRequest{PolicyType: "video", PolicyVersion: "2026-09"})
+_, _ = rec.Reopen(ctx, s.ID, 9)                          // S or D → W; everyone consents again, media kept
 ```
 
 | State | Meaning |
@@ -1708,9 +1717,14 @@ url, _ := rec.MediaURL(ctx, s.ID, 7, media.ID, 300)       // participants only, 
 - The creator need not be a participant (a dispatcher or system job may open a session); only participants may decide, start, stop, upload or read media. Re-creating a context with different consent terms returns `ErrConflict`.
 - `Acknowledge`, `Renew`, and `Upload` require both a participant ID and the expiring capture token.
 - Uploads require an allowed content type and size limit, use a session-prefixed object key, and may retry a failed media row by the same key.
+- `Invite` mints a reusable, expiring join token (hash stored in `recording_invite`); `InviteSession` previews it. `JoinWithConsent` adds the joiner and records its consent under the same session lock, while the session is `W`, `A` or `R`.
+- `Reopen` starts a new `attempt`; `EventRef(sessionID, attempt)` scopes consent to it, so earlier decisions no longer authorize `Start`.
+- `Service.ObjectKey` overrides the `recording/<sessionID>/<key>` layout (e.g. by `Session.CreatedAt`); it must be deterministic, unique per (session, key) and stay under `recording/`.
+- `ListMedia` and `PrivilegedMediaURL` skip the participant check for a caller the application has already authorized.
+- `RetentionSweeper{DB, Storage, Retention, Hold}.Sweep` deletes ready objects older than `Retention` and marks them `R` purged; `Hold` exempts a session. `MediaURL` on purged media returns `ErrMediaPurged`.
 - Typed errors let downstream handlers map failures without HTTP logic in the service.
 
-The application owns: mapping its aggregate to `context_ref` with its own FK, deriving participants and roles, deciding which contexts are eligible, retention and deletion, and the client capture and upload implementation. Schema group `recording` (`recording_session`, `recording_participant`, `recording_media`) depends on `core` and `tenant_management`.
+The application owns: mapping its aggregate to `context_ref` with its own FK, deriving participants and roles, deciding which contexts are eligible, who may use the privileged media reads, what places a hold, and the client capture and upload implementation. Schema group `recording` (`recording_session`, `recording_participant`, `recording_media`, `recording_invite`) depends on `core` and `tenant_management`.
 
 ## Realtime WebSocket Hub
 
@@ -2183,13 +2197,15 @@ Columns: `country_code`, `currency`, `account_holder_name`, `billing_address`, `
 
 ```go
 provider, err := payout.NewProvider(*kcommon.PayoutProvider, apiKey, webhookSecret, journal)
+providers := payout.NewStaticProviderResolver(provider) // or NewSQLProviderResolver(db, providers...) per partner
+instructions := payout.NewInstructionService(payout.NewSQLInstructionStore(db), providers, appAllocator, journal)
 svc := &payout.OnboardingService{
     DB:                  db,
-    Provider:            provider,
+    Providers:           providers,
     OnboardingReturnURL: *kcommon.PayoutReturnURL,
     WebhookCallbackURL:  *kcommon.PayoutWebhookURL,
     WebhookLog:          payout.NewSQLWebhookLog(db), // durable event-id dedup — required in production
-    TransferSink:        appPayoutLedger,             // your TransferEventSink; nil = log-only until the ledger lands
+    TransferSink:        instructions,                // payout.InstructionService, or your own TransferEventSink
     Journal:             journal,
 }
 h := &handler.PayoutHandler{
@@ -2198,6 +2214,8 @@ h := &handler.PayoutHandler{
 }
 mux.Handle(h.Routes(kcommon.RestPrefix + "/v1"))
 ```
+
+`partner_payout_provider` maps a partner to its provider code; webhooks select the provider by the code in the route. `InstructionService` records each payout in `payout_instruction`, dispatches it through one or more `payout_instruction_leg` attempts outside any transaction, and applies transfer events once per `(provider, event_id)` in `payout_instruction_event`, bounding reversals by the leg amount. The app's `payout.Allocator` posts and releases the amount against its earnings in the same transactions.
 
 Routes registered:
 
@@ -2215,7 +2233,7 @@ Routes registered:
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `payout_provider` | `AW` | Active provider code (`AW` / `SC` / `WI`) |
+| `payout_provider` | `AW` | Provider code for a single-provider deployment (`AW` / `SC` / `WI`); per-partner codes live in `partner_payout_provider` |
 | `payout_return_url` | (empty) | Deep-link the provider redirects to after hosted KYC |
 | `payout_webhook_url` | (empty) | Public host the provider posts webhooks to |
 | `airwallex_api_base` | `https://api-demo.airwallex.com` | Airwallex REST API base — flip to `https://api.airwallex.com` for production |

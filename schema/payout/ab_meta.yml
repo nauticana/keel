@@ -1,3 +1,7 @@
 tables:
   - user_bank_info
   - payout_webhook_log
+  - partner_payout_provider
+  - payout_instruction
+  - payout_instruction_leg
+  - payout_instruction_event

@@ -16,8 +16,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/nauticana/keel/logger"
+	"github.com/nauticana/keel/port"
 )
 
 // Provider code constants — the 2-char identifiers persisted on
@@ -130,6 +132,7 @@ const (
 // ProviderTransferID.
 type PayoutWebhookEvent struct {
 	Type               PayoutWebhookEventType
+	Provider           string // provider code; set by OnboardingService.HandleWebhook from the route
 	ExternalAccountID  string
 	ProviderTransferID string // provider transfer/payout id for transfer.* events
 	Activated          bool   // true when the provider's KYC is fully cleared and payouts can run
@@ -317,3 +320,70 @@ type PayoutProvider interface {
 	// reissuing an expired key.
 	GetPayoutStatus(ctx context.Context, providerPayoutID string) (*InstantPayoutResult, error)
 }
+
+// ProviderResolver selects the payout provider for a partner (onboarding,
+// dispatch) and by provider code (webhook routing, resuming a dispatch
+// recorded against a provider the partner has since left).
+type ProviderResolver interface {
+	ForPartner(ctx context.Context, partnerID int64) (PayoutProvider, error)
+	ByCode(code string) (PayoutProvider, error)
+}
+
+var (
+	ErrProviderNotConfigured = errors.New("payout: no payout provider configured for partner")
+	ErrUnknownProvider       = errors.New("payout: unknown payout provider code")
+)
+
+// ReleaseReason tells the Allocator why allocated earnings return to the payee.
+type ReleaseReason string
+
+const (
+	ReleaseCancelled ReleaseReason = "cancelled"
+	ReleaseReversed  ReleaseReason = "reversed"
+)
+
+// Allocator is the application's earnings ledger for payout instructions.
+// Both calls run inside the instruction's transaction; bind the
+// application's own query catalog to it via port.TxQueryCatalog so the
+// posting commits or rolls back with the instruction.
+type Allocator interface {
+	Allocate(ctx context.Context, tx port.TxQueryService, instr *Instruction) error
+	Release(ctx context.Context, tx port.TxQueryService, instr *Instruction, amountMinor int64, reason ReleaseReason) error
+}
+
+// InstructionStore persists payout instructions. InTx runs fn in one
+// database transaction: every state change, event record and Allocator
+// posting made through the InstructionTx commits together or not at all.
+type InstructionStore interface {
+	InTx(ctx context.Context, fn func(InstructionTx) error) error
+	InFlight(ctx context.Context, updatedBefore time.Time, limit int) ([]int64, error)
+}
+
+// InstructionTx is the transaction-scoped view of an InstructionStore.
+// Lock and LockByTransfer return the instruction with its legs, row-locked
+// until the transaction ends.
+type InstructionTx interface {
+	Queries() port.TxQueryService
+	// Insert returns false, leaving ID unset, when the (partner, key) pair already exists.
+	Insert(ctx context.Context, instr *Instruction) (bool, error)
+	FindByKey(ctx context.Context, partnerID int64, idempotencyKey string) (*Instruction, error)
+	Lock(ctx context.Context, id int64) (*Instruction, error)
+	LockByTransfer(ctx context.Context, provider, providerTransferID string) (*Instruction, error)
+	UpdateStatus(ctx context.Context, instr *Instruction) error
+	Destination(ctx context.Context, userID, partnerID int64) (*Destination, error)
+	InsertLeg(ctx context.Context, instructionID int64, leg *InstructionLeg) error
+	UpdateLeg(ctx context.Context, instructionID int64, leg *InstructionLeg) error
+	// RecordEvent returns true when the provider event id was already applied.
+	RecordEvent(ctx context.Context, instructionID int64, legNo int, ev *PayoutWebhookEvent) (bool, error)
+}
+
+var (
+	ErrInvalidInstruction        = errors.New("payout: invalid payout instruction")
+	ErrInstructionNotFound       = errors.New("payout: payout instruction not found")
+	ErrIdempotencyKeyReused      = errors.New("payout: idempotency key reused with a different payout instruction")
+	ErrDestinationNotPayable     = errors.New("payout: payee destination is not payable")
+	ErrDispatchUnresolved        = errors.New("payout: dispatch unresolved beyond the provider idempotency window")
+	ErrTransferConflict          = errors.New("payout: transfer outcome conflicts with the recorded state")
+	ErrReversalExceedsLeg        = errors.New("payout: reversal exceeds the payout leg amount")
+	ErrInstructionNotCancellable = errors.New("payout: payout instruction cannot be cancelled in its current state")
+)

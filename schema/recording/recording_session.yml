@@ -2,7 +2,8 @@ table: recording_session
 comment: |
   Consent-gated capture session over an application-defined context.
   status W=awaiting consent, A=authorized, R=recording (capture acknowledged),
-  F=finalizing, D=ready, S=stopped without media, X=failed.
+  F=finalizing, D=ready, S=stopped without media, X=failed. attempt counts
+  reopenings; consent is scoped to the attempt.
 columns:
   - name: id
     type: BIGINT
@@ -17,6 +18,9 @@ columns:
   - name: status
     type: CHAR(1)
     default: W
+  - name: attempt
+    type: INTEGER
+    default: 1
   - name: capture_token_hash
     type: VARCHAR(64)
     nullable: true

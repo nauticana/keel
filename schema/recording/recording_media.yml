@@ -1,7 +1,7 @@
 table: recording_media
 comment: |
   Stored objects of a session, by object reference only. status P=pending
-  upload, U=uploaded and ready, X=failed.
+  upload, U=uploaded and ready, X=failed, R=purged by retention.
 columns:
   - name: id
     type: BIGINT
@@ -25,6 +25,9 @@ columns:
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
   - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: purged_at
     type: TIMESTAMP
     nullable: true
 primary_key: [id]

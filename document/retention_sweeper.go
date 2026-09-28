@@ -17,7 +17,8 @@ const sweepBatch = 100
 
 // RetentionSweeper deletes the objects of documents retired longer than After
 // ago and stamps purged_at, so the row keeps its trace. Call Sweep from a
-// worker on its interval. A document that cannot be deleted (repository
+// worker on its interval. A document whose subject is under legal hold is kept
+// until the hold is released. A document that cannot be deleted (repository
 // read-only, migrating or gone) is skipped and reported; the sweep goes on.
 type RetentionSweeper struct {
 	DB    port.DatabaseRepository
@@ -56,6 +57,9 @@ func (s *RetentionSweeper) Sweep(ctx context.Context) (int, error) {
 		for _, r := range res.Rows {
 			id, contRep, docKey := common.AsInt64(r[0]), common.AsString(r[1]), common.AsString(r[2])
 			afterAt, afterID = common.AsTime(r[3]), id
+			if common.AsBool(r[4]) {
+				continue
+			}
 			if err := s.Docs.Delete(ctx, contRep, docKey); err != nil && !errors.Is(err, storage.ErrNotFound) && !dms.Succeeded(err) {
 				skipped = append(skipped, fmt.Errorf("document %d: %w", id, err))
 				continue

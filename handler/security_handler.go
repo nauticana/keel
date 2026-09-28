@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/user"
 )
 
 // requireRecentAuth confirms the JWT-bearing caller can still produce a
@@ -453,8 +455,7 @@ func (h *SecurityHandler) LogoutEverywhere(w http.ResponseWriter, r *http.Reques
 //	{ "password": "<current>", "reason": "..." }
 //	  or { "twoFactorCode": "<TOTP>", "reason": "..." }
 //
-// Consumers that own domain tables keyed on user_id should wrap this
-// method with their own cascade before calling it.
+// A legal hold answers 409 without naming the hold.
 func (h *SecurityHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodDelete) {
 		return
@@ -472,6 +473,10 @@ func (h *SecurityHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.UserService.DeleteAccount(session.Id, req.Reason); err != nil {
+		if errors.Is(err, user.ErrLegalHold) {
+			h.WriteError(w, http.StatusConflict, "Conflict", "the account cannot be deleted at this time")
+			return
+		}
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to delete account")
 		return
 	}

@@ -62,8 +62,10 @@ UPDATE partner_document SET status = 'X', superseded_at = CURRENT_TIMESTAMP
 	qSetReview:  `UPDATE partner_document SET status = ?, reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP, reviewer_notes = ? WHERE id = ?`,
 	qRetire:     `UPDATE partner_document SET status = 'R', retired_at = CURRENT_TIMESTAMP WHERE id = ?`,
 	qRetiredBefore: `
-SELECT id, contrep_id, doc_key, retired_at FROM partner_document
- WHERE status = 'R' AND purged_at IS NULL AND retired_at < ? AND (retired_at, id) > (?, ?)
- ORDER BY retired_at, id LIMIT ?`,
+SELECT d.id, d.contrep_id, d.doc_key, d.retired_at,
+       EXISTS (SELECT 1 FROM user_legal_hold h WHERE h.user_id = d.user_id AND h.released_at IS NULL)
+  FROM partner_document d
+ WHERE d.status = 'R' AND d.purged_at IS NULL AND d.retired_at < ? AND (d.retired_at, d.id) > (?, ?)
+ ORDER BY d.retired_at, d.id LIMIT ?`,
 	qSetPurged: `UPDATE partner_document SET purged_at = CURRENT_TIMESTAMP WHERE id = ?`,
 }

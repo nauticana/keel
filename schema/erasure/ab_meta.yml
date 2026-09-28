@@ -1,0 +1,5 @@
+tables:
+  - erasure_request
+  - erasure_audit
+  - user_pseudonym
+  - user_pseudonym_lookup
