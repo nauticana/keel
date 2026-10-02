@@ -87,7 +87,7 @@ graph TD
 | `notify` | Durable multi-channel notification delivery: `Queue.Enqueue`/`EnqueueTx` write one `notification` row per channel resolved from `notification_preference`, type defaults and app-forced channels, or exactly `Message.Channel` when set, dropping channels `Addressable` rejects (`notify.RecipientAddressable` checks email/phone on file, via `user.NewSQLRecipients` where no user service is built); `Worker` is a leased QueueWorker that sends through a `port.NotificationService` (typically `dispatcher.LocalNotificationService`) with backoff and a terminal failed state; a missing address (`port.ErrNotificationNoAddress`) is recorded suppressed |
 | `approval` | Maker-checker approval of an application record: `Service.Submit` / `Decide` with `ErrSameActor` unless the partner's `approval_policy.allow_single_person` is set, one open request per record, `approval_event` audit, `OnDecided` hook inside the decision transaction, `AllowsSinglePerson`; `handler` maps its sentinels to 404/409/403 |
 | `erasure` | Personal-data erasure: `Service.Request` plans per-table actions from app `Classifier`s (delete / anonymize / hold with reason), `Worker` executes them with one `erasure_audit` row per changed row, legal holds (`user_legal_hold`) that block erasure, `DeleteAccount` and document retention, pseudonyms resolvable only through an audited lookup |
-| `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
+| `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write and returns its id for same-tx references; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
 
 ## Runtime Configuration
@@ -1087,7 +1087,7 @@ point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
 
 ### `idempotency` — replay-safe mutating operations
 
-`port.IdempotencyLedger` records a key as in flight, completed with a non-nil opaque result, or unknown. `Begin` returns the prior entry so a replay hands back the stored result, a concurrent caller sees the claim, and an unknown outcome blocks retries until reconciled. A granted claim carries a fence that every later write must present. With a `Lease`, an in-flight claim not `Renew`ed within it is taken over under a new fence and the previous holder's ledger writes fail. The fence protects the ledger, not the side effect: a merely slow worker still finishes its external call, so a caller that enables takeover must make that call idempotent under the stable ledger key, arrange for its target to reject superseded fences, or leave the lease at zero and reconcile stuck keys explicitly. `PgsqlLedger` decides lease expiry on the database's own clock, so skew between worker nodes cannot cause a premature takeover. `MemoryLedger` is for one process.
+`port.IdempotencyLedger` records a key as in flight, completed with a non-nil opaque result, or unknown. `Begin` returns the prior entry so a replay hands back the stored result, a concurrent caller sees the claim, and an unknown outcome blocks retries until reconciled. A granted claim carries a fence that every later write must present. With a `Lease`, an in-flight claim not `Renew`ed within it is taken over under a new fence and the previous holder's ledger writes fail. The fence protects the ledger, not the side effect: a merely slow worker still finishes its external call, so a caller that enables takeover must make that call idempotent under the stable ledger key, arrange for its target to reject superseded fences, or leave the lease at zero and reconcile stuck keys explicitly. `ReclaimUnknown` grants a reconciler a fresh fence on an unknown key, which it then resolves with `Complete`, `Release` or `MarkUnknown`; the key stays unknown to `Begin`, and a later reclaim supersedes the earlier fence. `PgsqlLedger` decides lease expiry on the database's own clock, so skew between worker nodes cannot cause a premature takeover. `MemoryLedger` is for one process.
 
 ### `outbox.HTTPDispatcher` — signed webhooks off the outbox
 
@@ -2758,6 +2758,8 @@ set of component directories after including the dependencies declared in the
 manifest.
 
 Seed data lives under [`schema/seed/`](schema/seed), with one file per component.
+`-seed` takes a comma-separated list of seed files or directories, so a
+downstream installing some components passes exactly their seed files.
 A component seed may insert configuration rows into shared metadata, menu, or
 RBAC tables; the filename identifies the component being configured, not only
 the tables receiving those rows.

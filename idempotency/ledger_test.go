@@ -276,3 +276,65 @@ func TestAbstractDatabaseLedgerIsNotConcrete(t *testing.T) {
 		t.Fatal("AbstractDatabaseLedger must be embedded, not used directly")
 	}
 }
+
+func TestMemoryLedgerReclaimUnknownFencesTheReconciler(t *testing.T) {
+	l := &MemoryLedger{}
+	ctx := context.Background()
+	if _, err := l.ReclaimUnknown(ctx, "missing"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("reclaim of a missing key = %v", err)
+	}
+	live, _ := l.Begin(ctx, "k")
+	if _, err := l.ReclaimUnknown(ctx, "k"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("reclaim of an in-flight key = %v", err)
+	}
+	if err := l.MarkUnknown(ctx, "k", live.Fence); err != nil {
+		t.Fatal(err)
+	}
+	first, err := l.ReclaimUnknown(ctx, "k")
+	if err != nil || first == "" || first == live.Fence {
+		t.Fatalf("reclaim = %q, %v", first, err)
+	}
+	if e, _ := l.Begin(ctx, "k"); e.State != model.LedgerUnknown || e.Fence != "" {
+		t.Fatalf("reclaimed key must stay unknown to Begin: %+v", e)
+	}
+	second, _ := l.ReclaimUnknown(ctx, "k")
+	for _, stale := range []string{live.Fence, first} {
+		if err := l.Release(ctx, "k", stale); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("superseded fence released the key: %v", err)
+		}
+	}
+	if err := l.Complete(ctx, "k", second, []byte("verified")); err != nil {
+		t.Fatalf("reconciler completes with its fence: %v", err)
+	}
+	if _, err := l.ReclaimUnknown(ctx, "k"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("reclaim of a completed key = %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := l.ReclaimUnknown(canceled, "k"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("reclaim on canceled context = %v", err)
+	}
+}
+
+func TestPgsqlLedgerReclaimUnknown(t *testing.T) {
+	ctx := context.Background()
+	db := &scriptedDB{rows: map[string][][]any{qFenceUnknown: {{"k"}}}}
+	fence, err := NewPgsqlLedger(db, 0).ReclaimUnknown(ctx, "k")
+	if err != nil || fence == "" {
+		t.Fatalf("reclaim = %q, %v", fence, err)
+	}
+	if args := db.args[qFenceUnknown]; len(args) != 2 || args[0] != fence || args[1] != "k" {
+		t.Fatalf("reclaim args = %v", args)
+	}
+	refused := NewPgsqlLedger(&scriptedDB{rows: map[string][][]any{}}, 0)
+	if fence, err := refused.ReclaimUnknown(ctx, "k"); !errors.Is(err, ErrInvalidTransition) || fence != "" {
+		t.Fatalf("reclaim of a key not unknown = %q, %v", fence, err)
+	}
+	failing := &failingDB{failOn: qFenceUnknown}
+	if fence, err := NewPgsqlLedger(failing, 0).ReclaimUnknown(ctx, "k"); err == nil || fence != "" {
+		t.Fatalf("store failure granted %q, %v", fence, err)
+	}
+	if _, err := refused.ReclaimUnknown(ctx, ""); !errors.Is(err, ErrEmptyKey) {
+		t.Fatalf("empty key = %v", err)
+	}
+}

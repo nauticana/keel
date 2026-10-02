@@ -72,6 +72,10 @@ func (l *fakeLedger) MarkUnknown(_ context.Context, key, _ string) error {
 	return nil
 }
 
+func (l *fakeLedger) ReclaimUnknown(context.Context, string) (string, error) {
+	return "", errors.New("not used")
+}
+
 var (
 	_ port.NotificationSuppressor = (*fakeSuppressor)(nil)
 	_ port.RecipientResolver      = (*fakeRecipients)(nil)

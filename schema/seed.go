@@ -37,6 +37,25 @@ func ParseSeedFile(path string) (*SeedFile, error) {
 	return &sf, nil
 }
 
+// ParseSeedPath parses one seed YAML file, or every seed YAML file in a directory.
+func ParseSeedPath(path string) ([]*SeedFile, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return ParseSeedDir(path)
+	}
+	if ext := filepath.Ext(path); ext != ".yml" && ext != ".yaml" {
+		return nil, fmt.Errorf("seed file %s is not YAML", path)
+	}
+	sf, err := ParseSeedFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return []*SeedFile{sf}, nil
+}
+
 // ParseSeedDir parses all YAML files in a seed directory.
 func ParseSeedDir(dir string) ([]*SeedFile, error) {
 	entries, err := os.ReadDir(dir)

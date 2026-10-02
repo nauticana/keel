@@ -12,13 +12,14 @@ import (
 )
 
 const (
-	qFind     = "keel_idempotency_find"
-	qClaim    = "keel_idempotency_claim"
-	qReclaim  = "keel_idempotency_reclaim"
-	qRenew    = "keel_idempotency_renew"
-	qComplete = "keel_idempotency_complete"
-	qUnknown  = "keel_idempotency_unknown"
-	qRelease  = "keel_idempotency_release"
+	qFind         = "keel_idempotency_find"
+	qClaim        = "keel_idempotency_claim"
+	qReclaim      = "keel_idempotency_reclaim"
+	qFenceUnknown = "keel_idempotency_fence_unknown"
+	qRenew        = "keel_idempotency_renew"
+	qComplete     = "keel_idempotency_complete"
+	qUnknown      = "keel_idempotency_unknown"
+	qRelease      = "keel_idempotency_release"
 )
 
 const (
@@ -142,6 +143,28 @@ func (l *AbstractDatabaseLedger) leaseSeconds() int64 {
 
 func (l *AbstractDatabaseLedger) renew(ctx context.Context, key, fence string) error {
 	return l.write(ctx, key, fence, qRenew, key, fence)
+}
+
+func (l *AbstractDatabaseLedger) reclaimUnknown(ctx context.Context, key string) (string, error) {
+	if err := l.validateKey(key); err != nil {
+		return "", err
+	}
+	qs, err := l.query(ctx)
+	if err != nil {
+		return "", err
+	}
+	fence, err := newFence()
+	if err != nil {
+		return "", err
+	}
+	fenced, err := l.changed(ctx, qs, qFenceUnknown, fence, key)
+	if err != nil {
+		return "", err
+	}
+	if !fenced {
+		return "", ErrInvalidTransition
+	}
+	return fence, nil
 }
 
 func (l *AbstractDatabaseLedger) complete(ctx context.Context, key, fence string, result []byte) error {

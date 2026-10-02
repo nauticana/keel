@@ -108,6 +108,28 @@ func (l *MemoryLedger) Release(_ context.Context, key, fence string) error {
 	return nil
 }
 
+func (l *MemoryLedger) ReclaimUnknown(ctx context.Context, key string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := l.validateKey(key); err != nil {
+		return "", err
+	}
+	fence, err := newFence()
+	if err != nil {
+		return "", err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok || e.State != model.LedgerUnknown {
+		return "", ErrInvalidTransition
+	}
+	e.Fence, e.at = fence, l.now()
+	l.entries[key] = e
+	return fence, nil
+}
+
 func (l *MemoryLedger) transition(key, fence string, state model.LedgerState, result []byte) error {
 	if err := l.validateKey(key); err != nil {
 		return err

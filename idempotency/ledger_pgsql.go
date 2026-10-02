@@ -15,6 +15,8 @@ var pgsqlQueries = map[string]string{
 	         ON CONFLICT DO NOTHING RETURNING ledger_key`,
 	qReclaim: `UPDATE idempotency_ledger SET fence = ?, updated_at = CURRENT_TIMESTAMP
 	           WHERE ledger_key = ? AND state_code = 'I' AND updated_at <= CURRENT_TIMESTAMP - (INTERVAL '1 second' * ?) RETURNING ledger_key`,
+	qFenceUnknown: `UPDATE idempotency_ledger SET fence = ?, updated_at = CURRENT_TIMESTAMP
+	                WHERE ledger_key = ? AND state_code = 'U' RETURNING ledger_key`,
 	qRenew: `UPDATE idempotency_ledger SET updated_at = CURRENT_TIMESTAMP
 	         WHERE ledger_key = ? AND fence = ? AND state_code = 'I' RETURNING ledger_key`,
 	qComplete: `UPDATE idempotency_ledger SET state_code = 'C', result = ?, updated_at = CURRENT_TIMESTAMP
@@ -62,6 +64,10 @@ func (l *PgsqlLedger) Complete(ctx context.Context, key, fence string, result []
 
 func (l *PgsqlLedger) MarkUnknown(ctx context.Context, key, fence string) error {
 	return l.markUnknown(ctx, key, fence)
+}
+
+func (l *PgsqlLedger) ReclaimUnknown(ctx context.Context, key string) (string, error) {
+	return l.reclaimUnknown(ctx, key)
 }
 
 func (l *PgsqlLedger) Release(ctx context.Context, key, fence string) error {

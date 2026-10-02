@@ -15,7 +15,7 @@ import (
 func main() {
 	dialectName := flag.String("dialect", "pgsql", "SQL dialect: pgsql or mysql")
 	inputDirs := flag.String("input", "schema/", "Comma-separated list of schema directories")
-	seedDirs := flag.String("seed", "", "Comma-separated list of directories containing seed YAML files")
+	seedPaths := flag.String("seed", "", "Comma-separated list of seed YAML files or directories containing them")
 	outputFile := flag.String("out", "", "Output file path (default: stdout)")
 	singleTable := flag.String("table", "", "Generate DDL for a single table by table name")
 	flag.Parse()
@@ -78,14 +78,10 @@ func main() {
 		output = d.GenerateSchema(s)
 
 		// Append seed data if requested
-		if *seedDirs != "" {
-			sDirs := strings.Split(*seedDirs, ",")
-			for i := range sDirs {
-				sDirs[i] = strings.TrimSpace(sDirs[i])
-			}
+		if *seedPaths != "" {
 			var allSeeds []*schema.SeedFile
-			for _, sd := range sDirs {
-				seeds, err := schema.ParseSeedDir(sd)
+			for _, sp := range strings.Split(*seedPaths, ",") {
+				seeds, err := schema.ParseSeedPath(strings.TrimSpace(sp))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "seed error: %v\n", err)
 					os.Exit(1)

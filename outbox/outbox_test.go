@@ -166,22 +166,36 @@ func TestHandleJob_LostLeaseWarnsNoFalseSuccess(t *testing.T) {
 
 func TestEnqueueTx_NullsZeroPartnerAndEmptyPayload(t *testing.T) {
 	tx := &fakeTx{fakeQS: newFakeQS()}
-	if err := EnqueueTx(context.Background(), tx, Event{
+	id, err := EnqueueTx(context.Background(), tx, Event{
 		AggregateType: "business", AggregateID: "5", EventType: "claimed",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("EnqueueTx: %v", err)
 	}
 	ins := tx.ran(qInsert)
 	if ins == nil {
 		t.Fatal("insert not run")
 	}
-	if ins.args[0] != int64(99) {
-		t.Errorf("id = %v, want GenID 99", ins.args[0])
+	if id != 99 || ins.args[0] != id {
+		t.Errorf("returned id %d, inserted %v, want GenID 99 for both", id, ins.args[0])
 	}
 	if ins.args[1] != nil {
 		t.Errorf("partner_id = %v, want NULL for zero", ins.args[1])
 	}
 	if ins.args[5] != nil {
 		t.Errorf("payload = %v, want NULL for empty", ins.args[5])
+	}
+}
+
+type failingTx struct{ fakeTx }
+
+func (f *failingTx) Query(context.Context, string, ...any) (*model.QueryResult, error) {
+	return nil, errors.New("insert failed")
+}
+
+func TestEnqueueTx_FailedInsertReturnsNoID(t *testing.T) {
+	id, err := EnqueueTx(context.Background(), &failingTx{fakeTx{newFakeQS()}}, Event{EventType: "claimed"})
+	if err == nil || id != 0 {
+		t.Fatalf("failed insert returned id %d, err %v; want 0 and the error", id, err)
 	}
 }

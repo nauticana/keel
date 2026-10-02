@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.87",
+   "title": "Outbox event id from EnqueueTx; ledger reconciliation fence; seed files for schemagen",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "outbox.EnqueueTx returns the id it inserted, port.IdempotencyLedger gains ReclaimUnknown, and schemagen -seed accepts seed files as well as directories.",
+   "body_markdown": "### Breaking\n\n- `outbox.EnqueueTx(ctx, tx, e)` returns `(int64, error)`: the `outbox_event.id` it inserted, so a row written in the same transaction can reference the event. Callers that only checked the error write `if _, err := outbox.EnqueueTx(...); err != nil`.\n- `port.IdempotencyLedger` adds `ReclaimUnknown(ctx, key) (fence string, err error)`. `MemoryLedger` and `PgsqlLedger` implement it; a custom implementation must add it.\n\n### Additive\n\n- `ReclaimUnknown` fences an unknown key for a reconciler, which then resolves it through `Complete`, `Release` or `MarkUnknown`. The key stays unknown to `Begin`; a later reclaim supersedes the earlier fence; any other state returns `idempotency.ErrInvalidTransition`. No schema change.\n- `schemagen -seed` takes a comma-separated list of seed YAML files or directories (`schema.ParseSeedPath`), so selected component seeds no longer need to be staged into a separate directory."
+  },
+  {
    "version": "v1.2.86",
    "title": "OTP send rate limits are config flags",
    "tags": [

@@ -19,8 +19,8 @@ const (
 	StatusFailed  = "F" // dead-lettered: MaxAttempts reached or a PermanentError
 )
 
-// Event is one row to enqueue. Id is assigned by EnqueueTx and set on drained
-// events delivered to a Dispatcher, where it serves as a stable idempotency key;
+// Event is one row to enqueue. Id is assigned and returned by EnqueueTx and set on
+// drained events delivered to a Dispatcher, where it serves as a stable idempotency key;
 // callers of EnqueueTx supply only the routing + payload fields. status, attempt
 // count, and timestamps are managed by the store/worker.
 type Event struct {
@@ -45,12 +45,16 @@ func WriteQueries() map[string]string {
 }
 
 // EnqueueTx inserts one event using the caller's transaction — which must have
-// merged WriteQueries() into its query map. The insert commits or rolls back
-// atomically with the surrounding domain write: the outbox guarantee.
-func EnqueueTx(ctx context.Context, tx port.TxQueryService, e Event) error {
-	_, err := tx.Query(ctx, qInsert, tx.GenID(), nullIfZero(e.PartnerID),
-		e.AggregateType, e.AggregateID, e.EventType, nullIfEmpty(e.Payload))
-	return err
+// merged WriteQueries() into its query map — and returns its outbox_event.id so
+// a row written in the same transaction can reference it. The insert commits or
+// rolls back atomically with the surrounding domain write: the outbox guarantee.
+func EnqueueTx(ctx context.Context, tx port.TxQueryService, e Event) (int64, error) {
+	id := tx.GenID()
+	if _, err := tx.Query(ctx, qInsert, id, nullIfZero(e.PartnerID),
+		e.AggregateType, e.AggregateID, e.EventType, nullIfEmpty(e.Payload)); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func nullIfZero(v int64) any {

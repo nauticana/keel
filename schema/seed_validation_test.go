@@ -40,3 +40,20 @@ func TestValidateRejectsLongSequenceName(t *testing.T) {
 		t.Fatal("sequence name over 32 characters accepted")
 	}
 }
+
+func TestParseSeedPathAcceptsFilesAndDirectories(t *testing.T) {
+	file, err := ParseSeedPath("seed/core.yml")
+	if err != nil || len(file) != 1 {
+		t.Fatalf("seed file = %d files, %v", len(file), err)
+	}
+	dir, err := ParseSeedPath("seed")
+	if err != nil || len(dir) < 2 {
+		t.Fatalf("seed directory = %d files, %v", len(dir), err)
+	}
+	if _, err := ParseSeedPath("seed.go"); err == nil {
+		t.Fatal("non-YAML seed file accepted")
+	}
+	if _, err := ParseSeedPath("seed/missing.yml"); err == nil {
+		t.Fatal("missing seed file accepted")
+	}
+}
