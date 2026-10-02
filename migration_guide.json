@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.88",
+   "title": "PDF text extraction moves to folio with parser-enforced limits",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "extract.Native reads PDFs with github.com/carlos7ags/folio instead of gopdf. extract_max_bytes is now enforced inside the PDF parser, encrypted PDFs that open with the empty user password are extracted, and a scanned page's invisible OCR text is kept. No exported API changes.",
+   "body_markdown": "### Breaking (behavior)\n\n- PDF text comes from `github.com/carlos7ags/folio` v0.10.1; `github.com/razvandimescu/gopdf` and keel's regex stream pre-check are removed. Extracted text is ordered top to bottom and left to right, so line breaks and word spacing can differ from earlier releases; re-index stored PDF text if exact text matters.\n- `ErrEncrypted` is returned only for a PDF that needs a password or uses an unsupported security handler. An encrypted PDF that opens with the empty user password (permission-only protection) is now extracted.\n- Invisible text (render mode 3), which is how a scanned page carries its OCR layer, is now extracted, so such pages are no longer listed by `Extracted.EmptyPages()`.\n- `extract_max_bytes` bounds each decoded PDF stream and their total for the document inside the parser; exceeding it returns `ErrTooLarge`. Files that fooled the old pre-check are refused the same way.\n\n### Known gaps (TODO C15)\n\nUntil keel pins a folio release with the pending fixes: nested Form XObjects are bounded only by depth, so a crafted file can keep one page busy for a very long time (extract untrusted PDFs in a worker whose deadline stops the process); text in a font defined inside a Form XObject, and in a simple font whose ToUnicode CMap declares a two-byte codespace, extracts as raw codes.\n\n### Dependencies\n\nAdds `github.com/carlos7ags/folio` (Apache-2.0) and `golang.org/x/image`; raises `golang.org/x/crypto`, `x/net`, `x/text`, `x/sync` and `x/sys` to the versions folio requires."
+  },
+  {
    "version": "v1.2.87",
    "title": "Outbox event id from EnqueueTx; ledger reconciliation fence; seed files for schemagen",
    "tags": [

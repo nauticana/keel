@@ -11,9 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"hash/adler32"
-	"io"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/carlos7ags/folio/document"
+	"github.com/carlos7ags/folio/font"
 )
 
 var native = Native{MaxBytes: 1 << 20}
@@ -185,38 +190,58 @@ func TestDOCXDecompressionCap(t *testing.T) {
 	}
 }
 
-// pdfFixture writes a PDF whose pages hold the given texts ("" = no text layer).
-func pdfFixture(pages ...string) []byte {
-	var objects []string
-	objects = append(objects, "<< /Type /Catalog /Pages 2 0 R >>", "")
-	var kids []string
-	for _, p := range pages {
-		pageObj, streamObj := len(objects)+1, len(objects)+2
-		kids = append(kids, fmt.Sprintf("%d 0 R", pageObj))
-		stream := ""
-		if p != "" {
-			stream = fmt.Sprintf("BT /F1 12 Tf 72 720 Td (%s) Tj ET", p)
-		}
-		objects = append(objects,
-			fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R /Resources << /Font << /F1 %d 0 R >> >> >>", streamObj, 3+2*len(pages)),
-			fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(stream), stream))
-	}
-	objects[1] = fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(pages))
-	objects = append(objects, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+// pdfDoc writes a PDF whose objects are objs[i] for object number i+1,
+// with the catalog first.
+func pdfDoc(objs ...string) []byte {
 	var b strings.Builder
 	b.WriteString("%PDF-1.4\n")
-	offsets := make([]int, len(objects))
-	for i, obj := range objects {
+	offsets := make([]int, len(objs))
+	for i, obj := range objs {
 		offsets[i] = b.Len()
 		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, obj)
 	}
 	xref := b.Len()
-	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
 	for _, off := range offsets {
 		fmt.Fprintf(&b, "%010d 00000 n \n", off)
 	}
-	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
 	return []byte(b.String())
+}
+
+func streamObj(dict, data string) string {
+	return fmt.Sprintf("<< %s /Length %d >>\nstream\n%s\nendstream", dict, len(data), data)
+}
+
+// pdfFixture writes a PDF whose pages hold the given texts ("" = no text layer).
+func pdfFixture(pages ...string) []byte {
+	objs := []string{"<< /Type /Catalog /Pages 2 0 R >>", ""}
+	var kids []string
+	for _, p := range pages {
+		pageObj, contentObj := len(objs)+1, len(objs)+2
+		kids = append(kids, fmt.Sprintf("%d 0 R", pageObj))
+		content := ""
+		if p != "" {
+			content = fmt.Sprintf("BT /F1 12 Tf 72 720 Td (%s) Tj ET", p)
+		}
+		objs = append(objs,
+			fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R /Resources << /Font << /F1 %d 0 R >> >> >>", contentObj, 3+2*len(pages)),
+			streamObj("", content))
+	}
+	objs[1] = fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(pages))
+	objs = append(objs, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+	return pdfDoc(objs...)
+}
+
+// onePage writes a one-page PDF with the given resources whose content
+// stream is object 4; more objects follow from 5.
+func onePage(resources, content string, more ...string) []byte {
+	return pdfDoc(append([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << %s >> >>", resources),
+		content,
+	}, more...)...)
 }
 
 func TestPDF(t *testing.T) {
@@ -240,14 +265,37 @@ func TestPDF(t *testing.T) {
 	}
 }
 
-// streamPDF wraps stream objects, given as (dict, data) pairs, in a PDF shell.
-func streamPDF(objects ...[2]string) []byte {
-	var b bytes.Buffer
-	b.WriteString("%PDF-1.4\n")
-	for i, o := range objects {
-		fmt.Fprintf(&b, "%d 0 obj\n%s\nstream\n%s\nendstream\nendobj\n", i+1, o[0], o[1])
+// A scanned page carries its OCR text in render mode 3 (invisible).
+func TestPDFInvisibleTextLayer(t *testing.T) {
+	raw := onePage("/Font << /F1 5 0 R >>", streamObj("", "BT 3 Tr /F1 12 Tf 72 720 Td (Scanned words) Tj ET"),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+	e, err := native.Extract(context.Background(), mediaPDF, raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return b.Bytes()
+	if s := section(t, e, 0); text(e, s) != "Scanned words" {
+		t.Errorf("the invisible OCR layer must be extracted: %q", text(e, s))
+	}
+}
+
+func TestPDFEncryption(t *testing.T) {
+	encrypted := func(user, owner string) []byte {
+		doc := document.NewDocument(document.PageSizeLetter)
+		doc.SetEncryption(document.EncryptionConfig{Algorithm: document.EncryptAES256, UserPassword: user, OwnerPassword: owner})
+		doc.AddPage().AddText("Protected text", font.Helvetica, 12, 72, 700)
+		var buf bytes.Buffer
+		if _, err := doc.WriteTo(&buf); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	e, err := native.Extract(context.Background(), mediaPDF, encrypted("", "owner"))
+	if err != nil || !strings.Contains(e.Text, "Protected text") {
+		t.Errorf("an empty user password opens the document: %q %v", e.Text, err)
+	}
+	if _, err := native.Extract(context.Background(), mediaPDF, encrypted("user", "owner")); !errors.Is(err, ErrEncrypted) {
+		t.Errorf("a password-protected PDF must be refused: %v", err)
+	}
 }
 
 func zlibBytes(n int) []byte {
@@ -258,24 +306,38 @@ func zlibBytes(n int) []byte {
 	return z.Bytes()
 }
 
+// allocated returns the bytes the Go heap allocated while f ran.
+func allocated(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// Each fixture is a few hundred KB that inflates to 64 MiB. With a 1 MiB
+// limit, extraction must not allocate anywhere near the inflated size, and
+// a stream the parser does decode must be refused with ErrTooLarge. The dictionary variants are
+// ones a pattern-based pre-check misreads; the parser itself enforces the
+// limit, so they are no different.
 func TestPDFDecompressionBombs(t *testing.T) {
-	const limit = 1 << 20
+	const limit, inflated = 1 << 20, 64 << 20
 	n := Native{MaxBytes: limit}
-	bomb := zlibBytes(4 << 20)
+	bomb := string(zlibBytes(inflated))
 
 	var a85 bytes.Buffer
 	enc := ascii85.NewEncoder(&a85)
-	enc.Write(bomb)
+	enc.Write([]byte(bomb))
 	enc.Close()
 
 	var lz bytes.Buffer
 	lw := lzw.NewWriter(&lz, lzw.MSB, 8)
-	lw.Write(make([]byte, 4<<20))
+	lw.Write(make([]byte, inflated))
 	lw.Close()
 
-	// A literal "endstream" in a stored (uncompressed) deflate block at the
-	// start, followed by compressed zeros: an endstream search stops early.
-	marker, zeros := []byte("endstream"), make([]byte, 4<<20)
+	// A literal "endstream" in a stored deflate block, then compressed zeros.
+	marker, zeros := []byte("endstream"), make([]byte, inflated)
 	var hidden bytes.Buffer
 	hidden.Write([]byte{0x78, 0x01, 0x00, byte(len(marker)), 0, ^byte(len(marker)), 0xff})
 	hidden.Write(marker)
@@ -286,62 +348,101 @@ func TestPDFDecompressionBombs(t *testing.T) {
 	sum.Write(marker)
 	sum.Write(zeros)
 	hidden.Write(sum.Sum(nil))
-	if r, err := zlib.NewReader(bytes.NewReader(hidden.Bytes())); err != nil {
-		t.Fatal(err)
-	} else if n, err := io.Copy(io.Discard, r); err != nil || n != int64(len(marker)+len(zeros)) {
-		t.Fatalf("hidden-endstream fixture is not valid zlib: %d %v", n, err)
-	}
 
+	raw := func(dict, keyword, data string) string {
+		return fmt.Sprintf("<< %s >>\n%s%s\nendstream", dict, keyword, data)
+	}
+	flateDict := fmt.Sprintf("/Filter /FlateDecode /Length %d", len(bomb))
 	image := zlibBytes(limit / 4)
-	var images [][2]string
-	for range 8 {
-		images = append(images, [2]string{fmt.Sprintf("<< /Type /XObject /Subtype /Image /Length %d /Filter /FlateDecode >>", len(image)), string(image)})
+	var imageRes, draws []string
+	var images []string
+	for i := range 8 {
+		imageRes = append(imageRes, fmt.Sprintf("/Im%d %d 0 R", i, 5+i))
+		draws = append(draws, fmt.Sprintf("q 10 0 0 10 0 0 cm /Im%d Do Q", i))
+		images = append(images, streamObj("/Type /XObject /Subtype /Image /Width 512 /Height 512 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode", string(image)))
 	}
 
-	for name, raw := range map[string][]byte{
-		"flate":            streamPDF([2]string{fmt.Sprintf("<< /Length %d /Filter /FlateDecode >>", len(bomb)), string(bomb)}),
-		"ascii85 + flate":  streamPDF([2]string{fmt.Sprintf("<< /Length %d /Filter [/ASCII85Decode /FlateDecode] >>", a85.Len()+2), a85.String() + "~>"}),
-		"lzw":              streamPDF([2]string{fmt.Sprintf("<< /Length %d /Filter /LZWDecode >>", lz.Len()), lz.String()}),
-		"hidden endstream": streamPDF([2]string{fmt.Sprintf("<< /Length %d /Filter /FlateDecode >>", hidden.Len()), hidden.String()}),
-		"indirect length":  append(streamPDF([2]string{"<< /Length 9 0 R /Filter /FlateDecode >>", string(bomb)}), []byte(fmt.Sprintf("9 0 obj\n%d\nendobj\n", len(bomb)))...),
-		"8 images":         streamPDF(images...),
-	} {
-		if len(raw) > 512<<10 {
-			t.Fatalf("%s: fixture should be small: %d", name, len(raw))
+	refused := map[string][]byte{
+		"flate":                          onePage("", raw(flateDict, "stream\n", bomb)),
+		"ascii85 + flate":                onePage("", streamObj("/Filter [/ASCII85Decode /FlateDecode]", a85.String()+"~>")),
+		"hidden endstream":               onePage("", streamObj("/Filter /FlateDecode", hidden.String())),
+		"indirect length":                onePage("", raw("/Filter /FlateDecode /Length 5 0 R", "stream\n", bomb), strconv.Itoa(len(bomb))),
+		"fake object header in a string": onePage("", raw(flateDict+" /T (9 9 obj)", "stream\n", bomb)),
+		"nested dict first":              onePage("", raw("/X << /Filter /DCTDecode >> "+flateDict, "stream\n", bomb)),
+		"same key twice":                 onePage("", raw("/Filter /DCTDecode "+flateDict, "stream\n", bomb)),
+		"escaped name":                   onePage("", raw(fmt.Sprintf("/Filter /Flate#44ecode /Length %d", len(bomb)), "stream\n", bomb)),
+		"nested short length first":      onePage("", raw("/X << /Length 3 >> "+flateDict, "stream\n", bomb)),
+	}
+	bounded := map[string][]byte{
+		"lzw, which the parser leaves encoded": onePage("", streamObj("/Filter /LZWDecode", lz.String())),
+		"space after the keyword":              onePage("", raw(flateDict, "stream \n", bomb)),
+		"8 images":                             onePage("/XObject << "+strings.Join(imageRes, " ")+" >>", streamObj("", strings.Join(draws, " ")), images...),
+	}
+	for name, fixture := range refused {
+		var err error
+		if a := allocated(func() { _, err = n.Extract(context.Background(), mediaPDF, fixture) }); a > inflated/4 {
+			t.Errorf("%s: allocated %d MiB", name, a>>20)
 		}
-		if _, err := n.Extract(context.Background(), mediaPDF, raw); !errors.Is(err, ErrTooLarge) {
-			t.Errorf("%s: must be refused before parsing: %v", name, err)
+		if !errors.Is(err, ErrTooLarge) {
+			t.Errorf("%s: must be refused: %v", name, err)
 		}
 	}
-	if !bytes.Contains(hidden.Bytes(), []byte("endstream")) {
-		t.Fatal("the hidden-endstream fixture lost its marker")
-	}
-	if _, err := n.Extract(context.Background(), mediaPDF, append(pdfFixture("x"), []byte("trailer << /Encrypt 7 0 R >>")...)); !errors.Is(err, ErrEncrypted) {
-		t.Errorf("an encrypted PDF cannot be measured and must be refused: %v", err)
+	for name, fixture := range bounded {
+		if a := allocated(func() { n.Extract(context.Background(), mediaPDF, fixture) }); a > inflated/4 {
+			t.Errorf("%s: allocated %d MiB", name, a>>20)
+		}
 	}
 }
 
-// TestPDFParserMismatchBombs holds files that read differently to the
-// regex-based pre-check than to gopdf's parser; each is a bomb gopdf decodes.
-// They pass until gopdf enforces decode limits itself (gopdf#44, TODO C15).
-func TestPDFParserMismatchBombs(t *testing.T) {
-	t.Skip("known gap: the pre-check is not a PDF parser; waits for gopdf#44 (TODO C15)")
-	bomb := zlibBytes(4 << 20)
-	obj := func(dict, keyword string) []byte {
-		return []byte(fmt.Sprintf("%%PDF-1.4\n1 0 obj\n%s\n%s%s\nendstream\nendobj\n", dict, keyword, bomb))
+// The tests below wait for folio fixes (TODO C15); un-skip them when keel
+// pins a folio release that contains them.
+
+func TestPDFFormOwnResources(t *testing.T) {
+	t.Skip("waits for folio#458: a form's fonts are looked up in the page's resources")
+	cmap := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <01> <0048> <02> <0069> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
+	raw := onePage("/XObject << /Fm1 5 0 R >>", streamObj("", "/Fm1 Do"),
+		streamObj("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >>", "BT /F1 12 Tf 72 720 Td <0102> Tj ET"),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 7 0 R >>",
+		streamObj("", cmap))
+	e, err := native.Extract(context.Background(), mediaPDF, raw)
+	if err != nil || e.Text != "Hi\f" {
+		t.Errorf("text in a form's own font: %q %v", e.Text, err)
 	}
-	n := len(bomb)
-	for name, raw := range map[string][]byte{
-		"fake object header in a string": obj(fmt.Sprintf("<< /Filter /FlateDecode /Length %d /T (9 9 obj) >>", n), "stream\n"),
-		"nested dict first":              obj(fmt.Sprintf("<< /X << /Filter /DCTDecode >> /Filter /FlateDecode /Length %d >>", n), "stream\n"),
-		"same key twice":                 obj(fmt.Sprintf("<< /Filter /DCTDecode /Filter /FlateDecode /Length %d >>", n), "stream\n"),
-		"escaped name":                   obj(fmt.Sprintf("<< /Filter /Flate#44ecode /Length %d >>", n), "stream\n"),
-		"space after the keyword":        obj(fmt.Sprintf("<< /Filter /FlateDecode /Length %d >>", n), "stream \n"),
-		"nested short length first":      obj(fmt.Sprintf("<< /X << /Length 3 >> /Filter /FlateDecode /Length %d >>", n), "stream\n"),
-	} {
-		if _, err := (Native{MaxBytes: 1 << 20}).Extract(context.Background(), mediaPDF, raw); !errors.Is(err, ErrTooLarge) {
-			t.Errorf("%s: must be refused: %v", name, err)
+}
+
+func TestPDFSimpleFontWideCodespace(t *testing.T) {
+	t.Skip("waits for folio#459: a simple font is split by its ToUnicode codespace width")
+	cmap := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /W def 1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfchar <48> <0048> <69> <0069> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
+	raw := onePage("/Font << /F1 5 0 R >>", streamObj("", "BT /F1 12 Tf 72 720 Td (Hi) Tj ET"),
+		"<< /Type /Font /Subtype /TrueType /BaseFont /Arial /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>",
+		streamObj("", cmap))
+	e, err := native.Extract(context.Background(), mediaPDF, raw)
+	if err != nil || e.Text != "Hi\f" {
+		t.Errorf("one-byte codes in a simple font: %q %v", e.Text, err)
+	}
+}
+
+// 40 forms, each drawing the next twice, is 2^39 draws from a few KB.
+func TestPDFNestedFormsBounded(t *testing.T) {
+	t.Skip("waits for folio#457: nested forms are bounded by depth only, so this runs for days")
+	var names, forms []string
+	for i := range 40 {
+		names = append(names, fmt.Sprintf("/X%d %d 0 R", i, 5+i))
+	}
+	res := "/XObject << " + strings.Join(names, " ") + " >>"
+	for i := range 40 {
+		body := "0 0 m 1 1 l S"
+		if i < 39 {
+			body = fmt.Sprintf("/X%d Do /X%d Do", i+1, i+1)
 		}
+		forms = append(forms, streamObj("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << "+res+" >>", body))
+	}
+	start := time.Now()
+	if _, err := native.Extract(context.Background(), mediaPDF, onePage(res, streamObj("", "/X0 Do"), forms...)); err == nil {
+		t.Error("an exponential form graph must be refused")
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %v", d)
 	}
 }
 
