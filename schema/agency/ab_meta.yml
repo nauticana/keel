@@ -2,6 +2,8 @@ tables:
   - agency_profile
   - agency_client_invitation
   - agency_client_delegation
+  - agency_delegation_role
+  - agency_delegation_event
   - agency_client_billing
   - agency_payout_profile
   - agency_client_rate

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
@@ -51,11 +52,9 @@ SELECT addon_id, COUNT(*) AS active_count
  GROUP BY addon_id
 `,
 
-	// ON CONFLICT merge: the PK (partner_id, usage_time) collides for
-	// same-microsecond writers; summing amounts preserves SUM(amount).
 	qAddUsage: `
-INSERT INTO usage_ledger (partner_id, resource_name, amount, notes) VALUES (?, ?, ?, ?)
-ON CONFLICT (partner_id, usage_time) DO UPDATE SET amount = usage_ledger.amount + EXCLUDED.amount
+INSERT INTO usage_ledger (id, partner_id, resource_name, amount, notes, user_id, api_key_id, oauth_client_id)
+VALUES (nextval('usage_ledger_seq'), ?, ?, ?, ?, ?, ?, ?)
 `,
 
 	// Tx-scoped advisory lock keyed "partnerID:resource" — serializes
@@ -347,7 +346,7 @@ func (s *QuotaServiceDb) ConsumeQuota(ctx context.Context, partnerID int64, reso
 		}
 	}
 
-	if _, err := tx.Query(ctx, qAddUsage, partnerID, resource, amount, description); err != nil {
+	if _, err := tx.Query(ctx, qAddUsage, usageArgs(ctx, partnerID, resource, amount, description)...); err != nil {
 		return false, time.Time{}, fmt.Errorf("consume quota %s for partner %d: record: %w", resource, partnerID, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -423,11 +422,29 @@ func (s *QuotaServiceDb) CheckAddon(ctx context.Context, partnerID int64, addonN
 
 func (s *QuotaServiceDb) LogUsage(ctx context.Context, partnerID int64, quotaName string, amount int64, description string) error {
 	s.init(ctx)
-	_, err := s.qs.Query(ctx, qAddUsage, partnerID, quotaName, amount, description)
+	_, err := s.qs.Query(ctx, qAddUsage, usageArgs(ctx, partnerID, quotaName, amount, description)...)
 	if err != nil {
-		return fmt.Errorf("failed to add usage %s amount of %d to partner %d", quotaName, amount, partnerID)
+		return fmt.Errorf("add usage %s amount of %d to partner %d: %w", quotaName, amount, partnerID, err)
 	}
 	return nil
+}
+
+// usageArgs binds qAddUsage, attributing the row to the caller in ctx: the
+// session user, the API key, and the OAuth client, each NULL when absent.
+func usageArgs(ctx context.Context, partnerID int64, resource string, amount int64, notes string) []any {
+	var userID, apiKeyID, clientID any
+	if id, ok := ctx.Value(common.UserID).(int64); ok && id > 0 {
+		userID = id
+	}
+	if id, ok := ctx.Value(common.ApiKeyID).(int64); ok && id > 0 {
+		apiKeyID = id
+	}
+	if p, ok := ctx.Value(common.AuthPrincipal).(*model.TokenPrincipal); ok && p != nil {
+		if id := common.AsString(p.Claims["client_id"]); id != "" {
+			clientID = id
+		}
+	}
+	return []any{partnerID, resource, amount, notes, userID, apiKeyID, clientID}
 }
 
 func (s *QuotaServiceDb) ReportAddonUsage(ctx context.Context, partnerID int64, addonID string, amount int64, notes string) error {

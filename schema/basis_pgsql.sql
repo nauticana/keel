@@ -520,11 +520,15 @@ CREATE TABLE IF NOT EXISTS service_registry (
     CONSTRAINT service_registry_pk PRIMARY KEY (service_name, started_at)
 );
 
--- Per-tenant cadence for recurring worker tasks (worker.Scheduler); task_kind is consumer-defined
+-- Per-tenant cadence for recurring worker tasks (worker.Scheduler), an interval or a weekday or day of month in time_zone; task_kind is consumer-defined
 CREATE TABLE IF NOT EXISTS work_schedule (
     partner_id                           BIGINT        NOT NULL,
     task_kind                            VARCHAR(30)   NOT NULL,
     interval_seconds                     INTEGER       NOT NULL,
+    cadence                              CHAR(1)       NOT NULL DEFAULT 'I',
+    cadence_day                          SMALLINT     ,
+    cadence_minute                       SMALLINT     ,
+    time_zone                            VARCHAR(64)  ,
     next_run_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_run_at                          TIMESTAMP    ,
     last_error                           TEXT         ,
@@ -532,7 +536,8 @@ CREATE TABLE IF NOT EXISTS work_schedule (
     lease_until                          TIMESTAMP    ,
     lease_token                          BIGINT       ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT work_schedule_pk PRIMARY KEY (partner_id, task_kind)
+    CONSTRAINT work_schedule_pk PRIMARY KEY (partner_id, task_kind),
+    CONSTRAINT chk_work_schedule_cadence CHECK ((cadence = 'I' AND cadence_day IS NULL AND cadence_minute IS NULL AND time_zone IS NULL) OR (cadence IN ('W', 'M') AND cadence_minute BETWEEN 0 AND 1439 AND time_zone IS NOT NULL AND ((cadence = 'W' AND cadence_day BETWEEN 0 AND 6) OR (cadence = 'M' AND cadence_day BETWEEN 1 AND 31))))
 );
 CREATE INDEX IF NOT EXISTS idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
 
@@ -596,6 +601,27 @@ CREATE INDEX IF NOT EXISTS idx_oauth_refresh_user ON oauth_refresh_token(user_id
 
 CREATE SEQUENCE IF NOT EXISTS oauth_refresh_token_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('oauth_refresh_token', 'id', 'oauth_refresh_token_seq') ON CONFLICT DO NOTHING;
+
+-- Single-use hand-off codes that turn a bearer-JWT app session into a short-lived authorization-server cookie session; partner_id is a denormalized snapshot
+CREATE TABLE IF NOT EXISTS oauth_session_handoff (
+    id                                   BIGINT        NOT NULL,
+    code_hash                            CHAR(64)      NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    return_url                           VARCHAR(2000) NOT NULL,
+    expires_at                           TIMESTAMP     NOT NULL,
+    consumed_at                          TIMESTAMP    ,
+    session_hash                         CHAR(64)     ,
+    session_expires_at                   TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT oauth_session_handoff_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_handoff_code_hash ON oauth_session_handoff(code_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_handoff_session_hash ON oauth_session_handoff(session_hash);
+CREATE INDEX IF NOT EXISTS idx_oauth_handoff_user ON oauth_session_handoff(user_id);
+
+CREATE SEQUENCE IF NOT EXISTS oauth_session_handoff_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('oauth_session_handoff', 'id', 'oauth_session_handoff_seq') ON CONFLICT DO NOTHING;
 
 -- API keys for public API access with rotation support
 CREATE TABLE IF NOT EXISTS api_key (
@@ -754,16 +780,23 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     CONSTRAINT partner_addon_subscription_pk PRIMARY KEY (partner_id, addon_id, begda)
 );
 
--- Resource usage tracking for quota enforcement
+-- Resource usage tracking for quota enforcement, attributed to the acting user, API key or OAuth client when known
 CREATE TABLE IF NOT EXISTS usage_ledger (
+    id                                   BIGINT        NOT NULL,
     partner_id                           BIGINT        NOT NULL,
     usage_time                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resource_name                        VARCHAR(50)   NOT NULL,
     amount                               BIGINT        NOT NULL,
     notes                                VARCHAR(255) ,
-    CONSTRAINT usage_ledger_pk PRIMARY KEY (partner_id, usage_time)
+    user_id                              BIGINT       ,
+    api_key_id                           BIGINT       ,
+    oauth_client_id                      VARCHAR(255) ,
+    CONSTRAINT usage_ledger_pk PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ledger_quota ON usage_ledger(partner_id, resource_name, usage_time);
+
+CREATE SEQUENCE IF NOT EXISTS usage_ledger_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('usage_ledger', 'id', 'usage_ledger_seq') ON CONFLICT DO NOTHING;
 
 -- Raw inbound payment provider webhooks — idempotency + audit
 CREATE TABLE IF NOT EXISTS payment_webhook_log (
@@ -1290,6 +1323,39 @@ CREATE INDEX IF NOT EXISTS idx_agency_client_delegation_agency ON agency_client_
 
 CREATE SEQUENCE IF NOT EXISTS agency_client_delegation_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('agency_client_delegation', 'id', 'agency_client_delegation_seq') ON CONFLICT DO NOTHING;
+
+-- Roles a client grants its agency on one delegation, each with an optional
+-- expiry. No row means no access. role is an agency_delegation_role code.
+-- Revocation expires open roles at max(now, granted_at), so expiry may equal
+-- the grant time; the service requires client-set expiries to be in the future.
+CREATE TABLE IF NOT EXISTS agency_delegation_role (
+    client_delegation_id                 BIGINT        NOT NULL,
+    role                                 VARCHAR(10)   NOT NULL,
+    expires_at                           TIMESTAMP    ,
+    granted_by                           BIGINT        NOT NULL,
+    granted_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_delegation_role_pk PRIMARY KEY (client_delegation_id, role),
+    CONSTRAINT chk_agency_delegation_role_expiry CHECK (expires_at IS NULL OR expires_at >= granted_at)
+);
+
+-- Append-only history of client changes to a delegation's roles, one row per
+-- role. change_type G=granted, E=expiry changed, R=removed.
+CREATE TABLE IF NOT EXISTS agency_delegation_event (
+    id                                   BIGINT        NOT NULL,
+    client_delegation_id                 BIGINT        NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    role                                 VARCHAR(10)   NOT NULL,
+    change_type                          CHAR(1)       NOT NULL,
+    old_expires_at                       TIMESTAMP    ,
+    new_expires_at                       TIMESTAMP    ,
+    changed_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agency_delegation_event_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_delegation_event_type CHECK (change_type IN ('G', 'E', 'R'))
+);
+CREATE INDEX IF NOT EXISTS idx_agency_delegation_event ON agency_delegation_event(client_delegation_id, id);
+
+CREATE SEQUENCE IF NOT EXISTS agency_delegation_event_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('agency_delegation_event', 'id', 'agency_delegation_event_seq') ON CONFLICT DO NOTHING;
 
 -- Effective-dated referral (R) or wholesale (W) model per delegation. The
 -- partial unique index permits only one open row without a database extension;
@@ -2063,6 +2129,15 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'oauth_session_handoff_user' AND table_name = 'oauth_session_handoff'
+  ) THEN
+    ALTER TABLE oauth_session_handoff ADD CONSTRAINT oauth_session_handoff_user FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'api_key_partners' AND table_name = 'api_key'
   ) THEN
     ALTER TABLE api_key ADD CONSTRAINT api_key_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id);
@@ -2156,6 +2231,24 @@ BEGIN
      WHERE constraint_name = 'partner_usage_ledger' AND table_name = 'usage_ledger'
   ) THEN
     ALTER TABLE usage_ledger ADD CONSTRAINT partner_usage_ledger FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'usage_ledger_user' AND table_name = 'usage_ledger'
+  ) THEN
+    ALTER TABLE usage_ledger ADD CONSTRAINT usage_ledger_user FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'usage_ledger_api_key' AND table_name = 'usage_ledger'
+  ) THEN
+    ALTER TABLE usage_ledger ADD CONSTRAINT usage_ledger_api_key FOREIGN KEY (api_key_id) REFERENCES api_key(id) ON DELETE SET NULL;
   END IF;
 END $$;
 DO $$
@@ -2489,6 +2582,42 @@ BEGIN
      WHERE constraint_name = 'delegation_revoker' AND table_name = 'agency_client_delegation'
   ) THEN
     ALTER TABLE agency_client_delegation ADD CONSTRAINT delegation_revoker FOREIGN KEY (revoked_by) REFERENCES user_account(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_roles' AND table_name = 'agency_delegation_role'
+  ) THEN
+    ALTER TABLE agency_delegation_role ADD CONSTRAINT delegation_roles FOREIGN KEY (client_delegation_id) REFERENCES agency_client_delegation(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_role_grantor' AND table_name = 'agency_delegation_role'
+  ) THEN
+    ALTER TABLE agency_delegation_role ADD CONSTRAINT delegation_role_grantor FOREIGN KEY (granted_by) REFERENCES user_account(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_role_changes' AND table_name = 'agency_delegation_event'
+  ) THEN
+    ALTER TABLE agency_delegation_event ADD CONSTRAINT delegation_role_changes FOREIGN KEY (client_delegation_id) REFERENCES agency_client_delegation(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'delegation_role_changed_by' AND table_name = 'agency_delegation_event'
+  ) THEN
+    ALTER TABLE agency_delegation_event ADD CONSTRAINT delegation_role_changed_by FOREIGN KEY (actor_id) REFERENCES user_account(id) ON DELETE RESTRICT;
   END IF;
 END $$;
 DO $$

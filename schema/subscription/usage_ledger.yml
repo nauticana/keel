@@ -1,6 +1,8 @@
 table: usage_ledger
-comment: Resource usage tracking for quota enforcement
+comment: Resource usage tracking for quota enforcement, attributed to the acting user, API key or OAuth client when known
 columns:
+  - name: id
+    type: BIGINT
   - name: partner_id
     type: BIGINT
   - name: usage_time
@@ -13,13 +15,37 @@ columns:
   - name: notes
     type: VARCHAR(255)
     nullable: true
-primary_key: [partner_id, usage_time]
+  - name: user_id
+    type: BIGINT
+    nullable: true
+  - name: api_key_id
+    type: BIGINT
+    nullable: true
+  # client_id as issued; no FK, since the token may come from an external issuer
+  - name: oauth_client_id
+    type: VARCHAR(255)
+    nullable: true
+primary_key: [id]
+sequence:
+  name: usage_ledger_seq
+  column: id
 foreign_keys:
   - name: partner_usage_ledger
     columns: [partner_id]
     references:
       table: business_partner
       columns: [id]
+  - name: usage_ledger_user
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: usage_ledger_api_key
+    columns: [api_key_id]
+    references:
+      table: api_key
+      columns: [id]
+    on_delete: SET NULL
 indexes:
   - name: idx_usage_ledger_quota
     columns: [partner_id, resource_name, usage_time]

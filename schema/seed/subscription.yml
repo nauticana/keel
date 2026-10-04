@@ -119,6 +119,16 @@ seeds:
       - [330, false, setup, subscription_addons, subscription_addon, "Subscription Addons"]
       - [340, true, setup, user_registrations, user_registration, "User Registrations"]
       - [350, true, setup, usage_ledger, usage_ledger, "Usage Ledger"]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [PARTNER_PLAN_SUBSCRIPTION, Subscription Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [PARTNER_PLAN_SUBSCRIPTION, CANCEL, Cancel the subscription]
+      - [PARTNER_PLAN_SUBSCRIPTION, CHANGE, Change the subscription plan]
+      - [PARTNER_PLAN_SUBSCRIPTION, PORTAL, Open the billing portal]
   # PARTNER_ADMIN permissions for shared keel tables
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
@@ -135,7 +145,10 @@ seeds:
       - [PARTNER_ADMIN, TABLE, DELETE, user_permission]
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_domains]
       - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
-      # Subscription pages
+      # Subscription pages and changes
+      - [PARTNER_ADMIN, PARTNER_PLAN_SUBSCRIPTION, CANCEL, partner_plan_subscription]
+      - [PARTNER_ADMIN, PARTNER_PLAN_SUBSCRIPTION, CHANGE, partner_plan_subscription]
+      - [PARTNER_ADMIN, PARTNER_PLAN_SUBSCRIPTION, PORTAL, partner_plan_subscription]
       - [PARTNER_ADMIN, PAGE, ACCESS, subscription_plans]
       - [PARTNER_ADMIN, PAGE, ACCESS, usage_ledger]
       # Geo tables

@@ -8,7 +8,7 @@ import (
 	"github.com/nauticana/keel/model"
 )
 
-var ErrUnauthenticated = errors.New("no authenticated principal, subject, or api key in context")
+var ErrUnauthenticated = errors.New("no authenticated principal, subject, user, or api key in context")
 
 var ErrCallerIdentityConflict = errors.New("authenticated principal and subject disagree")
 
@@ -18,6 +18,7 @@ type CallerSession struct {
 	Principal *model.TokenPrincipal
 	Subject   string
 	PartnerID int64
+	UserID    int64
 	APIKeyID  int64
 	Scopes    []string
 	RequestID string
@@ -32,6 +33,7 @@ func CallerSessionFromContext(ctx context.Context) (CallerSession, error) {
 	s.Principal, _ = ctx.Value(AuthPrincipal).(*model.TokenPrincipal)
 	s.Subject, _ = ctx.Value(Subject).(string)
 	s.PartnerID, _ = ctx.Value(PartnerID).(int64)
+	s.UserID, _ = ctx.Value(UserID).(int64)
 	s.APIKeyID, _ = ctx.Value(ApiKeyID).(int64)
 	if raw, ok := ctx.Value(Scopes).(string); ok {
 		s.Scopes = strings.FieldsFunc(raw, func(r rune) bool { return r == ' ' || r == ',' })
@@ -46,7 +48,7 @@ func CallerSessionFromContext(ctx context.Context) (CallerSession, error) {
 		// The validated token principal is authoritative. A separate context value must never broaden its scopes.
 		s.Scopes = append([]string(nil), s.Principal.Scopes...)
 	}
-	if strings.TrimSpace(s.Subject) == "" && s.APIKeyID <= 0 {
+	if strings.TrimSpace(s.Subject) == "" && s.APIKeyID <= 0 && s.UserID <= 0 {
 		return CallerSession{}, ErrUnauthenticated
 	}
 	return s, nil
@@ -66,6 +68,9 @@ func WithCallerSession(ctx context.Context, s CallerSession) context.Context {
 	}
 	if s.PartnerID > 0 {
 		ctx = context.WithValue(ctx, PartnerID, s.PartnerID)
+	}
+	if s.UserID > 0 {
+		ctx = context.WithValue(ctx, UserID, s.UserID)
 	}
 	if s.APIKeyID > 0 {
 		ctx = context.WithValue(ctx, ApiKeyID, s.APIKeyID)

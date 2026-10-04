@@ -1,0 +1,36 @@
+table: agency_delegation_role
+comment: |
+  Roles a client grants its agency on one delegation, each with an optional
+  expiry. No row means no access. role is an agency_delegation_role code.
+  Revocation expires open roles at max(now, granted_at), so expiry may equal
+  the grant time; the service requires client-set expiries to be in the future.
+columns:
+  - name: client_delegation_id
+    type: BIGINT
+  - name: role
+    type: VARCHAR(10)
+  - name: expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: granted_by
+    type: BIGINT
+  - name: granted_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [client_delegation_id, role]
+checks:
+  - name: chk_agency_delegation_role_expiry
+    expression: "expires_at IS NULL OR expires_at >= granted_at"
+foreign_keys:
+  - name: delegation_roles
+    columns: [client_delegation_id]
+    references:
+      table: agency_client_delegation
+      columns: [id]
+    on_delete: CASCADE
+  - name: delegation_role_grantor
+    columns: [granted_by]
+    references:
+      table: user_account
+      columns: [id]
+    on_delete: RESTRICT

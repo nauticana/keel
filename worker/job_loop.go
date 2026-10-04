@@ -27,16 +27,27 @@ type JobLoop struct {
 	QS              port.QueryService
 	Journal         logger.ApplicationLogger
 	GetPendingQuery string // returns rows of claimable jobs; id is row[0]
-	ClaimQuery      string // UPDATE ... SET status='A' WHERE id=? AND status IN ('P','R') RETURNING id
 	WorkerName      string // for log messages
 
-	// ReclaimQuery (optional) demotes rows stuck in 'A' from a crashed run back
-	// to 'P'. Run once per tick via Reclaim. Must end with RETURNING id so the
-	// demoted count is logged. Recommended shape:
+	// ClaimQuery must stamp the claim time, because ReclaimQuery ages a claim
+	// from it; a scheduled or created time would make a long-queued job look
+	// stale while it runs:
 	//
-	//   UPDATE <queue> SET status='P', updated_at=CURRENT_TIMESTAMP
-	//    WHERE status='A' AND updated_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+	//   UPDATE <queue> SET status='A', claimed_at=CURRENT_TIMESTAMP
+	//    WHERE id=? AND status IN ('P','R') RETURNING id
+	ClaimQuery string
+
+	// ReclaimQuery (optional) resolves claims left in 'A' by a crashed run,
+	// once per tick via Reclaim, aging them from claimed_at. It must end with
+	// RETURNING id so the count is logged. Requeue only idempotent work:
+	//
+	//   UPDATE <queue> SET status='P'
+	//    WHERE status='A' AND claimed_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
 	//   RETURNING id
+	//
+	// A job with an outside side effect may have completed before the crash;
+	// move it to a terminal unknown-outcome status for reconciliation instead,
+	// or it runs twice.
 	ReclaimQuery string
 
 	// Leased mints a unique lease token (QS.GenID()) per claim, binds it as
@@ -47,7 +58,7 @@ type JobLoop struct {
 }
 
 // Reclaim runs ReclaimQuery (no-op when empty), logging only when rows were
-// demoted so steady-state ticks stay quiet.
+// reclaimed so steady-state ticks stay quiet.
 func (l *JobLoop) Reclaim(ctx context.Context) {
 	if l.ReclaimQuery == "" {
 		return
@@ -58,7 +69,7 @@ func (l *JobLoop) Reclaim(ctx context.Context) {
 		return
 	}
 	if res != nil && len(res.Rows) > 0 {
-		l.Journal.Info(fmt.Sprintf("%s: reclaimed %d stale Active claim(s) to Pending", l.WorkerName, len(res.Rows)))
+		l.Journal.Info(fmt.Sprintf("%s: reclaimed %d stale claim(s)", l.WorkerName, len(res.Rows)))
 	}
 }
 

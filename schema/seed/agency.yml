@@ -6,6 +6,8 @@ seeds:
     rows:
       - [agency_client_status, Agency Client Status]
       - [agency_delegation_status, Agency Delegation Status]
+      - [agency_delegation_role, Agency Delegation Role]
+      - [agency_delegation_change, Agency Delegation Role Change]
       - [agency_billing_model, Agency Billing Model]
       - [agency_payout_profile_status, Agency Payout Profile Status]
       - [agency_commission_entry, Agency Commission Entry]
@@ -20,6 +22,12 @@ seeds:
       - [agency_client_status, X, Cancelled]
       - [agency_delegation_status, A, Active]
       - [agency_delegation_status, R, Revoked]
+      - [agency_delegation_role, view, View]
+      - [agency_delegation_role, operate, Operate]
+      - [agency_delegation_role, publish, Publish]
+      - [agency_delegation_change, G, Granted]
+      - [agency_delegation_change, E, Expiry changed]
+      - [agency_delegation_change, R, Removed]
       - [agency_billing_model, R, Referral]
       - [agency_billing_model, W, Wholesale]
       - [agency_payout_profile_status, A, Active]
@@ -43,6 +51,9 @@ seeds:
     rows:
       - [agency_client_status, agency_client_invitation, status]
       - [agency_delegation_status, agency_client_delegation, status]
+      - [agency_delegation_role, agency_delegation_role, role]
+      - [agency_delegation_role, agency_delegation_event, role]
+      - [agency_delegation_change, agency_delegation_event, change_type]
       - [agency_billing_model, agency_client_billing, billing_model]
       - [agency_payout_profile_status, agency_payout_profile, status]
       - [agency_commission_entry, agency_commission, entry_type]
@@ -77,6 +88,7 @@ seeds:
     rows:
       - [AGENCY_PROFILE, Agency Profile Actions]
       - [AGENCY, Agency Self-Service Actions]
+      - [AGENCY_DELEGATION, Agency Delegation Client Actions]
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
     rows:
@@ -84,6 +96,7 @@ seeds:
       - [AGENCY, MANAGE_CLIENTS, Manage agency clients]
       - [AGENCY, VIEW_EARNINGS, View agency earnings]
       - [AGENCY, MANAGE_PAYOUT, Manage agency payout destination]
+      - [AGENCY_DELEGATION, SET_ROLE, Set the roles granted to an agency]
   - table: table_action
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
     rows:
@@ -109,6 +122,8 @@ seeds:
       - [agency_client_invitation, updated_at, U]
       - [agency_client_delegation, granted_at, R]
       - [agency_client_delegation, revoked_at, R]
+      - [agency_delegation_role, granted_at, R]
+      - [agency_delegation_event, changed_at, R]
       - [agency_client_billing, created_at, R]
       - [agency_client_rate, first_earned_at, R]
       - [agency_commission, created_at, R]
@@ -124,6 +139,7 @@ seeds:
       - [AGENCY, AGENCY, VIEW_EARNINGS, agency_earnings]
       - [AGENCY, AGENCY, MANAGE_PAYOUT, agency_payout_profile]
       - [AGENCY, PAGE, ACCESS, agency_clients]
+      - [PARTNER_ADMIN, AGENCY_DELEGATION, SET_ROLE, agency_client_delegation]
       - [APP_ADMIN, PAGE, ACCESS, agency_profiles]
       - [APP_ADMIN, TABLE, SELECT, agency_profile]
       - [APP_ADMIN, TABLE, UPDATE, agency_profile]

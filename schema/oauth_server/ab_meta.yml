@@ -2,3 +2,4 @@ tables:
   - oauth_client
   - oauth_authorization_code
   - oauth_refresh_token
+  - oauth_session_handoff

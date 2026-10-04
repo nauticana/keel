@@ -23,6 +23,11 @@ func init() {
 	RegisterErrorStatus(port.ErrCommissionRateAbsent, http.StatusConflict)
 	RegisterErrorStatus(port.ErrInvalidCommission, http.StatusUnprocessableEntity)
 	RegisterErrorStatus(port.ErrPayoutDestination, http.StatusConflict)
+	RegisterErrorStatus(port.ErrInvalidDelegationRole, http.StatusUnprocessableEntity)
+	RegisterErrorStatus(port.ErrDuplicateDelegationRole, http.StatusUnprocessableEntity)
+	RegisterErrorStatus(port.ErrTooManyDelegationRoles, http.StatusUnprocessableEntity)
+	RegisterErrorStatus(port.ErrDelegationExpiryPast, http.StatusUnprocessableEntity)
+	RegisterErrorStatus(port.ErrDelegationNoAccess, http.StatusForbidden)
 }
 
 // AgencyHandler is the HTTP bridge for keel/agency. InviteURL turns a token
@@ -68,6 +73,8 @@ func (h *AgencyHandler) Routes(apiPrefix, publicPrefix string) map[string]func(h
 		apiPrefix + "/agency/invite/accept":     h.AcceptInvite,
 		apiPrefix + "/agency/delegation":        h.Delegation,
 		apiPrefix + "/agency/delegation/revoke": h.RevokeDelegation,
+		apiPrefix + "/agency/delegation/roles": WrapTableAction(
+			h.DB, h.UserService, "AGENCY_DELEGATION", "SET_ROLE", "agency_client_delegation", h.SetDelegationRoles),
 		TableActionPath(apiPrefix, "agency_profile", "approve"): WrapTableAction(
 			h.DB, h.UserService, "AGENCY_PROFILE", "APPROVE", "agency_profile", h.approve),
 	}
@@ -260,6 +267,31 @@ func (h *AgencyHandler) RevokeDelegation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// SetDelegationRoles replaces the role set the client grants its agency.
+// clientPartnerId defaults to the session partner; an empty list removes access.
+func (h *AgencyHandler) SetDelegationRoles(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var request struct {
+		ClientPartnerID int64                   `json:"clientPartnerId"`
+		Roles           []model.AgencyRoleGrant `json:"roles"`
+	}
+	session, ok := h.RequireSession(w, r)
+	if !ok || !h.ReadStrictRequest(w, r, &request) {
+		return
+	}
+	if request.ClientPartnerID == 0 {
+		request.ClientPartnerID = session.PartnerId
+	}
+	if err := h.Agency.SetDelegationRoles(r.Context(), request.ClientPartnerID, session.PartnerId,
+		request.Roles, int64(session.Id)); err != nil {
+		h.WriteServiceError(w, r, err)
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 func (h *AgencyHandler) SetBillingModel(w http.ResponseWriter, r *http.Request) {

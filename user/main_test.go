@@ -23,6 +23,7 @@ type memStore struct {
 	cutoffs   map[int]time.Time // tokens_valid_after
 	holds     map[int]bool      // users with an unreleased legal hold
 	deleted   map[int]bool
+	partners  map[int][][]any // qListPartners rows per user
 	calls     []string
 	failQuery map[string]error
 	commits   int
@@ -79,6 +80,8 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		if m.holds[args[0].(int)] {
 			out.Rows = [][]any{{1}}
 		}
+	case qListPartners:
+		out.Rows = m.partners[args[0].(int)]
 	case qAnonymizeUserAccount:
 		m.deleted[args[2].(int)] = true
 		m.cutoffs[args[2].(int)] = time.Now()

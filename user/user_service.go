@@ -22,6 +22,9 @@ type UserService interface {
 	GetUserByLogin(username string, password string) (*model.UserSession, error)
 	GetUserByUsername(username string) (*model.UserSession, error)
 	GetUserByEmail(email string) (*model.UserSession, error)
+	// ListPartners returns the user's current partner memberships; the first is
+	// the session partner.
+	ListPartners(userID int) ([]model.PartnerMembership, error)
 	SetPassword(userid int, password string) error
 	GetUserMenu(userid int) ([]model.UserMenu, error)
 

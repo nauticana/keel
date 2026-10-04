@@ -1,0 +1,47 @@
+table: oauth_session_handoff
+comment: Single-use hand-off codes that turn a bearer-JWT app session into a short-lived authorization-server cookie session; partner_id is a denormalized snapshot
+columns:
+  - name: id
+    type: BIGINT
+  - name: code_hash
+    type: CHAR(64)
+  - name: user_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: return_url
+    type: VARCHAR(2000)
+  - name: expires_at
+    type: TIMESTAMP
+  - name: consumed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: session_hash
+    type: CHAR(64)
+    nullable: true
+  - name: session_expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: oauth_session_handoff_seq
+  column: id
+foreign_keys:
+  - name: oauth_session_handoff_user
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: idx_oauth_handoff_code_hash
+    columns: [code_hash]
+    unique: true
+  - name: idx_oauth_handoff_session_hash
+    columns: [session_hash]
+    unique: true
+  - name: idx_oauth_handoff_user
+    columns: [user_id]

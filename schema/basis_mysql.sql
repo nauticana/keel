@@ -529,11 +529,15 @@ CREATE TABLE IF NOT EXISTS service_registry (
     PRIMARY KEY (service_name, started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Per-tenant cadence for recurring worker tasks (worker.Scheduler); task_kind is consumer-defined
+-- Per-tenant cadence for recurring worker tasks (worker.Scheduler), an interval or a weekday or day of month in time_zone; task_kind is consumer-defined
 CREATE TABLE IF NOT EXISTS work_schedule (
     partner_id                           BIGINT        NOT NULL,
     task_kind                            VARCHAR(30)   NOT NULL,
     interval_seconds                     INT           NOT NULL,
+    cadence                              CHAR(1)       NOT NULL DEFAULT 'I',
+    cadence_day                          SMALLINT     ,
+    cadence_minute                       SMALLINT     ,
+    time_zone                            VARCHAR(64)  ,
     next_run_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_run_at                          DATETIME     ,
     last_error                           TEXT         ,
@@ -542,7 +546,8 @@ CREATE TABLE IF NOT EXISTS work_schedule (
     lease_token                          BIGINT       ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (partner_id, task_kind),
-    CONSTRAINT work_schedule_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+    CONSTRAINT work_schedule_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT chk_work_schedule_cadence CHECK ((cadence = 'I' AND cadence_day IS NULL AND cadence_minute IS NULL AND time_zone IS NULL) OR (cadence IN ('W', 'M') AND cadence_minute BETWEEN 0 AND 1439 AND time_zone IS NOT NULL AND ((cadence = 'W' AND cadence_day BETWEEN 0 AND 6) OR (cadence = 'M' AND cadence_day BETWEEN 1 AND 31))))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
 
@@ -601,6 +606,25 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_token (
 CREATE UNIQUE INDEX idx_oauth_refresh_hash ON oauth_refresh_token(token_hash);
 CREATE INDEX idx_oauth_refresh_family ON oauth_refresh_token(family_id);
 CREATE INDEX idx_oauth_refresh_user ON oauth_refresh_token(user_id);
+
+-- Single-use hand-off codes that turn a bearer-JWT app session into a short-lived authorization-server cookie session; partner_id is a denormalized snapshot
+CREATE TABLE IF NOT EXISTS oauth_session_handoff (
+    id                                   BIGINT        NOT NULL,
+    code_hash                            CHAR(64)      NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    return_url                           VARCHAR(2000) NOT NULL,
+    expires_at                           DATETIME      NOT NULL,
+    consumed_at                          DATETIME     ,
+    session_hash                         CHAR(64)     ,
+    session_expires_at                   DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT oauth_session_handoff_user FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_oauth_handoff_code_hash ON oauth_session_handoff(code_hash);
+CREATE UNIQUE INDEX idx_oauth_handoff_session_hash ON oauth_session_handoff(session_hash);
+CREATE INDEX idx_oauth_handoff_user ON oauth_session_handoff(user_id);
 
 -- API keys for public API access with rotation support
 CREATE TABLE IF NOT EXISTS api_key (
@@ -763,15 +787,21 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     CONSTRAINT partner_subscriptions_addon FOREIGN KEY (addon_id) REFERENCES subscription_addon(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Resource usage tracking for quota enforcement
+-- Resource usage tracking for quota enforcement, attributed to the acting user, API key or OAuth client when known
 CREATE TABLE IF NOT EXISTS usage_ledger (
+    id                                   BIGINT        NOT NULL,
     partner_id                           BIGINT        NOT NULL,
     usage_time                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resource_name                        VARCHAR(50)   NOT NULL,
     amount                               BIGINT        NOT NULL,
     notes                                VARCHAR(255) ,
-    PRIMARY KEY (partner_id, usage_time),
-    CONSTRAINT partner_usage_ledger FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+    user_id                              BIGINT       ,
+    api_key_id                           BIGINT       ,
+    oauth_client_id                      VARCHAR(255) ,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_usage_ledger FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT usage_ledger_user FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT usage_ledger_api_key FOREIGN KEY (api_key_id) REFERENCES api_key(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_usage_ledger_quota ON usage_ledger(partner_id, resource_name, usage_time);
 
@@ -1294,6 +1324,40 @@ CREATE TABLE IF NOT EXISTS agency_client_delegation (
 CREATE UNIQUE INDEX delegation_episode_uq ON agency_client_delegation(agency_partner_id, client_partner_id, granted_at);
 CREATE INDEX idx_agency_client_delegation_client ON agency_client_delegation(client_partner_id, status);
 CREATE INDEX idx_agency_client_delegation_agency ON agency_client_delegation(agency_partner_id, status);
+
+-- Roles a client grants its agency on one delegation, each with an optional
+-- expiry. No row means no access. role is an agency_delegation_role code.
+-- Revocation expires open roles at max(now, granted_at), so expiry may equal
+-- the grant time; the service requires client-set expiries to be in the future.
+CREATE TABLE IF NOT EXISTS agency_delegation_role (
+    client_delegation_id                 BIGINT        NOT NULL,
+    role                                 VARCHAR(10)   NOT NULL,
+    expires_at                           DATETIME     ,
+    granted_by                           BIGINT        NOT NULL,
+    granted_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (client_delegation_id, role),
+    CONSTRAINT delegation_roles FOREIGN KEY (client_delegation_id) REFERENCES agency_client_delegation(id) ON DELETE CASCADE,
+    CONSTRAINT delegation_role_grantor FOREIGN KEY (granted_by) REFERENCES user_account(id) ON DELETE RESTRICT,
+    CONSTRAINT chk_agency_delegation_role_expiry CHECK (expires_at IS NULL OR expires_at >= granted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Append-only history of client changes to a delegation's roles, one row per
+-- role. change_type G=granted, E=expiry changed, R=removed.
+CREATE TABLE IF NOT EXISTS agency_delegation_event (
+    id                                   BIGINT        NOT NULL,
+    client_delegation_id                 BIGINT        NOT NULL,
+    actor_id                             BIGINT        NOT NULL,
+    role                                 VARCHAR(10)   NOT NULL,
+    change_type                          CHAR(1)       NOT NULL,
+    old_expires_at                       DATETIME     ,
+    new_expires_at                       DATETIME     ,
+    changed_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT delegation_role_changes FOREIGN KEY (client_delegation_id) REFERENCES agency_client_delegation(id) ON DELETE CASCADE,
+    CONSTRAINT delegation_role_changed_by FOREIGN KEY (actor_id) REFERENCES user_account(id) ON DELETE RESTRICT,
+    CONSTRAINT chk_agency_delegation_event_type CHECK (change_type IN ('G', 'E', 'R'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_agency_delegation_event ON agency_delegation_event(client_delegation_id, id);
 
 -- Effective-dated referral (R) or wholesale (W) model per delegation. The
 -- partial unique index permits only one open row without a database extension;

@@ -11,6 +11,10 @@ var (
 	ErrUnsupportedMediaType = errors.New("extract: unsupported media type")
 	ErrTooLarge             = errors.New("extract: document exceeds the size limit")
 	ErrEncrypted            = errors.New("extract: encrypted PDFs are not extracted")
+	// ErrTimeout is a document the isolated child did not finish before its deadline.
+	ErrTimeout = errors.New("extract: the document was not extracted within the time limit")
+	// ErrIsolationFailed is a child that could not run, crashed or broke the protocol: an operational fault, not the document's.
+	ErrIsolationFailed = errors.New("extract: the isolated extraction process failed")
 )
 
 // Section kinds.

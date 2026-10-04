@@ -25,15 +25,23 @@ const (
 	qScheduleDone   = "work_schedule_complete"
 	qScheduleFail   = "work_schedule_fail"
 	qScheduleDrop   = "work_schedule_drop"
+	qScheduleClock  = "work_schedule_clock"
 )
 
 var scheduleQueries = map[string]string{
-	// The cadence is the app's; an existing row keeps its place in the rotation.
+	// The cadence is the app's; an existing row keeps its place in the rotation
+	// unless its calendar cadence changed. A NULL first run means now.
 	qScheduleUpsert: `
-INSERT INTO work_schedule (partner_id, task_kind, interval_seconds, next_run_at)
-VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+INSERT INTO work_schedule (partner_id, task_kind, interval_seconds, cadence, cadence_day, cadence_minute, time_zone, next_run_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP))
 ON CONFLICT (partner_id, task_kind)
-DO UPDATE SET interval_seconds = EXCLUDED.interval_seconds
+DO UPDATE SET interval_seconds = EXCLUDED.interval_seconds,
+       cadence = EXCLUDED.cadence, cadence_day = EXCLUDED.cadence_day,
+       cadence_minute = EXCLUDED.cadence_minute, time_zone = EXCLUDED.time_zone,
+       next_run_at = CASE
+         WHEN (work_schedule.cadence, work_schedule.cadence_day, work_schedule.cadence_minute, work_schedule.time_zone)
+              IS DISTINCT FROM (EXCLUDED.cadence, EXCLUDED.cadence_day, EXCLUDED.cadence_minute, EXCLUDED.time_zone)
+         THEN EXCLUDED.next_run_at ELSE work_schedule.next_run_at END
 `,
 	// One claim per due tenant, fleet-wide: the lease makes exactly one replica
 	// the owner and a crash recoverable — the row is due again once it lapses.
@@ -49,15 +57,16 @@ UPDATE work_schedule
          ORDER BY next_run_at
          LIMIT ?
          FOR UPDATE SKIP LOCKED)
-RETURNING partner_id, interval_seconds, consecutive_failures, last_run_at, lease_token
+RETURNING partner_id, interval_seconds, consecutive_failures, last_run_at, lease_token,
+          cadence, cadence_day, cadence_minute, time_zone
 `,
 	// Due-ness is reset from the clock, not from whatever the task wrote: a run
-	// that produced no rows is still a run.
+	// that produced no rows is still a run. A calendar cadence passes its next slot.
 	qScheduleDone: `
 UPDATE work_schedule
    SET last_run_at = CURRENT_TIMESTAMP, last_error = NULL, consecutive_failures = 0,
        lease_until = NULL, lease_token = NULL,
-       next_run_at = CURRENT_TIMESTAMP + (interval_seconds * INTERVAL '1 second')
+       next_run_at = COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP + (interval_seconds * INTERVAL '1 second'))
  WHERE partner_id = ? AND task_kind = ? AND lease_token = ?
 RETURNING partner_id
 `,
@@ -76,6 +85,7 @@ RETURNING partner_id
 	qScheduleDrop: `
 DELETE FROM work_schedule WHERE partner_id = ? AND task_kind = ?
 `,
+	qScheduleClock: `SELECT CURRENT_TIMESTAMP`,
 }
 
 // ErrScheduleClaimLost: the claim no longer owns the schedule — its lease
@@ -88,6 +98,7 @@ type ScheduledTask struct {
 	PartnerID           int64
 	TaskKind            string
 	Interval            time.Duration
+	Cadence             Cadence // zero for an interval schedule
 	ConsecutiveFailures int
 	LastRunAt           time.Time // zero = never run
 	LeaseToken          int64     // claim fence; pass this task to Complete or Fail
@@ -153,7 +164,31 @@ func (s *Scheduler) Schedule(ctx context.Context, partnerID int64, taskKind stri
 	if err != nil {
 		return err
 	}
-	_, err = qs.Query(ctx, qScheduleUpsert, partnerID, taskKind, durationSeconds(interval))
+	_, err = qs.Query(ctx, qScheduleUpsert, partnerID, taskKind, durationSeconds(interval), string(CadenceInterval), nil, nil, nil, nil)
+	return err
+}
+
+// ScheduleCalendar enrolls the tenant on a weekly or monthly cadence, first due
+// at its next slot. Re-enrolling with the same cadence keeps the pending slot.
+func (s *Scheduler) ScheduleCalendar(ctx context.Context, partnerID int64, taskKind string, cadence Cadence) error {
+	if partnerID <= 0 || taskKind == "" {
+		return fmt.Errorf("scheduler: partnerID and taskKind required")
+	}
+	var err error
+	cadence, err = cadence.normalized()
+	if err != nil {
+		return err
+	}
+	qs, err := s.queries(ctx)
+	if err != nil {
+		return err
+	}
+	now, err := scheduleNow(ctx, qs)
+	if err != nil {
+		return err
+	}
+	_, err = qs.Query(ctx, qScheduleUpsert, partnerID, taskKind, durationSeconds(cadence.period()),
+		string(cadence.Kind), cadence.Day, cadence.Minute, cadence.Location.String(), cadence.next(now))
 	return err
 }
 
@@ -169,7 +204,8 @@ func (s *Scheduler) Drop(ctx context.Context, partnerID int64, taskKind string) 
 
 // Due claims up to limit tenants due for taskKind and returns them. Every
 // claimed tenant must be resolved with Complete or Fail, or it stays leased
-// until the lease lapses.
+// until the lease lapses. The tasks are valid even when err reports a schedule
+// whose failure could not be recorded.
 func (s *Scheduler) Due(ctx context.Context, taskKind string, limit int) ([]ScheduledTask, error) {
 	if taskKind == "" || limit <= 0 {
 		return nil, fmt.Errorf("scheduler: taskKind and a positive limit required")
@@ -184,6 +220,7 @@ func (s *Scheduler) Due(ctx context.Context, taskKind string, limit int) ([]Sche
 		return nil, fmt.Errorf("scheduler: claim %s: %w", taskKind, err)
 	}
 	out := make([]ScheduledTask, 0, len(res.Rows))
+	var failed error
 	for _, row := range res.Rows {
 		task := ScheduledTask{
 			PartnerID:           common.AsInt64(row[0]),
@@ -193,18 +230,41 @@ func (s *Scheduler) Due(ctx context.Context, taskKind string, limit int) ([]Sche
 			LeaseToken:          common.AsInt64(row[4]),
 		}
 		task.LastRunAt, _ = row[3].(time.Time)
+		if kind := CadenceKind(common.AsString(row[5])); kind != CadenceInterval {
+			task.Cadence = Cadence{Kind: kind, Day: int(common.AsInt64(row[6])), Minute: int(common.AsInt64(row[7]))}
+			task.Cadence.Location, _ = time.LoadLocation(common.AsString(row[8]))
+			// A task that could not be completed would run again at every lease
+			// lapse, so an unusable cadence is failed here instead of handed out.
+			if _, err := task.Cadence.normalized(); err != nil {
+				failed = errors.Join(failed, s.Fail(ctx, task, err))
+				continue
+			}
+		}
 		out = append(out, task)
 	}
-	return out, nil
+	return out, failed
 }
 
-// Complete releases the claim and schedules the next run one interval out.
+// Complete releases the claim and schedules the next run one interval out, or
+// at the calendar cadence's first slot after completion.
 func (s *Scheduler) Complete(ctx context.Context, task ScheduledTask) error {
 	qs, err := s.queries(ctx)
 	if err != nil {
 		return err
 	}
-	res, err := qs.Query(ctx, qScheduleDone, task.PartnerID, task.TaskKind, task.LeaseToken)
+	var next any
+	if task.Cadence.calendar() {
+		cadence, err := task.Cadence.normalized()
+		if err != nil {
+			return fmt.Errorf("scheduler: complete %s for partner %d: %w", task.TaskKind, task.PartnerID, err)
+		}
+		now, err := scheduleNow(ctx, qs)
+		if err != nil {
+			return fmt.Errorf("scheduler: complete %s for partner %d: %w", task.TaskKind, task.PartnerID, err)
+		}
+		next = cadence.next(now)
+	}
+	res, err := qs.Query(ctx, qScheduleDone, next, task.PartnerID, task.TaskKind, task.LeaseToken)
 	if err != nil {
 		return fmt.Errorf("scheduler: complete %s for partner %d: %w", task.TaskKind, task.PartnerID, err)
 	}
@@ -235,6 +295,21 @@ func durationSeconds(d time.Duration) int64 {
 		seconds++
 	}
 	return int64(seconds)
+}
+
+func scheduleNow(ctx context.Context, qs port.QueryService) (time.Time, error) {
+	res, err := qs.Query(ctx, qScheduleClock)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("scheduler: read store clock: %w", err)
+	}
+	if res == nil || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return time.Time{}, errors.New("scheduler: store clock returned no value")
+	}
+	now := common.AsTime(res.Rows[0][0])
+	if now.IsZero() {
+		return time.Time{}, errors.New("scheduler: store clock returned an invalid value")
+	}
+	return now, nil
 }
 
 // claimLost turns a fenced write that matched nothing into ErrScheduleClaimLost

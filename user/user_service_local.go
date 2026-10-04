@@ -96,6 +96,7 @@ const (
 	qUserById           = "user_by_id"
 	qPartnerUserByid    = "partner_user_by_id"
 	qPartnerUserByEmail = "partner_user_by_email"
+	qListPartners       = "list_partners"
 	qSetPassword        = "set_password"
 	qSetLoginAttempt    = "set_login_attempt"
 	qBumpLoginAttempt   = "bump_login_attempt"
@@ -171,6 +172,17 @@ const (
 	qConfirmContactChange          = "confirm_contact_change"
 )
 
+// sessionPartnerJoin binds p.partner_id to the user's earliest current
+// membership, or NULL; ListPartners returns the same partner first.
+const sessionPartnerJoin = `  LEFT JOIN LATERAL (
+        SELECT pu.partner_id
+          FROM partner_user pu
+         WHERE pu.user_id = U.id
+           AND pu.begda <= CURRENT_TIMESTAMP
+           AND (pu.endda IS NULL OR pu.endda > CURRENT_TIMESTAMP)
+         ORDER BY pu.begda, pu.partner_id
+         LIMIT 1) p ON TRUE`
+
 var LocalUserQueries = map[string]string{
 	qUserAccountPolicy: "SELECT id, policy_value FROM user_account_policy",
 
@@ -224,26 +236,27 @@ SELECT id, user_name, first_name, last_name, user_email, status, passdate, passt
  WHERE id = ?
 `,
 
-	// LEFT JOIN partner_user: a user_account row may exist without a
-	// partner_user row (OTP/email signup flows don't auto-create a
-	// partner binding — that's wired separately, e.g. by an admin or
-	// a registration handler that knows which partner to attach).
-	// Switching from the comma-join (implicit INNER JOIN) means the
-	// second OTP /send for an existing-but-partnerless email no
-	// longer phantom-misses, falls through to create, and dies on
-	// the user_email UNIQUE constraint with a 500.
 	qPartnerUserByid: `
 SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.passtext, U.login_attempts, U.last_login_attempt, U.lock_time, p.partner_id
   FROM user_account U
-  LEFT JOIN partner_user p ON p.user_id = U.id
+` + sessionPartnerJoin + `
  WHERE U.id = ?
 `,
 
 	qPartnerUserByEmail: `
 SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.passtext, U.login_attempts, U.last_login_attempt, U.lock_time, p.partner_id, U.phone
   FROM user_account U
-  LEFT JOIN partner_user p ON p.user_id = U.id
+` + sessionPartnerJoin + `
  WHERE U.user_email = ?
+`,
+
+	qListPartners: `
+SELECT partner_id, begda, endda
+  FROM partner_user
+ WHERE user_id = ?
+   AND begda <= CURRENT_TIMESTAMP
+   AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
+ ORDER BY begda, partner_id
 `,
 
 	qSetPassword: `
@@ -408,12 +421,12 @@ VALUES (nextval('user_refresh_token_seq'), ?, ?, ?)
 
 	qGetRefreshToken: `
 SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id, U.phone
-  FROM user_refresh_token t, user_account U, partner_user p
+  FROM user_refresh_token t
+  JOIN user_account U ON U.id = t.user_id
+` + sessionPartnerJoin + `
  WHERE t.token_hash = ?
    AND t.revoked_at IS NULL
    AND t.expires_at > CURRENT_TIMESTAMP
-   AND U.id = t.user_id
-   AND p.user_id = U.id
  FOR UPDATE OF t
 `,
 
@@ -451,14 +464,14 @@ UPDATE user_trusted_device SET last_seen_at = CURRENT_TIMESTAMP
 	qUserByPhone: `
 SELECT U.id, U.first_name, U.last_name, U.user_email, U.phone, U.locale, U.status, p.partner_id
   FROM user_account U
-  LEFT JOIN partner_user p ON p.user_id = U.id
+` + sessionPartnerJoin + `
  WHERE U.phone = ?
 `,
 
 	qUserBySocial: `
 SELECT U.id, U.first_name, U.last_name, U.user_email, U.phone, U.locale, U.status, p.partner_id
   FROM user_account U
-  LEFT JOIN partner_user p ON p.user_id = U.id
+` + sessionPartnerJoin + `
   JOIN user_social_provider sp ON sp.user_id = U.id
  WHERE sp.provider = ? AND sp.provider_id = ?
 `,
@@ -929,6 +942,25 @@ func (s *LocalUserService) GetUserById(userId int) (*model.UserSession, error) {
 	}
 
 	return session, nil
+}
+
+// ListPartners returns the user's current memberships in session order: the
+// first is the partner GetUserById and the login paths put in the session.
+func (s *LocalUserService) ListPartners(userID int) ([]model.PartnerMembership, error) {
+	res, err := s.queryService.Query(s.ctx(), qListPartners, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list partners for user %d: %w", userID, err)
+	}
+	out := make([]model.PartnerMembership, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		m := model.PartnerMembership{PartnerID: common.AsInt64(row[0])}
+		m.Begda, _ = row[1].(time.Time)
+		if endda, ok := row[2].(time.Time); ok {
+			m.Endda = &endda
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // loginRow resolves a login identifier by user_name, then by user_email.

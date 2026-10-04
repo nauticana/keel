@@ -107,7 +107,7 @@ Real value but no concrete consumer asking yet. Defer until a downstream project
 | C12 | `document.ContentStore` port with a second implementation that stores partner documents on a remote ArchiveLink content server over HTTP, so client applications can share one central content server instead of their own buckets | 2–3 days |
 | C13 | `recording_media` on a content repository (`contrep_id` + `doc_key`) instead of recording a `bucket` column; `ObjectStorage` stays usable directly, so this is only for relocation and per-repository credentials | 1 day |
 | C14 | OCR providers behind `extract.TextExtractor` (GCP Vision, AWS Textract, Azure Vision) for scanned pages, selected by `extract_mode`; a chain that tries `Native` first and falls back to OCR when a page has no text layer | 2 days |
-| C15 | Pin the first folio release containing [#460](https://github.com/carlos7ags/folio/pull/460), [#461](https://github.com/carlos7ags/folio/pull/461) and [#462](https://github.com/carlos7ags/folio/pull/462) (fixes for folio#458, #457, #459), map its `ErrFormBudgetExceeded` to `ErrTooLarge`, un-skip `TestPDFFormOwnResources`, `TestPDFSimpleFontWideCodespace` and `TestPDFNestedFormsBounded`, and drop the README's untrusted-PDF worker advice | 2 hr |
+| C15 | Pin the first folio release containing [#460](https://github.com/carlos7ags/folio/pull/460), [#461](https://github.com/carlos7ags/folio/pull/461) and [#462](https://github.com/carlos7ags/folio/pull/462) (fixes for folio#458, #457, #459), map its `ErrFormBudgetExceeded` to `ErrTooLarge`, un-skip `TestPDFFormOwnResources`, `TestPDFSimpleFontWideCodespace` and `TestPDFNestedFormsBounded`, and decide whether the README still routes untrusted PDFs through `extract.Isolated` | 2 hr |
 
 ---
 

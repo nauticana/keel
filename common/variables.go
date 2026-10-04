@@ -35,6 +35,9 @@ const (
 	// uniformly across X-API-Key, JWT, and OAuth requests.
 	Subject       ContextKey = "subject"
 	AuthPrincipal ContextKey = "authPrincipal"
+	// UserID is the user_account.id (int64) of a validated JWT session, set by
+	// HttpBackend.SSOMiddleware.
+	UserID ContextKey = "userID"
 	// ConsentRoute is keel's consent surface. Declared here rather than in
 	// handler so the route mount and the SSO partner gate cannot drift apart
 	// (service cannot import handler).

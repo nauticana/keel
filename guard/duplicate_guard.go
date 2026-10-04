@@ -13,6 +13,9 @@ import (
 // the existing id. Query must return that id in column 0, or no rows:
 //
 //	SELECT id FROM <queue> WHERE partner_id=$1 AND dedup_key=$2 AND created_at >= $3 ... LIMIT 1
+//
+// Check is a read: two concurrent callers both pass unless Check and the write
+// run in one transaction that first takes Lock on a key covering the dedup scope.
 type DuplicateGuard struct {
 	queryName string
 	window    time.Duration

@@ -1,0 +1,47 @@
+table: agency_delegation_event
+comment: |
+  Append-only history of client changes to a delegation's roles, one row per
+  role. change_type G=granted, E=expiry changed, R=removed.
+columns:
+  - name: id
+    type: BIGINT
+  - name: client_delegation_id
+    type: BIGINT
+  - name: actor_id
+    type: BIGINT
+  - name: role
+    type: VARCHAR(10)
+  - name: change_type
+    type: CHAR(1)
+  - name: old_expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: new_expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: changed_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agency_delegation_event_seq
+  column: id
+checks:
+  - name: chk_agency_delegation_event_type
+    expression: "change_type IN ('G', 'E', 'R')"
+indexes:
+  - name: idx_agency_delegation_event
+    columns: [client_delegation_id, id]
+foreign_keys:
+  - name: delegation_role_changes
+    columns: [client_delegation_id]
+    references:
+      table: agency_client_delegation
+      columns: [id]
+    on_delete: CASCADE
+  - name: delegation_role_changed_by
+    columns: [actor_id]
+    references:
+      table: user_account
+      columns: [id]
+    on_delete: RESTRICT

@@ -278,22 +278,24 @@ func TestPDFInvisibleTextLayer(t *testing.T) {
 	}
 }
 
-func TestPDFEncryption(t *testing.T) {
-	encrypted := func(user, owner string) []byte {
-		doc := document.NewDocument(document.PageSizeLetter)
-		doc.SetEncryption(document.EncryptionConfig{Algorithm: document.EncryptAES256, UserPassword: user, OwnerPassword: owner})
-		doc.AddPage().AddText("Protected text", font.Helvetica, 12, 72, 700)
-		var buf bytes.Buffer
-		if _, err := doc.WriteTo(&buf); err != nil {
-			t.Fatal(err)
-		}
-		return buf.Bytes()
+func encryptedPDF(t *testing.T, user, owner string) []byte {
+	t.Helper()
+	doc := document.NewDocument(document.PageSizeLetter)
+	doc.SetEncryption(document.EncryptionConfig{Algorithm: document.EncryptAES256, UserPassword: user, OwnerPassword: owner})
+	doc.AddPage().AddText("Protected text", font.Helvetica, 12, 72, 700)
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatal(err)
 	}
-	e, err := native.Extract(context.Background(), mediaPDF, encrypted("", "owner"))
+	return buf.Bytes()
+}
+
+func TestPDFEncryption(t *testing.T) {
+	e, err := native.Extract(context.Background(), mediaPDF, encryptedPDF(t, "", "owner"))
 	if err != nil || !strings.Contains(e.Text, "Protected text") {
 		t.Errorf("an empty user password opens the document: %q %v", e.Text, err)
 	}
-	if _, err := native.Extract(context.Background(), mediaPDF, encrypted("user", "owner")); !errors.Is(err, ErrEncrypted) {
+	if _, err := native.Extract(context.Background(), mediaPDF, encryptedPDF(t, "user", "owner")); !errors.Is(err, ErrEncrypted) {
 		t.Errorf("a password-protected PDF must be refused: %v", err)
 	}
 }

@@ -49,7 +49,7 @@ groups:
   - name: subscription
     path: subscription
     seed: seed/subscription.yml
-    depends_on: [tenant_management]
+    depends_on: [core, tenant_management, api_key_management]
     seed_depends_on: [core]
 
   - name: payment

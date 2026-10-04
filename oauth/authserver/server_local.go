@@ -24,6 +24,10 @@ const (
 	OAuthRevokePath     = "/oauth/revoke"
 	OAuthIntrospectPath = "/oauth/introspect"
 	OAuthJWKSPath       = "/oauth/jwks"
+
+	OAuthPathPrefix         = "/oauth"
+	OAuthSessionPath        = "/oauth/session"         // redeems a hand-off code for an AS cookie session
+	OAuthSessionHandoffPath = "/oauth/session/handoff" // mints a hand-off code for a bearer-authenticated user
 )
 
 // OAuth error sentinels; Error() is the RFC 6749 error code the endpoints return.

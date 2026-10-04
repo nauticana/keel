@@ -37,7 +37,8 @@ func TestSchedulerScheduleUpserts(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := qs.argsFor(qScheduleUpsert)
-	if len(args) != 3 || args[0].(int64) != 7 || args[1].(string) != "review_poll" || args[2].(int64) != 5400 {
+	if len(args) != 8 || args[0].(int64) != 7 || args[1].(string) != "review_poll" || args[2].(int64) != 5400 ||
+		args[3] != "I" || args[4] != nil || args[5] != nil || args[6] != nil || args[7] != nil {
 		t.Fatalf("upsert args = %v", args)
 	}
 }
@@ -46,8 +47,8 @@ func TestSchedulerDueClaimsUnderLease(t *testing.T) {
 	last := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	qs := &fakeQS{genID: 41, fixed: map[string]*model.QueryResult{
 		qScheduleDue: qr(
-			[]any{int64(7), int64(3600), int64(0), last, int64(41)},
-			[]any{int64(9), int64(86400), int64(2), nil, int64(41)}, // never run
+			[]any{int64(7), int64(3600), int64(0), last, int64(41), "I", nil, nil, nil},
+			[]any{int64(9), int64(86400), int64(2), nil, int64(41), "I", nil, nil, nil}, // never run
 		),
 	}}
 	s := newScheduler(qs)
@@ -111,7 +112,7 @@ func TestSchedulerCompleteAndFail(t *testing.T) {
 	if err := s.Complete(ctx, task); err != nil {
 		t.Fatal(err)
 	}
-	if args := qs.argsFor(qScheduleDone); args[0].(int64) != 7 || args[1].(string) != "review_poll" || args[2].(int64) != 99 {
+	if args := qs.argsFor(qScheduleDone); args[0] != nil || args[1].(int64) != 7 || args[2].(string) != "review_poll" || args[3].(int64) != 99 {
 		t.Fatalf("complete args = %v", args)
 	}
 

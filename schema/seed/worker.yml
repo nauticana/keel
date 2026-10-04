@@ -1,6 +1,20 @@
 comment: Worker seed data
 order: 90
 seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [work_schedule_cadence, Work Schedule Cadence]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [work_schedule_cadence, I, Interval]
+      - [work_schedule_cadence, W, Weekly]
+      - [work_schedule_cadence, M, Monthly]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [work_schedule_cadence, work_schedule, cadence]
   - table: rest_api_header
     columns: [id, master_table]
     rows:

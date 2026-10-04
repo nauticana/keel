@@ -520,7 +520,7 @@ main: w := &PublishWorker{AbstractWorker{Caption, Interval, HCPort}}; w.Run(ctx,
 
 **Why `JobLoop` is a separate class, not folded into `JobExecutor`:** (1) one process can drain several queues — N loops per tick; (2) it is unit-testable with a fake `QueryService` (claim-won / claim-lost / reclaim / handler-error paths) with no HTTP/registry/ticker scaffolding; (3) it is reusable outside a daemon (a CLI one-shot drain or backfill). `JobExecutor` *drives* a `JobLoop`; it does not *become* one. The driver lives in `JobExecutor` because that is where the worker is held as an interface, so it can call `HandleJob` polymorphically.
 
-**Queue table convention.** Status flows `P` (pending) → `A` (active/claimed) → done, with `R` for retry. The claim is an atomic `UPDATE … SET status='A' WHERE id=? AND status IN ('P','R') RETURNING id` so two nodes can't both win. `Reclaim` demotes rows stuck in `A` (a worker that crashed mid-job) back to `P` after a grace period. Route a retryable failure to `R` with a `scheduled_time`, and have the pending query select `R` rows whose time has arrived — backoff is a handler concern, not the loop's.
+**Queue table convention.** Status flows `P` (pending) → `A` (active/claimed) → done, with `R` for retry. The claim is an atomic `UPDATE … SET status='A', claimed_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('P','R') RETURNING id` so two nodes can't both win, and it stamps its own time: `Reclaim` ages a claim from that stamp, never from a scheduled or created time, which would make a long-queued job look stale while it runs. `Reclaim` returns an expired claim (a worker that crashed mid-job) to `P` only for idempotent work; a job with an outside side effect may already have taken effect, so its reclaim moves it to a terminal unknown-outcome status for reconciliation. Route a retryable failure to `R` with a `scheduled_time`, and have the pending query select `R` rows whose time has arrived — backoff is a handler concern, not the loop's.
 
 ## Quota Service
 
@@ -543,6 +543,8 @@ How a resource's **current usage** is measured depends on whether it has a count
 | **Metered** | `SUM(usage_ledger)` windowed by `period_type` (`D`/`M`/…/`L`) | cumulative — `LogUsage` ticks it up | `API_CALLS`, `AI_CREDITS` |
 
 Keel ships exactly one default live-count query — `MAX_DOMAINS` (over `partner_domain`, a keel table). Everything else defaults to the ledger.
+
+Each `usage_ledger` row records who acted, read from the context: `user_id` (a JWT session, bound by `SSOMiddleware` as `common.UserID`), `api_key_id`, and `oauth_client_id` (the token's `client_id` claim). Each is NULL when absent, as in a worker without `common.WithCallerSession`.
 
 ### Adopting in a downstream project
 
@@ -589,6 +591,8 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 | `worker.AbstractBillingReconciler` | daily backstop pass over active partners (run from a systemd timer, never a CI cron) | `Partners`, `Reconcile` closures |
 | `billing.BillingEngine` (+ `ProviderSubscriptionEngine`, `SelfScheduledEngine`) | the recurring-engine strategy: provider runs the cycle **or** we self-schedule (own billing-run → off-session charge → invoice → dunning). `SelfScheduledEngine.BillSubscriptionsFromTable` enables keel's built-in **installment engine**: charges every due `partner_plan_subscription`, computes the per-installment amount from its snapshot terms, advances `next_charge_date`, and rolls to a new term (`auto_renew`) or ends the row at term end | engine choice + the self-scheduled closures (or just the flag for the built-in installment pass) |
 | basis: `invoice`/`invoice_line`/`partner_billing_customer`, `subscription_plan_price{plan_id,billing_cycle,term_count,term_type,amount_minor,currency,provider_price_id}` (per-offer prices, nested under `subscription_plan` via `rest_api_child`), `subscription_plan.{activation_mode,trial_days}`, `subscription_addon.{billing_cycle,term_count,term_type}`, `partner_plan_subscription`/`partner_addon_subscription.{billing_cycle,term_count,term_type,amount_minor,renewal_date,next_charge_date,…}` | the missing billing tables/columns | per-env seed of `subscription_plan_price` rows (amount + `provider_price_id`) + `activation_mode` |
+
+`handler.BillingHandler` serves sail's billing paths. Cancel, plan change and the portal need `Subscriptions`, `DB` and a `PARTNER_PLAN_SUBSCRIPTION` grant (`CANCEL`, `CHANGE`, `PORTAL` on `partner_plan_subscription`, seeded for `PARTNER_ADMIN`); the read routes need only a session.
 
 ### Provider-driven vs self-scheduled
 
@@ -800,6 +804,20 @@ Downstream handlers read identity with the same accessors as the X-API-Key path 
 
 All non-secret. For multiple issuers, construct one `resource.JWTValidator` per issuer and dispatch on the token's `iss`.
 
+### Session hand-off for bearer-token SPAs
+
+`/oauth/authorize` authenticates through `OAuthASHandler.ResolveUser`, which needs a cookie session on the authorization server's host. An SPA that keeps its JWT in browser storage hands its session over instead:
+
+```go
+store := &authserver.SessionHandoffStoreDB{DB: db}
+store.Init(ctx)
+hs, err := authserver.NewSessionHandoff(store, as.Metadata().AuthorizationEndpoint)
+asHandler := &handler.OAuthASHandler{ /* … */ Handoff: hs, UserService: users,
+    ResolveUser: handler.HandoffSessionUser(hs, journal)}
+```
+
+When the login page receives `?return=`, the SPA posts `{"return": <value>}` with its bearer token to `POST /oauth/session/handoff` and navigates the browser to the returned `redirect`. `GET /oauth/session` redeems the single-use 60-second code, sets a 10-minute HttpOnly, Secure, SameSite=Lax cookie scoped to `/oauth`, and redirects (303) to the authorize URL. `return` must be this AS's own authorize URL and is bound to the code, so the flow is never an open redirect. Revoking the user's access tokens (logout everywhere, password change, account deletion) also ends a pending code and the cookie session. The SPA's origin must be allowed by the AS backend's CORS settings.
+
 ## MCP Server Layer
 
 The MCP server layer (transports, tool/resource registry, response envelopes, text bundles, field-catalog discovery, conformance assertions) lives in [`github.com/nauticana/scout`](https://github.com/nauticana/scout) — packages `scout/mcp`, `scout/mcp/mcptest`, `scout/domain`, and `scout/contract`. Keep keel's API-key/OAuth middleware, quota, guards, and query services around the scout transport for remote servers; authentication state enters through keel request context, not MCP arguments.
@@ -844,6 +862,15 @@ if err := guards.Check(ctx, qs, in); err != nil {
     }
     return nil, err                                // ErrGuardRejected → refuse; map at the transport boundary
 }
+```
+
+`DuplicateGuard.Check` is a read, so two concurrent callers can both pass. When exactly one write must win, check and write in one transaction that first takes `guard.Lock(ctx, tx, key)`, a transaction-scoped advisory lock (merge `guard.Queries` into the `BeginTx` catalog):
+
+```go
+tx, _ := db.BeginTx(ctx, queries) // queries includes guard.Queries
+if err := guard.Lock(ctx, tx, fmt.Sprintf("%d:scan", pid)); err != nil { return err }
+if err := guards.Check(ctx, tx, in); err != nil { return err }
+// insert the job, then tx.Commit
 ```
 
 `GuardInput.Now` is injected so guards are deterministic in tests. The `port.TrustGuard` contract takes a `port.GuardQuerier` (which `data.QueryService` satisfies) — usable from any REST write handler or MCP tool alike.
@@ -947,6 +974,8 @@ for _, task := range due {           // due, err := sched.Due(ctx, "review_poll"
     _ = sched.Complete(ctx, task)
 }
 ```
+
+Calendar-aligned work enrolls with a cadence instead of an interval: `sched.ScheduleCalendar(ctx, partnerID, "weekly_report", worker.Weekly(time.Monday, 9*60, loc))` or `worker.Monthly(1, 0, loc)` (a day past the month's end runs on its last day). The slot is local time in a named zone; `Complete` sets the next run to the first slot after completion, so missed slots are not replayed. Re-enrolling with the same cadence keeps the pending slot; a changed cadence moves it. `Due` fails, without handing out, a schedule whose time zone no longer loads.
 
 Due-ness lives in `work_schedule`, so an empty run still counts and failures back off exponentially. Each `ScheduledTask` carries a lease token; `Complete` and `Fail` return `worker.ErrScheduleClaimLost` for a claim that was re-claimed after its lease lapsed, or whose tenant was dropped. The interval and task remain app-owned.
 
@@ -1077,9 +1106,21 @@ point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
 
 `WithScheme` (bare host → `https://`), `ResolveURL` (DNS check with a `www.` fallback, `ErrHostUnresolvable`), and over `*html.Node`: `ExtractLinks`, `ExtractTitle` (skips `<svg>` icon titles), `ExtractText` (verbatim), `PlainTextNode` (`PlainText` for a parsed subtree).
 
+### `service.PartnerDomainService` — does this URL belong to the partner?
+
+`Owns(ctx, partnerID, rawURL)` returns the normalized URL when its host is one of the partner's `partner_domain` rows or a subdomain of one (a stored `www.` is ignored, names compare as lowercase punycode), and refuses with `ErrInvalidURL` (not absolute http(s), or carrying credentials), `ErrInvalidPartner`, `ErrNoPartnerDomain`, `ErrURLNotOwned`, or `ErrDomainStore` when no database is wired. Check it before fetching a partner-supplied URL, so `evilexample.com` never passes for `example.com`.
+
+### `service.Health` — health check for any mux
+
+`Health(db)` answers 200 `ok` when the database responds to a ping within two seconds and 503 otherwise, without detail. `HttpBackend` mounts it at `/health`; a standalone mux mounts it itself.
+
+### Session partner for multi-partner users
+
+Login, `GetUserById`, token refresh and the phone, email and social lookups put the user's earliest current `partner_user` membership in the session (ordered by `begda`, then `partner_id`; ended memberships are ignored), so the partner does not change between refreshes. `UserService.ListPartners(userID)` returns every current membership in the same order.
+
 ### `common.CallerSession` — who is calling, anywhere a context flows
 
-`CallerSessionFromContext(ctx)` reads what keel's OAuth, API-key and request-id middlewares bound — principal, subject, partner, key, scopes, request id — and fails closed on an unauthenticated context. `WithCallerSession` is the inverse for workers acting on a claimed job, so a background task carries the same identity a request would.
+`CallerSessionFromContext(ctx)` reads what keel's OAuth, API-key and request-id middlewares bound — principal, subject, partner, session user, key, scopes, request id — and fails closed on an unauthenticated context. `WithCallerSession` is the inverse for workers acting on a claimed job, so a background task carries the same identity a request would.
 
 ### `common.Period` — effective dating in Go
 
@@ -2275,6 +2316,20 @@ direct-partner base service serializes on the partner row and permits one,
 while a narrower app enforces uniqueness on its extension entity so separate
 businesses owned by one client can use different agencies.
 
+A client controls what its agency may do through roles on the delegation
+(`agency_delegation_role`), each an `agency_delegation_role` code (seeded
+`view`, `operate`, `publish`; products add `constant_value` rows) with an
+optional `expires_at`. Acceptance creates a delegation with no roles, which
+grants no access. `SetDelegationRoles`, callable by the client partner only and
+gated by `AGENCY_DELEGATION/SET_ROLE` (granted to `PARTNER_ADMIN`), replaces the
+whole set in one transaction; an empty set removes access without revoking.
+Every grant, expiry change and removal appends an `agency_delegation_event` row
+(`G`, `E`, `R`). Revoking a delegation expires its open roles at the database
+clock in the same transaction and keeps the rows. Authorization code depends on
+`port.AgencyDelegationResolver`: `ActiveFor` lists an approved, unsuspended
+agency's active delegations holding at least one unexpired role, and `HasRole`
+returns nil or `ErrDelegationNoAccess`.
+
 The agency commission, provenance, and payout runtime is PostgreSQL-only. The
 MySQL artifact includes the tables for schema portability, but it does not
 provide a runnable implementation of the transaction/query semantics.
@@ -2345,6 +2400,7 @@ The HTTP surface is supplied by `handler.AgencyHandler`:
 | POST | `/api/v1/agency/invite/accept` | Accept and create referral delegation |
 | GET/POST | `/api/v1/agency/payout-profile` | Read/select a fully onboarded payout destination |
 | GET | `/api/v1/agency/earnings` | Read currency-separated balances and history |
+| POST | `/api/v1/agency/delegation/roles` | Client replaces the agency's role set and per-role expiries |
 
 Wire `AgencyHandler.Routes(restPrefix+"/v1", "/public")`, install the returned
 handlers, and wire `payout.OnboardingService.TransferSink` to the agency payout service.
@@ -2524,7 +2580,7 @@ Selection is driven by flag variables:
   - `HttpBackend` writes one access record per request through `ApplicationLogger.Access` — `METHOD /path STATUS BYTES MILLIS CLIENT_IP` — as the outermost middleware, so rejections from CORS, TLS guard, API-key and SSO layers are recorded too, and a handler panic is recorded as 500 before it propagates. Query strings are excluded because public confirmation URLs can contain credentials. `CLIENT_IP` comes from `common.TrustedClientIP`, so forwarding headers are honored only behind `trusted_proxy_cidr`. `/health` and `/ready` are logged only when they fail (status ≥ 400). A nil `Journal` leaves requests unchanged. `local` lands it in `<name>_access_<date>.log`; `gcp` and `azure` route it to the `<name>_access` log name; `aws` writes it to the same CloudWatch stream as server records with an `[ACCESS]` prefix.
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
 - `storage_mode=s3|gcs|azure|file`
-  - An `ObjectStorage` is bound to one bucket (Azure container, file root folder) described by a `storage.Spec{Mode, Bucket, Project, Region, Endpoint, AccountURL, PublicBaseURL, CredentialSecret}`. `storage.New(ctx, spec, secrets)` verifies the bucket exists (`ErrBucketNotFound` otherwise) and never creates one — **deployment prerequisite**: the runtime identity needs list permission on the bucket (GCS `storage.objects.list`, held by `roles/storage.objectViewer`; S3 `s3:ListBucket`; Azure container read), which object-only policies granting just get/put lack; `storage.CreateBucket(ctx, spec, secrets)` is the separate admin call (GCS needs `Project`; S3 sends `LocationConstraint` from `Region` except for `us-east-1`). `storage.NewFromConfig(ctx, secrets, bucket)` builds the spec from the flags below. `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.AbstractWorker.Run` when `storage_mode` is set) are bound to `storage_bucket`. Empty `storage_mode` disables storage (the field stays `nil`).
+  - An `ObjectStorage` is bound to one bucket (Azure container, file root folder) described by a `storage.Spec{Mode, Bucket, Project, Region, Endpoint, AccountURL, PublicBaseURL, CredentialSecret}`. `storage.New(ctx, spec, secrets)` verifies the bucket exists (`ErrBucketNotFound` otherwise) and never creates one — **deployment prerequisite**: the runtime identity needs list permission on the bucket (GCS `storage.objects.list`, held by `roles/storage.objectViewer`; S3 `s3:ListBucket`; Azure container read), which object-only policies granting just get/put lack; `storage.CreateBucket(ctx, spec, secrets)` is the separate admin call (GCS needs `Project`; S3 sends `LocationConstraint` from `Region` except for `us-east-1`). `storage.NewFromConfig(ctx, secrets, bucket)` builds the spec from the flags below. `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.AbstractWorker.Run` when `storage_mode` is set) are bound to `storage_bucket`. Empty `storage_mode` disables storage (the field stays `nil`). An app with several buckets holds one `storage.NewBuckets(secrets)` and calls `Get(ctx, bucket)`, which builds each bucket's store once (`ErrNoBucket` for a blank name, `ErrNotConfigured` when `storage_mode` is empty).
   - **Credentials**: `storage_credential_secret` names one keystore secret whose value is provider-specific — `s3`: JSON `{"access_key_id", "secret_access_key", "session_token"?}`; `gcs`: the service-account JSON; `azure`: the account key (the account name comes from the account URL; keel builds a shared-key credential and signs SAS URLs with it). Empty means the provider's ambient chain (IAM role, ADC, `DefaultAzureCredential`).
   - Methods: `PutObject(ctx, key, reader, contentType, attributes)`, `PutObjectIfAbsent` (one conditional provider call; `ErrExists`), `GetObject`, `DeleteObject`, `ListObjects(ctx, prefix, limit)` (every key starting with prefix; 0 = all), `ListPrefixes(ctx, prefix, limit)` (the child names between prefix and the next `/`, without prefix or trailing `/`), `SetObjectAttributes` (replaces all attributes; `ErrPreconditionFailed` when the object changed meanwhile), `GetObjectAttributes`, `GetObjectAndAttributes` (a `*Component` whose content and attributes come from the same write), `GetSignedURL`, `PublicURL`, `Bucket`. A missing object wraps `storage.ErrNotFound`; an operation a backend cannot do wraps `storage.ErrUnsupported`. Attribute keys must suit every backend you deploy to: Azure requires identifier-style keys (no `-`) and they come back lowercased; S3 limits all metadata to about 2 KB.
   - **Cloudflare R2 / S3-compatible**: use `s3` plus `s3_endpoint=https://<account>.r2.cloudflarestorage.com` (this switches the client to path-style addressing) and `storage_region=auto`. `storage_region` sets `Spec.Region` (S3 region, GCS location); empty uses the provider's default chain. Verify `PutObjectIfAbsent` (`If-None-Match: *`) on the provider before relying on it.
@@ -2533,7 +2589,8 @@ Selection is driven by flag variables:
   - **File**: the bucket is an existing root folder (`CreateBucket` makes it). Each object is a folder named by its key holding `DATA.bin` and `ATTR.txt` (`key=value` lines); folders left empty are pruned. Keys that escape the root are refused. Content types are not stored, and it serves no URLs (`GetSignedURL` → `ErrUnsupported`). Meant for RHEL/SUSE test hosts: it maps keys to folder names as-is, so a case-insensitive volume folds ids.
   - **HTTP surface**: `storage.UploadService{Storage, Scanner, MaxBytes, ContentTypes, SignedURLSeconds}` sniffs the content type from the bytes (the client's claim is ignored), enforces the allow-list and size cap, scans the buffered body when `Scanner` is set (`scan.ErrContentRejected` refuses it) and mints signed read URLs. `handler.StorageHandler{Uploads, UploadKey, PreviewKey}` exposes `Upload` (multipart field `file` → 201 `{key, contentType, url}`; 415 / 413 on a refused type / size, with codes `upload_media_type` / `upload_too_large`) and `Preview` (→ `{url}`, `no-store`). The app mounts both and injects the two hooks, which pick the object key and authorize the caller (return a `*model.AppError` to refuse). `storage.SanitizeFilename` reduces a client filename to a safe key segment.
 - `extract_mode=native`, `extract_max_bytes` (default 64 MiB)
-  - `extract.NewFromConfig()` returns a `TextExtractor`. `Native` handles `text/plain`, `text/markdown` (blocks split on blank lines; every ATX `#` line is a heading with its level, the lines between headings a paragraph), DOCX and PDF text layers. DOCX text comes only from `w:t` in runs, so tab stops, the previous formatting and deleted or moved-away text of tracked changes, field codes and the legacy copy of a text box stay out, and a text box's paragraphs follow the paragraph that holds it; a heading is a paragraph whose style resolves to an outline level in `styles.xml` (built-in `heading N` / `Title` names, `w:outlineLvl`, or through `w:basedOn`, so localized and derived styles work; the default English ids apply without `styles.xml`); a table is one section with rows on lines, cells ending in a tab and cell paragraphs separated by newlines. PDF gives one section per page; a page without a text layer is an empty section, listed by `Extracted.EmptyPages()` for an OCR fallback (TODO C14). `extract_max_bytes` caps each decompressed DOCX part and the extracted text (`ErrTooLarge`); `ctx` is checked between PDF pages and during DOCX parsing. PDF text comes from `github.com/carlos7ags/folio` (pure Go), ordered top to bottom and left to right; invisible text, which is how a scanned page carries its OCR layer, is kept. For PDFs, `extract_max_bytes` also bounds each decoded stream and their total for the document, enforced inside the parser (`ErrTooLarge`). A PDF that opens with the empty user password is extracted; one that needs a password or uses an unsupported security handler returns `ErrEncrypted`. Known gaps in the pinned folio release, tracked as TODO C15: nested Form XObjects are bounded only by depth, so a crafted file of a few KB can keep one page busy for days and `ctx` is not checked until the page ends (folio#457) — extract untrusted PDFs in a worker whose deadline stops the process; text in a font defined inside a Form XObject (folio#458) and in a simple font whose ToUnicode CMap declares a two-byte codespace (folio#459) extracts as raw codes. `ErrUnsupportedMediaType` for anything else; check `Supports` first.
+  - `extract.NewFromConfig()` returns a `TextExtractor`. `Native` handles `text/plain`, `text/markdown` (blocks split on blank lines; every ATX `#` line is a heading with its level, the lines between headings a paragraph), DOCX and PDF text layers. DOCX text comes only from `w:t` in runs, so tab stops, the previous formatting and deleted or moved-away text of tracked changes, field codes and the legacy copy of a text box stay out, and a text box's paragraphs follow the paragraph that holds it; a heading is a paragraph whose style resolves to an outline level in `styles.xml` (built-in `heading N` / `Title` names, `w:outlineLvl`, or through `w:basedOn`, so localized and derived styles work; the default English ids apply without `styles.xml`); a table is one section with rows on lines, cells ending in a tab and cell paragraphs separated by newlines. PDF gives one section per page; a page without a text layer is an empty section, listed by `Extracted.EmptyPages()` for an OCR fallback (TODO C14). `extract_max_bytes` caps each decompressed DOCX part and the extracted text (`ErrTooLarge`); `ctx` is checked between PDF pages and during DOCX parsing. PDF text comes from `github.com/carlos7ags/folio` (pure Go), ordered top to bottom and left to right; invisible text, which is how a scanned page carries its OCR layer, is kept. For PDFs, `extract_max_bytes` also bounds each decoded stream and their total for the document, enforced inside the parser (`ErrTooLarge`). A PDF that opens with the empty user password is extracted; one that needs a password or uses an unsupported security handler returns `ErrEncrypted`. Known gaps in the pinned folio release, tracked as TODO C15: nested Form XObjects are bounded only by depth, so a crafted file of a few KB can keep one page busy for days and `ctx` is not checked until the page ends (folio#457) — extract untrusted PDFs with `extract.Isolated` (below); text in a font defined inside a Form XObject (folio#458) and in a simple font whose ToUnicode CMap declares a two-byte codespace (folio#459) extracts as raw codes. `ErrUnsupportedMediaType` for anything else; check `Supports` first.
+  - `extract.NewIsolated(inProcess, extract.IsolatedConfig{Path, MaxBytes, Timeout, Concurrency, MediaTypes})` runs the chosen media types (default PDF) in a child binary, with no shell and an empty environment, that a deadline kills; other types go to `inProcess`. Input over `MaxBytes` is refused before a child starts and the child's output is capped. A deadline returns `ErrTimeout`, a child that cannot run, crashes or writes an invalid result returns `ErrIsolationFailed`, and `ErrTooLarge`, `ErrEncrypted` and `ErrUnsupportedMediaType` cross the process boundary unchanged. The child's main is one line: `os.Exit(extract.ChildMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))`.
 - `scan_mode=none|clamd`, `scan_addr=<host:port>`
   - `scan.NewFromConfig()` returns a `scan.ContentScanner` (nil for `none`). `ScannerClamd` streams the content to clamd (`zINSTREAM`); a `FOUND` reply is `scan.ErrContentRejected`, which callers map to 403.
 - `messaging_mode=noop|gcp|aws|nats` (empty = error)

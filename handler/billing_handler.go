@@ -9,15 +9,23 @@ import (
 	"github.com/nauticana/keel/billing"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/port"
 )
 
-// BillingHandler serves sail's BillingService paths. Without Subscriptions only
-// the read routes are mounted.
+// BillingHandler serves sail's BillingService paths. The subscription changes
+// need Subscriptions and DB, and a PARTNER_PLAN_SUBSCRIPTION grant; without
+// them only the read routes are mounted.
 type BillingHandler struct {
 	AbstractHandler
+	DB            port.DatabaseRepository
 	Billing       billing.BillingService
 	Subscriptions billing.SubscriptionManager
 }
+
+const (
+	SubscriptionAuthObject = "PARTNER_PLAN_SUBSCRIPTION"
+	subscriptionAuthScope  = "partner_plan_subscription"
+)
 
 func (h *BillingHandler) Routes() map[string]func(http.ResponseWriter, *http.Request) {
 	routes := map[string]func(http.ResponseWriter, *http.Request){
@@ -25,12 +33,16 @@ func (h *BillingHandler) Routes() map[string]func(http.ResponseWriter, *http.Req
 		common.RestPrefix + "/billing/subscription": h.Subscription(),
 		common.RestPrefix + "/billing/invoices":     h.Invoices(),
 	}
-	if h.Subscriptions != nil {
-		routes[common.RestPrefix+"/billing/subscription/cancel"] = h.Cancel()
-		routes[common.RestPrefix+"/billing/subscription/change"] = h.ChangePlan()
-		routes[common.RestPrefix+"/billing/portal"] = h.Portal()
+	if h.Subscriptions != nil && h.DB != nil {
+		routes[common.RestPrefix+"/billing/subscription/cancel"] = h.authorize("CANCEL", h.Cancel())
+		routes[common.RestPrefix+"/billing/subscription/change"] = h.authorize("CHANGE", h.ChangePlan())
+		routes[common.RestPrefix+"/billing/portal"] = h.authorize("PORTAL", h.Portal())
 	}
 	return routes
+}
+
+func (h *BillingHandler) authorize(action string, inner http.HandlerFunc) http.HandlerFunc {
+	return WrapTableAction(h.DB, h.UserService, SubscriptionAuthObject, action, subscriptionAuthScope, inner)
 }
 
 func billingPartner(s *model.UserSession) (int64, error) {

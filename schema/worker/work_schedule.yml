@@ -1,5 +1,5 @@
 table: work_schedule
-comment: Per-tenant cadence for recurring worker tasks (worker.Scheduler); task_kind is consumer-defined
+comment: Per-tenant cadence for recurring worker tasks (worker.Scheduler), an interval or a weekday or day of month in time_zone; task_kind is consumer-defined
 columns:
   - name: partner_id
     type: BIGINT
@@ -7,6 +7,18 @@ columns:
     type: VARCHAR(30)
   - name: interval_seconds
     type: INTEGER
+  - name: cadence
+    type: CHAR(1)
+    default: I
+  - name: cadence_day
+    type: SMALLINT
+    nullable: true
+  - name: cadence_minute
+    type: SMALLINT
+    nullable: true
+  - name: time_zone
+    type: VARCHAR(64)
+    nullable: true
   - name: next_run_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -29,6 +41,9 @@ columns:
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
 primary_key: [partner_id, task_kind]
+checks:
+  - name: chk_work_schedule_cadence
+    expression: "(cadence = 'I' AND cadence_day IS NULL AND cadence_minute IS NULL AND time_zone IS NULL) OR (cadence IN ('W', 'M') AND cadence_minute BETWEEN 0 AND 1439 AND time_zone IS NOT NULL AND ((cadence = 'W' AND cadence_day BETWEEN 0 AND 6) OR (cadence = 'M' AND cadence_day BETWEEN 1 AND 31)))"
 foreign_keys:
   - name: work_schedule_partners
     columns: [partner_id]

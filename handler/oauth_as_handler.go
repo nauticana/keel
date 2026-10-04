@@ -14,6 +14,7 @@ import (
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/oauth/authserver"
 	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/user"
 )
 
 // OAuthASHandler is the HTTP bridge for the local OAuth 2.1 authorization
@@ -26,8 +27,12 @@ type OAuthASHandler struct {
 
 	// ResolveUser returns the logged-in user for /authorize, or nil if the
 	// request carries no valid keel session. The app supplies this from its
-	// own session mechanism (cookie/JWT).
+	// own session mechanism (cookie/JWT), or HandoffSessionUser.
 	ResolveUser func(r *http.Request) *port.UserRef
+	// Handoff and UserService together mount the session hand-off routes,
+	// which let a bearer-JWT SPA establish a cookie session on the AS host.
+	Handoff     *authserver.SessionHandoff
+	UserService user.UserService
 	// LoginURL receives unauthenticated /authorize users with a ?return= back
 	// to the authorize URL. Empty → 401 instead of redirecting.
 	LoginURL string
@@ -77,7 +82,7 @@ type ConsentView struct {
 }
 
 func (h *OAuthASHandler) Routes() map[string]func(http.ResponseWriter, *http.Request) {
-	return map[string]func(http.ResponseWriter, *http.Request){
+	routes := map[string]func(http.ResponseWriter, *http.Request){
 		authserver.OAuthASMetadataPath: h.metadata,
 		authserver.OAuthJWKSPath:       h.jwks,
 		authserver.OAuthRegisterPath:   h.register,
@@ -86,6 +91,11 @@ func (h *OAuthASHandler) Routes() map[string]func(http.ResponseWriter, *http.Req
 		authserver.OAuthRevokePath:     h.revoke,
 		authserver.OAuthIntrospectPath: h.introspect,
 	}
+	if h.Handoff != nil && h.UserService != nil {
+		routes[authserver.OAuthSessionHandoffPath] = h.mintHandoff
+		routes[authserver.OAuthSessionPath] = h.redeemHandoff
+	}
+	return routes
 }
 
 func (h *OAuthASHandler) metadata(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +294,8 @@ func (h *OAuthASHandler) redirectToLogin(w http.ResponseWriter, r *http.Request)
 	}
 	if n := authRetryCount(r); n >= config.Config().OAuthMaxAuthRedirects {
 		http.Error(w, "login did not establish a session at the authorization endpoint after "+strconv.Itoa(n)+
-			" attempts — the session must be a cookie sent on this domain, not a localStorage bearer", http.StatusLoopDetected)
+			" attempts — the session must be a cookie on this host; a bearer-token app must use the session hand-off ("+
+			authserver.OAuthSessionHandoffPath+")", http.StatusLoopDetected)
 		return
 	}
 	ret := *r.URL

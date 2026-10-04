@@ -32,17 +32,18 @@ type AgencyClientInput struct {
 }
 
 type AgencyClient struct {
-	ID              int64      `json:"id"`
-	Name            string     `json:"name"`
-	Email           string     `json:"email,omitempty"`
-	Website         string     `json:"website,omitempty"`
-	Status          string     `json:"status"`
-	ClientPartnerID int64      `json:"clientPartnerId,omitempty"`
-	AcceptedBy      int64      `json:"acceptedBy,omitempty"`
-	InvitedAt       *time.Time `json:"invitedAt,omitempty"`
-	AcceptedAt      *time.Time `json:"acceptedAt,omitempty"`
-	Expired         bool       `json:"expired,omitempty"`
-	BillingModel    string     `json:"billingModel,omitempty"`
+	ID              int64             `json:"id"`
+	Name            string            `json:"name"`
+	Email           string            `json:"email,omitempty"`
+	Website         string            `json:"website,omitempty"`
+	Status          string            `json:"status"`
+	ClientPartnerID int64             `json:"clientPartnerId,omitempty"`
+	AcceptedBy      int64             `json:"acceptedBy,omitempty"`
+	InvitedAt       *time.Time        `json:"invitedAt,omitempty"`
+	AcceptedAt      *time.Time        `json:"acceptedAt,omitempty"`
+	Expired         bool              `json:"expired,omitempty"`
+	BillingModel    string            `json:"billingModel,omitempty"`
+	Roles           []AgencyRoleGrant `json:"roles,omitempty"`
 }
 
 type AgencyInvite struct {
@@ -54,13 +55,21 @@ type AgencyInvite struct {
 }
 
 type AgencyDelegation struct {
-	ID              int64     `json:"id"`
-	ClientPartnerID int64     `json:"clientPartnerId"`
-	ClientName      string    `json:"clientName"`
-	AgencyPartnerID int64     `json:"agencyPartnerId"`
-	AgencyName      string    `json:"agencyName"`
-	BillingModel    string    `json:"billingModel,omitempty"`
-	GrantedAt       time.Time `json:"grantedAt"`
+	ID              int64             `json:"id"`
+	ClientPartnerID int64             `json:"clientPartnerId"`
+	ClientName      string            `json:"clientName"`
+	AgencyPartnerID int64             `json:"agencyPartnerId"`
+	AgencyName      string            `json:"agencyName"`
+	BillingModel    string            `json:"billingModel,omitempty"`
+	GrantedAt       time.Time         `json:"grantedAt"`
+	Roles           []AgencyRoleGrant `json:"roles"`
+}
+
+// AgencyRoleGrant is one agency_delegation_role code a client grants its
+// agency; a nil ExpiresAt is open-ended.
+type AgencyRoleGrant struct {
+	Role      string     `json:"role"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 type AgencyEarnings struct {

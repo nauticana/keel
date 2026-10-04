@@ -45,7 +45,41 @@ const (
 	qPayoutProfile         = "agency_payout_profile"
 	qPayoutDestinations    = "agency_payout_destinations"
 	qSetPayoutProfile      = "agency_set_payout_profile"
+	qKnownDelegationRoles  = "agency_known_delegation_roles"
+	qExpiryInFuture        = "agency_expiry_in_future"
+	qDelegationLock        = "agency_delegation_lock"
+	qDelegationRoles       = "agency_delegation_roles"
+	qAgencyClientRoles     = "agency_client_roles"
+	qInsertDelegationRole  = "agency_insert_delegation_role"
+	qUpdateRoleExpiry      = "agency_update_role_expiry"
+	qDeleteDelegationRole  = "agency_delete_delegation_role"
+	qExpireDelegationRoles = "agency_expire_delegation_roles"
+	qInsertDelegationEvent = "agency_insert_delegation_event"
+	qActiveDelegationsFor  = "agency_active_delegations_for"
+	qHasDelegationRole     = "agency_has_delegation_role"
 )
+
+// delegationSelect and delegationFrom are the shared projection scanned by
+// scanDelegation; callers may append columns between them.
+const delegationSelect = `
+SELECT d.id, d.client_partner_id, cp.caption, d.agency_partner_id, ap.caption,
+       COALESCE(b.billing_model, ''), d.granted_at`
+
+const delegationFrom = `
+  FROM agency_client_delegation d
+  JOIN business_partner cp ON cp.id = d.client_partner_id
+  JOIN business_partner ap ON ap.id = d.agency_partner_id
+  LEFT JOIN agency_client_billing b
+    ON b.client_delegation_id = d.id
+   AND b.effective_from <= CURRENT_TIMESTAMP
+   AND (b.effective_to IS NULL OR b.effective_to > CURRENT_TIMESTAMP)`
+
+// grantsAccess is the fail-closed predicate for a role r on delegation d of
+// agency profile p that authorizes the agency now.
+const grantsAccess = `
+   AND d.status = 'A'
+   AND (r.expires_at IS NULL OR r.expires_at > CURRENT_TIMESTAMP)
+   AND p.approved_at IS NOT NULL AND p.suspended = FALSE`
 
 var baseAgencyQueries = map[string]string{
 	qAddClient: `
@@ -135,16 +169,7 @@ INSERT INTO agency_client_billing
  (id, client_delegation_id, billing_model)
 VALUES (?, ?, ?)`,
 
-	qClientDelegation: `
-SELECT d.id, d.client_partner_id, cp.caption, d.agency_partner_id, ap.caption,
-       COALESCE(b.billing_model, ''), d.granted_at
-  FROM agency_client_delegation d
-  JOIN business_partner cp ON cp.id = d.client_partner_id
-  JOIN business_partner ap ON ap.id = d.agency_partner_id
-  LEFT JOIN agency_client_billing b
-    ON b.client_delegation_id = d.id
-   AND b.effective_from <= CURRENT_TIMESTAMP
-   AND (b.effective_to IS NULL OR b.effective_to > CURRENT_TIMESTAMP)
+	qClientDelegation: delegationSelect + delegationFrom + `
  WHERE d.client_partner_id = ? AND d.status = 'A'`,
 
 	qDelegationForRevoke: `
@@ -257,6 +282,77 @@ ON CONFLICT (agency_partner_id) DO UPDATE
    SET user_bank_info_id = EXCLUDED.user_bank_info_id,
        status = 'A', updated_at = CURRENT_TIMESTAMP
 RETURNING agency_partner_id`,
+
+	qKnownDelegationRoles: `
+SELECT value FROM constant_value WHERE constant_id = 'agency_delegation_role'`,
+
+	qExpiryInFuture: `
+SELECT CAST(? AS TIMESTAMP) > CURRENT_TIMESTAMP`,
+
+	qDelegationLock: `
+SELECT id
+  FROM agency_client_delegation
+ WHERE client_partner_id = ? AND status = 'A'
+ FOR UPDATE`,
+
+	qDelegationRoles: `
+SELECT role, expires_at
+  FROM agency_delegation_role
+ WHERE client_delegation_id = ?
+ ORDER BY role`,
+
+	qAgencyClientRoles: `
+SELECT d.client_partner_id, r.role, r.expires_at
+  FROM agency_delegation_role r
+  JOIN agency_client_delegation d ON d.id = r.client_delegation_id
+ WHERE d.agency_partner_id = ? AND d.status = 'A'
+ ORDER BY d.client_partner_id, r.role`,
+
+	qInsertDelegationRole: `
+INSERT INTO agency_delegation_role
+ (client_delegation_id, role, expires_at, granted_by)
+VALUES (?, ?, ?, ?)`,
+
+	qUpdateRoleExpiry: `
+UPDATE agency_delegation_role
+   SET expires_at = ?
+ WHERE client_delegation_id = ? AND role = ?`,
+
+	qDeleteDelegationRole: `
+DELETE FROM agency_delegation_role
+ WHERE client_delegation_id = ? AND role = ?`,
+
+	qExpireDelegationRoles: `
+WITH open_roles AS (
+  SELECT role, expires_at
+    FROM agency_delegation_role
+   WHERE client_delegation_id = ?
+     AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+   FOR UPDATE)
+UPDATE agency_delegation_role r
+   SET expires_at = GREATEST(LOCALTIMESTAMP, r.granted_at)
+  FROM open_roles o
+ WHERE r.client_delegation_id = ? AND r.role = o.role
+RETURNING r.role, o.expires_at, r.expires_at`,
+
+	qInsertDelegationEvent: `
+INSERT INTO agency_delegation_event
+ (id, client_delegation_id, actor_id, role, change_type, old_expires_at, new_expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+
+	qActiveDelegationsFor: delegationSelect + `, r.role, r.expires_at` + delegationFrom + `
+  JOIN agency_profile p ON p.agency_partner_id = d.agency_partner_id
+  JOIN agency_delegation_role r ON r.client_delegation_id = d.id
+ WHERE d.agency_partner_id = ?` + grantsAccess + `
+ ORDER BY d.id, r.role`,
+
+	qHasDelegationRole: `
+SELECT 1
+  FROM agency_delegation_role r
+  JOIN agency_client_delegation d ON d.id = r.client_delegation_id
+  JOIN agency_profile p ON p.agency_partner_id = d.agency_partner_id
+ WHERE d.agency_partner_id = ? AND d.client_partner_id = ? AND r.role = ?` + grantsAccess + `
+ LIMIT 1`,
 }
 
 type BaseAgencyServiceOptions struct {
@@ -350,6 +446,20 @@ func (s *BaseAgencyService) ListClients(ctx context.Context, agencyPartnerID int
 		}
 		client.BillingModel = common.AsString(row[9])
 		out = append(out, client)
+	}
+	roles, err := s.QueryRows(ctx, qAgencyClientRoles, agencyPartnerID)
+	if err != nil {
+		return nil, fmt.Errorf("agency: client roles: %w", err)
+	}
+	byClient := map[int64][]model.AgencyRoleGrant{}
+	for _, row := range roles {
+		partnerID := common.AsInt64(row[0])
+		byClient[partnerID] = append(byClient[partnerID], scanRoleGrant(row[1], row[2]))
+	}
+	for i := range out {
+		if out[i].ClientPartnerID > 0 {
+			out[i].Roles = byClient[out[i].ClientPartnerID]
+		}
 	}
 	return out, nil
 }
@@ -492,15 +602,15 @@ func (s *BaseAgencyService) ClientDelegation(ctx context.Context, clientPartnerI
 	if row == nil {
 		return nil, nil
 	}
-	return &model.AgencyDelegation{
-		ID:              common.AsInt64(row[0]),
-		ClientPartnerID: common.AsInt64(row[1]),
-		ClientName:      common.AsString(row[2]),
-		AgencyPartnerID: common.AsInt64(row[3]),
-		AgencyName:      common.AsString(row[4]),
-		BillingModel:    common.AsString(row[5]),
-		GrantedAt:       common.AsTime(row[6]),
-	}, nil
+	delegation := scanDelegation(row)
+	roles, err := s.QueryRows(ctx, qDelegationRoles, delegation.ID)
+	if err != nil {
+		return nil, fmt.Errorf("agency: delegation roles: %w", err)
+	}
+	for _, roleRow := range roles {
+		delegation.Roles = append(delegation.Roles, scanRoleGrant(roleRow[0], roleRow[1]))
+	}
+	return &delegation, nil
 }
 
 func (s *BaseAgencyService) RevokeDelegation(ctx context.Context, clientPartnerID, callerPartnerID, callerUserID int64) error {
@@ -531,6 +641,9 @@ func (s *BaseAgencyService) RevokeDelegation(ctx context.Context, clientPartnerI
 	}
 	if _, err = tx.Query(ctx, qCloseBilling, delegationID); err != nil {
 		return fmt.Errorf("agency: close billing model: %w", err)
+	}
+	if err = expireDelegationRoles(ctx, tx, delegationID, callerUserID); err != nil {
+		return err
 	}
 	if result, err := tx.Query(ctx, qRevokeDelegation, callerUserID, delegationID); err != nil {
 		return fmt.Errorf("agency: revoke delegation: %w", err)
@@ -805,6 +918,19 @@ func (s *BaseAgencyService) expired(invitedAt time.Time) bool {
 	return invitedAt.IsZero() || !s.now().Before(invitedAt.Add(s.inviteTTL))
 }
 
+func scanDelegation(row []any) model.AgencyDelegation {
+	return model.AgencyDelegation{
+		ID:              common.AsInt64(row[0]),
+		ClientPartnerID: common.AsInt64(row[1]),
+		ClientName:      common.AsString(row[2]),
+		AgencyPartnerID: common.AsInt64(row[3]),
+		AgencyName:      common.AsString(row[4]),
+		BillingModel:    common.AsString(row[5]),
+		GrantedAt:       common.AsTime(row[6]),
+		Roles:           []model.AgencyRoleGrant{},
+	}
+}
+
 func randomToken() (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
@@ -821,3 +947,4 @@ func nullIfEmpty(value string) any {
 }
 
 var _ port.AgencyService = (*BaseAgencyService)(nil)
+var _ port.AgencyDelegationResolver = (*BaseAgencyService)(nil)

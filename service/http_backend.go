@@ -154,10 +154,7 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	// path is intentionally allow-listed inside SSO and PlainHTTP
 	// guards so health checkers can hit it without a JWT or TLS.
 	h.Handle(map[string]func(w http.ResponseWriter, r *http.Request){
-		"/health": func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		},
+		"/health": Health(h.DB),
 	})
 
 	// Plain HTTP always binds on HttpApiPort. When a deployment also
@@ -481,7 +478,7 @@ func (h *HttpBackend) SSOMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "User account is not associated with a business partner", http.StatusForbidden)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), common.UserID, int64(session.Id))))
 	})
 }
 
