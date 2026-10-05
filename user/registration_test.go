@@ -32,6 +32,8 @@ type regStore struct {
 	commits     int
 	rollbacks   int
 	memberFails bool // partner_user hits the one-partner exclusion
+	regions     map[string]bool
+	address     []any // last partner_address insert
 }
 
 type pendingRow struct {
@@ -48,7 +50,8 @@ func newRegStore() *regStore {
 		prices:  map[string][][]any{"PRO": {{"M", "M", int64(1), int64(1000), "USD", "price_pro"}}},
 		scoped:  map[string]bool{"PARTNER_ADMIN": true, "AGENT_ADMIN": true},
 		emails:  map[int64]string{}, members: map[int64]int64{}, domains: map[int64]string{},
-		nextID: 100,
+		regions: map[string]bool{"US": true, "US/CA": true, "TR": true},
+		nextID:  100,
 	}
 }
 
@@ -103,6 +106,16 @@ func (s *regStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		}
 	case qAddPartner:
 		out.Rows = [][]any{{s.GenID()}}
+	case qAddAddress:
+		s.address = args
+	case qCountryExists:
+		if s.regions[args[0].(string)] {
+			out.Rows = [][]any{{1}}
+		}
+	case qStateExists:
+		if s.regions[args[0].(string)+"/"+args[1].(string)] {
+			out.Rows = [][]any{{1}}
+		}
 	case qAddDomain:
 		s.domains[args[0].(int64)] = args[1].(string)
 	case qAddPartnerUser:
@@ -360,6 +373,56 @@ func TestSendConfirmationValidates(t *testing.T) {
 	}
 	if len(mail.sent) != 0 || len(store.pending) != 0 {
 		t.Fatal("a refused registration must not be stored or mailed")
+	}
+}
+
+func TestCreatePartnerStoresBlankAddressFieldsAsNull(t *testing.T) {
+	store := newRegStore()
+	svc, _, _ := newRegistration(store)
+	ctx := context.Background()
+	if _, err := svc.CreatePartner(ctx, 7, &PartnerSetup{PartnerCaption: "C", Address: "1 Main St", City: " "}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// partner_id, address, city, state, zipcode, country, phone, latitude, longitude
+	for i, v := range store.address[2:] {
+		if v != nil {
+			t.Fatalf("address arg %d = %#v, want NULL", i+2, v)
+		}
+	}
+	if store.count(qCountryExists) != 0 {
+		t.Fatal("no country must cost no lookup")
+	}
+
+	setup := &PartnerSetup{PartnerCaption: "C", Country: " us ", State: "ca", City: "Fresno", Latitude: 36.7, Longitude: -119.8}
+	if _, err := svc.CreatePartner(ctx, 8, setup, nil); err != nil {
+		t.Fatal(err)
+	}
+	if a := store.address; a[2] != "Fresno" || a[3] != "CA" || a[5] != "US" || a[7] != 36.7 || a[8] != -119.8 {
+		t.Fatalf("address args = %#v", a)
+	}
+}
+
+func TestPartnerSetupRefusesUnknownRegion(t *testing.T) {
+	store := newRegStore()
+	svc, _, mail := newRegistration(store)
+	ctx := context.Background()
+	cases := map[string]PartnerSetup{
+		"unknown country":       {PartnerCaption: "C", Country: "ZZ"},
+		"unknown state":         {PartnerCaption: "C", Country: "US", State: "ZZ"},
+		"state of another":      {PartnerCaption: "C", Country: "TR", State: "CA"},
+		"state without country": {PartnerCaption: "C", State: "CA"},
+	}
+	for name, setup := range cases {
+		if _, err := svc.CreatePartner(ctx, 7, &setup, nil); !isBadRequest(err) {
+			t.Errorf("%s: CreatePartner err = %v", name, err)
+		}
+		reg := &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "dee@corp.example"}, PartnerSetup: setup}
+		if err := svc.SendConfirmation(ctx, reg); !isBadRequest(err) {
+			t.Errorf("%s: SendConfirmation err = %v", name, err)
+		}
+	}
+	if store.count(qAddPartner) != 0 || len(store.pending) != 0 || len(mail.sent) != 0 {
+		t.Fatal("a refused region must write nothing")
 	}
 }
 

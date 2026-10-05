@@ -3190,6 +3190,8 @@ Keel provides a full `UserService` implementation with:
 - `CreatePartner(ctx, userID, *PartnerSetup, evidence)` — the second step of a two-step signup, for a signed-in user without a partner (`ErrAlreadyMember` otherwise).
 - `RegisterWithIdentity(ctx, identity, consent, *PartnerSetup, evidence)` — signup with an external identity the caller verified, account and partner in one transaction through `IdentityAccountCreator` (implemented by `LocalUserService`); the session carries `ExternalSignInMethod`. An identity or email of an existing account returns `ErrAccountExists`. Consent is recorded after commit; its failure returns `ErrConsentNotRecorded` with the other results valid.
 
+Blank optional `PartnerSetup` address fields (city, state, zipcode, country, phone) and an unset `0, 0` coordinate pair are stored as NULL. `country` and `state` are trimmed and upper-cased; a code missing from `country` / `state`, or a state without a country, is a 400 before any write.
+
 The sessions `Register` and `RegisterWithIdentity` return passed `CheckSignInMethod`. Composition fields:
 
 | Field | Effect |

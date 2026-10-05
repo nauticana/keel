@@ -119,6 +119,9 @@ func (r *RegistrationService) SendConfirmation(ctx context.Context, data *Partne
 		if err := reg.PartnerSetup.validate(); err != nil {
 			return err
 		}
+		if err := r.checkRegion(ctx, &reg.PartnerSetup); err != nil {
+			return err
+		}
 		if err := r.requireDomain(&reg.PartnerSetup); err != nil {
 			return err
 		}
@@ -347,6 +350,9 @@ func (r *RegistrationService) preparePartner(ctx context.Context, setup *Partner
 	if err := setup.validate(); err != nil {
 		return nil, err
 	}
+	if err := r.checkRegion(ctx, setup); err != nil {
+		return nil, err
+	}
 	if err := r.requireDomain(setup); err != nil {
 		return nil, err
 	}
@@ -354,6 +360,32 @@ func (r *RegistrationService) preparePartner(ctx context.Context, setup *Partner
 		return nil, errors.New("user: domain evidence needs Domains and a partner domain")
 	}
 	return r.resolvePlan(ctx, setup)
+}
+
+// checkRegion refuses a country or state code the catalog does not hold,
+// before any write.
+func (r *RegistrationService) checkRegion(ctx context.Context, setup *PartnerSetup) error {
+	country, state := setup.region()
+	if country == "" {
+		return nil
+	}
+	res, err := r.qs.Query(ctx, qCountryExists, country)
+	if err != nil {
+		return fmt.Errorf("failed to look up country %q: %w", country, err)
+	}
+	if len(res.Rows) == 0 {
+		return model.NewBadRequest(fmt.Sprintf("unknown country %q", country))
+	}
+	if state == "" {
+		return nil
+	}
+	if res, err = r.qs.Query(ctx, qStateExists, country, state); err != nil {
+		return fmt.Errorf("failed to look up state %q of %q: %w", state, country, err)
+	}
+	if len(res.Rows) == 0 {
+		return model.NewBadRequest(fmt.Sprintf("unknown state %q of country %q", state, country))
+	}
+	return nil
 }
 
 // resolvePlan resolves the plan and offer before any write, so a bad plan
@@ -426,8 +458,10 @@ func (r *RegistrationService) createPartnerTx(ctx context.Context, tx port.TxQue
 		return nil, errors.New("add partner: no id returned")
 	}
 	partnerID := common.AsInt64(ids.Rows[0][0])
-	if _, err := tx.Query(ctx, qAddAddress, partnerID, setup.Address, setup.City, setup.State, setup.Zipcode,
-		setup.Country, setup.Phone, setup.Latitude, setup.Longitude); err != nil {
+	country, state := setup.region()
+	latitude, longitude := setup.coordinates()
+	if _, err := tx.Query(ctx, qAddAddress, partnerID, setup.Address, nullIfBlank(setup.City), nullIfEmpty(state),
+		nullIfBlank(setup.Zipcode), nullIfEmpty(country), nullIfBlank(setup.Phone), latitude, longitude); err != nil {
 		return nil, fmt.Errorf("add address: %w", err)
 	}
 	if host != "" {

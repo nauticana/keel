@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.95",
+   "title": "Optional partner address fields in registration",
+   "tags": [
+    "additive"
+   ],
+   "summary": "A partner setup without a state or country registers instead of failing on the address foreign keys, and an unknown code is refused with 400.",
+   "body_markdown": "- `user.RegistrationService` stores blank `PartnerSetup` `city`, `state`, `zipcode`, `country` and `phone` as NULL in `partner_address`, and an unset `0, 0` coordinate pair as NULL so `geo.AddressService` can fill it.\n- `country` and `state` are trimmed and upper-cased. A code that is not in `country` / `state`, or a state without a country, returns 400 from `SendConfirmation`, `CreatePartner` and `RegisterWithIdentity` before any write.\n\nNo schema change and no caller change."
+  },
+  {
    "version": "v1.2.94",
    "title": "Extensible partner registration",
    "tags": [

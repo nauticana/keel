@@ -8,6 +8,8 @@ const (
 	qExpireRegistration       = "expire_registration"
 	qAddPartner               = "add_partner"
 	qAddAddress               = "add_address"
+	qCountryExists            = "country_exists"
+	qStateExists              = "state_exists"
 	qAddDomain                = "add_domain"
 	qAddUserAccount           = "add_user_account"
 	qRegistrantEmail          = "registrant_email"
@@ -56,6 +58,8 @@ INSERT INTO partner_address
 VALUES
  (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
+	qCountryExists: "SELECT 1 FROM country WHERE id = ?",
+	qStateExists:   "SELECT 1 FROM state WHERE country_id = ? AND id = ?",
 	qAddDomain: `
 INSERT INTO partner_domain
  (partner_id, domain_url, is_primary)

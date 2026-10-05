@@ -48,8 +48,24 @@ func (p *PartnerSetup) host() (string, error) {
 	return "", model.NewBadRequest("domainUrl is not a valid host")
 }
 
+// region returns the normalized country and state codes, "" for none.
+func (p *PartnerSetup) region() (country, state string) {
+	return strings.ToUpper(strings.TrimSpace(p.Country)), strings.ToUpper(strings.TrimSpace(p.State))
+}
+
+// coordinates returns the point to store, nil for an unset (0, 0) pair.
+func (p *PartnerSetup) coordinates() (latitude, longitude any) {
+	if p.Latitude == 0 && p.Longitude == 0 {
+		return nil, nil
+	}
+	return p.Latitude, p.Longitude
+}
+
 func (p *PartnerSetup) validate() error {
+	country, state := p.region()
 	switch {
+	case state != "" && country == "":
+		return model.NewBadRequest("state needs a country")
 	case strings.TrimSpace(p.PartnerCaption) == "":
 		return model.NewBadRequest("partnerCaption is required")
 	case math.IsNaN(p.Latitude) || math.Abs(p.Latitude) > 90 || math.IsNaN(p.Longitude) || math.Abs(p.Longitude) > 180:

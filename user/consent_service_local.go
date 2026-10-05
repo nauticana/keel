@@ -326,4 +326,8 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
+func nullIfBlank(s string) any {
+	return nullIfEmpty(strings.TrimSpace(s))
+}
+
 var _ ConsentService = (*LocalConsentService)(nil)
