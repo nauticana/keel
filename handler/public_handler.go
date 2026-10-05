@@ -145,9 +145,11 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if partnerSession, err := h.UserService.GetUserById(session.Id); err == nil {
-		session.PartnerId = partnerSession.PartnerId
+	if err := h.UserService.CheckSignInMethod(session.Id, user.SignInPassword); err != nil {
+		h.WriteServiceError(w, r, err)
+		return
 	}
+	session.SignInMethod = user.SignInPassword
 
 	if session.TwoFactorEnabled {
 		trusted := false
@@ -155,7 +157,7 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 			trusted, _ = h.UserService.IsTrustedDevice(session.Id, secret)
 		}
 		if !trusted {
-			loginToken, err := h.UserService.CreateLoginToken(session.Id)
+			loginToken, err := h.UserService.CreateLoginToken(session.Id, user.SignInPassword)
 			if err != nil {
 				h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
 				return
@@ -292,10 +294,11 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.UserService.GetUserFromExternal(user.ExternalIdentity{
+	identity := user.ExternalIdentity{
 		Provider: "google", Issuer: googleIssuer1, Subject: userInfo.ID, Email: userInfo.Email, EmailVerified: true,
 		HostedDomain: userInfo.HostedDomain, FirstName: userInfo.GivenName, LastName: userInfo.FamilyName,
-	})
+	}
+	session, err := h.UserService.GetUserFromExternal(identity)
 	if err != nil {
 		if mapped := socialSignInError(err); mapped != nil {
 			h.WriteServiceError(w, r, mapped)
@@ -305,6 +308,9 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid credentials")
 		return
 	}
+	if !h.admitExternalSignIn(w, r, session, identity) {
+		return
+	}
 
 	if session.TwoFactorEnabled {
 		trusted := false
@@ -312,7 +318,7 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 			trusted, _ = h.UserService.IsTrustedDevice(session.Id, secret)
 		}
 		if !trusted {
-			loginToken, err := h.UserService.CreateLoginToken(session.Id)
+			loginToken, err := h.UserService.CreateLoginToken(session.Id, session.SignInMethod)
 			if err != nil {
 				h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
 				return

@@ -140,9 +140,6 @@ seeds:
       - [PARTNER_ADMIN, TABLE, SELECT, user_account_history]
       - [PARTNER_ADMIN, TABLE, SELECT, user_account]
       - [PARTNER_ADMIN, TABLE, SELECT, user_permission]
-      - [PARTNER_ADMIN, TABLE, INSERT, user_permission]
-      - [PARTNER_ADMIN, TABLE, UPDATE, user_permission]
-      - [PARTNER_ADMIN, TABLE, DELETE, user_permission]
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_domains]
       - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
       # Subscription pages and changes
@@ -178,8 +175,6 @@ seeds:
       # Partner user
       - [PARTNER_ADMIN, TABLE, SELECT, partner_user]
       - [PARTNER_ADMIN, TABLE, INSERT, partner_user]
-      - [PARTNER_ADMIN, TABLE, UPDATE, partner_user]
-      - [PARTNER_ADMIN, TABLE, DELETE, partner_user]
       # Subscription read-only
       - [PARTNER_ADMIN, TABLE, SELECT, subscription_plan]
       - [PARTNER_ADMIN, TABLE, SELECT, subscription_plan_price]

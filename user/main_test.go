@@ -31,7 +31,10 @@ type memStore struct {
 	links      map[string]int    // issuer|subject → user id
 	members    map[[2]int64]bool // {user, partner} with an open membership
 	tokens     map[string]*refreshRow
-	endedRoles []int // users whose open role assignments were ended
+	loginRow   []any                    // qUserByLogin row
+	endedRoles []int                    // users whose open role assignments were ended
+	policies   map[int64]map[string]int // user_account_policy by partner; 0 = global
+	clock      time.Duration            // offset added to the wall clock
 	calls      []string
 	failQuery  map[string]error
 	commits    int
@@ -41,7 +44,7 @@ type memStore struct {
 
 func newMemStore(userIDs ...int) *memStore {
 	m := &memStore{users: map[int]bool{}, cutoffs: map[int]time.Time{}, holds: map[int]bool{}, deleted: map[int]bool{}, failQuery: map[string]error{},
-		accounts: map[int]*account{}, links: map[string]int{}, members: map[[2]int64]bool{}, tokens: map[string]*refreshRow{}}
+		accounts: map[int]*account{}, links: map[string]int{}, members: map[[2]int64]bool{}, tokens: map[string]*refreshRow{}, policies: map[int64]map[string]int{}}
 	for _, id := range userIDs {
 		m.users[id] = true
 	}
@@ -51,7 +54,12 @@ func newMemStore(userIDs ...int) *memStore {
 type refreshRow struct {
 	user    int
 	revoked bool
+	started time.Time
+	method  string
 }
+
+// now is the store clock; tests move it with clock.
+func (m *memStore) now() time.Time { return time.Now().Add(m.clock) }
 
 // account is a user_account row for the identity-linking queries.
 type account struct {
@@ -118,7 +126,12 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	case qListPartners:
 		out.Rows = m.partners[args[0].(int)]
 	case qInsertRefreshToken:
-		m.tokens[args[1].(string)] = &refreshRow{user: args[0].(int)}
+		row := &refreshRow{user: args[0].(int), started: m.now()}
+		if started, ok := args[3].(time.Time); ok {
+			row.started = started
+		}
+		row.method, _ = args[4].(string)
+		m.tokens[args[1].(string)] = row
 	case qRevokeRefreshToken:
 		if t := m.tokens[args[0].(string)]; t != nil {
 			t.revoked = true
@@ -137,13 +150,46 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 					partner = k[1]
 				}
 			}
-			out.Rows = [][]any{{int64(t.user), "F", "L", "", UserStatusActive, false, partner, nil}}
+			status := UserStatusActive
+			if a := m.accounts[t.user]; a != nil {
+				status = a.status
+			}
+			var method any
+			if t.method != "" {
+				method = t.method
+			}
+			age := int64(m.now().Sub(t.started) / time.Second)
+			out.Rows = [][]any{{int64(t.user), "F", "L", "", status, false, partner, nil, nil, t.started, method, age}}
 		}
 	case qEndMembership:
 		k := [2]int64{int64(args[0].(int)), args[1].(int64)}
 		if m.members[k] {
 			delete(m.members, k)
 			out.Rows = [][]any{{args[1]}}
+		}
+	case qUserByLogin, qUserByLoginEmail:
+		if m.loginRow != nil {
+			out.Rows = [][]any{m.loginRow}
+		}
+	case qEffectivePolicies, qUserPolicies:
+		// The partner's row overrides the global one, per policy type.
+		partner, _ := args[0].(int64)
+		if name == qUserPolicies {
+			for k := range m.members {
+				if k[0] == int64(args[0].(int)) {
+					partner = k[1]
+				}
+			}
+		}
+		effective := map[string]int{}
+		for policy, value := range m.policies[0] {
+			effective[policy] = value
+		}
+		for policy, value := range m.policies[partner] {
+			effective[policy] = value
+		}
+		for policy, value := range effective {
+			out.Rows = append(out.Rows, []any{policy, int32(value)})
 		}
 	case qEndPermissions:
 		m.endedRoles = append(m.endedRoles, args[0].(int))

@@ -298,11 +298,25 @@ func (h *OAuthASHandler) redirectToLogin(w http.ResponseWriter, r *http.Request)
 			authserver.OAuthSessionHandoffPath+")", http.StatusLoopDetected)
 		return
 	}
-	ret := *r.URL
-	q := ret.Query()
+	q := r.URL.Query()
 	q.Set("_authretry", strconv.Itoa(authRetryCount(r)+1))
-	ret.RawQuery = q.Encode()
-	http.Redirect(w, r, h.LoginURL+"?return="+url.QueryEscape(ret.RequestURI()), http.StatusFound)
+	http.Redirect(w, r, h.LoginURL+"?return="+url.QueryEscape(h.authorizeURL(r, q)), http.StatusFound)
+}
+
+// authorizeURL is the absolute authorize URL with query q, built from the
+// configured issuer and never from request headers, so a login page on another
+// origin knows where to return. It falls back to the request path when the
+// server advertises no absolute endpoint.
+func (h *OAuthASHandler) authorizeURL(r *http.Request, q url.Values) string {
+	endpoint, err := url.Parse(h.AS.Metadata().AuthorizationEndpoint)
+	if err != nil || !endpoint.IsAbs() || endpoint.Host == "" {
+		ret := *r.URL
+		ret.RawQuery = q.Encode()
+		return ret.RequestURI()
+	}
+	endpoint.RawQuery = q.Encode()
+	endpoint.Fragment = ""
+	return endpoint.String()
 }
 
 func authRetryCount(r *http.Request) int {

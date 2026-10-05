@@ -141,9 +141,13 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 
 	// Login-time verification (loginToken present)
 	if req.LoginToken != "" {
-		userID, err := h.UserService.ValidateLoginToken(req.LoginToken)
+		userID, method, err := h.UserService.ValidateLoginToken(req.LoginToken)
 		if err != nil {
 			h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired login token")
+			return
+		}
+		if err := h.UserService.CheckSignInMethod(userID, method); err != nil {
+			h.WriteServiceError(w, r, err)
 			return
 		}
 
@@ -164,6 +168,7 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to load session")
 			return
 		}
+		session.SignInMethod = method
 
 		menu, err := h.UserService.GetUserMenu(userID)
 		if err != nil {
@@ -216,9 +221,13 @@ func (h *SecurityHandler) VerifyBackupCode(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	userID, err := h.UserService.ValidateLoginToken(req.LoginToken)
+	userID, method, err := h.UserService.ValidateLoginToken(req.LoginToken)
 	if err != nil {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired login token")
+		return
+	}
+	if err := h.UserService.CheckSignInMethod(userID, method); err != nil {
+		h.WriteServiceError(w, r, err)
 		return
 	}
 
@@ -233,6 +242,7 @@ func (h *SecurityHandler) VerifyBackupCode(w http.ResponseWriter, r *http.Reques
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to load session")
 		return
 	}
+	session.SignInMethod = method
 
 	menu, err := h.UserService.GetUserMenu(userID)
 	if err != nil {

@@ -60,7 +60,7 @@ func (h *AbstractHandler) SessionTokens(session *model.UserSession) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	refresh, err := h.UserService.CreateRefreshToken(session.Id)
+	refresh, err := h.UserService.CreateRefreshToken(session.Id, session.SignInMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -554,5 +554,21 @@ func (h *AbstractHandler) requireRecentAuth(w http.ResponseWriter, session *mode
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "re-authentication failed")
 		return false
 	}
+	return true
+}
+
+// admitExternalSignIn classifies a verified external sign-in, checks it
+// against the SSO policy and records the method on the session. It writes the
+// response and returns false when the sign-in is refused.
+func (h *AbstractHandler) admitExternalSignIn(w http.ResponseWriter, r *http.Request, session *model.UserSession, identity user.ExternalIdentity) bool {
+	method, err := h.UserService.ExternalSignInMethod(session.PartnerId, identity)
+	if err == nil {
+		err = h.UserService.CheckSignInMethod(session.Id, method)
+	}
+	if err != nil {
+		h.WriteServiceError(w, r, err)
+		return false
+	}
+	session.SignInMethod = method
 	return true
 }

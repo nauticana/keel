@@ -3,9 +3,11 @@ package authserver
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/oauth/claims"
 	"github.com/nauticana/keel/port"
 )
@@ -38,6 +40,13 @@ SELECT token_hash, family_id, client_id, user_id, partner_id, scopes, resource, 
 	oauthRevokeUser:     `UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL`,
 }
 
+var oauthTokenTxQueries = common.MergeMaps(oauthTokenQueries, guard.Queries)
+
+// grantLockKey names the lock that serializes a user's grant to one client.
+func grantLockKey(userID int64, clientID string) string {
+	return "oauth_grant:" + strconv.FormatInt(userID, 10) + ":" + clientID
+}
+
 // TokenStoreDB persists refresh tokens (token_hash, never the raw token).
 // The caller hashes before storing/looking up.
 type TokenStoreDB struct {
@@ -60,7 +69,7 @@ func (s *TokenStoreDB) SaveRefreshToken(ctx context.Context, t *port.RefreshToke
 }
 
 func (s *TokenStoreDB) Rotate(ctx context.Context, oldHash string, t *port.RefreshToken) error {
-	tx, err := s.DB.BeginTx(ctx, oauthTokenQueries)
+	tx, err := s.DB.BeginTx(ctx, oauthTokenTxQueries)
 	if err != nil {
 		return err
 	}
@@ -70,6 +79,11 @@ func (s *TokenStoreDB) Rotate(ctx context.Context, oldHash string, t *port.Refre
 			_ = tx.Rollback(ctx)
 		}
 	}()
+	// A grant revocation takes the same lock, so it either sees the rotated
+	// token or revokes the old one first and this consume finds nothing.
+	if err := guard.Lock(ctx, tx, grantLockKey(t.UserID, t.ClientID)); err != nil {
+		return err
+	}
 	// Consume the old token atomically; no active row means it was already
 	// rotated/revoked (concurrent refresh or replay) — abort without inserting.
 	res, err := tx.Query(ctx, oauthConsumeRefresh, oldHash)

@@ -1,7 +1,8 @@
 table: approval_event
 comment: |
   Append-only audit of an approval request. event_type S=submitted,
-  A=approved, R=rejected; actor_id is the user who acted.
+  A=approved, R=rejected, W=withdrawn, E=expired; actor_id is the user who
+  acted, NULL for an expiry.
 columns:
   - name: id
     type: BIGINT
@@ -11,6 +12,7 @@ columns:
     type: CHAR(1)
   - name: actor_id
     type: BIGINT
+    nullable: true
   - name: note
     type: VARCHAR(500)
     nullable: true

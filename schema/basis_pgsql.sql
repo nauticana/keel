@@ -177,13 +177,6 @@ CREATE TABLE IF NOT EXISTS table_action_parameter (
     CONSTRAINT table_action_parameter_pk PRIMARY KEY (table_name, action_name, seq)
 );
 
--- Configurable password and login policies
-CREATE TABLE IF NOT EXISTS user_account_policy (
-    id                                   VARCHAR(30)   NOT NULL,
-    policy_value                         INTEGER      ,
-    CONSTRAINT user_account_policy_pk PRIMARY KEY (id)
-);
-
 -- User accounts with authentication credentials
 CREATE TABLE IF NOT EXISTS user_account (
     id                                   BIGINT        NOT NULL,
@@ -264,6 +257,8 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
     user_id                              BIGINT        NOT NULL,
     token_hash                           VARCHAR(128)  NOT NULL,
     expires_at                           TIMESTAMP     NOT NULL,
+    session_started_at                   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sign_in_method                       CHAR(1)      ,
     revoked_at                           TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT user_refresh_token_pk PRIMARY KEY (id)
@@ -379,6 +374,7 @@ CREATE TABLE IF NOT EXISTS authorization_object_action (
 CREATE TABLE IF NOT EXISTS authorization_role (
     id                                   VARCHAR(30)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
+    partner_scoped                       BOOLEAN       NOT NULL DEFAULT FALSE,
     CONSTRAINT authorization_role_pk PRIMARY KEY (id)
 );
 
@@ -479,6 +475,21 @@ CREATE TABLE IF NOT EXISTS business_partner (
 
 CREATE SEQUENCE IF NOT EXISTS business_partner_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('business_partner', 'id', 'business_partner_seq') ON CONFLICT DO NOTHING;
+
+-- Password and sign-in policies. A row with partner_id NULL is global; a
+-- partner's row applies to its users.
+CREATE TABLE IF NOT EXISTS user_account_policy (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    policy_type                          VARCHAR(30)   NOT NULL,
+    policy_value                         INTEGER      ,
+    CONSTRAINT user_account_policy_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS user_account_policy_global_uq ON user_account_policy(policy_type) WHERE partner_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS user_account_policy_partner_uq ON user_account_policy(partner_id, policy_type);
+
+CREATE SEQUENCE IF NOT EXISTS user_account_policy_seq INCREMENT BY 1 START WITH 100;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_account_policy', 'id', 'user_account_policy_seq') ON CONFLICT DO NOTHING;
 
 -- Associates users with business partners. A user belongs to at most one partner at a time.
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -1685,8 +1696,9 @@ CREATE TABLE IF NOT EXISTS approval_policy (
 );
 
 -- Maker-checker decision on an application record (object_type, object_id).
--- status P=pending, A=approved, R=rejected. A decided request is final; a
--- rejected record is resubmitted as a new request.
+-- status P=pending, A=approved, R=rejected, W=withdrawn by the maker,
+-- E=expired. A closed request is final; the record is resubmitted as a new
+-- request. A pending request past expires_at can no longer be decided.
 CREATE TABLE IF NOT EXISTS approval_request (
     id                                   BIGINT        NOT NULL,
     partner_id                           BIGINT        NOT NULL,
@@ -1698,21 +1710,24 @@ CREATE TABLE IF NOT EXISTS approval_request (
     checker_id                           BIGINT       ,
     decided_at                           TIMESTAMP    ,
     decision_note                        VARCHAR(500) ,
+    expires_at                           TIMESTAMP    ,
     CONSTRAINT approval_request_pk PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS approval_request_open_uq ON approval_request(partner_id, object_type, object_id) WHERE status = 'P';
+CREATE INDEX IF NOT EXISTS idx_approval_request_due ON approval_request(expires_at) WHERE status = 'P' AND expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_approval_request_object ON approval_request(partner_id, object_type, object_id, submitted_at);
 
 CREATE SEQUENCE IF NOT EXISTS approval_request_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('approval_request', 'id', 'approval_request_seq') ON CONFLICT DO NOTHING;
 
 -- Append-only audit of an approval request. event_type S=submitted,
--- A=approved, R=rejected; actor_id is the user who acted.
+-- A=approved, R=rejected, W=withdrawn, E=expired; actor_id is the user who
+-- acted, NULL for an expiry.
 CREATE TABLE IF NOT EXISTS approval_event (
     id                                   BIGINT        NOT NULL,
     request_id                           BIGINT        NOT NULL,
     event_type                           CHAR(1)       NOT NULL,
-    actor_id                             BIGINT        NOT NULL,
+    actor_id                             BIGINT       ,
     note                                 VARCHAR(500) ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT approval_event_pk PRIMARY KEY (id)
@@ -2073,6 +2088,15 @@ BEGIN
      WHERE constraint_name = 'counties' AND table_name = 'county'
   ) THEN
     ALTER TABLE county ADD CONSTRAINT counties FOREIGN KEY (country_id, state_id) REFERENCES state(country_id, id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_account_policies' AND table_name = 'user_account_policy'
+  ) THEN
+    ALTER TABLE user_account_policy ADD CONSTRAINT partner_account_policies FOREIGN KEY (partner_id) REFERENCES business_partner(id);
   END IF;
 END $$;
 DO $$

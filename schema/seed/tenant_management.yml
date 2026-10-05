@@ -23,6 +23,20 @@ seeds:
     rows:
       - [domain_verification_method, partner_domain_verification, method]
       - [domain_verification_method, partner_domain_challenge, method]
+  - table: user_account_policy
+    columns: [id, policy_type, policy_value]
+    rows:
+      - [1, PASSWORD_EXPIRE_DAYS, 90]
+      - [2, MIN_PASSWORD_LENGTH, 8]
+      - [3, MIN_PASSWORD_UPPER, 1]
+      - [4, MIN_PASSWORD_LOWER, 1]
+      - [5, MIN_PASSWORD_DIGIT, 1]
+      - [6, MIN_PASSWORD_SPECIAL, 0]
+      - [7, MAX_ATTEMPTS, 5]
+      - [8, AUTO_UNLOCK_MINUTES, 30]
+      - [9, AUTO_LOGOUT_MINUTES, 5]
+      - [10, SSO_REQUIRED, 0]
+      - [11, SESSION_MAX_HOURS, 0]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:
@@ -46,6 +60,7 @@ seeds:
       - [partner_address_countries, D, caption]
       - [partner_address_states, D, caption]
       - [partner_domains, S, "*"]
+      - [partner_account_policies, S, "*"]
       - [partner_domain_verifications, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
@@ -96,8 +111,6 @@ seeds:
       - [SECURITY_ADMIN, TABLE, SELECT, business_partner]
       - [SECURITY_ADMIN, TABLE, SELECT, partner_user]
       - [SECURITY_ADMIN, TABLE, INSERT, partner_user]
-      - [SECURITY_ADMIN, TABLE, UPDATE, partner_user]
-      - [SECURITY_ADMIN, TABLE, DELETE, partner_user]
       - [SECURITY_OPER, PAGE, ACCESS, partner_registrations]
       - [SECURITY_OPER, PAGE, ACCESS, partner_addresses]
       - [SECURITY_OPER, PAGE, ACCESS, partner_users]
@@ -116,8 +129,6 @@ seeds:
       - [PARTNER_ADMIN, TABLE, UPDATE, business_partner]
       - [PARTNER_ADMIN, TABLE, SELECT, partner_user]
       - [PARTNER_ADMIN, TABLE, INSERT, partner_user]
-      - [PARTNER_ADMIN, TABLE, UPDATE, partner_user]
-      - [PARTNER_ADMIN, TABLE, DELETE, partner_user]
       - [PARTNER_ADMIN, TABLE, SELECT, partner_address]
       - [PARTNER_ADMIN, TABLE, INSERT, partner_address]
       - [PARTNER_ADMIN, TABLE, UPDATE, partner_address]

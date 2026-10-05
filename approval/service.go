@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
@@ -15,6 +16,7 @@ import (
 const (
 	maxObjectType = 50
 	maxNote       = 500
+	expireBatch   = 200
 )
 
 // Service runs maker-checker approval over application records. Separation
@@ -57,11 +59,25 @@ func (s *Service) transact(ctx context.Context, fn func(port.TxQueryService) err
 }
 
 // Submit opens a pending request for the record. A record has at most one
-// open request; a rejected or approved record is submitted again as a new one.
+// open request; a closed record is submitted again as a new one.
 func (s *Service) Submit(ctx context.Context, partnerID int64, objectType string, objectID, makerID int64) (*Request, error) {
+	return s.SubmitUntil(ctx, partnerID, objectType, objectID, makerID, time.Time{})
+}
+
+// SubmitUntil is Submit for a request that can no longer be decided after
+// expiresAt; the zero time never expires. An open request that has already
+// expired is closed first, so it does not block the new one.
+func (s *Service) SubmitUntil(ctx context.Context, partnerID int64, objectType string, objectID, makerID int64, expiresAt time.Time) (*Request, error) {
 	objectType = strings.TrimSpace(objectType)
 	if partnerID <= 0 || objectID <= 0 || makerID <= 0 || objectType == "" || len(objectType) > maxObjectType {
 		return nil, fmt.Errorf("approval: partner, object type, object id and maker are required")
+	}
+	var expiry any
+	if !expiresAt.IsZero() {
+		if !expiresAt.After(time.Now()) {
+			return nil, fmt.Errorf("approval: expiry must be in the future")
+		}
+		expiry = expiresAt.UTC()
 	}
 	var id int64
 	err := s.transact(ctx, func(tx port.TxQueryService) error {
@@ -70,10 +86,16 @@ func (s *Service) Submit(ctx context.Context, partnerID int64, objectType string
 			return err
 		}
 		if len(open.Rows) > 0 {
-			return fmt.Errorf("%w: request %d", ErrAlreadyOpen, common.AsInt64(open.Rows[0][0]))
+			openID := common.AsInt64(open.Rows[0][0])
+			if !common.AsBool(open.Rows[0][1]) {
+				return fmt.Errorf("%w: request %d", ErrAlreadyOpen, openID)
+			}
+			if err := s.close(ctx, tx, openID, StatusExpired, EventExpired, 0, ""); err != nil {
+				return err
+			}
 		}
 		id = tx.GenID()
-		if _, err := tx.Query(ctx, qInsertRequest, id, partnerID, objectType, objectID, makerID); err != nil {
+		if _, err := tx.Query(ctx, qInsertRequest, id, partnerID, objectType, objectID, makerID, expiry); err != nil {
 			if pgsql.IsUniqueViolation(err) {
 				return fmt.Errorf("%w: %s %d", ErrAlreadyOpen, objectType, objectID)
 			}
@@ -86,6 +108,71 @@ func (s *Service) Submit(ctx context.Context, partnerID int64, objectType string
 		return nil, err
 	}
 	return s.Get(ctx, partnerID, id)
+}
+
+// close ends a pending request without a checker and records the event. An
+// actor of 0 is the system.
+func (s *Service) close(ctx context.Context, tx port.TxQueryService, id int64, status, event string, actorID int64, note string) error {
+	if _, err := tx.Query(ctx, qClose, status, nullableNote(note), id); err != nil {
+		return err
+	}
+	var actor any
+	if actorID > 0 {
+		actor = actorID
+	}
+	_, err := tx.Query(ctx, qInsertEvent, tx.GenID(), id, event, actor, nullableNote(note))
+	return err
+}
+
+// Withdraw lets the maker close their own pending request.
+func (s *Service) Withdraw(ctx context.Context, partnerID, id, makerID int64, note string) (*Request, error) {
+	if len(note) > maxNote {
+		return nil, fmt.Errorf("approval: note exceeds %d bytes", maxNote)
+	}
+	err := s.transact(ctx, func(tx port.TxQueryService) error {
+		res, err := tx.Query(ctx, qLock, partnerID, id)
+		if err != nil {
+			return err
+		}
+		if len(res.Rows) == 0 {
+			return fmt.Errorf("%w: %d", ErrNotFound, id)
+		}
+		req := requestFromRow(res.Rows[0])
+		if req.Status != StatusPending {
+			return fmt.Errorf("%w: %d is %s", ErrInvalidState, id, req.Status)
+		}
+		if makerID <= 0 || makerID != req.MakerID {
+			return fmt.Errorf("%w: %d", ErrNotMaker, id)
+		}
+		return s.close(ctx, tx, id, StatusWithdrawn, EventWithdrawn, makerID, note)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, partnerID, id)
+}
+
+// ExpireDue closes up to expireBatch pending requests past their expiry and
+// returns how many it closed; a worker calls it until it returns fewer.
+func (s *Service) ExpireDue(ctx context.Context) (int, error) {
+	closed := 0
+	err := s.transact(ctx, func(tx port.TxQueryService) error {
+		due, err := tx.Query(ctx, qDue, expireBatch)
+		if err != nil {
+			return err
+		}
+		for _, row := range due.Rows {
+			if err := s.close(ctx, tx, common.AsInt64(row[0]), StatusExpired, EventExpired, 0, ""); err != nil {
+				return err
+			}
+		}
+		closed = len(due.Rows)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return closed, nil
 }
 
 // Decide approves or rejects a pending request. The checker must differ from
@@ -108,6 +195,9 @@ func (s *Service) Decide(ctx context.Context, partnerID, id, checkerID int64, ap
 		req := requestFromRow(res.Rows[0])
 		if req.Status != StatusPending {
 			return fmt.Errorf("%w: %d is %s", ErrInvalidState, id, req.Status)
+		}
+		if req.Expired {
+			return fmt.Errorf("%w: %d", ErrExpired, id)
 		}
 		if checkerID == req.MakerID {
 			allowed, err := s.allowsSinglePerson(ctx, tx, partnerID)

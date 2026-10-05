@@ -23,6 +23,8 @@ type Setup struct {
 	AS        port.AuthorizationServer
 	Validator port.TokenValidator
 	Signer    *authserver.RS256Signer
+	// Grants lists and revokes the clients users have authorized; nil unless local.
+	Grants *authserver.GrantService
 }
 
 // NewOAuthFromConfig wires OAuth from the --oauth_* flags:
@@ -92,7 +94,7 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 		// validator is the single-audience resource-server validator for the
 		// caller's resource.Middleware; the AS builds its own multi-audience
 		// validator internally for introspection / token-exchange.
-		return &Setup{Mode: mode, AS: as, Validator: validator, Signer: signer}, nil
+		return &Setup{Mode: mode, AS: as, Validator: validator, Signer: signer, Grants: &authserver.GrantService{DB: db}}, nil
 
 	default:
 		return nil, fmt.Errorf("oauth: unknown oauth_as_mode %q (want local|external|disabled)", mode)

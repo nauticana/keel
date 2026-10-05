@@ -1,5 +1,6 @@
 tables:
   - business_partner
+  - user_account_policy
   - partner_user
   - partner_address
   - partner_domain

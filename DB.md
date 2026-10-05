@@ -58,7 +58,6 @@ flowchart RL
 
     subgraph user["User"]
         direction BT
-        user_account_policy
         user_account
         user_account_history
         user_registration
@@ -151,11 +150,13 @@ flowchart BT
         partner_user["partner_user"]
         partner_address["partner_address"]
         partner_domain["partner_domain"]
+        user_account_policy["user_account_policy"]
     end
 
     partner_user --> business_partner
     partner_address --> business_partner
     partner_domain --> business_partner
+    user_account_policy --> business_partner
 
     subgraph oauth_server["OAuth Authorization Server"]
         direction TB
@@ -422,10 +423,6 @@ erDiagram
         BIGINT user_id
         INTEGER attempts
     }
-    user_account_policy {
-        VARCHAR id PK
-        INTEGER policy_value
-    }
 
 ```
 
@@ -465,6 +462,8 @@ erDiagram
         BIGINT user_id FK
         VARCHAR token_hash
         TIMESTAMP expires_at
+        TIMESTAMP session_started_at
+        CHAR sign_in_method
         TIMESTAMP revoked_at
         TIMESTAMP created_at
     }
@@ -575,6 +574,7 @@ erDiagram
     authorization_role {
         VARCHAR id PK
         VARCHAR caption
+        BOOLEAN partner_scoped
     }
     authorization_role_permission {
         VARCHAR role_id PK,FK
@@ -637,6 +637,7 @@ erDiagram
 erDiagram
     business_partner ||--o{ partner_user : "partner_users"
     business_partner ||--o{ partner_domain : "partner_domains"
+    business_partner o|--o{ user_account_policy : "partner_account_policies"
     business_partner ||--o{ partner_address : "partner_addresses"
     user_account ||--o{ partner_user : "user_partners"
     country o|--o{ partner_address : "partner_address_countries"
@@ -662,6 +663,12 @@ erDiagram
         VARCHAR phone
         NUMERIC latitude
         NUMERIC longitude
+    }
+    user_account_policy {
+        BIGINT id PK
+        BIGINT partner_id FK
+        VARCHAR policy_type
+        INTEGER policy_value
     }
     partner_domain {
         BIGINT partner_id PK,FK

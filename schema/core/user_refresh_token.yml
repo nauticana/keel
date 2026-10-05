@@ -9,6 +9,14 @@ columns:
     type: VARCHAR(128)
   - name: expires_at
     type: TIMESTAMP
+  - name: session_started_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+    comment: Sign-in time of the session, carried through rotation
+  - name: sign_in_method
+    type: CHAR(1)
+    nullable: true
+    comment: How the session signed in; NULL is unknown
   - name: revoked_at
     type: TIMESTAMP
     nullable: true

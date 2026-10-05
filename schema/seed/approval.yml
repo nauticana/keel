@@ -12,9 +12,13 @@ seeds:
       - [approval_request_status, P, Pending]
       - [approval_request_status, A, Approved]
       - [approval_request_status, R, Rejected]
+      - [approval_request_status, W, Withdrawn]
+      - [approval_request_status, E, Expired]
       - [approval_event_type, S, Submitted]
       - [approval_event_type, A, Approved]
       - [approval_event_type, R, Rejected]
+      - [approval_event_type, W, Withdrawn]
+      - [approval_event_type, E, Expired]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

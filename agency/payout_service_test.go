@@ -2,12 +2,14 @@ package agency
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payout"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/service"
 )
 
@@ -83,5 +85,22 @@ func TestPayoutSelectionIncludesPayableReversalsImmediately(t *testing.T) {
 		if !strings.Contains(query, predicate) {
 			t.Errorf("%s does not bypass the earning cutoff for payable reversals", name)
 		}
+	}
+}
+
+type promotedLedger struct {
+	port.AgencyCommissionLedger
+	promoted int
+}
+
+func (l *promotedLedger) PromoteHeld(context.Context) error { l.promoted++; return nil }
+
+// A cycle without a provider still promotes held earnings and says so with a
+// typed error, so a worker can tell "payouts not enabled" from a failure.
+func TestRunCycleWithoutProviderIsTyped(t *testing.T) {
+	ledger := &promotedLedger{}
+	err := (&BaseAgencyPayoutService{Ledger: ledger}).RunCycle(context.Background())
+	if !errors.Is(err, payout.ErrProviderNotConfigured) || ledger.promoted != 1 {
+		t.Fatalf("err = %v, promoted = %d", err, ledger.promoted)
 	}
 }

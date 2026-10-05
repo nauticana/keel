@@ -1,0 +1,34 @@
+table: user_account_policy
+comment: |
+  Password and sign-in policies. A row with partner_id NULL is global; a
+  partner's row applies to its users.
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: policy_type
+    type: VARCHAR(30)
+  - name: policy_value
+    type: INTEGER
+    nullable: true
+primary_key: [id]
+sequence:
+  name: user_account_policy_seq
+  column: id
+  start_with: 100
+indexes:
+  - name: user_account_policy_global_uq
+    columns: [policy_type]
+    unique: true
+    where: "partner_id IS NULL"
+  - name: user_account_policy_partner_uq
+    columns: [partner_id, policy_type]
+    unique: true
+foreign_keys:
+  - name: partner_account_policies
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

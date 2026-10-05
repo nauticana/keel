@@ -156,8 +156,8 @@ type KeelConfig struct {
 	SmtpUser                    string        // smtp_user                     ""                 SMTP username
 	SmtpFrom                    string        // smtp_from                     ""                 SMTP sender email address
 	CORSOrigin                  string        // cors_origin                   ""                 Allowed CORS origin
-	GoogleClientID              string        // google_client_id              ""                 Google OAuth client ID (verifies ID tokens against Google's JWKs)
-	AppleClientID               string        // apple_client_id               ""                 Apple Sign-In client identifier
+	GoogleClientID              string        // google_client_id              ""                 Google OAuth client id; set it to enable Google sign-in
+	AppleClientID               string        // apple_client_id               ""                 Apple Sign-In client id; set it to enable Apple sign-in
 	OAuthIssuer                 string        // oauth_issuer                  ""                 OAuth 2.1 AS issuer URL trusted by the resource-server validator
 	OAuthJWKSURL                string        // oauth_jwks_url                ""                 JWKS URL used to verify access-token signatures
 	OAuthAudience               string        // oauth_audience                ""                 Expected access-token audience (RFC 8707)

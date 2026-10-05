@@ -22,6 +22,19 @@ type memStore struct {
 	single   map[int64]bool // approval_policy.allow_single_person by partner
 	nextID   int64
 	pending  []func() // undo log of the open transaction
+	clock    time.Duration
+}
+
+func (m *memStore) now() time.Time { return time.Now().Add(m.clock) }
+
+func (m *memStore) expired(r []any) bool {
+	at, ok := r[10].(time.Time)
+	return ok && !at.After(m.now())
+}
+
+// view is a stored row plus the store clock's expiry verdict.
+func (m *memStore) view(r []any) []any {
+	return append(append([]any(nil), r...), m.expired(r))
 }
 
 func newStore() *memStore {
@@ -43,7 +56,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	switch name {
 	case qInsertRequest:
 		id := args[0].(int64)
-		m.requests[id] = []any{id, args[1], args[2], args[3], StatusPending, args[4], time.Now(), nil, nil, nil}
+		m.requests[id] = []any{id, args[1], args[2], args[3], StatusPending, args[4], m.now(), nil, nil, nil, args[5]}
 		m.pending = append(m.pending, func() { delete(m.requests, id) })
 	case qInsertEvent:
 		n := len(m.events)
@@ -51,12 +64,12 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		m.pending = append(m.pending, func() { m.events = m.events[:n] })
 	case qGet, qLock:
 		if r, ok := m.requests[args[1].(int64)]; ok && r[1] == args[0] {
-			out.Rows = [][]any{r}
+			out.Rows = [][]any{m.view(r)}
 		}
 	case qOpenFor:
 		for _, r := range m.requests {
 			if r[1] == args[0] && r[2] == args[1] && r[3] == args[2] && r[4] == StatusPending {
-				out.Rows = [][]any{{r[0]}}
+				out.Rows = [][]any{{r[0], m.expired(r)}}
 			}
 		}
 	case qLatestFor:
@@ -67,12 +80,12 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			}
 		}
 		if latest != nil {
-			out.Rows = [][]any{latest}
+			out.Rows = [][]any{m.view(latest)}
 		}
 	case qPending:
 		for id := int64(1); id <= m.nextID; id++ {
 			if r, ok := m.requests[id]; ok && r[1] == args[0] && r[4] == StatusPending {
-				out.Rows = append(out.Rows, r)
+				out.Rows = append(out.Rows, m.view(r))
 			}
 		}
 	case qAllowSingle:
@@ -84,6 +97,18 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		prev := append([]any(nil), r...)
 		r[4], r[7], r[8], r[9] = args[0], args[1], time.Now(), args[2]
 		m.pending = append(m.pending, func() { copy(r, prev) })
+	case qClose:
+		if r := m.requests[args[2].(int64)]; r != nil && r[4] == StatusPending {
+			prev := append([]any(nil), r...)
+			r[4], r[8], r[9] = args[0], m.now(), args[1]
+			m.pending = append(m.pending, func() { copy(r, prev) })
+		}
+	case qDue:
+		for id := int64(1); id <= m.nextID && len(out.Rows) < args[0].(int); id++ {
+			if r, ok := m.requests[id]; ok && r[4] == StatusPending && m.expired(r) {
+				out.Rows = append(out.Rows, []any{id})
+			}
+		}
 	case qEvents:
 		for _, e := range m.events {
 			if e[1] == args[0] {

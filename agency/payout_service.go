@@ -289,7 +289,7 @@ func (s *BaseAgencyPayoutService) RunCycle(ctx context.Context) error {
 		return err
 	}
 	if s.Provider == nil {
-		return fmt.Errorf("agency payout: provider is not configured")
+		return fmt.Errorf("agency payout: %w", payout.ErrProviderNotConfigured)
 	}
 	now := s.now()
 	cutoff := monthStart(now)

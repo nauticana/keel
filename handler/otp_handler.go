@@ -595,6 +595,11 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to load user")
 		return
 	}
+	if err := h.UserService.CheckSignInMethod(session.Id, user.SignInOTP); err != nil {
+		h.WriteServiceError(w, r, err)
+		return
+	}
+	session.SignInMethod = user.SignInOTP
 
 	resp, err := h.SessionTokens(session)
 	if err != nil {

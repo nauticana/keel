@@ -15,12 +15,14 @@ import (
 type refreshUsers struct {
 	user.UserService
 	minted  int
+	method  string
 	revoked []string
 }
 
 func (u *refreshUsers) CreateJWT(s *model.UserSession) (string, error) { return "jwt-" + s.Email, nil }
-func (u *refreshUsers) CreateRefreshToken(int) (string, error) {
+func (u *refreshUsers) CreateRefreshToken(_ int, method string) (string, error) {
 	u.minted++
+	u.method = method
 	return "refresh-new", nil
 }
 func (u *refreshUsers) ValidateRefreshToken(token string) (*model.UserSession, error) {
@@ -42,8 +44,8 @@ var _ user.UserService = (*refreshUsers)(nil)
 func TestSessionTokens_MintsPair(t *testing.T) {
 	users := &refreshUsers{}
 	h := &AbstractHandler{UserService: users}
-	resp, err := h.SessionTokens(&model.UserSession{Id: 7, PartnerId: 3, Email: "a@b"})
-	if err != nil || resp["token"] != "jwt-a@b" || resp["refreshToken"] != "refresh-new" || resp["userId"] != 7 || users.minted != 1 {
+	resp, err := h.SessionTokens(&model.UserSession{Id: 7, PartnerId: 3, Email: "a@b", SignInMethod: user.SignInOTP})
+	if err != nil || resp["token"] != "jwt-a@b" || resp["refreshToken"] != "refresh-new" || resp["userId"] != 7 || users.minted != 1 || users.method != user.SignInOTP {
 		t.Fatalf("resp=%v err=%v minted=%d", resp, err, users.minted)
 	}
 }

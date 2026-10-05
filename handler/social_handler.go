@@ -13,6 +13,7 @@ import (
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/crypto"
 	"github.com/nauticana/keel/user"
 )
 
@@ -58,6 +59,8 @@ func init() {
 	RegisterErrorCode(user.ErrIdentityNotLinked, http.StatusConflict, "identity_not_linked")
 	RegisterErrorCode(user.ErrIdentityLinked, http.StatusConflict, "identity_linked")
 	RegisterErrorCode(user.ErrAccountUnavailable, http.StatusForbidden, "account_unavailable")
+	RegisterErrorCode(user.ErrSSORequired, http.StatusForbidden, "sso_required")
+	RegisterErrorCode(errProviderDisabled, http.StatusBadRequest, "provider_not_enabled")
 }
 
 // SocialLoginHandler handles OAuth/social login (Google, Apple).
@@ -92,6 +95,10 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 	// claims. Both providers issue RS256 ID tokens; keel pins that
 	// algorithm and rejects everything else.
 	identity, nonce, err := verifySocialToken(r.Context(), req.Provider, req.Token)
+	if errors.Is(err, errProviderDisabled) {
+		h.WriteServiceError(w, r, errProviderDisabled)
+		return
+	}
 	if err != nil {
 		// Don't echo the verifier's diagnostic — leaking "kid not found"
 		// vs "exp expired" gives an attacker a usable signal.
@@ -123,6 +130,9 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if !h.admitExternalSignIn(w, r, session, identity) {
+		return
+	}
 	resp, err := h.SessionTokens(session)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create token")
@@ -246,6 +256,11 @@ func buildSignupConsent(r *http.Request, req *socialLoginRequest) *user.SignupCo
 	}
 }
 
+// errProviderDisabled: the provider has no client id configured. A provider
+// is enabled by setting google_client_id or apple_client_id, application-wide
+// or per node.
+var errProviderDisabled = errors.New("sign-in provider is not enabled")
+
 // verifySocialToken validates the provider's RS256 ID token against its JWKs,
 // asserts iss/aud/exp, and returns the identity and the token's nonce.
 func verifySocialToken(ctx context.Context, provider, token string) (user.ExternalIdentity, string, error) {
@@ -255,7 +270,7 @@ func verifySocialToken(ctx context.Context, provider, token string) (user.Extern
 	case "apple":
 		return verifyAppleToken(ctx, token)
 	default:
-		return user.ExternalIdentity{}, "", fmt.Errorf("unsupported provider: %s", provider)
+		return user.ExternalIdentity{}, "", errProviderDisabled
 	}
 }
 
@@ -264,9 +279,9 @@ func verifySocialToken(ctx context.Context, provider, token string) (user.Extern
 func verifyGoogleToken(ctx context.Context, token string) (user.ExternalIdentity, string, error) {
 	aud := config.Config().GoogleClientID
 	if aud == "" {
-		return user.ExternalIdentity{}, "", fmt.Errorf("google_client_id is not configured")
+		return user.ExternalIdentity{}, "", errProviderDisabled
 	}
-	claims, err := verifyJWKsToken(ctx, getGoogleJWKs(), token, aud, "")
+	claims, err := crypto.VerifyRS256(ctx, getGoogleJWKs(), token, aud, "")
 	if err != nil {
 		return user.ExternalIdentity{}, "", err
 	}
@@ -290,9 +305,9 @@ func verifyGoogleToken(ctx context.Context, token string) (user.ExternalIdentity
 func verifyAppleToken(ctx context.Context, token string) (user.ExternalIdentity, string, error) {
 	aud := config.Config().AppleClientID
 	if aud == "" {
-		return user.ExternalIdentity{}, "", fmt.Errorf("apple_client_id is not configured")
+		return user.ExternalIdentity{}, "", errProviderDisabled
 	}
-	claims, err := verifyJWKsToken(ctx, getAppleJWKs(), token, aud, appleIssuer)
+	claims, err := crypto.VerifyRS256(ctx, getAppleJWKs(), token, aud, appleIssuer)
 	if err != nil {
 		return user.ExternalIdentity{}, "", err
 	}

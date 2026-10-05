@@ -1,8 +1,9 @@
 table: approval_request
 comment: |
   Maker-checker decision on an application record (object_type, object_id).
-  status P=pending, A=approved, R=rejected. A decided request is final; a
-  rejected record is resubmitted as a new request.
+  status P=pending, A=approved, R=rejected, W=withdrawn by the maker,
+  E=expired. A closed request is final; the record is resubmitted as a new
+  request. A pending request past expires_at can no longer be decided.
 columns:
   - name: id
     type: BIGINT
@@ -29,6 +30,9 @@ columns:
   - name: decision_note
     type: VARCHAR(500)
     nullable: true
+  - name: expires_at
+    type: TIMESTAMP
+    nullable: true
 primary_key: [id]
 sequence:
   name: approval_request_seq
@@ -38,6 +42,9 @@ indexes:
     columns: [partner_id, object_type, object_id]
     unique: true
     where: "status = 'P'"
+  - name: idx_approval_request_due
+    columns: [expires_at]
+    where: "status = 'P' AND expires_at IS NOT NULL"
   - name: idx_approval_request_object
     columns: [partner_id, object_type, object_id, submitted_at]
 foreign_keys:

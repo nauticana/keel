@@ -188,13 +188,6 @@ CREATE TABLE IF NOT EXISTS table_action_parameter (
     CONSTRAINT table_action_parameters FOREIGN KEY (table_name, action_name) REFERENCES table_action(table_name, action_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Configurable password and login policies
-CREATE TABLE IF NOT EXISTS user_account_policy (
-    id                                   VARCHAR(30)   NOT NULL,
-    policy_value                         INT          ,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- User accounts with authentication credentials
 CREATE TABLE IF NOT EXISTS user_account (
     id                                   BIGINT        NOT NULL,
@@ -276,6 +269,8 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
     user_id                              BIGINT        NOT NULL,
     token_hash                           VARCHAR(128)  NOT NULL,
     expires_at                           DATETIME      NOT NULL,
+    session_started_at                   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sign_in_method                       CHAR(1)      ,
     revoked_at                           DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -383,6 +378,7 @@ CREATE TABLE IF NOT EXISTS authorization_object_action (
 CREATE TABLE IF NOT EXISTS authorization_role (
     id                                   VARCHAR(30)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
+    partner_scoped                       TINYINT(1)    NOT NULL DEFAULT 0,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -482,6 +478,20 @@ CREATE TABLE IF NOT EXISTS business_partner (
     caption                              VARCHAR(200)  NOT NULL,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Password and sign-in policies. A row with partner_id NULL is global; a
+-- partner's row applies to its users.
+CREATE TABLE IF NOT EXISTS user_account_policy (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    policy_type                          VARCHAR(30)   NOT NULL,
+    policy_value                         INT          ,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_account_policies FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- user_account_policy_global_uq is a partial index on PostgreSQL (WHERE partner_id IS NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX user_account_policy_global_uq ON user_account_policy(policy_type);
+CREATE UNIQUE INDEX user_account_policy_partner_uq ON user_account_policy(partner_id, policy_type);
 
 -- Associates users with business partners. A user belongs to at most one partner at a time.
 CREATE TABLE IF NOT EXISTS partner_user (
@@ -1709,8 +1719,9 @@ CREATE TABLE IF NOT EXISTS approval_policy (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Maker-checker decision on an application record (object_type, object_id).
--- status P=pending, A=approved, R=rejected. A decided request is final; a
--- rejected record is resubmitted as a new request.
+-- status P=pending, A=approved, R=rejected, W=withdrawn by the maker,
+-- E=expired. A closed request is final; the record is resubmitted as a new
+-- request. A pending request past expires_at can no longer be decided.
 CREATE TABLE IF NOT EXISTS approval_request (
     id                                   BIGINT        NOT NULL,
     partner_id                           BIGINT        NOT NULL,
@@ -1722,6 +1733,7 @@ CREATE TABLE IF NOT EXISTS approval_request (
     checker_id                           BIGINT       ,
     decided_at                           DATETIME     ,
     decision_note                        VARCHAR(500) ,
+    expires_at                           DATETIME     ,
     PRIMARY KEY (id),
     CONSTRAINT approval_request_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT approval_request_maker FOREIGN KEY (maker_id) REFERENCES user_account(id),
@@ -1729,15 +1741,18 @@ CREATE TABLE IF NOT EXISTS approval_request (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- approval_request_open_uq is a partial index on PostgreSQL (WHERE status = 'P'); MySQL cannot enforce it — service-enforced
 CREATE INDEX approval_request_open_uq ON approval_request(partner_id, object_type, object_id);
+-- idx_approval_request_due is a partial index on PostgreSQL (WHERE status = 'P' AND expires_at IS NOT NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX idx_approval_request_due ON approval_request(expires_at);
 CREATE INDEX idx_approval_request_object ON approval_request(partner_id, object_type, object_id, submitted_at);
 
 -- Append-only audit of an approval request. event_type S=submitted,
--- A=approved, R=rejected; actor_id is the user who acted.
+-- A=approved, R=rejected, W=withdrawn, E=expired; actor_id is the user who
+-- acted, NULL for an expiry.
 CREATE TABLE IF NOT EXISTS approval_event (
     id                                   BIGINT        NOT NULL,
     request_id                           BIGINT        NOT NULL,
     event_type                           CHAR(1)       NOT NULL,
-    actor_id                             BIGINT        NOT NULL,
+    actor_id                             BIGINT       ,
     note                                 VARCHAR(500) ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),

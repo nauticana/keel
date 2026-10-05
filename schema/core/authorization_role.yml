@@ -5,4 +5,8 @@ columns:
     type: VARCHAR(30)
   - name: caption
     type: VARCHAR(80)
+  - name: partner_scoped
+    type: BOOLEAN
+    default: "FALSE"
+    comment: The role applies within the holder's partner; FALSE is a platform role
 primary_key: [id]

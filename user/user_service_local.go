@@ -18,6 +18,7 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/domain"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
@@ -41,6 +42,7 @@ var (
 	ErrAccessTokenRevoked  = errors.New("access token revoked")
 	ErrLegalHold           = errors.New("user: account is under legal hold")
 	ErrNoMembership        = errors.New("user: no current membership of the partner")
+	ErrSSORequired         = errors.New("user: single sign-on is required")
 )
 
 // classifyUniqueViolation maps a pgx unique-index error from user_account
@@ -73,6 +75,19 @@ const (
 	UserStatusInitial    = "I"
 	UserStatusDeleted    = "D"
 
+	// Sign-in methods checked against the SSO_REQUIRED policy.
+	SignInPassword = "P"
+	SignInOTP      = "O"
+	SignInExternal = "E" // an identity provider not proven to be the partner's
+	SignInTenant   = "T" // the partner's own identity provider
+
+	// SSO_REQUIRED values.
+	SSOAnyIdentity     = 1 // any external identity
+	SSOPartnerIdentity = 2 // the partner's own identity provider only
+
+	PolicySSORequired     = "SSO_REQUIRED"
+	PolicySessionMaxHours = "SESSION_MAX_HOURS" // 0 is unlimited
+
 	UserActivityCreate        = "C"
 	UserActivityLogin         = "L"
 	UserActivityFailed        = "F"
@@ -93,6 +108,8 @@ const (
 	EncryptionCost = 12
 
 	qUserAccountPolicy  = "user_account_policy"
+	qEffectivePolicies  = "effective_policies"
+	qUserPolicies       = "user_policies"
 	qUserMenu           = "user_menu"
 	qUserByLogin        = "user_by_login"
 	qUserByLoginEmail   = "user_by_login_email"
@@ -191,8 +208,27 @@ const sessionPartnerJoin = `  LEFT JOIN LATERAL (
          LIMIT 1) p ON TRUE`
 
 var LocalUserQueries = map[string]string{
-	qUserAccountPolicy: "SELECT id, policy_value FROM user_account_policy",
-
+	qUserAccountPolicy: "SELECT policy_type, policy_value FROM user_account_policy WHERE partner_id IS NULL",
+	// qEffectivePolicies for a user's current partner.
+	qUserPolicies: `
+SELECT DISTINCT ON (policy_type) policy_type, policy_value
+  FROM user_account_policy
+ WHERE partner_id IS NULL
+    OR partner_id = (SELECT pu.partner_id FROM partner_user pu
+                      WHERE pu.user_id = ?
+                        AND pu.begda <= CURRENT_TIMESTAMP
+                        AND (pu.endda IS NULL OR pu.endda > CURRENT_TIMESTAMP)
+                      ORDER BY pu.begda, pu.partner_id
+                      LIMIT 1)
+ ORDER BY policy_type, partner_id NULLS LAST
+`,
+	// One row per policy type: the partner's row when it has one, else the global row.
+	qEffectivePolicies: `
+SELECT DISTINCT ON (policy_type) policy_type, policy_value
+  FROM user_account_policy
+ WHERE partner_id = ? OR partner_id IS NULL
+ ORDER BY policy_type, partner_id NULLS LAST
+`,
 	qUpdateProfile: "UPDATE user_account SET first_name = ?, last_name = ?, locale = ? WHERE id = ?",
 	qSetUserEmail:  "UPDATE user_account SET user_email = ?, email_verified_at = CURRENT_TIMESTAMP, email_verification_method = 'C' WHERE id = ?",
 	qSetUserPhone:  "UPDATE user_account SET phone = ? WHERE id = ?",
@@ -374,17 +410,17 @@ UPDATE user_account
 
 	qInsertLoginToken: `
 INSERT INTO user_registration (user_email, confirmation, payload, status, user_id, attempts)
-VALUES (?, ?, 'LOGIN', 'P', ?, 0)
+VALUES (?, ?, ?, 'P', ?, 0)
 `,
 
 	// Lookup is bound to user_id so two pending LOGIN tokens with the same
 	// 8-digit confirmation cannot collide across users. Caller obtains
 	// user_id by parsing the token string ("<user_id>-<confirmation>").
 	qGetLoginToken: `
-SELECT user_email, attempts FROM user_registration
+SELECT user_email, attempts, payload FROM user_registration
  WHERE user_id = ?
    AND confirmation = ?
-   AND payload = 'LOGIN'
+   AND payload LIKE 'LOGIN%'
    AND status = 'P'
    AND created_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
 `,
@@ -396,7 +432,7 @@ SELECT user_email, attempts FROM user_registration
 UPDATE user_registration
    SET status = 'X'
  WHERE user_id = ?
-   AND payload = 'LOGIN'
+   AND payload LIKE 'LOGIN%'
 `,
 
 	// Atomic-bump variant of qIncrementLoginAttempts: returns the
@@ -410,7 +446,7 @@ UPDATE user_registration
 UPDATE user_registration
    SET attempts = attempts + 1
  WHERE user_id = ?
-   AND payload = 'LOGIN'
+   AND payload LIKE 'LOGIN%'
    AND status = 'P'
 RETURNING attempts
 `,
@@ -418,12 +454,12 @@ RETURNING attempts
 	qDeleteLoginToken: `
 DELETE FROM user_registration
  WHERE user_id = ?
-   AND payload = 'LOGIN'
+   AND payload LIKE 'LOGIN%'
 `,
 
 	qInsertRefreshToken: `
-INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at)
-VALUES (nextval('user_refresh_token_seq'), ?, ?, ?)
+INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at, session_started_at, sign_in_method)
+VALUES (nextval('user_refresh_token_seq'), ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP), ?)
 `,
 	qEndMembership: `
 UPDATE partner_user SET endda = CURRENT_TIMESTAMP
@@ -435,7 +471,9 @@ UPDATE user_permission SET endda = CURRENT_TIMESTAMP
  WHERE user_id = ? AND endda IS NULL
 `,
 	qGetRefreshToken: `
-SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id, U.phone
+SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id, U.phone,
+       U.last_login_attempt, t.session_started_at, t.sign_in_method,
+       CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - t.session_started_at)) AS BIGINT)
   FROM user_refresh_token t
   JOIN user_account U ON U.id = t.user_id
 ` + sessionPartnerJoin + `
@@ -674,6 +712,10 @@ type LocalUserService struct {
 	// OAuthTokens is optional. When set, EndMembership also revokes the
 	// user's authorization-server refresh tokens.
 	OAuthTokens port.OAuthTokenStore
+	// TenantDomains is optional. When set, a Google Workspace sign-in whose
+	// hosted domain the user's partner holds counts as the partner's own
+	// identity provider (SignInTenant).
+	TenantDomains *domain.Service
 
 	// Ctx is the parent context used by every service method that needs
 	// to issue a DB query. Set by NewLocalUserService / Init from the
@@ -775,33 +817,59 @@ func (r *LocalUserService) Init(ctx context.Context, database port.DatabaseRepos
 	}
 	for _, row := range res.Rows {
 		policy := common.AsString(row[0])
-		value := int(common.AsInt32(row[1]))
-		switch policy {
-		case "PASSWORD_EXPIRE_DAYS":
-			r.passwordPolicy.PasswordExpire = value
-		case "MIN_PASSWORD_LENGTH":
-			r.passwordPolicy.MinPasswordLength = value
-		case "MIN_PASSWORD_UPPER":
-			r.passwordPolicy.MinPasswordUpper = value
-		case "MIN_PASSWORD_LOWER":
-			r.passwordPolicy.MinPasswordLower = value
-		case "MIN_PASSWORD_DIGIT":
-			r.passwordPolicy.MinPasswordDigit = value
-		case "MIN_PASSWORD_SPECIAL":
-			r.passwordPolicy.MinPasswordSpecial = value
-		case "MAX_ATTEMPTS":
-			r.passwordPolicy.MaxAttempts = value
-		case "AUTO_UNLOCK_MINUTES":
-			r.passwordPolicy.AutoUnlock = int64(value) * int64(time.Minute)
-		case "AUTO_LOGOUT_MINUTES":
-			r.passwordPolicy.AutoLogout = int64(value) * int64(time.Minute)
-		default:
+		if !applyPolicy(&r.passwordPolicy, policy, int(common.AsInt32(row[1]))) {
 			return fmt.Errorf("unknown password policy found in database: %s", policy)
 		}
 	}
 	return nil
 }
 
+// applyPolicy sets one policy type on p and reports whether the type is known.
+// Policies that are not password rules are known and leave p unchanged.
+func applyPolicy(p *model.PasswordPolicy, policyType string, value int) bool {
+	switch policyType {
+	case "PASSWORD_EXPIRE_DAYS":
+		p.PasswordExpire = value
+	case "MIN_PASSWORD_LENGTH":
+		p.MinPasswordLength = value
+	case "MIN_PASSWORD_UPPER":
+		p.MinPasswordUpper = value
+	case "MIN_PASSWORD_LOWER":
+		p.MinPasswordLower = value
+	case "MIN_PASSWORD_DIGIT":
+		p.MinPasswordDigit = value
+	case "MIN_PASSWORD_SPECIAL":
+		p.MinPasswordSpecial = value
+	case "MAX_ATTEMPTS":
+		p.MaxAttempts = value
+	case "AUTO_UNLOCK_MINUTES":
+		p.AutoUnlock = int64(value) * int64(time.Minute)
+	case "AUTO_LOGOUT_MINUTES":
+		p.AutoLogout = int64(value) * int64(time.Minute)
+	case PolicySSORequired, PolicySessionMaxHours:
+	default:
+		return false
+	}
+	return true
+}
+
+// policyFor returns the password rules for a user: the global rules with the
+// user's partner's own values over them. A failed lookup is an error, never
+// the weaker global rules.
+func (s *LocalUserService) policyFor(userID int) (model.PasswordPolicy, error) {
+	policy := s.passwordPolicy
+	res, err := s.queryService.Query(s.ctx(), qUserPolicies, userID)
+	if err != nil {
+		return model.PasswordPolicy{}, fmt.Errorf("user: password policy lookup: %w", err)
+	}
+	for _, row := range res.Rows {
+		applyPolicy(&policy, common.AsString(row[0]), int(common.AsInt32(row[1])))
+	}
+	return policy, nil
+}
+
+// GetPasswordPolicy returns the global rules; a partner's own apply at sign-in
+// and password change.
 func (r *LocalUserService) GetPasswordPolicy() model.PasswordPolicy {
 	return r.passwordPolicy
 }
@@ -818,7 +886,7 @@ func (r *LocalUserService) GetPasswordPolicy() model.PasswordPolicy {
 // any user with a NULL last_login_attempt from ever signing in. That risk
 // is preferable to the alternative of a self-locked-then-data-migrated
 // account being indefinitely shut out.
-func (s *LocalUserService) checkAccountStatus(uStatus string, lastAttempt time.Time) error {
+func (s *LocalUserService) checkAccountStatus(userID int, uStatus string, lastAttempt time.Time) error {
 	if uStatus == UserStatusExpired {
 		return fmt.Errorf("%w: user account is expired", ErrAccountUnavailable)
 	}
@@ -829,7 +897,11 @@ func (s *LocalUserService) checkAccountStatus(uStatus string, lastAttempt time.T
 		if lastAttempt.IsZero() {
 			return nil
 		}
-		if s.passwordPolicy.AutoUnlock > time.Now().UnixNano()-lastAttempt.UnixNano() {
+		policy, err := s.policyFor(userID)
+		if err != nil {
+			return err
+		}
+		if policy.AutoUnlock > time.Now().UnixNano()-lastAttempt.UnixNano() {
 			return fmt.Errorf("%w: user account is locked", ErrAccountUnavailable)
 		}
 	}
@@ -878,7 +950,11 @@ func (s *LocalUserService) bumpLoginAttempts(userID int, reason string) (int, er
 	if res != nil && len(res.Rows) > 0 {
 		attempts = int(common.AsInt32(res.Rows[0][0]))
 	}
-	if attempts >= s.passwordPolicy.MaxAttempts {
+	policy, err := s.policyFor(userID)
+	if err != nil {
+		return attempts, err
+	}
+	if attempts >= policy.MaxAttempts {
 		_, _ = s.queryService.Query(ctx, qSetLockStatus, UserStatusSelfLocked, time.Now(), userID)
 		_ = s.AddUserHistory(userID, 0, "", UserActivityLock, UserStatusSelfLocked, reason)
 	}
@@ -907,7 +983,7 @@ func (s *LocalUserService) verifyPasswordByID(userID int, password string) (bool
 	row := res.Rows[0]
 	uStatus := common.AsString(row[5])
 	lastAttempt, _ := row[9].(time.Time)
-	if err := s.checkAccountStatus(uStatus, lastAttempt); err != nil {
+	if err := s.checkAccountStatus(userID, uStatus, lastAttempt); err != nil {
 		return false, err
 	}
 	if row[7] == nil {
@@ -946,7 +1022,7 @@ func (s *LocalUserService) GetUserById(userId int) (*model.UserSession, error) {
 	uStatus := common.AsString(row[5])
 	lastAttempt, _ := row[9].(time.Time)
 
-	if err := s.checkAccountStatus(uStatus, lastAttempt); err != nil {
+	if err := s.checkAccountStatus(userAccountId, uStatus, lastAttempt); err != nil {
 		return nil, err
 	}
 
@@ -1024,7 +1100,7 @@ func (s *LocalUserService) GetUserByLogin(username string, password string) (*mo
 	attempts := int(common.AsInt32(row[8]))
 	lastAttempt, _ := row[9].(time.Time)
 
-	if err := s.checkAccountStatus(uStatus, lastAttempt); err != nil {
+	if err := s.checkAccountStatus(userAccountId, uStatus, lastAttempt); err != nil {
 		return nil, err
 	}
 	if row[7] == nil {
@@ -1038,7 +1114,7 @@ func (s *LocalUserService) GetUserByLogin(username string, password string) (*mo
 		// flips status to self-locked when the ceiling is crossed.
 		newAttempts, _ := s.bumpLoginAttempts(userAccountId, "password-attempts-exceeded")
 		s.AddUserHistory(userAccountId, 0, "", UserActivityFailed, "A", "")
-		if newAttempts >= s.passwordPolicy.MaxAttempts {
+		if policy, policyErr := s.policyFor(userAccountId); policyErr != nil || newAttempts >= policy.MaxAttempts {
 			return nil, fmt.Errorf("too many failed login attempts, user account is locked")
 		}
 		_ = attempts // legacy local kept for clarity; not used after the bump
@@ -1058,18 +1134,23 @@ func (s *LocalUserService) GetUserByLogin(username string, password string) (*mo
 		ExpiresAt:   time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:    time.Now().Unix(),
 	}
-	if passdate.AddDate(0, 0, s.passwordPolicy.PasswordExpire).Before(time.Now()) {
+	policy, policyErr := s.policyFor(userAccountId)
+	if policyErr != nil {
+		return nil, policyErr
+	}
+	if passdate.AddDate(0, 0, policy.PasswordExpire).Before(time.Now()) {
 		return nil, fmt.Errorf("password expired")
 	}
 	s.AddUserHistory(userAccountId, 0, "", UserActivityLogin, "A", "")
 	s.queryService.Query(ctx, qSetLastLogin, time.Now(), userAccountId)
 
-	// Stamp the partner binding into the session so PartnerSpecific row
-	// scoping works on password logins — same lookup GetUserById /
-	// GetUserByEmail already do. Without it PartnerId stays 0 and every
-	// partner-scoped read returns nothing.
+	// Stamp the session partner. A failed lookup refuses the login; a session
+	// with partner 0 is only for a user who has no partner.
 	partnerRes, err := s.queryService.Query(ctx, qPartnerUserByid, userAccountId)
-	if err == nil && len(partnerRes.Rows) > 0 {
+	if err != nil {
+		return nil, fmt.Errorf("user: session partner lookup: %w", err)
+	}
+	if len(partnerRes.Rows) > 0 {
 		session.PartnerId = common.AsInt64(partnerRes.Rows[0][10])
 	}
 
@@ -1114,7 +1195,7 @@ func (s *LocalUserService) GetUserByEmail(email string) (*model.UserSession, err
 	uStatus := common.AsString(row[4])
 	lastAttempt, _ := row[8].(time.Time)
 
-	if err := s.checkAccountStatus(uStatus, lastAttempt); err != nil {
+	if err := s.checkAccountStatus(userAccountId, uStatus, lastAttempt); err != nil {
 		return nil, err
 	}
 	session := &model.UserSession{
@@ -1134,7 +1215,11 @@ func (s *LocalUserService) GetUserByEmail(email string) (*model.UserSession, err
 }
 
 func (s *LocalUserService) SetPassword(userid int, password string) error {
-	if err := s.passwordPolicy.Check(password); err != nil {
+	policy, err := s.policyFor(userid)
+	if err != nil {
+		return err
+	}
+	if err := policy.Check(password); err != nil {
 		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), EncryptionCost)
@@ -1243,6 +1328,87 @@ func (s *LocalUserService) checkAccessTokenCutoff(session *model.UserSession) er
 
 // RevokeAccessTokens invalidates every access token issued to the user so far.
 // Other nodes honor it within access_revocation_cache_ttl.
+// EffectivePolicies returns the policies that apply to a partner's users: the
+// partner's own value for each policy type, else the global value. A
+// partnerID of 0 returns the global policies.
+func (s *LocalUserService) EffectivePolicies(partnerID int64) (map[string]int, error) {
+	if partnerID < 0 {
+		partnerID = 0
+	}
+	res, err := s.queryService.Query(s.ctx(), qEffectivePolicies, partnerID)
+	if err != nil {
+		return nil, err
+	}
+	policies := make(map[string]int, len(res.Rows))
+	for _, row := range res.Rows {
+		policies[common.AsString(row[0])] = int(common.AsInt32(row[1]))
+	}
+	return policies, nil
+}
+
+// CheckSignInMethod refuses a sign-in with ErrSSORequired when the SSO_REQUIRED
+// policy of the user's partner, else the global one, does not admit method.
+// The user's partner is resolved in the same lookup; a failed lookup refuses.
+func (s *LocalUserService) CheckSignInMethod(userID int, method string) error {
+	switch method {
+	case SignInPassword, SignInOTP, SignInExternal, SignInTenant:
+	default:
+		return fmt.Errorf("user: unknown sign-in method %q", method)
+	}
+	if userID <= 0 {
+		return fmt.Errorf("user: user id is required")
+	}
+	res, err := s.queryService.Query(s.ctx(), qUserPolicies, userID)
+	if err != nil {
+		return fmt.Errorf("user: sign-in policy lookup: %w", err)
+	}
+	for _, row := range res.Rows {
+		if common.AsString(row[0]) == PolicySSORequired && !ssoAdmits(int(common.AsInt32(row[1])), method) {
+			return ErrSSORequired
+		}
+	}
+	return nil
+}
+
+// ssoAdmits reports whether a session that signed in by method satisfies an
+// SSO_REQUIRED value. An unknown method or a value above the known ones gets
+// the strictest reading.
+func ssoAdmits(required int, method string) bool {
+	switch {
+	case required <= 0:
+		return true
+	case required == SSOAnyIdentity:
+		return method == SignInExternal || method == SignInTenant
+	default:
+		return method == SignInTenant
+	}
+}
+
+// ExternalSignInMethod classifies a verified external sign-in for a user of
+// partnerID: SignInTenant when the identity comes from the partner's own
+// identity provider, else SignInExternal. Today that is a Google Workspace
+// account whose hosted domain the partner holds by identity-grade evidence;
+// without TenantDomains nothing is proven.
+func (s *LocalUserService) ExternalSignInMethod(partnerID int64, id ExternalIdentity) (string, error) {
+	if err := id.validate(); err != nil {
+		return "", err
+	}
+	if partnerID <= 0 || s.TenantDomains == nil || id.Provider != "google" || id.Issuer != GoogleIssuer || id.HostedDomain == "" {
+		return SignInExternal, nil
+	}
+	holder, err := s.TenantDomains.IdentityHolder(s.ctx(), id.HostedDomain)
+	if errors.Is(err, domain.ErrNotHeld) {
+		return SignInExternal, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("user: identity domain lookup: %w", err)
+	}
+	if holder == partnerID {
+		return SignInTenant, nil
+	}
+	return SignInExternal, nil
+}
+
 // EndMembership ends the user's open membership of the partner and, in the
 // same transaction, ends the user's open role assignments and revokes every
 // refresh and access token. A user belongs to one partner at a time, so
@@ -1331,7 +1497,9 @@ func (s *LocalUserService) forgetTokenCutoff(userID int) {
 
 // --- Refresh Token ---
 
-func (s *LocalUserService) CreateRefreshToken(userID int) (string, error) {
+// CreateRefreshToken starts a session. signInMethod is a sign_in_method code,
+// or empty when unknown; an unknown method cannot refresh once SSO is required.
+func (s *LocalUserService) CreateRefreshToken(userID int, signInMethod string) (string, error) {
 	ctx := s.ctx()
 	raw, err := generateRandomToken(48)
 	if err != nil {
@@ -1355,7 +1523,7 @@ func (s *LocalUserService) CreateRefreshToken(userID int) (string, error) {
 		return "", fmt.Errorf("create refresh token: revoke prior tokens: %w", err)
 	}
 	hash := sha256Hex(raw)
-	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, hash, refreshTokenExpiry()); err != nil {
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, hash, refreshTokenExpiry(), nil, nullIfEmpty(signInMethod)); err != nil {
 		return "", fmt.Errorf("create refresh token: insert: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1462,8 +1630,27 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 	}
 	row := res.Rows[0]
 	userID := int(common.AsInt64(row[0]))
+	// A locked, expired or deleted account must not renew its session.
+	lastAttempt, _ := row[8].(time.Time)
+	if err := s.checkAccountStatus(userID, common.AsString(row[4]), lastAttempt); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRefreshToken, err)
+	}
+	method := common.AsString(row[10])
+	partnerID, _ := common.AsInt64OK(row[6])
+	policies, err := s.EffectivePolicies(partnerID)
+	if err != nil {
+		return nil, fmt.Errorf("rotate refresh token: policies: %w", err)
+	}
+	if hours := policies[PolicySessionMaxHours]; hours > 0 && common.AsInt64(row[11]) >= int64(hours)*3600 {
+		return nil, fmt.Errorf("%w: session exceeded %s", ErrInvalidRefreshToken, PolicySessionMaxHours)
+	}
+	// A session ends when SSO_REQUIRED no longer admits the way it signed in.
+	if !ssoAdmits(policies[PolicySSORequired], method) {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRefreshToken, ErrSSORequired)
+	}
 	session := &model.UserSession{
 		Id:               userID,
+		SignInMethod:     method,
 		FirstName:        common.AsString(row[1]),
 		LastName:         common.AsString(row[2]),
 		Email:            common.AsString(row[3]),
@@ -1480,7 +1667,7 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 	// revoking the old token in the same transaction makes concurrent reuse
 	// deterministic: only one caller can rotate a token successfully.
 	rotatedHash := sha256Hex(rotated)
-	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, rotatedHash, refreshTokenExpiry()); err != nil {
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, rotatedHash, refreshTokenExpiry(), row[9], nullIfEmpty(method)); err != nil {
 		return nil, fmt.Errorf("rotate refresh token: %w", err)
 	}
 	if _, err := tx.Query(ctx, qRevokeRefreshToken, hash); err != nil {
@@ -1578,7 +1765,7 @@ func (s *LocalUserService) Verify2FA(userID int, code string) (bool, error) {
 	attempts := int(common.AsInt32(row[5]))
 	lastAttempt, _ := row[6].(time.Time)
 	lastStep := common.AsInt64(row[7])
-	if err := s.checkAccountStatus(uStatus, lastAttempt); err != nil {
+	if err := s.checkAccountStatus(userID, uStatus, lastAttempt); err != nil {
 		return false, err
 	}
 
@@ -1589,7 +1776,7 @@ func (s *LocalUserService) Verify2FA(userID int, code string) (bool, error) {
 		// and both write `n+1`.
 		newAttempts, _ := s.bumpLoginAttempts(userID, "2fa-attempts-exceeded")
 		_ = attempts // pre-bump value retained for clarity
-		if newAttempts >= s.passwordPolicy.MaxAttempts {
+		if policy, policyErr := s.policyFor(userID); policyErr != nil || newAttempts >= policy.MaxAttempts {
 			return false, fmt.Errorf("too many failed 2FA attempts, user account is locked")
 		}
 		return false, nil
@@ -1670,7 +1857,7 @@ func (s *LocalUserService) VerifyBackupCode(userID int, code string) (bool, erro
 	uStatus := common.AsString(row[4])
 	attempts := int(common.AsInt32(row[5]))
 	lastAttempt, _ := row[6].(time.Time)
-	if err := s.checkAccountStatus(uStatus, lastAttempt); err != nil {
+	if err := s.checkAccountStatus(userID, uStatus, lastAttempt); err != nil {
 		return false, err
 	}
 
@@ -1694,7 +1881,7 @@ func (s *LocalUserService) VerifyBackupCode(userID int, code string) (bool, erro
 	if matchIdx < 0 {
 		newAttempts, _ := s.bumpLoginAttempts(userID, "backup-code-attempts-exceeded")
 		_ = attempts
-		if newAttempts >= s.passwordPolicy.MaxAttempts {
+		if policy, policyErr := s.policyFor(userID); policyErr != nil || newAttempts >= policy.MaxAttempts {
 			return false, fmt.Errorf("too many failed backup code attempts, user account is locked")
 		}
 		return false, nil
@@ -1730,7 +1917,9 @@ func (s *LocalUserService) VerifyBackupCode(userID int, code string) (bool, erro
 // 8-digit confirmation cannot collide across users. Token lifetime is
 // 5 minutes (enforced by the SELECT query); after MaxLoginTokenAttempts
 // failed confirmations the row is marked expired.
-func (s *LocalUserService) CreateLoginToken(userID int) (string, error) {
+// CreateLoginToken issues the short-lived token between a first factor and
+// its 2FA step, remembering the sign-in method the first factor used.
+func (s *LocalUserService) CreateLoginToken(userID int, signInMethod string) (string, error) {
 	if userID <= 0 {
 		return "", fmt.Errorf("login token: user id is required")
 	}
@@ -1747,7 +1936,7 @@ func (s *LocalUserService) CreateLoginToken(userID int) (string, error) {
 		return "", fmt.Errorf("user not found")
 	}
 	email := common.AsString(res.Rows[0][3])
-	if _, err := s.queryService.Query(s.ctx(), qInsertLoginToken, email, confirmation, int64(userID)); err != nil {
+	if _, err := s.queryService.Query(s.ctx(), qInsertLoginToken, email, confirmation, loginTokenPayload+signInMethod, int64(userID)); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%d-%d", userID, confirmation), nil
@@ -1758,15 +1947,25 @@ func (s *LocalUserService) CreateLoginToken(userID int) (string, error) {
 // consumes the row on success. On mismatch the per-user attempts counter
 // is incremented; after MaxLoginTokenAttempts the pending row is marked
 // expired so the caller cannot keep retrying.
-func (s *LocalUserService) ValidateLoginToken(token string) (int, error) {
+func (s *LocalUserService) ValidateLoginToken(token string) (int, string, error) {
+	userID, method, err := s.validateLoginToken(token)
+	if err == nil && method == "" {
+		method = SignInPassword // a token issued before methods were recorded
+	}
+	return userID, method, err
+}
+
+const loginTokenPayload = "LOGIN"
+
+func (s *LocalUserService) validateLoginToken(token string) (int, string, error) {
 	userID, confirmation, err := parseLoginToken(token)
 	if err != nil {
-		return 0, fmt.Errorf("invalid login token format")
+		return 0, "", fmt.Errorf("invalid login token format")
 	}
 	ctx := s.ctx()
 	res, err := s.queryService.Query(ctx, qGetLoginToken, int64(userID), confirmation)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if len(res.Rows) == 0 {
 		// (userID, confirmation) didn't match a pending row. Use the
@@ -1784,12 +1983,12 @@ func (s *LocalUserService) ValidateLoginToken(token string) (int, error) {
 				_, _ = s.queryService.Query(ctx, qExpireLoginToken, int64(userID))
 			}
 		}
-		return 0, fmt.Errorf("invalid or expired login token")
+		return 0, "", fmt.Errorf("invalid or expired login token")
 	}
 	attempts := int(common.AsInt32(res.Rows[0][1]))
 	if attempts >= MaxLoginTokenAttempts {
 		_, _ = s.queryService.Query(ctx, qExpireLoginToken, int64(userID))
-		return 0, fmt.Errorf("invalid or expired login token")
+		return 0, "", fmt.Errorf("invalid or expired login token")
 	}
 	// Row exists for (userID, confirmation) and attempts is below the cap —
 	// the token is valid. Consume the row and return the userID. The
@@ -1798,7 +1997,7 @@ func (s *LocalUserService) ValidateLoginToken(token string) (int, error) {
 	// user_account.id, and a mid-flight email change would otherwise cause
 	// a stale token to resolve to whoever owns the email NOW.
 	_, _ = s.queryService.Query(ctx, qDeleteLoginToken, int64(userID))
-	return userID, nil
+	return userID, strings.TrimPrefix(common.AsString(res.Rows[0][2]), loginTokenPayload), nil
 }
 
 // parseLoginToken splits a "<userID>-<confirmation>" token string into its
@@ -1947,7 +2146,11 @@ func (s *LocalUserService) VerifyOTP(userId int, purpose, code string) error {
 	otpID := common.AsInt64(res.Rows[0][0])
 	storedCode := common.AsString(res.Rows[0][1])
 	attempts := int(common.AsInt32(res.Rows[0][2]))
-	cap := s.passwordPolicy.MaxAttempts
+	policy, policyErr := s.policyFor(userId)
+	if policyErr != nil {
+		return policyErr
+	}
+	cap := policy.MaxAttempts
 	if cap <= 0 {
 		cap = 5
 	}
@@ -2090,7 +2293,7 @@ func (s *LocalUserService) getUserByExternalIdentity(issuer, subject, provider s
 	}
 	row := res.Rows[0]
 	lastAttempt, _ := row[8].(time.Time)
-	if err := s.checkAccountStatus(common.AsString(row[6]), lastAttempt); err != nil {
+	if err := s.checkAccountStatus(int(common.AsInt64(row[0])), common.AsString(row[6]), lastAttempt); err != nil {
 		return nil, err
 	}
 	session := s.newSession(

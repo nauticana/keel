@@ -86,7 +86,7 @@ graph TD
 | `geo` | `AddressService` fills `partner_address.latitude` / `longitude` from a `reference.Geocoder`, refusing a placement coarser than `MinPrecision` |
 | `notify` | Durable multi-channel notification delivery: `Queue.Enqueue`/`EnqueueTx` write one `notification` row per channel resolved from `notification_preference`, type defaults and app-forced channels, or exactly `Message.Channel` when set, dropping channels `Addressable` rejects (`notify.RecipientAddressable` checks email/phone on file, via `user.NewSQLRecipients` where no user service is built); `Worker` is a leased QueueWorker that sends through a `port.NotificationService` (typically `dispatcher.LocalNotificationService`) with backoff and a terminal failed state; a missing address (`port.ErrNotificationNoAddress`) is recorded suppressed |
 | `domain` | Domain names (`DomainName`, `ASCIIHost`, `DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`) and domain verification: `Service` records how a partner proved a domain by one of ten methods, with history, re-check, lapse and cancellation; consumers choose the methods they honor. See [Domain Verification](#domain-verification) |
-| `approval` | Maker-checker approval of an application record: `Service.Submit` / `Decide` with `ErrSameActor` unless the partner's `approval_policy.allow_single_person` is set, one open request per record, `approval_event` audit, `OnDecided` hook inside the decision transaction, `AllowsSinglePerson`; `handler` maps its sentinels to 404/409/403 |
+| `approval` | Maker-checker approval of an application record: `Service.Submit` / `Decide` with `ErrSameActor` unless the partner's `approval_policy.allow_single_person` is set, one open request per record, `approval_event` audit, `OnDecided` hook inside the decision transaction, `AllowsSinglePerson`. `SubmitUntil` sets an expiry after which `Decide` returns `ErrExpired`, `Withdraw` lets the maker close a pending request, and a worker calls `ExpireDue` to close expired ones in batches (statuses `W` and `E`); `handler` maps its sentinels to 404/409/403 |
 | `erasure` | Personal-data erasure: `Service.Request` plans per-table actions from app `Classifier`s (delete / anonymize / hold with reason), `Worker` executes them with one `erasure_audit` row per changed row, legal holds (`user_legal_hold`) that block erasure, `DeleteAccount` and document retention, pseudonyms resolvable only through an audited lookup |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write and returns its id for same-tx references; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
 | Table actions (basis) | Metadata-driven custom buttons surfaced in sail's CRUD UIs. Insert one row in basis `table_action` + auth_object + grant; mount a Go handler via `handler.WrapTableAction`. See **Table Actions** below. |
@@ -819,6 +819,17 @@ asHandler := &handler.OAuthASHandler{ /* … */ Handoff: hs, UserService: users,
 
 When the login page receives `?return=`, the SPA posts `{"return": <value>}` with its bearer token to `POST /oauth/session/handoff` and navigates the browser to the returned `redirect`. `GET /oauth/session` redeems the single-use 60-second code, sets a 10-minute HttpOnly, Secure, SameSite=Lax cookie scoped to `/oauth`, and redirects (303) to the authorize URL. `return` must be this AS's own authorize URL and is bound to the code, so the flow is never an open redirect. Revoking the user's access tokens (logout everywhere, password change, account deletion) also ends a pending code and the cookie session. The SPA's origin must be allowed by the AS backend's CORS settings.
 
+### Authorized clients (local authorization server)
+
+`oauth.Setup.Grants` (`authserver.GrantService`) manages the clients a user has authorized. A grant is the live refresh tokens a client holds for a user; a client registered without the `refresh_token` grant has none.
+
+- `List(ctx, userID)` returns each client with its name, scopes, first authorization and newest token.
+- `Revoke(ctx, userID, clientID)` revokes every refresh token of the pair, or returns `ErrGrantNotFound`; it is serialized with refresh rotation, so a concurrent refresh cannot keep the grant alive.
+- `Active(ctx, userID, clientID)` lets a resource server honor a revocation before the access token expires.
+- `PurgeUnauthorizedClients(ctx, olderThan)` deletes, in batches, public clients that registered for refresh tokens and never completed an authorization.
+
+An unauthenticated `/authorize` redirects to `LoginURL` with `return` set to the absolute authorize URL built from the configured issuer, so a login page on another origin knows where to send the user back.
+
 ## MCP Server Layer
 
 The MCP server layer (transports, tool/resource registry, response envelopes, text bundles, field-catalog discovery, conformance assertions) lives in [`github.com/nauticana/scout`](https://github.com/nauticana/scout) — packages `scout/mcp`, `scout/mcp/mcptest`, `scout/domain`, and `scout/contract`. Keep keel's API-key/OAuth middleware, quota, guards, and query services around the scout transport for remote servers; authentication state enters through keel request context, not MCP arguments.
@@ -1125,7 +1136,7 @@ A user belongs to at most one partner at a time. PostgreSQL enforces it with the
 
 `UserService.EndMembership(partnerID, userID, reason)` sets `endda` on the open `partner_user` row and, in the same transaction, ends the user's open `user_permission` rows and revokes every refresh and access token; with `LocalUserService.OAuthTokens` set it also revokes the user's authorization-server refresh tokens. Rows are ended, never deleted. `handler.MembershipHandler` mounts `partner_user/end` for the session partner, gated by `PARTNER_USER` `END` (seeded for `PARTNER_ADMIN`).
 
-A `partner_user` or `user_permission` row is read-only once `endda` is set (`data.EndedReadOnlyTables`): generic Update, Patch and Delete skip it, and a later change is a new row. Setting `endda` through generic REST ends the row but revokes no tokens and ends no roles; use the route for that.
+A `partner_user` or `user_permission` row is read-only once `endda` is set (`data.EndedReadOnlyTables`): generic Update, Patch and Delete skip it, and a later change is a new row. No seeded role may update or delete a `partner_user` row through generic REST, so a membership ends only through the route.
 
 ### `common.CallerSession` — who is calling, anywhere a context flows
 
@@ -1346,7 +1357,7 @@ When `twoFactorRequired` is `true`, the frontend redirects to a 2FA verification
 
 ### Refresh tokens
 
-Every login path (`LoginLocal`, `LoginGoogle`, `VerifyOTP`, `LoginSocial`, `Verify2FA`, `VerifyBackupCode`) answers with an access `token` (JWT, `session_timeout` seconds) and a `refreshToken` (`refresh_token_ttl` seconds, default 30 days). Downstream login handlers mint the same pair with `AbstractHandler.SessionTokens(session)` and add their own fields to the returned map.
+Every login path (`LoginLocal`, `LoginGoogle`, `VerifyOTP`, `LoginSocial`, `Verify2FA`, `VerifyBackupCode`) answers with an access `token` (JWT, `session_timeout` seconds) and a `refreshToken` (`refresh_token_ttl` seconds, default 30 days). Downstream login handlers mint the same pair with `AbstractHandler.SessionTokens(session)` and add their own fields to the returned map. A refresh is refused with 401 when the account is locked, expired or deleted, or when the session is older than the `SESSION_MAX_HOURS` policy (hours since sign-in; 0, the default, is unlimited).
 
 ```
 POST /public/token/refresh  { "refreshToken": "…" }
@@ -1628,6 +1639,28 @@ Soft-deleted accounts (`status='D'`) don't compete for the index — `DeleteAcco
 | GET | `/public/login/social` | Issue the single-use nonce the ID token must carry |
 | POST | `/public/login/social` | Authenticate via provider ID token (Google or Apple) |
 | POST | app-chosen authenticated path | `LinkSocial`: link a provider identity to the signed-in account |
+
+### Enabling providers
+
+A provider is enabled by its client id: `google_client_id` enables Google, `apple_client_id` enables Apple, and a provider without one answers 400 `provider_not_enabled`. The setting is application-wide, not per partner; `application_config_value` can give each node its own id. The Google OAuth code flow (`LoginGoogle`) uses the same id with the `google_client_secret` secret.
+
+### Requiring SSO
+
+`user_account_policy` rows are global when `partner_id` is NULL and otherwise apply to that partner's users; a partner's own row overrides the global one for each policy type, and `UserService.EffectivePolicies(partnerID)` returns them resolved that way. Only platform roles can write policy rows as seeded.
+
+The policy type `SSO_REQUIRED` takes three values:
+
+| Value | Admits |
+|---|---|
+| 0 | Every sign-in method |
+| 1 | Any external identity: Google, Apple or the partner's own identity provider |
+| 2 | Only the partner's own identity provider |
+
+A sign-in counts as the partner's own identity provider (`sign_in_method` `T`) when it is a Google Workspace account whose hosted domain the user's partner holds by identity-grade domain evidence; wire `LocalUserService.TenantDomains` to the `domain.Service` to enable it. A personal Google or Apple account is `E` and does not satisfy value 2.
+
+`CheckSignInMethod(userID, method)` resolves the user's partner and the policy in one lookup and refuses with 403 `sso_required`; a failed lookup refuses too. keel calls it at password sign-in, at one-time-code sign-in, at Google and Apple sign-in and again when a 2FA step completes. A downstream login handler must call it, and set `session.SignInMethod`, before `SessionTokens`. Each session records its method, and a refresh is refused once the policy no longer admits it, so tightening the policy ends other sessions at their next refresh; a session without a method is admitted only by value 0.
+
+The password rules (`MIN_PASSWORD_*`, `MAX_ATTEMPTS`, `AUTO_UNLOCK_MINUTES`, `PASSWORD_EXPIRE_DAYS`) and `SESSION_MAX_HOURS` resolve the same way. A failed policy lookup refuses the operation instead of falling back to the global rules. `GetPasswordPolicy` and `/public/password/policy` report the global rules.
 
 ### Registering Social Login Routes
 
@@ -2942,9 +2975,9 @@ this summary can be checked directly against the generated schema.
 | `country` | Country reference catalogue |
 | `state` | State/province reference catalogue |
 | `county` | County reference catalogue |
-| `authorization_role` | RBAC role definitions |
+| `authorization_role` | RBAC role definitions; `partner_scoped` marks roles that apply within the holder's partner |
 | `authorization_role_permission` | Object/action/scope grants assigned to roles |
-| `user_account_policy` | Password and account-policy settings |
+| `user_account_policy` | Password and sign-in policies, global (`partner_id` NULL) or per partner |
 | `user_account` | User accounts with password, 2FA fields, email verification time and method |
 | `user_permission` | User-to-role assignments |
 | `user_account_history` | Login audit trail |
@@ -3244,7 +3277,7 @@ keel/
 ├── common/                    # Type helpers, HTTP response envelope, shared HTTP client, flag variables
 ├── domain/                    # Domain names and domain verification service + verifiers
 ├── model/                     # Domain-agnostic data shapes (UserSession, TableDefinition, AppError, ...)
-├── port/                      # Pluggable component interfaces (login, messaging, notification, quota,
+├── port/                      # Pluggable component interfaces (messaging, notification, quota,
 │                              #   table change logger, web socket hub, ID generator)
 ├── data/                      # AbstractRepository, AbstractTableService, DatabaseRepository / TxView /
 │                              #   QueryService interfaces, file TableLogger, SnowflakeGenerator
@@ -3340,7 +3373,7 @@ Non-human principals draw on the *same* roles and matrix below, out of their own
 | TABLE | user_permission | | S | SIUD | SIUD | | S |
 | TABLE | user_account_history | | S | S | S | | |
 | TABLE | user_account_policy | | S | SIUD | S | S | |
-| TABLE | partner_user | | S | SIUD | S | | S |
+| TABLE | partner_user | | S | SI | S | | SI |
 | **Framework** | | | | | | | |
 | PAGE | application_menus | | A | A | A | A | |
 | PAGE | constant_headers | | A | A | | A | |

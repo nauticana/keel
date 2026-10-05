@@ -343,3 +343,41 @@ func TestAuthorizeLoopPointsToHandoff(t *testing.T) {
 		t.Fatalf("loop = %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+type issuerAS struct {
+	handoffAS
+	endpoint string
+}
+
+func (a issuerAS) Metadata() port.AuthServerMetadata {
+	return port.AuthServerMetadata{AuthorizationEndpoint: a.endpoint}
+}
+
+// A login page on another origin needs the absolute authorize URL, taken from
+// the configured issuer and never from the request's Host header.
+func TestLoginRedirectReturnsToTheIssuerAuthorizeURL(t *testing.T) {
+	h := &OAuthASHandler{AS: issuerAS{endpoint: handoffAuthorize}, LoginURL: "https://app.example.com/login"}
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?client_id=c&state=s%26x", nil)
+	req.Host = "attacker.example.net"
+	rec := httptest.NewRecorder()
+	h.redirectToLogin(rec, req)
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if rec.Code != http.StatusFound || err != nil || loc.Host != "app.example.com" {
+		t.Fatalf("redirect = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	ret, err := url.Parse(loc.Query().Get("return"))
+	if err != nil || ret.Scheme+"://"+ret.Host+ret.Path != handoffAuthorize {
+		t.Fatalf("return = %q", loc.Query().Get("return"))
+	}
+	if q := ret.Query(); q.Get("client_id") != "c" || q.Get("state") != "s&x" || q.Get("_authretry") != "1" {
+		t.Fatalf("return query = %v", q)
+	}
+
+	h.AS = issuerAS{}
+	rec = httptest.NewRecorder()
+	h.redirectToLogin(rec, httptest.NewRequest(http.MethodGet, "/oauth/authorize?client_id=c", nil))
+	loc, _ = url.Parse(rec.Header().Get("Location"))
+	if got := loc.Query().Get("return"); !strings.HasPrefix(got, "/oauth/authorize?") {
+		t.Fatalf("without an advertised endpoint the return stays path-absolute: %q", got)
+	}
+}

@@ -53,7 +53,16 @@ type UserService interface {
 	VerifyPasswordByID(userID int, password string) (bool, error)
 
 	// Refresh tokens
-	CreateRefreshToken(userID int) (string, error)
+	CreateRefreshToken(userID int, signInMethod string) (string, error)
+	// EffectivePolicies returns each policy type's value for a partner: its own
+	// row when it has one, else the global row.
+	EffectivePolicies(partnerID int64) (map[string]int, error)
+	// CheckSignInMethod returns ErrSSORequired when the SSO_REQUIRED policy of
+	// the user's partner, else the global one, does not admit method.
+	CheckSignInMethod(userID int, method string) error
+	// ExternalSignInMethod classifies a verified external sign-in as the
+	// partner's own identity provider (SignInTenant) or not (SignInExternal).
+	ExternalSignInMethod(partnerID int64, identity ExternalIdentity) (string, error)
 	// EndMembership ends the user's membership of the partner, ends their role
 	// assignments and revokes their tokens.
 	EndMembership(partnerID int64, userID int, reason string) error
@@ -94,8 +103,8 @@ type UserService interface {
 	VerifyBackupCode(userID int, code string) (bool, error)
 
 	// Login token (short-lived, for 2FA flow)
-	CreateLoginToken(userID int) (string, error)
-	ValidateLoginToken(token string) (int, error)
+	CreateLoginToken(userID int, signInMethod string) (string, error)
+	ValidateLoginToken(token string) (userID int, signInMethod string, err error)
 
 	// Trusted devices
 	// RegisterTrustedDevice mints a random 32-byte secret, stores its hex
