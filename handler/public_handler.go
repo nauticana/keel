@@ -11,6 +11,8 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/oauth/connect"
 	"github.com/nauticana/keel/rest"
 	"github.com/nauticana/keel/secret"
 	"github.com/nauticana/keel/user"
@@ -22,6 +24,8 @@ type PublicHandler struct {
 	RegisterService *user.RegistrationService
 	Secrets         secret.SecretProvider
 	FolderHTML      string
+	// Handoff, initialized, mounts the exchange of a HandoffCode for tokens.
+	Handoff *connect.NonceService
 }
 
 // GetPublicRoutes returns the unauthenticated routes served by PublicHandler.
@@ -45,6 +49,9 @@ func (h *PublicHandler) GetPublicRoutes() map[string]func(w http.ResponseWriter,
 		routes[common.PublicPrefix+"/password/change"] = h.ChangePassword
 		routes[common.PublicPrefix+"/password/reset"] = h.ConfirmPasswordChange
 		routes[common.PublicPrefix+"/plans"] = h.ListPublicPlans
+	}
+	if h.Handoff != nil {
+		routes[common.PublicPrefix+"/register/exchange"] = h.ExchangeHandoff
 	}
 	return routes
 }
@@ -119,6 +126,30 @@ func (h *PublicHandler) GetPasswordPolicy(w http.ResponseWriter, r *http.Request
 	common.WriteJSON(w, http.StatusOK, h.UserService.GetPasswordPolicy().ClientView())
 }
 
+// secondFactorPending reports whether the sign-in stops here: an account with
+// 2FA on a device that is not trusted gets a login token for the 2FA step in
+// place of session tokens. It has written the response when it returns true.
+func (h *PublicHandler) secondFactorPending(w http.ResponseWriter, r *http.Request, session *model.UserSession) bool {
+	if !session.TwoFactorEnabled {
+		return false
+	}
+	if secret := DefaultTrustedDeviceCookie.Get(r); secret != "" {
+		if trusted, _ := h.UserService.IsTrustedDevice(session.Id, secret); trusted {
+			return false
+		}
+	}
+	loginToken, err := h.UserService.CreateLoginToken(session.Id, session.SignInMethod)
+	if err != nil {
+		h.WriteServiceError(w, r, err)
+		return true
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]any{
+		"twoFactorRequired": true,
+		"loginToken":        loginToken,
+	})
+	return true
+}
+
 func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -151,23 +182,8 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 	}
 	session.SignInMethod = user.SignInPassword
 
-	if session.TwoFactorEnabled {
-		trusted := false
-		if secret := DefaultTrustedDeviceCookie.Get(r); secret != "" {
-			trusted, _ = h.UserService.IsTrustedDevice(session.Id, secret)
-		}
-		if !trusted {
-			loginToken, err := h.UserService.CreateLoginToken(session.Id, user.SignInPassword)
-			if err != nil {
-				h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
-				return
-			}
-			common.WriteJSON(w, http.StatusOK, map[string]any{
-				"twoFactorRequired": true,
-				"loginToken":        loginToken,
-			})
-			return
-		}
+	if h.secondFactorPending(w, r, session) {
+		return
 	}
 
 	menu, err := h.UserService.GetUserMenu(session.Id)
@@ -312,23 +328,8 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if session.TwoFactorEnabled {
-		trusted := false
-		if secret := DefaultTrustedDeviceCookie.Get(r); secret != "" {
-			trusted, _ = h.UserService.IsTrustedDevice(session.Id, secret)
-		}
-		if !trusted {
-			loginToken, err := h.UserService.CreateLoginToken(session.Id, session.SignInMethod)
-			if err != nil {
-				h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
-				return
-			}
-			common.WriteJSON(w, http.StatusOK, map[string]any{
-				"twoFactorRequired": true,
-				"loginToken":        loginToken,
-			})
-			return
-		}
+	if h.secondFactorPending(w, r, session) {
+		return
 	}
 
 	menu, err := h.UserService.GetUserMenu(session.Id)
@@ -459,25 +460,27 @@ func (h *PublicHandler) AddRegistrationRequest(w http.ResponseWriter, r *http.Re
 	if !h.ReadRequest(w, r, &req) {
 		return
 	}
-	if req.Email == "" {
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", "email is required")
-		return
-	}
-	if req.UserName == "" {
-		req.UserName = req.Email
-	}
 	if err := h.RegisterService.SendConfirmation(r.Context(), &req); err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to send confirmation")
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "confirmation sent"})
 }
 
+// ConfirmRegistration completes registration from ?email=&code= and returns
+// the new session's tokens, with the partner when the registration had one.
 func (h *PublicHandler) ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
 	email := r.URL.Query().Get("email")
 	code := r.URL.Query().Get("code")
 	if email == "" || code == "" {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "email and code are required")
+		return
+	}
+	if len(code) > 9 {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "invalid confirmation code")
 		return
 	}
 	confirmation := 0
@@ -488,18 +491,22 @@ func (h *PublicHandler) ConfirmRegistration(w http.ResponseWriter, r *http.Reque
 		}
 		confirmation = confirmation*10 + int(c-'0')
 	}
-	result, err := h.RegisterService.Register(r.Context(), email, confirmation)
-	if err != nil {
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", err.Error())
+	session, created, err := h.RegisterService.Register(r.Context(), email, confirmation)
+	if !h.checkoutTolerated(w, r, err) {
 		return
 	}
-	common.WriteJSON(w, http.StatusOK, map[string]any{
-		"status":          "registration confirmed",
-		"partnerId":       result.PartnerID,
-		"planId":          result.PlanID,
-		"paymentRequired": result.PaymentRequired,
-		"paymentUrl":      result.PaymentURL,
-	})
+	resp, err := h.SessionTokens(session)
+	if err != nil {
+		h.WriteServiceError(w, r, err)
+		return
+	}
+	resp["status"] = "registration confirmed"
+	if created != nil {
+		resp["planId"] = created.PlanID
+		resp["paymentRequired"] = created.PaymentRequired
+		resp["paymentUrl"] = created.PaymentURL
+	}
+	common.WriteJSON(w, http.StatusOK, resp)
 }
 
 // ListPublicPlans returns the subscription plans to the unauthenticated

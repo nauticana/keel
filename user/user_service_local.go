@@ -2310,18 +2310,8 @@ func (s *LocalUserService) getUserByExternalIdentity(issuer, subject, provider s
 	return session, nil
 }
 
-// createUserFromSocial stores only an email Google or Apple verified.
 func (s *LocalUserService) createUserFromSocial(id ExternalIdentity) (*model.UserSession, error) {
 	ctx := s.ctx()
-	email := ""
-	if id.emailTrusted() {
-		email = normalizeEmail(id.Email)
-	}
-	username := email
-	if username == "" {
-		username = id.Provider + "-" + id.Subject
-	}
-
 	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
 	if err != nil {
 		return nil, err
@@ -2332,20 +2322,9 @@ func (s *LocalUserService) createUserFromSocial(id ExternalIdentity) (*model.Use
 			_ = data.RollbackDetached(tx)
 		}
 	}()
-	userId, err := s.insertUserAccount(ctx, tx, id.FirstName, id.LastName, email, id.Phone, username)
+	userId, email, err := s.insertIdentityAccount(ctx, tx, id)
 	if err != nil {
 		return nil, err
-	}
-	if _, err := tx.Query(ctx, qLinkExternalIdentity, userId, id.Provider, id.Issuer, id.Subject); err != nil {
-		if pgsql.IsUniqueViolation(err) {
-			return nil, ErrIdentityLinked
-		}
-		return nil, err
-	}
-	if email != "" {
-		if _, err := tx.Query(ctx, qMarkEmailVerified, id.verificationMethod(), userId); err != nil {
-			return nil, err
-		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -2358,6 +2337,86 @@ func (s *LocalUserService) createUserFromSocial(id ExternalIdentity) (*model.Use
 	return session, nil
 }
 
+// CreateIdentityAccountTx creates and links the account of a verified identity
+// in the caller's transaction, which must implement port.TxQueryCatalog. An
+// identity or email that already has an account returns ErrAccountExists.
+func (s *LocalUserService) CreateIdentityAccountTx(ctx context.Context, tx port.TxQueryService, id ExternalIdentity) (*model.UserSession, error) {
+	if err := id.validate(); err != nil {
+		return nil, err
+	}
+	catalog, ok := tx.(port.TxQueryCatalog)
+	if !ok {
+		return nil, errors.New("user: the transaction cannot bind the user query catalog")
+	}
+	q := catalog.QueryService("user.local", LocalUserQueries)
+	res, err := q.Query(ctx, qUserByExternalIdentity, id.Issuer, id.Subject)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Rows) > 0 {
+		return nil, ErrAccountExists
+	}
+	if email := normalizeEmail(id.Email); email != "" {
+		if res, err = q.Query(ctx, qUserIDByEmail, email); err != nil {
+			return nil, err
+		}
+		if len(res.Rows) > 0 {
+			return nil, ErrAccountExists
+		}
+	}
+	userID, email, err := s.insertIdentityAccount(ctx, q, id)
+	if errors.Is(err, ErrDuplicateEmail) || errors.Is(err, ErrIdentityLinked) {
+		return nil, ErrAccountExists
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := q.Query(ctx, qAddUserActivity, userID, time.Now(), UserActivityCreate, "A", "social:"+id.Provider, ""); err != nil {
+		return nil, err
+	}
+	session := s.newSession(userID, id.FirstName, id.LastName, email, UserStatusActive, id.Provider)
+	session.PhoneNumber = id.Phone
+	return session, nil
+}
+
+// RecordSignupConsent records the consents given at signup. It does nothing
+// without a ConsentService or consents.
+func (s *LocalUserService) RecordSignupConsent(userID int, email string, sc *SignupConsent) error {
+	if s.ConsentService == nil || sc == nil || len(sc.Consents) == 0 {
+		return nil
+	}
+	return s.recordSignupConsent(userID, email, sc)
+}
+
+// insertIdentityAccount inserts an identity's account and link, storing only
+// an email Google or Apple verified, and returns the id and stored email.
+func (s *LocalUserService) insertIdentityAccount(ctx context.Context, q port.QueryService, id ExternalIdentity) (int, string, error) {
+	email := ""
+	if id.emailTrusted() {
+		email = normalizeEmail(id.Email)
+	}
+	username := email
+	if username == "" {
+		username = id.Provider + "-" + id.Subject
+	}
+	userID, err := s.insertUserAccount(ctx, q, id.FirstName, id.LastName, email, id.Phone, username)
+	if err != nil {
+		return 0, "", err
+	}
+	if _, err := q.Query(ctx, qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject); err != nil {
+		if pgsql.IsUniqueViolation(err) {
+			return 0, "", ErrIdentityLinked
+		}
+		return 0, "", err
+	}
+	if email != "" {
+		if _, err := q.Query(ctx, qMarkEmailVerified, id.verificationMethod(), userID); err != nil {
+			return 0, "", err
+		}
+	}
+	return userID, email, nil
+}
+
 // insertUserAccount runs qCreateSocialUser on the given tx and returns the
 // new user_account.id. Shared by createUserFromSocial and createUserByPhone
 // so both flows write the same INSERT shape (passtext=NULL, status='A').
@@ -2366,7 +2425,7 @@ func (s *LocalUserService) createUserFromSocial(id ExternalIdentity) (*model.Use
 // index on those columns will not collide on the second account that
 // happens to lack the value. Email is lowercased defensively in case a
 // caller bypasses GetOrCreateUserFromSocial's entry-point normalization.
-func (s *LocalUserService) insertUserAccount(ctx context.Context, tx port.TxQueryService, firstName, lastName, email, phone, username string) (int, error) {
+func (s *LocalUserService) insertUserAccount(ctx context.Context, tx port.QueryService, firstName, lastName, email, phone, username string) (int, error) {
 	id := tx.GenID()
 	var emailArg, phoneArg any = normalizeEmail(email), phone
 	if emailArg == "" {
@@ -2847,5 +2906,7 @@ func verifyBackupCodeHash(stored, candidate string) bool {
 }
 
 var _ UserService = (*LocalUserService)(nil)
+
+var _ IdentityAccountCreator = (*LocalUserService)(nil)
 
 var _ port.RecipientResolver = (*LocalUserService)(nil)

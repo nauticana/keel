@@ -4,39 +4,38 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nauticana/keel/billing"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/domain"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// MailSender is the minimal mail-transport contract the registration
-// flow needs. dispatcher.MailClient satisfies it; declaring it here
-// rather than importing dispatcher keeps user/ free of the dispatcher
-// package — dispatcher imports user (UserService) for SMS/email
-// recipient resolution, and that direction must stay one-way.
-type MailSender interface {
-	SendEmail(ctx context.Context, subject string, body string, recipients []string, headers map[string]string) error
+// BusinessEmail is an EmailPolicy that refuses free consumer mailboxes.
+func BusinessEmail(email string) error {
+	at := domain.DomainFromEmail(email)
+	if at == "" || domain.IsPublicDomain(at) {
+		return ErrPublicEmail
+	}
+	return nil
 }
 
-// confirmationRange is the count of distinct 8-digit confirmation
-// codes keel emits in registration / password-reset flows. Codes are
-// drawn from [10000000, 99999999] so the publicly-emitted token is
-// always exactly 8 digits — no leading zero corner cases.
+// confirmationRange keeps emailed codes at exactly 8 digits.
 const confirmationRange = 90000000
 
-// generateConfirmationCode returns a fresh 8-digit confirmation code
-// drawn from crypto/rand, not math/rand. The code is publicly mailed
-// and used as a one-shot security factor on the password-reset and
-// account-confirm flows; using a CSPRNG closes the predictability
-// gap that math/rand/v2 left wide open.
 func generateConfirmationCode() (int, error) {
 	n, err := crand.Int(crand.Reader, big.NewInt(confirmationRange))
 	if err != nil {
@@ -45,549 +44,582 @@ func generateConfirmationCode() (int, error) {
 	return int(n.Int64()) + 10000000, nil
 }
 
-const (
-	qAddUserRegistration      = "add_user_registration"
-	qGetUserRegistration      = "get_user_registration"
-	qSetUserRegistration      = "set_user_registration"
-	qBumpRegistrationAttempts = "bump_registration_attempts"
-	qExpireRegistration       = "expire_registration"
-	qAddPartner               = "add_partner"
-	qAddAddress               = "add_address"
-	qAddDomain                = "add_domain"
-	qAddUserAccount           = "add_user_account"
-	qMarkEmailVerifiedByEmail = "mark_email_verified_by_email"
-	qAddPartnerUser           = "add_partner_user"
-	qAddUserPermission        = "add_user_permission"
-	qGetPlan                  = "get_plan"
-	qPlanPrices               = "plan_prices"
-	qAddSubscription          = "add_subscription"
-	qActivateSubscription     = "activate_subscription"
-	qActivateUserAccount      = "activate_user_account"
-	qListActivePlans          = "list_active_plans"
-)
-
-var registerQueries = map[string]string{
-	qAddUserRegistration: `
-INSERT INTO user_registration
- (user_email, confirmation, payload)
-VALUES
- (?, ?, ?)
-`,
-	// Returns (confirmation, payload, attempts) for the latest pending
-	// row that's still inside the TTL. The TTL filter is what stops a
-	// minted-but-unused code from being brute-forced indefinitely; the
-	// attempts column is read so callers can decide whether to bump or
-	// expire on mismatch.
-	qGetUserRegistration: "SELECT confirmation, payload, attempts FROM user_registration WHERE user_email = ? AND status = 'P' AND created_at > ? ORDER BY created_at DESC LIMIT 1",
-	qSetUserRegistration: "UPDATE user_registration SET confirmed_at = CURRENT_TIMESTAMP, status = 'C' WHERE user_email = ? AND status = 'P'",
-	// Atomic-bump: returns post-increment attempts when a pending row
-	// exists for (email, confirmation), or zero rows otherwise.
-	qBumpRegistrationAttempts: `
-UPDATE user_registration
-   SET attempts = attempts + 1
- WHERE user_email = ?
-   AND confirmation = ?
-   AND status = 'P'
-RETURNING attempts
-`,
-	// Expire all pending rows for an email. Called when MaxRegistration-
-	// Attempts is crossed so the attacker cannot keep guessing.
-	qExpireRegistration: "UPDATE user_registration SET status = 'X' WHERE user_email = ? AND status = 'P'",
-	qAddPartner: `
-INSERT INTO business_partner
- (id, caption)
-VALUES
- (nextval('business_partner_seq'), ?)
-RETURNING id
-`,
-	qAddAddress: `
-INSERT INTO partner_address
- (partner_id, address, city, state, zipcode, country, phone, latitude, longitude)
-VALUES
- (?, ?, ?, ?, ?, ?, ?, ?, ?)
-`,
-	qAddDomain: `
-INSERT INTO partner_domain
- (partner_id, domain_url, is_primary)
-VALUES
- (?, ?, TRUE)
-`,
-	qAddUserAccount: `
-INSERT INTO user_account
- (id, first_name, last_name, user_name, user_email, status, passtext, passdate, login_attempts,
-  email_verification_method, email_verified_at)
-VALUES
- (?, ?, ?, ?, ?, 'I', ?, CURRENT_TIMESTAMP, 0,
-  CAST(? AS CHAR(1)), CASE WHEN CAST(? AS CHAR(1)) IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)
-`,
-	qMarkEmailVerifiedByEmail: `
-UPDATE user_account
-   SET email_verified_at = CURRENT_TIMESTAMP, email_verification_method = 'P'
- WHERE user_email = ?
-`,
-	qAddPartnerUser: `
-INSERT INTO partner_user
- (partner_id, user_id, begda)
-VALUES
- (?, ?, CURRENT_TIMESTAMP)
-`,
-	qAddUserPermission: `
-INSERT INTO user_permission
- (user_id, role_id, begda)
-VALUES
- (?, 'PARTNER_ADMIN', CURRENT_TIMESTAMP)
-`,
-	qGetPlan: `
-SELECT currency FROM subscription_plan WHERE id = ? AND is_active = TRUE
-`,
-	qPlanPrices: `
-SELECT billing_cycle, term_type, term_count, amount_minor, currency
-  FROM subscription_plan_price WHERE plan_id = ?
-`,
-	qAddSubscription: `
-INSERT INTO partner_plan_subscription
- (partner_id, plan_id, begda, status, monthly_cost, currency, auto_renew,
-  billing_cycle, term_count, term_type, amount_minor, renewal_date, next_charge_date)
-VALUES
- (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?)
-`,
-	qActivateSubscription: `
-UPDATE partner_plan_subscription
-   SET status = 'A'
- WHERE partner_id = ? AND plan_id = ? AND status = 'P'
-`,
-	qActivateUserAccount: `
-UPDATE user_account
-   SET status = 'A'
- WHERE id = ?
-`,
-	qListActivePlans: `
-SELECT sp.id, sp.caption, sp.activation_mode, sp.trial_days,
-       pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id
-  FROM subscription_plan sp
-  LEFT JOIN subscription_plan_price pp ON pp.plan_id = sp.id
- WHERE sp.is_active = TRUE
- ORDER BY sp.id, pp.term_type, pp.term_count, pp.billing_cycle
-`,
-}
-
-type PartnerRegistration struct {
-	FirstName      string  `json:"firstName"`
-	LastName       string  `json:"lastName"`
-	UserName       string  `json:"userName"`
-	Email          string  `json:"email"`
-	Password       string  `json:"password"`
-	PartnerCaption string  `json:"partnerCaption"`
-	Address        string  `json:"address"`
-	City           string  `json:"city"`
-	State          string  `json:"state"`
-	Zipcode        string  `json:"zipcode"`
-	Country        string  `json:"country"`
-	Phone          string  `json:"phone"`
-	Latitude       float64 `json:"latitude"`
-	Longitude      float64 `json:"longitude"`
-	DomainURL      string  `json:"domainUrl"`
-	PlanID         string  `json:"planId"`
-	// EmailVerified is set by a caller of RegisterImmediately that proved the
-	// address itself; the confirmation flow sets it from the confirmed code.
-	EmailVerified bool `json:"-"`
-	// Chosen offer (optional; from the plan's subscription_plan_price rows). When
-	// omitted, registration uses the plan's cheapest offer. PERIOD_TYPE codes.
-	BillingCycle string `json:"billingCycle,omitempty"`
-	TermType     string `json:"termType,omitempty"`
-	TermCount    int    `json:"termCount,omitempty"`
-}
-
-// ConfirmRegisterResult tells the client how to route the user after a
-// successful registration confirmation. For paid plans the subscription row
-// is inserted with status='P' and the caller should send the user to the
-// payment URL; on payment success, call ActivateSubscription to flip it to 'A'.
-type ConfirmRegisterResult struct {
-	PartnerID       int64  `json:"partnerId"`
-	PlanID          string `json:"planId"`
-	PaymentRequired bool   `json:"paymentRequired"`
-	PaymentURL      string `json:"paymentUrl,omitempty"`
-}
-
-// PublicPlan is the unauthenticated registration-page view of a plan. Prices is
-// the same per-offer shape as billing.GetPlans so the shared sail price selector
-// works without auth.
-type PublicPlan struct {
-	ID             string              `json:"id"`
-	Caption        string              `json:"caption"`
-	ActivationMode string              `json:"activationMode"` // drives the registration CTA (trial vs subscribe)
-	TrialDays      int                 `json:"trialDays"`
-	Prices         []billing.PlanPrice `json:"prices"`
-}
-
-// subscriptionOffer is the resolved price + schedule snapshot for the sub row a
-// registration creates. The NULLable fields are nil for a free plan.
-type subscriptionOffer struct {
-	paymentRequired bool
-	monthlyCost     string // per-installment display, exact major-unit decimal
-	currency        string // offer currency ("" for free → caller keeps plan currency)
-	billingCycle    any
-	termType        any
-	termCount       any
-	amountMinor     any
-	renewalDate     any
-	nextChargeDate  any
-}
-
-var freeOffer = subscriptionOffer{monthlyCost: "0"}
-
-// resolveSubscriptionOffer picks the offer a registration should snapshot from a
-// plan's subscription_plan_price rows. No rows (or a zero-priced match) → free.
-// Requested terms must match an offer; with none requested, the cheapest is used.
-// The first installment is collected via the checkout PaymentURL, so
-// next_charge_date is the SECOND installment (the engine takes over from there).
-func resolveSubscriptionOffer(rows [][]any, data *PartnerRegistration, currency string, now time.Time) (subscriptionOffer, error) {
-	if len(rows) == 0 {
-		return freeOffer, nil
-	}
-	idx := -1
-	if data.BillingCycle != "" || data.TermType != "" || data.TermCount > 0 {
-		wc := billing.ParseBillingPeriod(data.BillingCycle).Code()
-		wt := billing.ParseBillingPeriod(data.TermType).Code()
-		wn := data.TermCount
-		if wn < 1 {
-			wn = 1
-		}
-		for i, row := range rows {
-			if common.AsString(row[0]) == wc && common.AsString(row[1]) == wt && int(common.AsInt32(row[2])) == wn {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return subscriptionOffer{}, fmt.Errorf("plan does not offer the selected terms (%s/%d%s)", wc, wn, wt)
-		}
-	} else {
-		for i := range rows {
-			if idx < 0 || common.AsInt64(rows[i][3]) < common.AsInt64(rows[idx][3]) {
-				idx = i
-			}
-		}
-	}
-
-	row := rows[idx]
-	amount := common.AsInt64(row[3])
-	if amount <= 0 {
-		return freeOffer, nil
-	}
-	terms := billing.BillingTerms{
-		BillingCycle: billing.ParseBillingPeriod(common.AsString(row[0])),
-		TermType:     billing.ParseBillingPeriod(common.AsString(row[1])),
-		TermCount:    int(common.AsInt32(row[2])),
-	}
-	n, err := terms.TotalInstallments()
-	if err != nil {
-		return subscriptionOffer{}, err
-	}
-	tc := terms.TermCount
-	if tc < 1 {
-		tc = 1
-	}
-	monthlyCost, ok := common.FormatMinorUnits(billing.InstallmentMinor(terms.ContractTotalMinor(amount), n, 0), common.AsString(row[4]))
-	if !ok {
-		return subscriptionOffer{}, fmt.Errorf("plan price has unknown currency %q", common.AsString(row[4]))
-	}
-	return subscriptionOffer{
-		paymentRequired: true,
-		monthlyCost:     monthlyCost,
-		currency:        common.AsString(row[4]),
-		billingCycle:    terms.BillingCycle.Code(),
-		termType:        terms.TermType.Code(),
-		termCount:       tc,
-		amountMinor:     amount,
-		renewalDate:     terms.TermEnd(now),
-		nextChargeDate:  terms.BillingCycle.NextRenewal(now),
-	}, nil
-}
-
+// RegistrationService creates accounts and their partners: by emailed code,
+// for a verified external identity, or for a signed-in user.
 type RegistrationService struct {
 	Repo port.DatabaseRepository
 	Mail MailSender
+	// Users applies the password and sign-in policies and builds sessions.
+	Users UserService
+	// Domains records a partner domain's evidence in the partner transaction.
+	// Given no evidence, it proves the domain by the account's verified email
+	// (VE) when that holds. RequireDomainProof refuses a domain left unproven.
+	Domains            *domain.Service
+	RequireDomainProof bool
+	// Checkout opens the checkout of a plan that activates at checkout, priced
+	// by the offer's provider_price_id. Nil leaves PaymentURL empty.
+	Checkout           payment.CheckoutClient
+	CheckoutSuccessURL string
+	CheckoutCancelURL  string
+	// Roles are granted to a partner's creator and must be partner-scoped.
+	// Nil grants PARTNER_ADMIN.
+	Roles []string
+	// EmailPolicy screens the address of an emailed-code signup.
+	EmailPolicy func(email string) error
+	// OnPartnerTx writes the application's rows for a new partner in its
+	// transaction; bind the application's query catalog with port.TxQueryCatalog.
+	OnPartnerTx func(ctx context.Context, tx port.TxQueryService, partnerID, userID int64, setup *PartnerSetup) error
+
+	once    sync.Once
+	initErr error
+	qs      port.QueryService
+	txMap   map[string]string
 }
 
+var errNoUsers = errors.New("user: RegistrationService.Users is required")
+
+func (r *RegistrationService) init(ctx context.Context) error {
+	r.once.Do(func() {
+		switch {
+		case r.Repo == nil:
+			r.initErr = errors.New("user: RegistrationService.Repo is required")
+		case r.RequireDomainProof && r.Domains == nil:
+			r.initErr = errors.New("user: RequireDomainProof needs Domains")
+		case r.Checkout != nil && (r.CheckoutSuccessURL == "" || r.CheckoutCancelURL == ""):
+			r.initErr = errors.New("user: Checkout needs CheckoutSuccessURL and CheckoutCancelURL")
+		}
+		if r.initErr != nil {
+			return
+		}
+		r.txMap = common.MergeMaps(registerQueries, domain.TxQueries())
+		r.qs = r.Repo.GetQueryService(ctx, registerQueries)
+	})
+	return r.initErr
+}
+
+// SendConfirmation stores a pending registration and emails its code.
 func (r *RegistrationService) SendConfirmation(ctx context.Context, data *PartnerRegistration) error {
+	if err := r.init(ctx); err != nil {
+		return err
+	}
+	if r.Users == nil || r.Mail == nil {
+		return errors.New("user: SendConfirmation needs Users and Mail")
+	}
+	if data == nil {
+		return model.NewBadRequest("registration is required")
+	}
+	if err := r.codeSignupAllowed(); err != nil {
+		return err
+	}
+	reg := *data
+	if err := r.validateAccount(&reg.AccountRegistration); err != nil {
+		return err
+	}
+	if !reg.PartnerSetup.empty() {
+		if err := reg.PartnerSetup.validate(); err != nil {
+			return err
+		}
+		if err := r.requireDomain(&reg.PartnerSetup); err != nil {
+			return err
+		}
+		if r.RequireDomainProof {
+			err := domain.MailboxOnDomain(reg.Email, reg.DomainURL)
+			if errors.Is(err, domain.ErrRecipient) {
+				return domain.ErrDomainNotProven
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if reg.Password != "" {
+		hashed, err := bcrypt.GenerateFromPassword([]byte(reg.Password), EncryptionCost)
+		if err != nil {
+			return fmt.Errorf("failed to hash password: %w", err)
+		}
+		reg.Password = string(hashed)
+	}
+	payload, err := json.Marshal(reg)
+	if err != nil {
+		return err
+	}
 	confirmation, err := generateConfirmationCode()
 	if err != nil {
 		return err
 	}
-
-	// Hash password before persisting in payload
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(data.Password), EncryptionCost)
-	if err != nil {
-		return fmt.Errorf("failed to hash password: %w", err)
-	}
-	payloadData := *data
-	payloadData.Email = normalizeEmail(payloadData.Email)
-	payloadData.Password = string(hashedPassword)
-	bytes, err := json.Marshal(payloadData)
-	if err != nil {
+	if _, err := r.qs.Query(ctx, qAddUserRegistration, reg.Email, confirmation, string(payload)); err != nil {
 		return err
 	}
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	_, err = qs.Query(ctx, qAddUserRegistration, payloadData.Email, confirmation, string(bytes))
-	if err != nil {
-		return err
-	}
-
-	subject := "Confirm your registration"
-	body := fmt.Sprintf("Hello %s,\n\nPlease use the following confirmation code to complete your registration:\n\n%d\n", data.FirstName, confirmation)
-	if err := r.Mail.SendEmail(ctx, subject, body, []string{data.Email}, nil); err != nil {
+	body := fmt.Sprintf("Hello %s,\n\nPlease use the following confirmation code to complete your registration:\n\n%d\n", reg.FirstName, confirmation)
+	if err := r.Mail.SendEmail(ctx, "Confirm your registration", body, []string{reg.Email}, nil); err != nil {
 		return fmt.Errorf("failed to send confirmation email: %w", err)
 	}
-
 	return nil
 }
 
-func (r *RegistrationService) Register(ctx context.Context, email string, confirmation int) (*ConfirmRegisterResult, error) {
-	// Validate confirmation code
-	email = normalizeEmail(email)
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	cutoff := time.Now().Add(-config.Config().RegistrationConfirmationTTL)
-	res, err := qs.Query(ctx, qGetUserRegistration, email, cutoff)
+// codeSignupAllowed refuses an emailed-code signup the global sign-in policy
+// would not let sign in, before an account is created.
+func (r *RegistrationService) codeSignupAllowed() error {
+	policies, err := r.Users.EffectivePolicies(0)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("user: sign-in policy lookup: %w", err)
 	}
-	if len(res.Rows) == 0 {
-		// Either no pending row, or the row is past TTL. Generic message
-		// — never distinguish "expired" from "never existed" because that
-		// leaks whether the email was registered.
-		return nil, fmt.Errorf("invalid or expired confirmation")
+	if !ssoAdmits(policies[PolicySSORequired], SignInOTP) {
+		return ErrSSORequired
 	}
-	expected := int(common.AsInt32(res.Rows[0][0]))
-	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= config.Config().MaxRegistrationAttempts {
-		_, _ = qs.Query(ctx, qExpireRegistration, email)
-		return nil, fmt.Errorf("invalid or expired confirmation")
+	return nil
+}
+
+func (r *RegistrationService) validateAccount(a *AccountRegistration) error {
+	a.Email = normalizeEmail(a.Email)
+	if strings.Count(a.Email, "@") != 1 || strings.ContainsAny(a.Email, " \r\n,;<>") {
+		return model.NewBadRequest("a valid email is required")
 	}
-	if confirmation != expected {
-		// Atomic-bump the attempts counter on the row that ACTUALLY
-		// matches the (email, expected) pair. If post-increment crosses
-		// the cap, expire the row so the attacker cannot keep guessing
-		// against fresh `attempts` reads.
-		bumpRes, _ := qs.Query(ctx, qBumpRegistrationAttempts, email, expected)
-		if bumpRes != nil && len(bumpRes.Rows) > 0 {
-			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= config.Config().MaxRegistrationAttempts {
-				_, _ = qs.Query(ctx, qExpireRegistration, email)
-			}
+	if a.UserName = strings.TrimSpace(a.UserName); a.UserName == "" {
+		a.UserName = a.Email
+	}
+	// Login resolves user_name before user_email, so a name shaped like an
+	// address would shadow that address's owner.
+	if strings.Contains(a.UserName, "@") && a.UserName != a.Email {
+		return model.NewBadRequest("userName must not be another email address")
+	}
+	if r.EmailPolicy != nil {
+		if err := r.EmailPolicy(a.Email); err != nil {
+			return err
 		}
-		return nil, fmt.Errorf("invalid or expired confirmation")
 	}
-	payload := []byte(common.AsString(res.Rows[0][1]))
-	var data PartnerRegistration
-	if err := json.Unmarshal(payload, &data); err != nil {
-		return nil, fmt.Errorf("failed to parse registration data: %w", err)
+	if a.Password != "" {
+		policy := r.Users.GetPasswordPolicy()
+		if err := policy.Check(a.Password); err != nil {
+			return model.NewBadRequest(err.Error())
+		}
 	}
-	result, _, err := r.executeRegistration(ctx, &data, false)
-	return result, err
+	return nil
 }
 
-// RegisterImmediately is the OAuth-verified-signup entry point: callers
-// (e.g. Google Business Profile, Apple Sign-In) that have already verified
-// the user's email skip the SendConfirmation/Register two-step and run the
-// full transaction directly. Caller is responsible for bcrypt-hashing
-// data.Password in advance (or passing empty if no password — passtext is
-// nullable as of v0.5).
-//
-// The created user_account is left at status='I' (consistent with the
-// email-confirmation flow). For an OAuth-verified flow that should land an
-// already-active user with an in-memory session, use
-// RegisterImmediatelyWithSession instead.
-//
-// No row is written to user_registration; if the user later tries to
-// re-register via the standard email flow, GetUserByEmail / the unique
-// index on user_email will short-circuit it cleanly.
-func (r *RegistrationService) RegisterImmediately(ctx context.Context, data *PartnerRegistration) (*ConfirmRegisterResult, error) {
-	if data == nil {
-		return nil, fmt.Errorf("nil registration data")
+// Register confirms an emailed code and creates the active account, and its
+// partner when the registration has one, in one transaction. The session
+// signed in by one-time code.
+func (r *RegistrationService) Register(ctx context.Context, email string, confirmation int) (*model.UserSession, *PartnerCreated, error) {
+	if err := r.init(ctx); err != nil {
+		return nil, nil, err
 	}
-	normalized := *data
-	normalized.Email = normalizeEmail(normalized.Email)
-	result, _, err := r.executeRegistration(ctx, &normalized, true)
-	return result, err
-}
-
-// RegisterImmediatelyWithSession is RegisterImmediately + activation +
-// in-memory UserSession. Use this when the upstream OAuth provider has
-// already authenticated the user and the caller wants to issue a JWT
-// without a follow-up GetUserByLogin round-trip (which would require the
-// caller to know data.Password — an obstacle for password-less social
-// signups).
-//
-// Side effects beyond RegisterImmediately:
-//   - user_account.status is flipped to 'A' (active) since OAuth-verified
-//     signup has no email-confirmation gate.
-//   - The returned UserSession is built from the freshly-inserted row and
-//     is suitable for UserService.CreateJWT(session).
-//
-// data.Password may be empty for password-less providers — the session is
-// authoritative for JWT, not the DB password column.
-func (r *RegistrationService) RegisterImmediatelyWithSession(ctx context.Context, data *PartnerRegistration) (*ConfirmRegisterResult, *model.UserSession, error) {
-	if data == nil {
-		return nil, nil, fmt.Errorf("nil registration data")
+	if r.Users == nil {
+		return nil, nil, errNoUsers
 	}
-	normalized := *data
-	normalized.Email = normalizeEmail(normalized.Email)
-
-	result, userID, err := r.executeRegistration(ctx, &normalized, true)
+	if err := r.codeSignupAllowed(); err != nil {
+		return nil, nil, err
+	}
+	email = normalizeEmail(email)
+	payload, err := r.checkConfirmation(ctx, email, confirmation)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// OAuth-verified signups land active immediately — no email confirmation
-	// step to gate behind. We update via the existing query service rather
-	// than spinning a new tx because the registration tx already committed.
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	if _, err := qs.Query(ctx, qActivateUserAccount, userID); err != nil {
-		return nil, nil, fmt.Errorf("activate user_account: %w", err)
+	var reg PartnerRegistration
+	if err := json.Unmarshal([]byte(payload), &reg); err != nil || reg.Email != email {
+		return nil, nil, ErrInvalidConfirmation // a password-reset code
+	}
+	withPartner := !reg.PartnerSetup.empty()
+	var plan *planChoice
+	if withPartner {
+		if plan, err = r.preparePartner(ctx, &reg.PartnerSetup, nil); err != nil {
+			return nil, nil, err
+		}
 	}
 
-	session := &model.UserSession{
-		Id:          int(userID),
-		Email:       normalized.Email,
-		PartnerId:   result.PartnerID,
-		FirstName:   normalized.FirstName,
-		LastName:    normalized.LastName,
-		PhoneNumber: normalized.Phone,
-		Status:      "A",
+	tx, err := r.Repo.BeginTx(ctx, r.txMap)
+	if err != nil {
+		return nil, nil, err
 	}
-	return result, session, nil
+	committed := false
+	defer func() {
+		if !committed {
+			_ = data.RollbackDetached(tx)
+		}
+	}()
+	userID := tx.GenID()
+	if _, err := tx.Query(ctx, qAddUserAccount, userID, reg.FirstName, reg.LastName, reg.UserName, email, nullIfEmpty(reg.Password)); err != nil {
+		return nil, nil, classifyUniqueViolation(err)
+	}
+	var created *PartnerCreated
+	if withPartner {
+		if created, err = r.createPartnerTx(ctx, tx, userID, &reg.PartnerSetup, nil, plan); err != nil {
+			return nil, nil, err
+		}
+	}
+	if _, err := tx.Query(ctx, qSetUserRegistration, email); err != nil {
+		return nil, nil, fmt.Errorf("mark user_registration: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	committed = true
+
+	session, err := signedIn(r.Users, int(userID), SignInOTP)
+	if err != nil {
+		return nil, nil, err
+	}
+	return session, created, r.checkout(ctx, created, plan, userID)
 }
 
-// executeRegistration runs the full registration transaction (partner +
-// address + domain + user_account + permission + subscription) given a
-// fully-populated PartnerRegistration. When skipMarkRegistration is false,
-// also writes qSetUserRegistration to mark the matching user_registration
-// row confirmed; RegisterImmediately passes true to skip that since no
-// user_registration row was ever written.
-//
-// Returns the freshly-created userID alongside the public result so callers
-// like RegisterImmediatelyWithSession can build an in-memory UserSession
-// without re-querying.
-func (r *RegistrationService) executeRegistration(ctx context.Context, data *PartnerRegistration, skipMarkRegistration bool) (*ConfirmRegisterResult, int64, error) {
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
+// RegisterWithIdentity creates the account of an external identity the
+// caller verified and its partner in one transaction, and signs it in.
+// evidence, from Domains.Check, proves setup's domain. An identity or email
+// of an existing account returns ErrAccountExists.
+func (r *RegistrationService) RegisterWithIdentity(ctx context.Context, identity ExternalIdentity, consent *SignupConsent,
+	setup *PartnerSetup, evidence *domain.Evidence) (*model.UserSession, *PartnerCreated, error) {
+	if err := r.init(ctx); err != nil {
+		return nil, nil, err
+	}
+	if r.Users == nil {
+		return nil, nil, errNoUsers
+	}
+	plan, err := r.preparePartner(ctx, setup, evidence)
+	if err != nil {
+		return nil, nil, err
+	}
+	creator, ok := r.Users.(IdentityAccountCreator)
+	if !ok {
+		return nil, nil, errors.New("user: RegisterWithIdentity needs IdentityAccountCreator")
+	}
+	tx, err := r.Repo.BeginTx(ctx, r.txMap)
+	if err != nil {
+		return nil, nil, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = data.RollbackDetached(tx)
+		}
+	}()
+	account, err := creator.CreateIdentityAccountTx(ctx, tx, identity)
+	if err != nil {
+		return nil, nil, err
+	}
+	created, err := r.createPartnerTx(ctx, tx, int64(account.Id), setup, evidence, plan)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	committed = true
+	var consentErr error
+	if err := creator.RecordSignupConsent(account.Id, account.Email, consent); err != nil {
+		consentErr = fmt.Errorf("%w: %w", ErrConsentNotRecorded, err)
+	}
+	method, err := r.Users.ExternalSignInMethod(created.PartnerID, identity)
+	if err != nil {
+		return nil, nil, errors.Join(consentErr, err)
+	}
+	session, err := signedIn(r.Users, account.Id, method)
+	if err != nil {
+		return nil, nil, errors.Join(consentErr, err)
+	}
+	return session, created, errors.Join(consentErr, r.checkout(ctx, created, plan, int64(account.Id)))
+}
 
-	// Resolve plan outside the transaction so a bad plan_id fails fast.
-	planID := strings.ToUpper(strings.TrimSpace(data.PlanID))
+// CreatePartner creates a partner for a signed-in user who has none and makes
+// the user its member with Roles. evidence, from Domains.Check, proves
+// setup's domain. The user's next token refresh carries the partner.
+func (r *RegistrationService) CreatePartner(ctx context.Context, userID int64, setup *PartnerSetup, evidence *domain.Evidence) (*PartnerCreated, error) {
+	if err := r.init(ctx); err != nil {
+		return nil, err
+	}
+	if userID <= 0 {
+		return nil, errors.New("user: user id is required")
+	}
+	plan, err := r.preparePartner(ctx, setup, evidence)
+	if err != nil {
+		return nil, err
+	}
+	created, err := r.createPartner(ctx, userID, setup, evidence, plan)
+	if err != nil {
+		return nil, err
+	}
+	return created, r.checkout(ctx, created, plan, userID)
+}
+
+func (r *RegistrationService) preparePartner(ctx context.Context, setup *PartnerSetup, evidence *domain.Evidence) (*planChoice, error) {
+	if setup == nil {
+		return nil, model.NewBadRequest("partner setup is required")
+	}
+	if err := setup.validate(); err != nil {
+		return nil, err
+	}
+	if err := r.requireDomain(setup); err != nil {
+		return nil, err
+	}
+	if evidence != nil && (r.Domains == nil || setup.DomainURL == "") {
+		return nil, errors.New("user: domain evidence needs Domains and a partner domain")
+	}
+	return r.resolvePlan(ctx, setup)
+}
+
+// resolvePlan resolves the plan and offer before any write, so a bad plan
+// fails without an orphan account or partner. No plan selects FREE.
+func (r *RegistrationService) resolvePlan(ctx context.Context, setup *PartnerSetup) (*planChoice, error) {
+	planID := strings.ToUpper(strings.TrimSpace(setup.PlanID))
 	if planID == "" {
 		planID = "FREE"
 	}
-	planRes, err := qs.Query(ctx, qGetPlan, planID)
+	res, err := r.qs.Query(ctx, qGetPlan, planID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to look up plan %q: %w", planID, err)
+		return nil, fmt.Errorf("failed to look up plan %q: %w", planID, err)
 	}
-	if len(planRes.Rows) == 0 {
-		return nil, 0, fmt.Errorf("unknown plan %q", planID)
+	if len(res.Rows) == 0 {
+		return nil, model.NewBadRequest(fmt.Sprintf("unknown plan %q", planID))
 	}
-	currency := common.AsString(planRes.Rows[0][0])
-	if currency == "" {
-		currency = "USD"
+	plan := &planChoice{id: planID, currency: common.AsString(res.Rows[0][0])}
+	if plan.currency == "" {
+		plan.currency = "USD"
 	}
-
-	// Resolve the chosen offer from subscription_plan_price. A plan with no price
-	// rows is free; otherwise pick the requested terms (or the cheapest offer).
-	priceRes, err := qs.Query(ctx, qPlanPrices, planID)
+	prices, err := r.qs.Query(ctx, qPlanPrices, planID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to look up prices for plan %q: %w", planID, err)
+		return nil, fmt.Errorf("failed to look up prices for plan %q: %w", planID, err)
 	}
-	sub, err := resolveSubscriptionOffer(priceRes.Rows, data, currency, time.Now().UTC())
+	if plan.offer, err = resolveSubscriptionOffer(prices.Rows, setup, common.AsString(res.Rows[0][1]), time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	if plan.offer.currency != "" {
+		plan.currency = plan.offer.currency
+	}
+	if plan.offer.paymentRequired && r.Checkout != nil && plan.offer.providerPriceID == "" {
+		return nil, fmt.Errorf("user: plan %q offer has no provider_price_id", planID)
+	}
+	return plan, nil
+}
+
+func (r *RegistrationService) createPartner(ctx context.Context, userID int64, setup *PartnerSetup, evidence *domain.Evidence, plan *planChoice) (*PartnerCreated, error) {
+	tx, err := r.Repo.BeginTx(ctx, r.txMap)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	if sub.currency != "" {
-		currency = sub.currency
-	}
-	subStatus := "A"
-	if sub.paymentRequired {
-		subStatus = "P"
-	}
-
-	tx, err := r.Repo.BeginTx(ctx, registerQueries)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer tx.Rollback(ctx)
-
-	ids, err := tx.Query(ctx, qAddPartner, data.PartnerCaption)
-	if err != nil {
-		return nil, 0, fmt.Errorf("add partner: %w", err)
-	}
-	partnerID := common.AsInt64(ids.Rows[0][0])
-
-	if _, err := tx.Query(ctx, qAddAddress, partnerID, data.Address, data.City, data.State, data.Zipcode, data.Country, data.Phone, data.Latitude, data.Longitude); err != nil {
-		return nil, 0, fmt.Errorf("add address: %w", err)
-	}
-	if _, err := tx.Query(ctx, qAddDomain, partnerID, data.DomainURL); err != nil {
-		return nil, 0, fmt.Errorf("add domain: %w", err)
-	}
-
-	// Password is already bcrypt-hashed in the payload (or empty for
-	// password-less social signups).
-	userID := tx.GenID()
-	var verification any
-	switch {
-	case !skipMarkRegistration:
-		verification = EmailVerifiedByRegistration
-	case data.EmailVerified:
-		verification = EmailVerifiedByApplication
-	}
-	if _, err := tx.Query(ctx, qAddUserAccount, userID, data.FirstName, data.LastName, data.UserName, data.Email, data.Password, verification, verification); err != nil {
-		return nil, 0, classifyUniqueViolation(err)
-	}
-	if _, err := tx.Query(ctx, qAddPartnerUser, partnerID, userID); err != nil {
-		return nil, 0, fmt.Errorf("add partner_user: %w", err)
-	}
-	if _, err := tx.Query(ctx, qAddUserPermission, userID); err != nil {
-		return nil, 0, fmt.Errorf("add user_permission: %w", err)
-	}
-	if _, err := tx.Query(ctx, qAddSubscription, partnerID, planID, subStatus, sub.monthlyCost, currency,
-		sub.billingCycle, sub.termCount, sub.termType, sub.amountMinor, sub.renewalDate, sub.nextChargeDate); err != nil {
-		return nil, 0, fmt.Errorf("add subscription: %w", err)
-	}
-	if !skipMarkRegistration {
-		if _, err := tx.Query(ctx, qSetUserRegistration, data.Email); err != nil {
-			return nil, 0, fmt.Errorf("mark user_registration: %w", err)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = data.RollbackDetached(tx)
 		}
+	}()
+	created, err := r.createPartnerTx(ctx, tx, userID, setup, evidence, plan)
+	if err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-
-	return &ConfirmRegisterResult{
-		PartnerID:       partnerID,
-		PlanID:          planID,
-		PaymentRequired: sub.paymentRequired,
-		PaymentURL:      buildPaymentURL(partnerID, planID, sub.paymentRequired),
-	}, userID, nil
+	committed = true
+	return created, nil
 }
 
-// buildPaymentURL is a stub that points to a frontend checkout route. When the
-// payment integration lands (Stripe / similar), replace this with a real
-// Checkout Session URL generated server-side.
-func buildPaymentURL(partnerID int64, planID string, paymentRequired bool) string {
-	if !paymentRequired {
-		return ""
+func (r *RegistrationService) createPartnerTx(ctx context.Context, tx port.TxQueryService, userID int64, setup *PartnerSetup,
+	evidence *domain.Evidence, plan *planChoice) (*PartnerCreated, error) {
+	host, err := setup.host()
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Sprintf("/payment/checkout?partnerId=%d&planId=%s", partnerID, planID)
+	ids, err := tx.Query(ctx, qAddPartner, strings.TrimSpace(setup.PartnerCaption))
+	if err != nil {
+		return nil, fmt.Errorf("add partner: %w", err)
+	}
+	if len(ids.Rows) == 0 {
+		return nil, errors.New("add partner: no id returned")
+	}
+	partnerID := common.AsInt64(ids.Rows[0][0])
+	if _, err := tx.Query(ctx, qAddAddress, partnerID, setup.Address, setup.City, setup.State, setup.Zipcode,
+		setup.Country, setup.Phone, setup.Latitude, setup.Longitude); err != nil {
+		return nil, fmt.Errorf("add address: %w", err)
+	}
+	if host != "" {
+		if _, err := tx.Query(ctx, qAddDomain, partnerID, host); err != nil {
+			return nil, fmt.Errorf("add domain: %w", err)
+		}
+	}
+	if _, err := tx.Query(ctx, qAddPartnerUser, partnerID, userID); err != nil {
+		if pgsql.IsExclusionViolation(err) {
+			return nil, ErrAlreadyMember
+		}
+		return nil, fmt.Errorf("add partner_user: %w", err)
+	}
+	if err := r.grantRoles(ctx, tx, userID); err != nil {
+		return nil, err
+	}
+	if err := r.recordDomain(ctx, tx, partnerID, userID, host, evidence); err != nil {
+		return nil, err
+	}
+	o := plan.offer
+	if o.status != "" {
+		if _, err := tx.Query(ctx, qAddSubscription, partnerID, plan.id, o.status, o.monthlyCost, plan.currency,
+			o.billingCycle, o.termCount, o.termType, o.amountMinor, o.renewalDate, o.nextChargeDate); err != nil {
+			return nil, fmt.Errorf("add subscription: %w", err)
+		}
+	}
+	if r.OnPartnerTx != nil {
+		if err := r.OnPartnerTx(ctx, tx, partnerID, userID, setup); err != nil {
+			return nil, err
+		}
+	}
+	return &PartnerCreated{PartnerID: partnerID, PlanID: plan.id, PaymentRequired: o.paymentRequired}, nil
 }
 
-// ActivateSubscription flips a pending subscription to active. Call this from
-// the payment success callback / webhook once funds have cleared.
+func (r *RegistrationService) grantRoles(ctx context.Context, tx port.TxQueryService, userID int64) error {
+	roles := r.Roles
+	if roles == nil {
+		roles = []string{"PARTNER_ADMIN"}
+	}
+	granted := map[string]bool{}
+	for _, role := range roles {
+		if granted[role] {
+			continue
+		}
+		res, err := tx.Query(ctx, qAddPartnerRole, userID, role)
+		if err != nil {
+			return fmt.Errorf("grant role %s: %w", role, err)
+		}
+		if len(res.Rows) == 0 {
+			return fmt.Errorf("user: role %q is not a partner-scoped role", role)
+		}
+		granted[role] = true
+	}
+	return nil
+}
+
+// requireDomain refuses a partner without a domain when RequireDomainProof is set.
+func (r *RegistrationService) requireDomain(setup *PartnerSetup) error {
+	if r.RequireDomainProof && strings.TrimSpace(setup.DomainURL) == "" {
+		return model.NewBadRequest("domainUrl is required")
+	}
+	return nil
+}
+
+// recordDomain records evidence for the partner's domain: the given one, else
+// the account's verified email when it proves the domain. With
+// RequireDomainProof a partner without proven domain is refused.
+func (r *RegistrationService) recordDomain(ctx context.Context, tx port.TxQueryService, partnerID, userID int64, host string, evidence *domain.Evidence) error {
+	if host == "" {
+		if r.RequireDomainProof {
+			return domain.ErrDomainNotProven
+		}
+		return nil
+	}
+	if evidence == nil && r.Domains != nil {
+		res, err := tx.Query(ctx, qRegistrantEmail, userID)
+		if err != nil {
+			return err
+		}
+		if len(res.Rows) > 0 {
+			proof := domain.DomainProof{Email: common.AsString(res.Rows[0][0]), EmailVerified: common.AsBool(res.Rows[0][1])}
+			evidence, err = r.Domains.Check(ctx, host, domain.MethodVerifiedEmail, proof)
+			if err != nil && !errors.Is(err, domain.ErrDomainNotProven) && !errors.Is(err, domain.ErrInvalidDomain) && !errors.Is(err, domain.ErrUnknownMethod) {
+				return err
+			}
+		}
+	}
+	if evidence == nil {
+		if r.RequireDomainProof {
+			return domain.ErrDomainNotProven
+		}
+		return nil
+	}
+	_, err := r.Domains.RecordTx(ctx, tx, partnerID, userID, host, evidence)
+	return err
+}
+
+// checkout opens the checkout of a partner whose plan activates at checkout.
+// Its metadata is what billing.NewProviderSubscriptionEventHandler reads.
+func (r *RegistrationService) checkout(ctx context.Context, created *PartnerCreated, plan *planChoice, userID int64) error {
+	if created == nil || !created.PaymentRequired || r.Checkout == nil {
+		return nil
+	}
+	o := plan.offer
+	url, err := r.Checkout.CreateCheckoutSession(ctx, payment.CheckoutRequest{
+		Mode:       payment.ModeSubscription,
+		PriceID:    o.providerPriceID,
+		Quantity:   1,
+		SuccessURL: r.CheckoutSuccessURL,
+		CancelURL:  r.CheckoutCancelURL,
+		Metadata: map[string]string{
+			"partner_id":    strconv.FormatInt(created.PartnerID, 10),
+			"plan_id":       plan.id,
+			"user_id":       strconv.FormatInt(userID, 10),
+			"billing_cycle": common.AsString(o.billingCycle),
+			"term_type":     common.AsString(o.termType),
+			"term_count":    strconv.Itoa(int(common.AsInt32(o.termCount))),
+		},
+		LineMetadata: map[string]string{"plan_id": plan.id},
+	})
+	if err != nil {
+		return fmt.Errorf("%w: partner %d: %w", ErrCheckout, created.PartnerID, err)
+	}
+	created.PaymentURL = url
+	return nil
+}
+
+func signedIn(users UserService, userID int, method string) (*model.UserSession, error) {
+	if err := users.CheckSignInMethod(userID, method); err != nil {
+		return nil, err
+	}
+	session, err := users.GetUserById(userID)
+	if err != nil {
+		return nil, err
+	}
+	session.SignInMethod = method
+	return session, nil
+}
+
+// checkConfirmation returns the payload of the pending code for email. A
+// wrong code counts against MaxRegistrationAttempts, and reaching it expires
+// every pending code for the email.
+func (r *RegistrationService) checkConfirmation(ctx context.Context, email string, confirmation int) (string, error) {
+	cfg := config.Config()
+	res, err := r.qs.Query(ctx, qGetUserRegistration, email, time.Now().Add(-cfg.RegistrationConfirmationTTL))
+	if err != nil {
+		return "", err
+	}
+	if len(res.Rows) == 0 {
+		return "", ErrInvalidConfirmation
+	}
+	expected := int(common.AsInt32(res.Rows[0][0]))
+	if int(common.AsInt32(res.Rows[0][2])) >= cfg.MaxRegistrationAttempts {
+		return "", r.expireConfirmation(ctx, email)
+	}
+	if confirmation != expected {
+		bump, err := r.qs.Query(ctx, qBumpRegistrationAttempts, email, expected)
+		if err != nil {
+			return "", err
+		}
+		if len(bump.Rows) > 0 && int(common.AsInt32(bump.Rows[0][0])) >= cfg.MaxRegistrationAttempts {
+			return "", r.expireConfirmation(ctx, email)
+		}
+		return "", ErrInvalidConfirmation
+	}
+	return common.AsString(res.Rows[0][1]), nil
+}
+
+func (r *RegistrationService) expireConfirmation(ctx context.Context, email string) error {
+	if _, err := r.qs.Query(ctx, qExpireRegistration, email); err != nil {
+		return err
+	}
+	return ErrInvalidConfirmation
+}
+
+// ActivateSubscription flips a pending subscription to active, for a payment
+// confirmation outside billing.NewProviderSubscriptionEventHandler.
 func (r *RegistrationService) ActivateSubscription(ctx context.Context, partnerID int64, planID string) error {
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	_, err := qs.Query(ctx, qActivateSubscription, partnerID, strings.ToUpper(strings.TrimSpace(planID)))
+	if err := r.init(ctx); err != nil {
+		return err
+	}
+	_, err := r.qs.Query(ctx, qActivateSubscription, partnerID, strings.ToUpper(strings.TrimSpace(planID)))
 	return err
 }
 
 // ListPlans returns the public view of all subscription plans. Used by the
 // unauthenticated registration page to render a plan picker.
 func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, error) {
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	res, err := qs.Query(ctx, qListActivePlans)
+	if err := r.init(ctx); err != nil {
+		return nil, err
+	}
+	res, err := r.qs.Query(ctx, qListActivePlans)
 	if err != nil {
 		return nil, err
 	}
@@ -632,55 +664,38 @@ func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, erro
 }
 
 func (r *RegistrationService) SendPasswordChangeConfirmation(ctx context.Context, email string) error {
+	if err := r.init(ctx); err != nil {
+		return err
+	}
 	confirmation, err := generateConfirmationCode()
 	if err != nil {
 		return err
 	}
-	normalized := normalizeEmail(email)
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	_, err = qs.Query(ctx, qAddUserRegistration, normalized, confirmation, "")
-	if err != nil {
+	if _, err := r.qs.Query(ctx, qAddUserRegistration, normalizeEmail(email), confirmation, ""); err != nil {
 		return err
 	}
-
-	subject := "Confirm your password change"
 	body := fmt.Sprintf("Hello,\n\nPlease use the following confirmation code to complete your password change:\n\n%d\n\nIf you did not request this change, please ignore this email.\n", confirmation)
-	if err := r.Mail.SendEmail(ctx, subject, body, []string{email}, nil); err != nil {
+	if err := r.Mail.SendEmail(ctx, "Confirm your password change", body, []string{email}, nil); err != nil {
 		return fmt.Errorf("failed to send confirmation email: %w", err)
 	}
-
 	return nil
 }
 
 func (r *RegistrationService) ConfirmPasswordChange(ctx context.Context, email string, confirmation int) error {
+	if err := r.init(ctx); err != nil {
+		return err
+	}
 	email = normalizeEmail(email)
-	qs := r.Repo.GetQueryService(ctx, registerQueries)
-	cutoff := time.Now().Add(-config.Config().RegistrationConfirmationTTL)
-	res, err := qs.Query(ctx, qGetUserRegistration, email, cutoff)
+	payload, err := r.checkConfirmation(ctx, email, confirmation)
 	if err != nil {
 		return err
 	}
-	if len(res.Rows) == 0 {
-		return fmt.Errorf("invalid or expired confirmation")
+	if payload != "" {
+		return ErrInvalidConfirmation // a registration code
 	}
-	expected := int(common.AsInt32(res.Rows[0][0]))
-	attempts := int(common.AsInt32(res.Rows[0][2]))
-	if attempts >= config.Config().MaxRegistrationAttempts {
-		_, _ = qs.Query(ctx, qExpireRegistration, email)
-		return fmt.Errorf("invalid or expired confirmation")
-	}
-	if confirmation != expected {
-		bumpRes, _ := qs.Query(ctx, qBumpRegistrationAttempts, email, expected)
-		if bumpRes != nil && len(bumpRes.Rows) > 0 {
-			if newAttempts := int(common.AsInt32(bumpRes.Rows[0][0])); newAttempts >= config.Config().MaxRegistrationAttempts {
-				_, _ = qs.Query(ctx, qExpireRegistration, email)
-			}
-		}
-		return fmt.Errorf("invalid or expired confirmation")
-	}
-	if _, err = qs.Query(ctx, qSetUserRegistration, email); err != nil {
+	if _, err := r.qs.Query(ctx, qSetUserRegistration, email); err != nil {
 		return err
 	}
-	_, err = qs.Query(ctx, qMarkEmailVerifiedByEmail, email)
+	_, err = r.qs.Query(ctx, qMarkEmailVerifiedByEmail, email)
 	return err
 }

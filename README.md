@@ -52,7 +52,7 @@ graph TD
 | `schema` | YAML-based schema definition + seed loader, plus the `schemagen` model used by `cmd/schemagen` to emit DDL/DML for any supported dialect |
 | `schema/dialect` | DDL dialects (PostgreSQL, MySQL) consumed by `schemagen` |
 | `cmd/schemagen` | CLI tool that converts `schema/*.yml` files into DDL + seed SQL |
-| `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (email-confirmation, OAuth-verified, OAuth + active session) |
+| `user` | `UserService` interface + `LocalUserService` (password / 2FA / OTP / refresh tokens / trusted devices / social login / phone-first auth / consent capture / device-token registry / account deletion) and `RegistrationService` (account and partner signup by emailed code or verified identity, partner setup for a signed-in user) |
 | `rest` | Metadata-driven REST engine that reads API definitions from database tables (`rest_api_header`, `rest_api_child`) and generates CRUD endpoints automatically with parent-child relations |
 | `handler` | `AbstractHandler` (JWT session parsing + helpers, plus `JSON`/`JSONPublic` body→handler adapter), `PublicHandler` (login with 2FA support), `SecurityHandler` (2FA setup/verify/disable, trusted devices, account deletion), `ProfileHandler` (self-service profile edit + email/phone verify-before-apply), `OTPHandler` (phone/email OTP authentication), `ConsentHandler` (record a consent + export consent history), `SocialLoginHandler` (Google/Apple social login), `PaymentHandler` (webhooks + checkout), `PushHandler` (device-token register/revoke), `InboxHandler` (in-app notification inbox), `StorageHandler` (validated upload + signed preview URL), `DocumentHandler` (partner-document multipart upload + signed preview URL), `WellKnownHandler` (app-association files), `RestHandler` (generic CRUD), `CacheHandler` (application data + TypeScript table generation), `CSRF` (double-submit-cookie helper), `AdminSessionStore` (opaque-token in-memory session), `TrustedDeviceCookie` (HttpOnly+Secure+Strict cookie for the 2FA-bypass secret) |
 | `idempotency` | `port.IdempotencyLedger` implementations: `MemoryLedger` and `PgsqlLedger` over `idempotency_ledger` — replay a completed key, refuse a live claim, and block on an unknown outcome until reconciliation |
@@ -1447,7 +1447,8 @@ srv.Handle(publicHandler.GetPublicRoutes())
 | POST | `/public/login/local` | `LoginLocal` | Username / password login |
 | POST | `/public/login/gmail` | `LoginGoogle` | Google OAuth code login |
 | POST | `/public/register` | `AddRegistrationRequest` | Start registration, emails the confirmation code |
-| GET | `/public/register/confirm` | `ConfirmRegistration` | `?email=&code=` completes registration |
+| POST | `/public/register/confirm` | `ConfirmRegistration` | `?email=&code=` completes registration and returns the session tokens |
+| POST | `/public/register/exchange` | `ExchangeHandoff` | `{code}` from `HandoffCode`; mounted when `Handoff` is set |
 | GET | `/public/password/policy` | `GetPasswordPolicy` | Password rules for pre-submit validation |
 | POST | `/public/token/refresh` | `RefreshToken` | `{refreshToken}` — rotates and returns a new pair; 401 on reuse |
 | POST | `/public/logout` | `Logout` | `{refreshToken}` — revokes the token |
@@ -1576,7 +1577,7 @@ POST /public/login/social  { "provider": "google", "token": "eyJhbG..." }
 
 Google and Apple link to an existing account by verified email, whatever its mail domain (Gmail, a Google Workspace domain, or any other address they verified), so a user who registered with an email can sign in with either provider, provided the account proved that email (`user_account.email_verified_at`). An unverified email, an Apple private-relay address, or an email asserted by any other issuer never selects an account: the owner signs in another way and calls `LinkSocial`, which requires the account password or a current 2FA code and a fresh provider token. A new account stores the email only when Google or Apple verified it.
 
-`email_verified_at` and `email_verification_method` (constant `email_verification_method`) are set when the user proves the mailbox: `O` email code, `R` registration confirmation, `C` contact change, `P` password reset, `G`/`A` an account created by Google or Apple, `X` a `RegisterImmediately` caller that sets `PartnerRegistration.EmailVerified`, `L` rows backfilled at upgrade. An email typed at phone signup or at email-OTP registration stays unverified until its code is entered, so a planted account cannot capture the real owner's Google or Apple sign-in. `UserService.MarkEmailVerified` records a proof made elsewhere.
+`email_verified_at` and `email_verification_method` (constant `email_verification_method`) are set when the user proves the mailbox: `O` email code, `R` registration confirmation, `C` contact change, `P` password reset, `G`/`A` an account created by Google or Apple, `X` a proof the application made and recorded with `MarkEmailVerified`, `L` rows backfilled at upgrade. An email typed at phone signup or at email-OTP registration stays unverified until its code is entered, so a planted account cannot capture the real owner's Google or Apple sign-in. `UserService.MarkEmailVerified` records a proof made elsewhere.
 
 `LoginGoogle` (`/public/login/gmail`, OAuth code) follows rules (a) to (c) through `GetUserFromExternal` and never creates an account. A locked, expired or deleted account is refused with `ErrAccountUnavailable` (403).
 
@@ -3184,10 +3185,25 @@ Keel provides a full `UserService` implementation with:
 - **Consent capture** — optional `port.ConsentService` called from signup flows; PIPEDA / GDPR audit trail in `consent_policy` + `consent_event` tables
 - **Push notifications (FCM)** — channel-keyed `port.MessageDispatcher` (FCM and `NoOp` push impls ship; email adapter wraps `MailClient`), `device_token` table, register/revoke endpoints, stale-token auto-deactivation. `port.PushProvider` is now a deprecated alias of `MessageDispatcher`.
 
-`RegistrationService` exposes three entry points:
-- `Register(ctx, email, confirmation)` — standard email-confirmation two-step (`SendConfirmation` followed by `Register`). Created `user_account` lands at `status='I'`; the email-confirmation step flips it to `'A'`.
-- `RegisterImmediately(ctx, *PartnerRegistration)` — for OAuth-verified signups (Google Business Profile, Apple Sign-In, etc.) where the upstream provider has already verified the email. Skips the `user_registration` round-trip and runs the full transactional create directly. Created `user_account` is left at `status='I'` (consistent with `Register`); a follow-up confirmation step is expected. Caller is responsible for bcrypt-hashing `data.Password` (or passing empty for password-less social signups).
-- `RegisterImmediatelyWithSession(ctx, *PartnerRegistration) (result, *model.UserSession, error)` — like `RegisterImmediately`, but additionally activates the new `user_account` (`status='A'`) and returns an in-memory `*model.UserSession` ready for `UserService.CreateJWT(session)`. Removes the otherwise-needed `GetUserByLogin` round-trip on OAuth-verified flows that have no password to bcrypt-check. `data.Password` may be empty.
+`RegistrationService` creates an account and its partner (`business_partner`, `partner_address`, `partner_domain`, `partner_user`, roles, subscription) in one transaction:
+- `SendConfirmation(ctx, *PartnerRegistration)` then `Register(ctx, email, code)` — signup by emailed code. The account is active with the email verified (`R`), and the session signed in by one-time code. A registration with no partner field creates only the account. A global `SSO_REQUIRED` policy refuses it with `ErrSSORequired`, and a `userName` containing `@` must equal the email.
+- `CreatePartner(ctx, userID, *PartnerSetup, evidence)` — the second step of a two-step signup, for a signed-in user without a partner (`ErrAlreadyMember` otherwise).
+- `RegisterWithIdentity(ctx, identity, consent, *PartnerSetup, evidence)` — signup with an external identity the caller verified, account and partner in one transaction through `IdentityAccountCreator` (implemented by `LocalUserService`); the session carries `ExternalSignInMethod`. An identity or email of an existing account returns `ErrAccountExists`. Consent is recorded after commit; its failure returns `ErrConsentNotRecorded` with the other results valid.
+
+The sessions `Register` and `RegisterWithIdentity` return passed `CheckSignInMethod`. Composition fields:
+
+| Field | Effect |
+|---|---|
+| `Users` | Password and sign-in policy, sessions. Required for signup |
+| `Domains`, `RequireDomainProof` | `evidence` from `Domains.Check` is recorded by `RecordTx` in the partner transaction; without it the account's verified email proves the domain (`VE`) when it can. `RequireDomainProof` requires every partner to have a proven domain, and `SendConfirmation` refuses a mailbox off it; without it the domain is optional |
+| `Roles` | Granted to the creator; each must be `partner_scoped`. Nil grants `PARTNER_ADMIN` |
+| `EmailPolicy` | Screens an emailed-code signup address; `user.BusinessEmail` refuses free mailboxes |
+| `OnPartnerTx` | Writes the application's rows in the partner transaction; `PartnerSetup.Extra` carries its fields. Bind the application's queries with `port.TxQueryCatalog` |
+| `Checkout`, `CheckoutSuccessURL`, `CheckoutCancelURL` | Opens the checkout of a plan that activates at checkout, priced by the offer's `provider_price_id`, with the metadata `billing.NewProviderSubscriptionEventHandler` reads |
+
+The plan's `activation_mode` decides the subscription: a free offer or `F` plan is active at once, `P` inserts a pending row that checkout activates, and `A` and `T` leave the row to checkout. `PaymentRequired` then sends the client to `PaymentURL`, or to the billing page when no checkout client is set. A checkout failure after the partner exists returns `ErrCheckout` with the other results valid.
+
+`PublicHandler.GetAuthRoutes(apiPrefix)` mounts `POST {apiPrefix}/register/partner` (`CreatePartner`, body `PartnerSetup`). A redirect-based provider signup hands the session to the browser with `PublicHandler.HandoffCode(ctx, session)`: a single-use code, valid five minutes, that `/public/register/exchange` trades for tokens after re-checking the account, the sign-in policy and 2FA.
 
 Use the built-in `LocalUserService` directly:
 

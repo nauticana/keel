@@ -85,6 +85,9 @@ func (m *memStore) userByEmail(email string) int {
 func (m *memStore) GenID() int64                   { m.nextID++; return m.nextID }
 func (m *memStore) Commit(context.Context) error   { m.commits++; return nil }
 func (m *memStore) Rollback(context.Context) error { m.rollbacks++; return nil }
+func (m *memStore) QueryService(string, map[string]string) port.QueryService {
+	return m
+}
 
 func (m *memStore) count(name string) int {
 	n := 0
