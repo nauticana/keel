@@ -19,6 +19,7 @@ import (
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -137,11 +138,12 @@ const (
 
 	// OTP queries
 	qUserByPhone                     = "user_by_phone"
-	qUserBySocial                    = "user_by_social"
+	qUserByExternalIdentity          = "user_by_external_identity"
 	qCreateSocialUser                = "create_social_user"
-	qLinkSocialProvider              = "link_social_provider"
+	qLinkExternalIdentity            = "link_external_identity"
+	qUserIDByEmail                   = "user_id_by_email"
 	qAnonymizeUserAccount            = "anonymize_user_account"
-	qDeleteSocialLinks               = "delete_social_links_for_user"
+	qDeleteExternalIdentities        = "delete_external_identities_for_user"
 	qDeleteTrustedDevices            = "delete_trusted_devices_for_user"
 	qLockUserAccount                 = "lock_user_account"
 	qActiveLegalHold                 = "active_legal_hold"
@@ -468,12 +470,12 @@ SELECT U.id, U.first_name, U.last_name, U.user_email, U.phone, U.locale, U.statu
  WHERE U.phone = ?
 `,
 
-	qUserBySocial: `
-SELECT U.id, U.first_name, U.last_name, U.user_email, U.phone, U.locale, U.status, p.partner_id
+	qUserByExternalIdentity: `
+SELECT U.id, U.first_name, U.last_name, U.user_email, U.phone, U.locale, U.status, p.partner_id, U.last_login_attempt
   FROM user_account U
 ` + sessionPartnerJoin + `
-  JOIN user_social_provider sp ON sp.user_id = U.id
- WHERE sp.provider = ? AND sp.provider_id = ?
+  JOIN user_external_identity ei ON ei.user_id = U.id
+ WHERE ei.issuer = ? AND ei.subject = ?
 `,
 
 	qCreateSocialUser: `
@@ -481,10 +483,12 @@ INSERT INTO user_account (id, first_name, last_name, user_email, phone, status, 
 VALUES (?, ?, ?, ?, ?, 'A', ?)
 `,
 
-	qLinkSocialProvider: `
-INSERT INTO user_social_provider (user_id, provider, provider_id)
-VALUES (?, ?, ?)
+	qLinkExternalIdentity: `
+INSERT INTO user_external_identity (user_id, provider, issuer, subject)
+VALUES (?, ?, ?, ?)
 `,
+
+	qUserIDByEmail: `SELECT id FROM user_account WHERE user_email = ?`,
 
 	qAnonymizeUserAccount: `
 UPDATE user_account
@@ -510,8 +514,8 @@ UPDATE user_account
 	qTokensValidAfter:   `SELECT tokens_valid_after FROM user_account WHERE id = ?`,
 	qRevokeAccessTokens: `UPDATE user_account SET tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ? RETURNING tokens_valid_after`,
 
-	qDeleteSocialLinks: `
-DELETE FROM user_social_provider WHERE user_id = ?
+	qDeleteExternalIdentities: `
+DELETE FROM user_external_identity WHERE user_id = ?
 `,
 
 	qDeleteTrustedDevices: `
@@ -792,17 +796,17 @@ func (r *LocalUserService) GetPasswordPolicy() model.PasswordPolicy {
 // account being indefinitely shut out.
 func (s *LocalUserService) checkAccountStatus(uStatus string, lastAttempt time.Time) error {
 	if uStatus == UserStatusExpired {
-		return fmt.Errorf("user account is expired")
+		return fmt.Errorf("%w: user account is expired", ErrAccountUnavailable)
 	}
-	if uStatus == UserStatusAdminLock {
-		return fmt.Errorf("user account is locked")
+	if uStatus == UserStatusAdminLock || uStatus == UserStatusDeleted {
+		return fmt.Errorf("%w: user account is locked", ErrAccountUnavailable)
 	}
 	if uStatus == UserStatusSelfLocked {
 		if lastAttempt.IsZero() {
 			return nil
 		}
 		if s.passwordPolicy.AutoUnlock > time.Now().UnixNano()-lastAttempt.UnixNano() {
-			return fmt.Errorf("user account is locked")
+			return fmt.Errorf("%w: user account is locked", ErrAccountUnavailable)
 		}
 	}
 	return nil
@@ -1998,12 +2002,20 @@ func (s *LocalUserService) newSession(id int, firstName, lastName, email, status
 
 // --- Social Login ---
 
-func (s *LocalUserService) getUserBySocialProvider(provider, providerID string) (*model.UserSession, error) {
-	res, err := s.queryService.Query(s.ctx(), qUserBySocial, provider, providerID)
-	if err != nil || len(res.Rows) == 0 {
-		return nil, fmt.Errorf("user not found")
+// getUserByExternalIdentity returns the issuer-and-subject-linked account.
+func (s *LocalUserService) getUserByExternalIdentity(issuer, subject, provider string) (*model.UserSession, error) {
+	res, err := s.queryService.Query(s.ctx(), qUserByExternalIdentity, issuer, subject)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Rows) == 0 {
+		return nil, nil
 	}
 	row := res.Rows[0]
+	lastAttempt, _ := row[8].(time.Time)
+	if err := s.checkAccountStatus(common.AsString(row[6]), lastAttempt); err != nil {
+		return nil, err
+	}
 	session := s.newSession(
 		int(common.AsInt64(row[0])),
 		common.AsString(row[1]),
@@ -2018,33 +2030,46 @@ func (s *LocalUserService) getUserBySocialProvider(provider, providerID string) 
 	return session, nil
 }
 
-func (s *LocalUserService) createUserFromSocial(email, firstName, lastName, phone, provider, providerID string) (*model.UserSession, error) {
+// createUserFromSocial stores only an email Google or Apple verified.
+func (s *LocalUserService) createUserFromSocial(id ExternalIdentity) (*model.UserSession, error) {
 	ctx := s.ctx()
+	email := ""
+	if id.emailTrusted() {
+		email = normalizeEmail(id.Email)
+	}
 	username := email
 	if username == "" {
-		username = provider + "-" + providerID
+		username = id.Provider + "-" + id.Subject
 	}
 
 	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
 	if err != nil {
 		return nil, err
 	}
-	userId, err := s.insertUserAccount(ctx, tx, firstName, lastName, email, phone, username)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = data.RollbackDetached(tx)
+		}
+	}()
+	userId, err := s.insertUserAccount(ctx, tx, id.FirstName, id.LastName, email, id.Phone, username)
 	if err != nil {
-		_ = tx.Rollback(ctx)
 		return nil, err
 	}
-	if _, err := tx.Query(ctx, qLinkSocialProvider, userId, provider, providerID); err != nil {
-		_ = tx.Rollback(ctx)
+	if _, err := tx.Query(ctx, qLinkExternalIdentity, userId, id.Provider, id.Issuer, id.Subject); err != nil {
+		if pgsql.IsUniqueViolation(err) {
+			return nil, ErrIdentityLinked
+		}
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	committed = true
 
-	s.AddUserHistory(userId, 0, "", UserActivityCreate, "A", "social:"+provider)
-	session := s.newSession(userId, firstName, lastName, email, UserStatusActive, provider)
-	session.PhoneNumber = phone
+	s.AddUserHistory(userId, 0, "", UserActivityCreate, "A", "social:"+id.Provider)
+	session := s.newSession(userId, id.FirstName, id.LastName, email, UserStatusActive, id.Provider)
+	session.PhoneNumber = id.Phone
 	return session, nil
 }
 
@@ -2259,56 +2284,105 @@ func normalizePhone(input, defaultRegion string) (string, error) {
 	return phonenumbers.Format(num, phonenumbers.E164), nil
 }
 
-// GetOrCreateUserFromSocial implements the standard social-login ladder:
-// 1) existing social link → return that session,
-// 2) existing account by verified email → link new social provider to it,
-// 3) otherwise create a fresh user + social-provider row atomically.
-// emailVerified gates branch 2 to prevent account takeover via an unverified
-// provider-asserted email.
-//
-// Hard-rejects provider == "phone" — phone OTP flows must go through
-// GetOrCreateUserByPhone, not through the social pseudo-provider shim.
-//
-// When s.ConsentService is set and signupConsent is non-nil, consents are
-// recorded after the create branch fires. A consent-recording failure
-// returns a non-nil session alongside the error so the caller sees both
-// "user was created" and "consent did not land".
-func (s *LocalUserService) GetOrCreateUserFromSocial(
-	email, firstName, lastName, phone, provider, providerID string,
-	emailVerified bool,
-	signupConsent *SignupConsent,
-) (session *model.UserSession, created bool, err error) {
-	if provider == "phone" {
-		return nil, false, fmt.Errorf("social: provider %q is reserved; use GetOrCreateUserByPhone for phone-OTP flows", provider)
+// GetOrCreateUserFromSocial signs the identity in and creates an account when
+// none is linked and no account owns its email. A non-nil session with an
+// error means the account was created but consent recording failed.
+func (s *LocalUserService) GetOrCreateUserFromSocial(id ExternalIdentity, signupConsent *SignupConsent) (session *model.UserSession, created bool, err error) {
+	session, err = s.GetUserFromExternal(id)
+	if !errors.Is(err, ErrNoAccount) {
+		return session, false, err
 	}
-	email = normalizeEmail(email)
-	if existing, lookupErr := s.getUserBySocialProvider(provider, providerID); lookupErr == nil {
-		s.AddUserHistory(existing.Id, 0, "", UserActivityLogin, "A", "social:"+provider)
-		return existing, false, nil
-	}
-	// Email-link branch. Skipped when the provider has not verified the email
-	// (account-takeover guard) or when the address is an Apple "Hide My Email"
-	// relay — those addresses are stable per app but never match a password
-	// account's email, so linking on them would always be wrong.
-	if emailVerified && email != "" && !strings.HasSuffix(strings.ToLower(email), "@privaterelay.appleid.com") {
-		if existing, lookupErr := s.GetUserByEmail(email); lookupErr == nil {
-			if _, linkErr := s.queryService.Query(s.ctx(), qLinkSocialProvider, existing.Id, provider, providerID); linkErr != nil {
-				return nil, false, linkErr
-			}
-			existing.Provider = provider
-			return existing, false, nil
+	fresh, err := s.createUserFromSocial(id)
+	if err != nil {
+		if errors.Is(err, ErrDuplicateEmail) {
+			return nil, false, ErrIdentityNotLinked
 		}
-	}
-	fresh, createErr := s.createUserFromSocial(email, firstName, lastName, phone, provider, providerID)
-	if createErr != nil {
-		return nil, false, createErr
+		if errors.Is(err, ErrIdentityLinked) {
+			linked, lookupErr := s.getUserByExternalIdentity(id.Issuer, id.Subject, id.Provider)
+			if lookupErr != nil {
+				return nil, false, lookupErr
+			}
+			if linked != nil {
+				return linked, false, nil
+			}
+		}
+		return nil, false, err
 	}
 	if s.ConsentService != nil && signupConsent != nil && len(signupConsent.Consents) > 0 {
-		if consentErr := s.recordSignupConsent(fresh.Id, email, signupConsent); consentErr != nil {
+		if consentErr := s.recordSignupConsent(fresh.Id, fresh.Email, signupConsent); consentErr != nil {
 			return fresh, true, fmt.Errorf("user created but consent recording failed: %w", consentErr)
 		}
 	}
 	return fresh, true, nil
+}
+
+// GetUserFromExternal signs in the account linked by issuer and subject, or
+// the account owning an email Google or Apple verified, which is then linked.
+// Any other issuer asserting an existing account's email gets ErrIdentityNotLinked.
+func (s *LocalUserService) GetUserFromExternal(id ExternalIdentity) (*model.UserSession, error) {
+	if err := id.validate(); err != nil {
+		return nil, err
+	}
+	linked, err := s.getUserByExternalIdentity(id.Issuer, id.Subject, id.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if linked != nil {
+		_ = s.AddUserHistory(linked.Id, 0, "", UserActivityLogin, "A", "social:"+id.Provider)
+		return linked, nil
+	}
+	email := normalizeEmail(id.Email)
+	if email == "" {
+		return nil, ErrNoAccount
+	}
+	res, err := s.queryService.Query(s.ctx(), qUserIDByEmail, email)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Rows) == 0 {
+		return nil, ErrNoAccount
+	}
+	if !id.linksByEmail() {
+		return nil, ErrIdentityNotLinked
+	}
+	existing, err := s.GetUserByEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.LinkExternalIdentity(existing.Id, id); err != nil {
+		return nil, err
+	}
+	existing.Provider = id.Provider
+	return existing, nil
+}
+
+// LinkExternalIdentity links the identity to an authenticated account. The
+// caller must have re-authenticated the user. Linking an identity the account
+// already holds is a no-op.
+func (s *LocalUserService) LinkExternalIdentity(userID int, id ExternalIdentity) error {
+	if err := id.validate(); err != nil {
+		return err
+	}
+	if userID <= 0 {
+		return ErrNoAccount
+	}
+	res, err := s.queryService.Query(s.ctx(), qUserByExternalIdentity, id.Issuer, id.Subject)
+	if err != nil {
+		return err
+	}
+	if len(res.Rows) > 0 {
+		if int(common.AsInt64(res.Rows[0][0])) == userID {
+			return nil
+		}
+		return ErrIdentityLinked
+	}
+	if _, err := s.queryService.Query(s.ctx(), qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject); err != nil {
+		if pgsql.IsUniqueViolation(err) {
+			return ErrIdentityLinked
+		}
+		return err
+	}
+	return s.AddUserHistory(userID, 0, "", UserActivityLogin, "A", "link:"+id.Provider)
 }
 
 // recordSignupConsent is the private bridge between signup flows and
@@ -2373,7 +2447,7 @@ func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
 		args        []any
 	}{
 		{qAnonymizeUserAccount, "anonymize user_account", []any{fmt.Sprintf("deleted+%d@local.invalid", userID), fmt.Sprintf("deleted-%d", userID), userID}},
-		{qDeleteSocialLinks, "remove social links", []any{userID}},
+		{qDeleteExternalIdentities, "remove external identities", []any{userID}},
 		{qDeleteTrustedDevices, "remove trusted devices", []any{userID}},
 		{qDeactivateDeviceTokensForUser, "deactivate device tokens", []any{userID}},
 		{qRevokeAllRefreshTokensForID, "revoke refresh tokens", []any{userID}},

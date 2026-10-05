@@ -276,8 +276,12 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	var userInfo struct {
+		ID            string `json:"id"`
 		Email         string `json:"email"`
 		VerifiedEmail bool   `json:"verified_email"`
+		GivenName     string `json:"given_name"`
+		FamilyName    string `json:"family_name"`
+		HostedDomain  string `json:"hd"`
 	}
 	if err := json.NewDecoder(userInfoResp.Body).Decode(&userInfo); err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to parse user info")
@@ -288,16 +292,19 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.UserService.GetUserByEmail(userInfo.Email)
+	session, err := h.UserService.GetUserFromExternal(user.ExternalIdentity{
+		Provider: "google", Issuer: googleIssuer1, Subject: userInfo.ID, Email: userInfo.Email, EmailVerified: true,
+		HostedDomain: userInfo.HostedDomain, FirstName: userInfo.GivenName, LastName: userInfo.FamilyName,
+	})
 	if err != nil {
-		// Same generic message as the password path — Google login can't
-		// be allowed to leak whether the email is registered.
+		if mapped := socialSignInError(err); mapped != nil {
+			h.WriteServiceError(w, r, mapped)
+			return
+		}
+		// Same generic message as the password path, so an unregistered email is not revealed.
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid credentials")
 		return
 	}
-	// GetUserByEmail no longer logs a phantom Login row (P0-17). Issue the
-	// real activity entry now that we're committing to a JWT for this user.
-	_ = h.UserService.AddUserHistory(session.Id, 0, common.TrustedClientIP(r), "L", "A", "google")
 
 	if session.TwoFactorEnabled {
 		trusted := false

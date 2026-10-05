@@ -1476,7 +1476,7 @@ Consumers that own domain tables cascading off `user_id` (e.g. profiles, history
 
 ## OTP Authentication (Phone/Email)
 
-Keel includes OTP-based authentication for mobile-first applications. Users can sign in or register using a one-time code. Phone numbers are first-class in v0.3 — raw user input (e.g. `(416) 555-1234`, `416-555-1234`, `+14165551234`) is normalized to E.164 before lookup or insert, and phone registrations write to `user_account.phone` directly (no `user_social_provider` row).
+Keel includes OTP-based authentication for mobile-first applications. Users can sign in or register using a one-time code. Phone numbers are first-class in v0.3 — raw user input (e.g. `(416) 555-1234`, `416-555-1234`, `+14165551234`) is normalized to E.164 before lookup or insert, and phone registrations write to `user_account.phone` directly (no external-identity row).
 
 ### OTP Flow
 
@@ -1534,43 +1534,38 @@ srv.Handle(map[string]func(w, r){
 
 ## Social Login (Google & Apple)
 
-Keel supports social login via Google and Apple ID tokens. The handler verifies the token then delegates to a single service entry point that handles the full three-branch ladder atomically.
+Keel supports social login via Google and Apple ID tokens. The handler verifies the token and passes a `user.ExternalIdentity` containing the exact issuer, subject, provider label, email claims and Google `hd`.
 
-### Social Login Flow
+### Sign-in ladder
 
 ```
 POST /public/login/social  { "provider": "google", "token": "eyJhbG..." }
 
-1. Verify token (Google: tokeninfo endpoint, Apple: JWT decode)
-2. Service.GetOrCreateUserFromSocial(...) runs the ladder:
-     a. Existing social link on (provider, providerId)?   → return session.
-     b. emailVerified && existing account on email?       → link social provider to it.
-     c. Otherwise                                         → INSERT user_account + user_social_provider
-                                                            in one transaction.
-3. Return JWT.
-
-Response: { "token": "jwt...", "userId": 42, "partnerId": 1, "isNewUser": false }
+1. Verify the ID token against the provider's JWKs (RS256, issuer, audience, nonce).
+2. GetOrCreateUserFromSocial(identity, consent):
+     a. Identity linked on (issuer, subject)?               → sign in that account.
+     b. An account owns the email and Google or Apple
+        verified it?                                       → link and sign in.
+     c. An account owns the email otherwise?                → 409 identity_not_linked.
+     d. No account                                          → create account + link atomically.
+3. Return the token pair.
 ```
 
-Branch (c) runs inside `DatabaseRepository.BeginTx` so a link failure rolls back the orphan `user_account` row. Socially created accounts carry `passtext = NULL`; a subsequent password-login attempt against the same account is rejected with `"password authentication not enabled for this account"` *before* bcrypt runs.
+Google and Apple link to an existing account by verified email, whatever its mail domain (Gmail, a Google Workspace domain, or any other address they verified), so a user who registered with an email can sign in with either provider. An unverified email, an Apple private-relay address, or an email asserted by any other issuer never selects an account: the owner signs in another way and calls `LinkSocial`, which requires the account password or a current 2FA code and a fresh provider token. A new account stores the email only when Google or Apple verified it.
+
+`LoginGoogle` (`/public/login/gmail`, OAuth code) follows rules (a) to (c) through `GetUserFromExternal` and never creates an account. A locked, expired or deleted account is refused with `ErrAccountUnavailable` (403).
+
+Socially created accounts carry `passtext = NULL`; a password login against such an account is rejected before bcrypt runs.
 
 ### Service API
 
 ```go
-GetOrCreateUserFromSocial(
-    email, firstName, lastName, phone, provider, providerID string,
-    emailVerified bool,
-    signupConsent *port.SignupConsent,
-) (session *model.UserSession, created bool, err error)
+GetUserFromExternal(identity user.ExternalIdentity) (*model.UserSession, error)
+GetOrCreateUserFromSocial(identity user.ExternalIdentity, signupConsent *user.SignupConsent) (session *model.UserSession, created bool, err error)
+LinkExternalIdentity(userID int, identity user.ExternalIdentity) error
 ```
 
-This is the only public social-login method on `port.UserService`. The older `CreateUserFromSocial` and `GetUserBySocialProvider` methods were consolidated into this single entry point.
-
-`emailVerified` reflects the provider's verified-email claim. `verifyGoogleToken` extracts Google's `email_verified` (string `"true"`/`"false"`) from the tokeninfo response; `verifyAppleToken` reads it from the Apple ID-token JWT (handles both bool and string encoding). The handler passes the parsed value straight through. When `false`, branch (b) is skipped — which avoids account takeover via an unverified provider-asserted email.
-
-### Apple "Hide My Email" handling
-
-Apple sets `email_verified=true` for relay addresses (`*@privaterelay.appleid.com`), but those addresses are stable per app and **never** match a password-signup account's email. Branch (b) explicitly skips relay addresses so an Apple sign-in cannot link onto an unrelated password account that happens to share the same relay string.
+Errors: `ErrIdentityNotLinked` (409), `ErrIdentityLinked` (409: the identity belongs to another account, or the account already has one from this issuer), `ErrAccountUnavailable` (403), `ErrNoAccount`.
 
 ### Email normalization
 
@@ -1616,7 +1611,9 @@ Soft-deleted accounts (`status='D'`) don't compete for the index — `DeleteAcco
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/public/login/social` | Issue the single-use nonce the ID token must carry |
 | POST | `/public/login/social` | Authenticate via provider ID token (Google or Apple) |
+| POST | app-chosen authenticated path | `LinkSocial`: link a provider identity to the signed-in account |
 
 ### Registering Social Login Routes
 
@@ -1627,13 +1624,17 @@ socialHandler := handler.SocialLoginHandler{
 srv.Handle(map[string]func(w, r){
     "/public/login/social": socialHandler.LoginSocial,
 })
+// authenticated mux
+srv.Handle(map[string]func(w, r){
+    "/api/v1/user/social/link": socialHandler.LinkSocial,
+})
 ```
 
 ### Database Tables
 
 | Table | Purpose |
 |-------|---------|
-| `user_social_provider` | `user_id`, `provider` (google/apple), `provider_id` (sub claim from token). **Phone is NOT a provider here** — `GetOrCreateUserFromSocial` rejects `provider == "phone"` at runtime; phone registrations live in `user_account.phone` directly and are handled via `GetOrCreateUserByPhone`. |
+| `user_external_identity` | External links keyed by `(issuer, subject)`, with one identity per issuer per account. `provider` is only the adapter/UI label. Phone registrations remain in `user_account.phone`. |
 | `user_account.passtext` | Nullable. NULL means "this account authenticates via social/OTP only; password login is disabled." |
 
 ## Consent Capture (PIPEDA / GDPR)
@@ -2945,7 +2946,7 @@ this summary can be checked directly against the generated schema.
 | `user_trusted_device` | Server-minted trusted-device credentials |
 | `api_key` | Partner-scoped API key lifecycle and scopes |
 | `user_otp` | OTP codes with expiry and attempt tracking |
-| `user_social_provider` | Social login provider links (Google, Apple) |
+| `user_external_identity` | External identity links keyed by issuer and subject |
 | `consent_policy` | Versioned regional consent-policy documents |
 | `consent_event` | Immutable user or pre-registration consent evidence |
 | `device_token` | Push-notification device registrations |
@@ -3128,11 +3129,11 @@ Keel provides a full `UserService` implementation with:
 - **Refresh tokens** with revocation
 - **Trusted devices** with 30-day expiry
 - **OTP authentication** (phone/email) with rate limiting
-- **Social login** (Google, Apple) via single `GetOrCreateUserFromSocial` — atomic transactional create, verified-email account linking, NULL `passtext` for social-only accounts
-- **Phone-first auth** via `GetOrCreateUserByPhone` — E.164 normalization (libphonenumber), `phone` stored in `user_account.phone` directly (no `user_social_provider` shim), `passtext=NULL` on OTP registrations
+- **Social login** (Google, Apple) via `GetOrCreateUserFromSocial` — issuer-and-subject links, linking by Google- or Apple-verified email, atomic account creation, authenticated `LinkSocial`, NULL `passtext` for social-only accounts
+- **Phone-first auth** via `GetOrCreateUserByPhone` — E.164 normalization (libphonenumber), `phone` stored in `user_account.phone` directly (no external-identity shim), `passtext=NULL` on OTP registrations
 - **Session hygiene** — `SetPassword`, `Setup2FA`, `Disable2FA`, `RevokeTrustedDevice` automatically revoke all active refresh tokens; public `LogoutEverywhere(userID)` for explicit "log out of all devices"
 - **Single-device policy** — `SetSingleDevicePolicy(userID, on)` primitive; when on, `CreateRefreshToken` revokes all prior tokens on issue (e.g. drivers must be signed in on one device at a time)
-- **Account deletion** — `DeleteAccount(userID, reason)` anonymizes in place, revokes tokens, drops trusted devices, deactivates device tokens, drops social links; App Store / Play Store compliant
+- **Account deletion** — `DeleteAccount(userID, reason)` anonymizes in place, revokes tokens, drops trusted devices, deactivates device tokens, drops external-identity links; App Store / Play Store compliant
 - **Consent capture** — optional `port.ConsentService` called from signup flows; PIPEDA / GDPR audit trail in `consent_policy` + `consent_event` tables
 - **Push notifications (FCM)** — channel-keyed `port.MessageDispatcher` (FCM and `NoOp` push impls ship; email adapter wraps `MailClient`), `device_token` table, register/revoke endpoints, stale-token auto-deactivation. `port.PushProvider` is now a deprecated alias of `MessageDispatcher`.
 

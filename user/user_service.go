@@ -113,13 +113,16 @@ type UserService interface {
 	IncrementOTPAttempts(userId int) error
 	ClearOTP(userId int) error
 
-	// Social login — single entry point for OAuth / external-identity flow.
-	// signupConsent is optional; when the service has a ConsentService
-	// registered and signupConsent is non-nil, consents are recorded after
-	// user creation. A non-nil error alongside a non-nil session indicates
-	// the user was created but consent recording failed — caller decides
-	// whether to treat that as a hard failure.
-	GetOrCreateUserFromSocial(email, firstName, lastName, phone, provider, providerID string, emailVerified bool, signupConsent *SignupConsent) (session *model.UserSession, created bool, err error)
+	// External identities (social login). GetUserFromExternal signs in the
+	// account linked by issuer and subject, or the account owning an email
+	// Google or Apple verified; GetOrCreateUserFromSocial also creates an
+	// account when none matches. LinkExternalIdentity links an identity to a
+	// re-authenticated user. A non-nil session with an error from
+	// GetOrCreateUserFromSocial means the account was created but consent
+	// recording failed.
+	GetUserFromExternal(identity ExternalIdentity) (*model.UserSession, error)
+	GetOrCreateUserFromSocial(identity ExternalIdentity, signupConsent *SignupConsent) (session *model.UserSession, created bool, err error)
+	LinkExternalIdentity(userID int, identity ExternalIdentity) error
 
 	// Phone as first-class. Raw phone is normalized to E.164 using
 	// defaultRegion (e.g. "CA", "US") as a hint for local-format input.

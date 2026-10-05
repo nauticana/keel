@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -22,9 +23,9 @@ import (
 const (
 	googleJWKsURL = "https://www.googleapis.com/oauth2/v3/certs"
 	appleJWKsURL  = "https://appleid.apple.com/auth/keys"
-	googleIssuer1 = "https://accounts.google.com"
+	googleIssuer1 = user.GoogleIssuer
 	googleIssuer2 = "accounts.google.com"
-	appleIssuer   = "https://appleid.apple.com"
+	appleIssuer   = user.AppleIssuer
 
 	socialNonceKey = "social_nonce:"
 )
@@ -51,6 +52,12 @@ func getAppleJWKs() *jwksProvider {
 		appleJWKs = newJWKsProvider(appleJWKsURL, config.Config().SocialJWKSCacheTTL, common.HTTPClient())
 	})
 	return appleJWKs
+}
+
+func init() {
+	RegisterErrorCode(user.ErrIdentityNotLinked, http.StatusConflict, "identity_not_linked")
+	RegisterErrorCode(user.ErrIdentityLinked, http.StatusConflict, "identity_linked")
+	RegisterErrorCode(user.ErrAccountUnavailable, http.StatusForbidden, "account_unavailable")
 }
 
 // SocialLoginHandler handles OAuth/social login (Google, Apple).
@@ -84,7 +91,7 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 	// Verify token signature against the provider's JWKs and extract
 	// claims. Both providers issue RS256 ID tokens; keel pins that
 	// algorithm and rejects everything else.
-	email, firstName, lastName, emailVerified, providerID, nonce, err := verifySocialToken(r.Context(), req.Provider, req.Token)
+	identity, nonce, err := verifySocialToken(r.Context(), req.Provider, req.Token)
 	if err != nil {
 		// Don't echo the verifier's diagnostic — leaking "kid not found"
 		// vs "exp expired" gives an attacker a usable signal.
@@ -99,8 +106,12 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 	}
 
 	signupConsent := buildSignupConsent(r, &req)
-	session, isNewUser, err := h.UserService.GetOrCreateUserFromSocial(email, firstName, lastName, "", req.Provider, providerID, emailVerified, signupConsent)
+	session, isNewUser, err := h.UserService.GetOrCreateUserFromSocial(identity, signupConsent)
 	if err != nil {
+		if mapped := socialSignInError(err); mapped != nil {
+			h.WriteServiceError(w, r, mapped)
+			return
+		}
 		// A non-nil session with a non-nil error signals the user WAS created
 		// but consent recording failed — surface a specific status so the
 		// caller can re-submit consent rather than re-creating the account.
@@ -119,6 +130,41 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 	}
 	resp["isNewUser"] = isNewUser
 	common.WriteJSON(w, http.StatusOK, resp)
+}
+
+// LinkSocial links a provider identity to the signed-in account (POST). The
+// caller re-enters a password or current 2FA code and presents a fresh ID
+// token carrying a nonce from GET on LoginSocial's route.
+func (h *SocialLoginHandler) LinkSocial(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req struct {
+		Provider      string `json:"provider"`
+		Token         string `json:"token"`
+		Password      string `json:"password"`
+		TwoFactorCode string `json:"twoFactorCode"`
+	}
+	session, ok := h.ReadAuthRequest(w, r, &req)
+	if !ok {
+		return
+	}
+	if !h.RequireFields(w, map[string]string{"provider": req.Provider, "token": req.Token}) {
+		return
+	}
+	if !h.requireRecentAuth(w, session, req.Password, req.TwoFactorCode) {
+		return
+	}
+	identity, nonce, err := verifySocialToken(r.Context(), req.Provider, req.Token)
+	if err != nil || (h.NonceCache != nil && !h.consumeSocialNonce(r.Context(), nonce)) {
+		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
+		return
+	}
+	if err := h.UserService.LinkExternalIdentity(session.Id, identity); err != nil {
+		h.WriteServiceError(w, r, err)
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]any{"linked": identity.Provider})
 }
 
 // issueSocialNonce returns a single-use nonce the client feeds to the provider
@@ -200,95 +246,86 @@ func buildSignupConsent(r *http.Request, req *socialLoginRequest) *user.SignupCo
 	}
 }
 
-// verifySocialToken validates the provider's ID token signature against
-// the provider's published JWKs, asserts iss/aud/exp, and extracts the
-// claims callers need. Returns email, given/family names, the verified
-// flag, and the stable subject (sub claim) used as the provider id.
-//
-// Both Google and Apple emit RS256 ID tokens. We pin that algorithm and
-// reject any other (notably "none") at verifyJWKsToken's parser level.
-//
-// Callers MUST honor emailVerified — linking on an unverified
-// provider-asserted email is the standard account-takeover vector for
-// misconfigured OAuth clients.
-func verifySocialToken(ctx context.Context, provider, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
+// verifySocialToken validates the provider's RS256 ID token against its JWKs,
+// asserts iss/aud/exp, and returns the identity and the token's nonce.
+func verifySocialToken(ctx context.Context, provider, token string) (user.ExternalIdentity, string, error) {
 	switch provider {
 	case "google":
 		return verifyGoogleToken(ctx, token)
 	case "apple":
 		return verifyAppleToken(ctx, token)
 	default:
-		return "", "", "", false, "", "", fmt.Errorf("unsupported provider: %s", provider)
+		return user.ExternalIdentity{}, "", fmt.Errorf("unsupported provider: %s", provider)
 	}
 }
 
-// verifyGoogleToken verifies a Google-issued ID token against Google's
-// JWKs (`https://www.googleapis.com/oauth2/v3/certs`), enforces aud =
-// configured GoogleClientID and iss = "accounts.google.com" or
-// "https://accounts.google.com" (Google publishes both forms).
-//
-// Google's email_verified claim arrives as either a JSON bool or a
-// JSON string; both shapes are accepted.
-func verifyGoogleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
+// verifyGoogleToken accepts either published Google issuer form and the
+// configured google_client_id audience.
+func verifyGoogleToken(ctx context.Context, token string) (user.ExternalIdentity, string, error) {
 	aud := config.Config().GoogleClientID
 	if aud == "" {
-		return "", "", "", false, "", "", fmt.Errorf("google_client_id is not configured")
+		return user.ExternalIdentity{}, "", fmt.Errorf("google_client_id is not configured")
 	}
 	claims, err := verifyJWKsToken(ctx, getGoogleJWKs(), token, aud, "")
 	if err != nil {
-		return "", "", "", false, "", "", err
+		return user.ExternalIdentity{}, "", err
 	}
 	iss, _ := claims["iss"].(string)
 	if iss != googleIssuer1 && iss != googleIssuer2 {
-		return "", "", "", false, "", "", fmt.Errorf("google: unexpected issuer %q", iss)
+		return user.ExternalIdentity{}, "", fmt.Errorf("google: unexpected issuer %q", iss)
 	}
-	sub, _ := claims["sub"].(string)
-	if sub == "" {
-		return "", "", "", false, "", "", fmt.Errorf("google: missing sub")
+	id := identityFromClaims("google", googleIssuer1, claims)
+	if id.Subject == "" {
+		return user.ExternalIdentity{}, "", fmt.Errorf("google: missing sub")
 	}
-	emailStr, _ := claims["email"].(string)
-	firstName, _ = claims["given_name"].(string)
-	lastName, _ = claims["family_name"].(string)
-	nonceStr, _ := claims["nonce"].(string)
-	switch v := claims["email_verified"].(type) {
-	case bool:
-		emailVerified = v
-	case string:
-		emailVerified = v == "true"
-	}
-	return emailStr, firstName, lastName, emailVerified, sub, nonceStr, nil
+	id.FirstName, _ = claims["given_name"].(string)
+	id.LastName, _ = claims["family_name"].(string)
+	id.HostedDomain, _ = claims["hd"].(string)
+	nonce, _ := claims["nonce"].(string)
+	return id, nonce, nil
 }
 
-// verifyAppleToken verifies an Apple-issued ID token against Apple's
-// JWKs (`https://appleid.apple.com/auth/keys`), enforces iss =
-// "https://appleid.apple.com" and aud = configured AppleClientID. Apple
-// omits given/family name claims entirely after the first sign-in, so
-// firstName/lastName are returned empty when absent.
-//
-// For "Hide My Email" relay addresses (*@privaterelay.appleid.com)
-// Apple still sets email_verified=true, but those addresses must not be
-// used to link to existing password-account emails. That policy lives
-// in GetOrCreateUserFromSocial.
-func verifyAppleToken(ctx context.Context, token string) (email, firstName, lastName string, emailVerified bool, providerID, nonce string, err error) {
+// verifyAppleToken requires the Apple issuer and apple_client_id audience.
+// Apple sends names only on the first sign-in, and never in the token.
+func verifyAppleToken(ctx context.Context, token string) (user.ExternalIdentity, string, error) {
 	aud := config.Config().AppleClientID
 	if aud == "" {
-		return "", "", "", false, "", "", fmt.Errorf("apple_client_id is not configured")
+		return user.ExternalIdentity{}, "", fmt.Errorf("apple_client_id is not configured")
 	}
 	claims, err := verifyJWKsToken(ctx, getAppleJWKs(), token, aud, appleIssuer)
 	if err != nil {
-		return "", "", "", false, "", "", err
+		return user.ExternalIdentity{}, "", err
 	}
-	sub, _ := claims["sub"].(string)
-	if sub == "" {
-		return "", "", "", false, "", "", fmt.Errorf("apple: missing sub")
+	id := identityFromClaims("apple", appleIssuer, claims)
+	if id.Subject == "" {
+		return user.ExternalIdentity{}, "", fmt.Errorf("apple: missing sub")
 	}
-	emailStr, _ := claims["email"].(string)
-	nonceStr, _ := claims["nonce"].(string)
+	nonce, _ := claims["nonce"].(string)
+	return id, nonce, nil
+}
+
+// identityFromClaims reads sub, email and email_verified, which providers send
+// as a JSON bool or string.
+func identityFromClaims(provider, issuer string, claims map[string]any) user.ExternalIdentity {
+	id := user.ExternalIdentity{Provider: provider, Issuer: issuer}
+	id.Subject, _ = claims["sub"].(string)
+	id.Email, _ = claims["email"].(string)
 	switch v := claims["email_verified"].(type) {
 	case bool:
-		emailVerified = v
+		id.EmailVerified = v
 	case string:
-		emailVerified = v == "true"
+		id.EmailVerified = v == "true"
 	}
-	return emailStr, "", "", emailVerified, sub, nonceStr, nil
+	return id
+}
+
+// socialSignInError keeps the sign-in refusals a client can act on; other
+// failures stay internal.
+func socialSignInError(err error) error {
+	for _, sentinel := range []error{user.ErrIdentityNotLinked, user.ErrAccountUnavailable, user.ErrIdentityLinked} {
+		if errors.Is(err, sentinel) {
+			return sentinel
+		}
+	}
+	return nil
 }

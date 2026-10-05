@@ -3,9 +3,12 @@ package user
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/schema"
@@ -24,6 +27,8 @@ type memStore struct {
 	holds     map[int]bool      // users with an unreleased legal hold
 	deleted   map[int]bool
 	partners  map[int][][]any // qListPartners rows per user
+	accounts  map[int]*account
+	links     map[string]int // issuer|subject → user id
 	calls     []string
 	failQuery map[string]error
 	commits   int
@@ -32,11 +37,31 @@ type memStore struct {
 }
 
 func newMemStore(userIDs ...int) *memStore {
-	m := &memStore{users: map[int]bool{}, cutoffs: map[int]time.Time{}, holds: map[int]bool{}, deleted: map[int]bool{}, failQuery: map[string]error{}}
+	m := &memStore{users: map[int]bool{}, cutoffs: map[int]time.Time{}, holds: map[int]bool{}, deleted: map[int]bool{}, failQuery: map[string]error{},
+		accounts: map[int]*account{}, links: map[string]int{}}
 	for _, id := range userIDs {
 		m.users[id] = true
 	}
 	return m
+}
+
+// account is a user_account row for the identity-linking queries.
+type account struct {
+	email, status string
+}
+
+func (m *memStore) addAccount(id int, email, status string) {
+	m.users[id] = true
+	m.accounts[id] = &account{email: email, status: status}
+}
+
+func (m *memStore) userByEmail(email string) int {
+	for id, a := range m.accounts {
+		if a.email != "" && a.email == email {
+			return id
+		}
+	}
+	return 0
 }
 
 func (m *memStore) GenID() int64                   { m.nextID++; return m.nextID }
@@ -82,6 +107,34 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		}
 	case qListPartners:
 		out.Rows = m.partners[args[0].(int)]
+	case qUserByExternalIdentity:
+		if id, ok := m.links[fmt.Sprint(args[0], "|", args[1])]; ok {
+			a := m.accounts[id]
+			out.Rows = [][]any{{int64(id), "F", "L", a.email, nil, nil, a.status, int64(0), nil}}
+		}
+	case qUserIDByEmail:
+		if id := m.userByEmail(args[0].(string)); id != 0 {
+			out.Rows = [][]any{{int64(id)}}
+		}
+	case qPartnerUserByEmail:
+		if id := m.userByEmail(args[0].(string)); id != 0 {
+			a := m.accounts[id]
+			out.Rows = [][]any{{int64(id), "F", "L", a.email, a.status, nil, nil, int16(0), nil, nil, int64(0), nil}}
+		}
+	case qLinkExternalIdentity:
+		k := fmt.Sprint(args[2], "|", args[3])
+		for lk, uid := range m.links {
+			if lk == k || (uid == args[0].(int) && strings.HasPrefix(lk, fmt.Sprint(args[2], "|"))) {
+				return nil, &pgconn.PgError{Code: "23505"}
+			}
+		}
+		m.links[k] = args[0].(int)
+	case qCreateSocialUser:
+		email, _ := args[3].(string)
+		if email != "" && m.userByEmail(email) != 0 {
+			return nil, &pgconn.PgError{Code: "23505", ConstraintName: "user_account_email_uq"}
+		}
+		m.addAccount(int(args[0].(int64)), email, UserStatusActive)
 	case qAnonymizeUserAccount:
 		m.deleted[args[2].(int)] = true
 		m.cutoffs[args[2].(int)] = time.Now()

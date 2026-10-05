@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.91",
+   "title": "Issuer-keyed external identities",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "External identities are keyed by verified issuer and subject. Google and Apple still link an existing account by verified email; other issuers never do. An identity can also be linked from a re-authenticated session, and social sign-in honors account locks.",
+   "body_markdown": "### Breaking\n\n- `user.UserService.GetOrCreateUserFromSocial` takes `user.ExternalIdentity` (`Provider`, `Issuer`, `Subject`, email and profile claims) instead of positional arguments. `UserService` adds `GetUserFromExternal` and `LinkExternalIdentity`; custom implementations must add them.\n- Replace `user_social_provider` with `user_external_identity(user_id, provider, issuer, subject)`. Its primary key is `(issuer, subject)` and `(user_id, issuer)` is unique. Migrate existing Google and Apple links by mapping `provider_id` to `subject` and backfilling their canonical issuer; other providers require an explicit issuer mapping.\n- Google and Apple link an existing account by verified email as before, and `PublicHandler.LoginGoogle` now records that link. An unverified email, or an email asserted by any other issuer, no longer selects an account: sign-in returns `user.ErrIdentityNotLinked` (409 `identity_not_linked`) and the owner links with `SocialLoginHandler.LinkSocial`, which requires a password or current 2FA code.\n- A new social account stores its email only when Google or Apple verified it. A tenant IdP flow must restrict asserted email to that tenant's IdP-verified domains before account creation; tenant SSO is not introduced by this release.\n- Social sign-in refuses locked, expired and deleted linked accounts with `user.ErrAccountUnavailable` (403 `account_unavailable`).\n\n### Additive\n\n- `SocialLoginHandler.LinkSocial` links a Google or Apple identity to the signed-in account; mount it on an authenticated path. `user.ErrIdentityLinked` (409 `identity_linked`) reports an identity held by another account.\n"
+  },
+  {
    "version": "v1.2.90",
    "title": "Domain verification",
    "tags": [

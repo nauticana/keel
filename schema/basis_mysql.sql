@@ -307,14 +307,16 @@ CREATE TABLE IF NOT EXISTS user_otp (
     CONSTRAINT user_otps FOREIGN KEY (user_id) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Social login provider links (Google, Apple)
-CREATE TABLE IF NOT EXISTS user_social_provider (
+-- External identity links keyed by the verified token issuer and subject
+CREATE TABLE IF NOT EXISTS user_external_identity (
     user_id                              BIGINT        NOT NULL,
     provider                             VARCHAR(20)   NOT NULL,
-    provider_id                          VARCHAR(255)  NOT NULL,
-    PRIMARY KEY (user_id, provider),
-    CONSTRAINT user_social_providers FOREIGN KEY (user_id) REFERENCES user_account(id)
+    issuer                               VARCHAR(255)  NOT NULL,
+    subject                              VARCHAR(255)  NOT NULL,
+    PRIMARY KEY (issuer, subject),
+    CONSTRAINT user_external_identities FOREIGN KEY (user_id) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX user_external_identity_user_issuer_uq ON user_external_identity(user_id, issuer);
 
 -- Mobile device push-notification tokens (FCM / APNs via FCM)
 CREATE TABLE IF NOT EXISTS device_token (

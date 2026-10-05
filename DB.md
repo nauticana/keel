@@ -65,7 +65,7 @@ flowchart RL
         user_refresh_token
         user_trusted_device
         user_otp
-        user_social_provider
+        user_external_identity
         device_token
         user_notification
         consent_policy
@@ -76,7 +76,7 @@ flowchart RL
     user_refresh_token --> user_account
     user_trusted_device --> user_account
     user_otp --> user_account
-    user_social_provider --> user_account
+    user_external_identity --> user_account
     device_token --> user_account
     user_notification --> user_account
     consent_event --> consent_policy
@@ -442,7 +442,7 @@ erDiagram
     consent_policy ||--o{ consent_event : "consent_event_policies"
 
     user_account ||--o{ user_account_history : "user_historic_actions"
-    user_account ||--o{ user_social_provider : "user_social_providers"
+    user_account ||--o{ user_external_identity : "user_external_identities"
     user_account ||--o{ user_otp : "user_otps"
     user_account ||--o{ user_refresh_token : "user_refresh_tokens"
     user_account ||--o{ user_notification : "user_notifications"
@@ -485,10 +485,11 @@ erDiagram
         TIMESTAMP expires_at
         INTEGER attempts
     }
-    user_social_provider {
-        BIGINT user_id PK,FK
-        VARCHAR provider PK
-        VARCHAR provider_id
+    user_external_identity {
+        BIGINT user_id FK
+        VARCHAR provider
+        VARCHAR issuer PK
+        VARCHAR subject PK
     }
     device_token {
         BIGINT id PK

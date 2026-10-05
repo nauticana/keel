@@ -8,47 +8,8 @@ import (
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
-	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/user"
 )
-
-// requireRecentAuth confirms the JWT-bearing caller can still produce a
-// password (or current 2FA code, on accounts with TOTP enabled). It is
-// the gate placed in front of security-sensitive mutations — Setup2FA,
-// Disable2FA, DeleteAccount, LogoutEverywhere — so a stolen JWT alone
-// cannot rotate the seed, delete the account, or force every other
-// device to re-authenticate.
-//
-// Password verification routes through VerifyPasswordByID, NOT
-// GetUserByLogin. The previous implementation used session.Subject as
-// the user_name lookup key; for phone-OTP and social-login signups
-// Subject is "First Last", not the canonical user_name, so the
-// password branch was silently broken for those users (BLOCKER 3).
-// VerifyPasswordByID keys off the JWT-bound user id directly, which
-// is stable across signup paths.
-//
-// On success returns ok=true and leaves the response untouched. On
-// failure writes a 401 and returns false; the caller should early-return.
-func (h *SecurityHandler) requireRecentAuth(w http.ResponseWriter, session *model.UserSession, password, twoFactorCode string) bool {
-	if password == "" && twoFactorCode == "" {
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "password or current 2FA code is required")
-		return false
-	}
-	if password != "" {
-		ok, err := h.UserService.VerifyPasswordByID(session.Id, password)
-		if err != nil || !ok {
-			h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "re-authentication failed")
-			return false
-		}
-		return true
-	}
-	valid, err := h.UserService.Verify2FA(session.Id, twoFactorCode)
-	if err != nil || !valid {
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "re-authentication failed")
-		return false
-	}
-	return true
-}
 
 type SecurityHandler struct {
 	AbstractHandler

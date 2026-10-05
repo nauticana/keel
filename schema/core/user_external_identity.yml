@@ -1,0 +1,22 @@
+table: user_external_identity
+comment: External identity links keyed by the verified token issuer and subject
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: provider
+    type: VARCHAR(20)
+  - name: issuer
+    type: VARCHAR(255)
+  - name: subject
+    type: VARCHAR(255)
+primary_key: [issuer, subject]
+indexes:
+  - name: user_external_identity_user_issuer_uq
+    columns: [user_id, issuer]
+    unique: true
+foreign_keys:
+  - name: user_external_identities
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

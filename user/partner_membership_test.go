@@ -10,7 +10,7 @@ import (
 // Every session builder must pick the same current partner, or a multi-partner
 // user switches partners between login and refresh.
 func TestSessionQueriesUseCurrentPartnerJoin(t *testing.T) {
-	for _, name := range []string{qPartnerUserByid, qPartnerUserByEmail, qGetRefreshToken, qUserByPhone, qUserBySocial} {
+	for _, name := range []string{qPartnerUserByid, qPartnerUserByEmail, qGetRefreshToken, qUserByPhone, qUserByExternalIdentity} {
 		sql := LocalUserQueries[name]
 		if !strings.Contains(sql, sessionPartnerJoin) {
 			t.Errorf("%s does not use sessionPartnerJoin", name)

@@ -23,7 +23,7 @@ tables:
   - user_refresh_token
   - user_trusted_device
   - user_otp
-  - user_social_provider
+  - user_external_identity
   - device_token
   - user_notification
   - notification_suppression

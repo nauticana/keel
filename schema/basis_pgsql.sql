@@ -301,13 +301,15 @@ CREATE TABLE IF NOT EXISTS user_otp (
 CREATE SEQUENCE IF NOT EXISTS user_otp_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_otp', 'id', 'user_otp_seq') ON CONFLICT DO NOTHING;
 
--- Social login provider links (Google, Apple)
-CREATE TABLE IF NOT EXISTS user_social_provider (
+-- External identity links keyed by the verified token issuer and subject
+CREATE TABLE IF NOT EXISTS user_external_identity (
     user_id                              BIGINT        NOT NULL,
     provider                             VARCHAR(20)   NOT NULL,
-    provider_id                          VARCHAR(255)  NOT NULL,
-    CONSTRAINT user_social_provider_pk PRIMARY KEY (user_id, provider)
+    issuer                               VARCHAR(255)  NOT NULL,
+    subject                              VARCHAR(255)  NOT NULL,
+    CONSTRAINT user_external_identity_pk PRIMARY KEY (issuer, subject)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS user_external_identity_user_issuer_uq ON user_external_identity(user_id, issuer);
 
 -- Mobile device push-notification tokens (FCM / APNs via FCM)
 CREATE TABLE IF NOT EXISTS device_token (
@@ -1963,9 +1965,9 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
-     WHERE constraint_name = 'user_social_providers' AND table_name = 'user_social_provider'
+     WHERE constraint_name = 'user_external_identities' AND table_name = 'user_external_identity'
   ) THEN
-    ALTER TABLE user_social_provider ADD CONSTRAINT user_social_providers FOREIGN KEY (user_id) REFERENCES user_account(id);
+    ALTER TABLE user_external_identity ADD CONSTRAINT user_external_identities FOREIGN KEY (user_id) REFERENCES user_account(id);
   END IF;
 END $$;
 DO $$
