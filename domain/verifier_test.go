@@ -289,3 +289,53 @@ func TestEmailCodeVerifier(t *testing.T) {
 		}
 	}
 }
+
+func TestGoogleWorkspaceAliasDomain(t *testing.T) {
+	base := providerServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"/ok": reply(200, `{"domains":[{"domainName":"example.com","verified":true,"domainAliases":[
+			{"domainAliasName":"example.net","verified":true},{"domainAliasName":"pending.net","verified":false}]}]}`),
+	})
+	v := &GoogleWorkspaceVerifier{DomainsURL: base + "/ok"}
+	if ref, err := v.Verify(context.Background(), DomainProof{Domain: "example.net", AccessToken: "tok"}); err != nil || ref != "example.net" {
+		t.Fatalf("verified alias = %q, %v", ref, err)
+	}
+	if _, err := v.Verify(context.Background(), DomainProof{Domain: "pending.net", AccessToken: "tok"}); !notProven(err) {
+		t.Fatalf("unverified alias: %v", err)
+	}
+}
+
+func TestMicrosoftEntraRoleQuery(t *testing.T) {
+	ctx := context.Background()
+	var base string
+	base = providerServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"/roles": func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("ConsistencyLevel") != "eventual" || r.URL.Query().Get("$count") != "true" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			fmt.Fprint(w, `{"value":[{"roleTemplateId":"`+EntraDomainNameAdministrator+`"}]}`)
+		},
+		"/hidden":  reply(200, `{"value":[{"@odata.type":"#microsoft.graph.directoryRole","roleTemplateId":null}]}`),
+		"/domains": reply(200, `{"value":[{"id":"example.com","isVerified":true}]}`),
+		"/endless": func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprintf(w, `{"value":[],"@odata.nextLink":"%s/endless"}`, base)
+		},
+	})
+	proof := DomainProof{Domain: "example.com", AccessToken: "tok"}
+	ok := &MicrosoftEntraVerifier{RolesURL: base + "/roles?$count=true", DomainsURL: base + "/domains"}
+	if _, err := ok.Verify(ctx, proof); err != nil {
+		t.Fatalf("role query with its required header and count: %v", err)
+	}
+	for name, v := range map[string]*MicrosoftEntraVerifier{
+		"unreadable role details": {RolesURL: base + "/hidden", DomainsURL: base + "/domains"},
+		"truncated role listing":  {RolesURL: base + "/endless", DomainsURL: base + "/domains"},
+		"truncated domain list":   {RolesURL: base + "/roles?$count=true", DomainsURL: base + "/endless"},
+	} {
+		if _, err := v.Verify(ctx, proof); err == nil || notProven(err) {
+			t.Errorf("%s must not be a verdict: %v", name, err)
+		}
+	}
+	if !strings.Contains(EntraRolesURL, "transitiveMemberOf/microsoft.graph.directoryRole?$count=true") {
+		t.Fatalf("EntraRolesURL = %s", EntraRolesURL)
+	}
+}

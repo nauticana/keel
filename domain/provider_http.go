@@ -13,14 +13,21 @@ import (
 
 const maxProviderPages = 10
 
+// errTooManyPages is not a verdict: the answer may be on an unread page.
+var errTooManyPages = errors.New("domain verification: provider listing exceeds the page limit")
+
 // getProviderJSON reads one provider API page with the acting user's grant.
 // HTTP failures are operational or credential errors, not proof verdicts:
 // providers also use 403 for missing scopes, quota and disabled APIs.
-func getProviderJSON(ctx context.Context, rawURL, accessToken string, out any) error {
+func getProviderJSON(ctx context.Context, rawURL, accessToken string, out any, headers ...string) error {
 	if accessToken == "" {
 		return fmt.Errorf("domain verification: provider access token required")
 	}
-	body, _, err := common.RequestJSON(ctx, http.MethodGet, rawURL, map[string]string{"Authorization": "Bearer " + accessToken}, nil)
+	h := map[string]string{"Authorization": "Bearer " + accessToken}
+	for i := 0; i+1 < len(headers); i += 2 {
+		h[headers[i]] = headers[i+1]
+	}
+	body, _, err := common.RequestJSON(ctx, http.MethodGet, rawURL, h, nil)
 	if err != nil {
 		var requestErr *url.Error
 		if errors.As(err, &requestErr) {

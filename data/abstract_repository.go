@@ -59,6 +59,10 @@ type AbstractRepository struct {
 }
 
 // Grants returns the injected catalog, or the process default.
+// EndedReadOnlyTables are the effective-dated tables whose rows become
+// read-only once endda is set.
+var EndedReadOnlyTables = []string{"partner_user", "user_permission"}
+
 func (r *AbstractRepository) Grants() port.GrantCatalog {
 	if r.GrantCatalog == nil {
 		return DefaultGrantCatalog
@@ -217,6 +221,11 @@ func (r *AbstractRepository) Init(ctx context.Context) error {
 	// every downstream that follows keel's user_account convention.
 	if userTable := r.TableDefinitions[r.userTable()]; userTable != nil {
 		userTable.PartnerUserScoped = true
+	}
+	for _, name := range EndedReadOnlyTables {
+		if table := r.TableDefinitions[name]; table != nil {
+			table.EndedReadOnly = true
+		}
 	}
 
 	for tableName, table := range r.TableDefinitions {

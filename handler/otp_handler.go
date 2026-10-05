@@ -560,7 +560,7 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, _, purpose := h.resolveOTPToken(r, req.OTPToken)
+	userID, channel, purpose := h.resolveOTPToken(r, req.OTPToken)
 	if userID <= 0 {
 		// Either the token never existed, or it's a fake-token from
 		// the login fall-through (userID=0). Generic 401 — same shape
@@ -582,6 +582,13 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	// Consume the token after a successful verify so a stolen token
 	// can't be replayed even within its TTL.
 	h.consumeOTPToken(r, req.OTPToken)
+
+	if channel == otpChannelEmail {
+		if err := h.UserService.MarkEmailVerified(userID, user.EmailVerifiedByCode); err != nil {
+			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to record verification")
+			return
+		}
+	}
 
 	session, err := h.UserService.GetUserById(userID)
 	if err != nil {

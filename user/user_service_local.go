@@ -40,6 +40,7 @@ var (
 	ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
 	ErrAccessTokenRevoked  = errors.New("access token revoked")
 	ErrLegalHold           = errors.New("user: account is under legal hold")
+	ErrNoMembership        = errors.New("user: no current membership of the partner")
 )
 
 // classifyUniqueViolation maps a pgx unique-index error from user_account
@@ -72,16 +73,17 @@ const (
 	UserStatusInitial    = "I"
 	UserStatusDeleted    = "D"
 
-	UserActivityCreate  = "C"
-	UserActivityLogin   = "L"
-	UserActivityFailed  = "F"
-	UserActivityLogout  = "O"
-	UserActivityLock    = "X"
-	UserActivityUnlock  = "U"
-	UserActivityPasswd  = "P"
-	UserActivityDelete  = "D"
-	UserActivityProfile = "M"
-	UserActivityContact = "N"
+	UserActivityCreate        = "C"
+	UserActivityLogin         = "L"
+	UserActivityFailed        = "F"
+	UserActivityLogout        = "O"
+	UserActivityLock          = "X"
+	UserActivityUnlock        = "U"
+	UserActivityPasswd        = "P"
+	UserActivityDelete        = "D"
+	UserActivityProfile       = "M"
+	UserActivityContact       = "N"
+	UserActivityMembershipEnd = "E"
 
 	// EncryptionCost is the bcrypt work factor for password hashes.
 	// Bumped from 10 → 12 in v0.4.1 to track OWASP 2024 guidance.
@@ -127,6 +129,8 @@ const (
 	// Refresh token queries
 	qInsertRefreshToken          = "insert_refresh_token"
 	qGetRefreshToken             = "get_refresh_token"
+	qEndMembership               = "end_membership"
+	qEndPermissions              = "end_permissions"
 	qRevokeRefreshToken          = "revoke_refresh_token"
 	qRevokeAllRefreshTokensForID = "revoke_all_refresh_tokens_for_user"
 
@@ -142,6 +146,7 @@ const (
 	qCreateSocialUser                = "create_social_user"
 	qLinkExternalIdentity            = "link_external_identity"
 	qUserIDByEmail                   = "user_id_by_email"
+	qMarkEmailVerified               = "mark_email_verified"
 	qAnonymizeUserAccount            = "anonymize_user_account"
 	qDeleteExternalIdentities        = "delete_external_identities_for_user"
 	qDeleteTrustedDevices            = "delete_trusted_devices_for_user"
@@ -189,7 +194,7 @@ var LocalUserQueries = map[string]string{
 	qUserAccountPolicy: "SELECT id, policy_value FROM user_account_policy",
 
 	qUpdateProfile: "UPDATE user_account SET first_name = ?, last_name = ?, locale = ? WHERE id = ?",
-	qSetUserEmail:  "UPDATE user_account SET user_email = ? WHERE id = ?",
+	qSetUserEmail:  "UPDATE user_account SET user_email = ?, email_verified_at = CURRENT_TIMESTAMP, email_verification_method = 'C' WHERE id = ?",
 	qSetUserPhone:  "UPDATE user_account SET phone = ? WHERE id = ?",
 	// Contact-change codes reuse user_registration (the pending-confirmation
 	// table), bound to both the new value (user_email PK) and the user_id, so
@@ -420,7 +425,15 @@ DELETE FROM user_registration
 INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at)
 VALUES (nextval('user_refresh_token_seq'), ?, ?, ?)
 `,
-
+	qEndMembership: `
+UPDATE partner_user SET endda = CURRENT_TIMESTAMP
+ WHERE user_id = ? AND partner_id = ? AND endda IS NULL
+RETURNING partner_id
+`,
+	qEndPermissions: `
+UPDATE user_permission SET endda = CURRENT_TIMESTAMP
+ WHERE user_id = ? AND endda IS NULL
+`,
 	qGetRefreshToken: `
 SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id, U.phone
   FROM user_refresh_token t
@@ -488,13 +501,21 @@ INSERT INTO user_external_identity (user_id, provider, issuer, subject)
 VALUES (?, ?, ?, ?)
 `,
 
-	qUserIDByEmail: `SELECT id FROM user_account WHERE user_email = ?`,
+	qUserIDByEmail: `SELECT id, email_verified_at FROM user_account WHERE user_email = ?`,
+
+	qMarkEmailVerified: `
+UPDATE user_account
+   SET email_verified_at = CURRENT_TIMESTAMP, email_verification_method = ?
+ WHERE id = ? AND user_email IS NOT NULL
+`,
 
 	qAnonymizeUserAccount: `
 UPDATE user_account
    SET first_name = 'Deleted',
        last_name = 'User',
        user_email = ?,
+       email_verified_at = NULL,
+       email_verification_method = NULL,
        user_name = ?,
        phone = NULL,
        passtext = NULL,
@@ -650,6 +671,9 @@ type LocalUserService struct {
 	// user_account (social, phone OTP) record consent inside the account
 	// creation transaction. When nil, consent recording is skipped.
 	ConsentService ConsentService
+	// OAuthTokens is optional. When set, EndMembership also revokes the
+	// user's authorization-server refresh tokens.
+	OAuthTokens port.OAuthTokenStore
 
 	// Ctx is the parent context used by every service method that needs
 	// to issue a DB query. Set by NewLocalUserService / Init from the
@@ -1219,6 +1243,59 @@ func (s *LocalUserService) checkAccessTokenCutoff(session *model.UserSession) er
 
 // RevokeAccessTokens invalidates every access token issued to the user so far.
 // Other nodes honor it within access_revocation_cache_ttl.
+// EndMembership ends the user's open membership of the partner and, in the
+// same transaction, ends the user's open role assignments and revokes every
+// refresh and access token. A user belongs to one partner at a time, so
+// nothing else depends on them.
+func (s *LocalUserService) EndMembership(partnerID int64, userID int, reason string) error {
+	if userID <= 0 || partnerID <= 0 {
+		return ErrNoMembership
+	}
+	lock := s.tokenCutoffLock(userID)
+	lock.Lock()
+	defer lock.Unlock()
+	ctx := s.ctx()
+	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = data.RollbackDetached(tx)
+		}
+	}()
+	ended, err := tx.Query(ctx, qEndMembership, userID, partnerID)
+	if err != nil {
+		return fmt.Errorf("end membership: %w", err)
+	}
+	if len(ended.Rows) == 0 {
+		return ErrNoMembership
+	}
+	if _, err := tx.Query(ctx, qEndPermissions, userID); err != nil {
+		return fmt.Errorf("end membership: end role assignments: %w", err)
+	}
+	if _, err := tx.Query(ctx, qRevokeAllRefreshTokensForID, userID); err != nil {
+		return fmt.Errorf("end membership: revoke refresh tokens: %w", err)
+	}
+	if _, err := tx.Query(ctx, qRevokeAccessTokens, userID); err != nil {
+		return fmt.Errorf("end membership: revoke access tokens: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("end membership: commit: %w", err)
+	}
+	committed = true
+	s.forgetTokenCutoff(userID)
+	var errs []error
+	if s.OAuthTokens != nil {
+		if err := s.OAuthTokens.RevokeForUser(ctx, int64(userID)); err != nil {
+			errs = append(errs, fmt.Errorf("end membership: revoke authorization-server tokens: %w", err))
+		}
+	}
+	errs = append(errs, s.AddUserHistory(userID, 0, "", UserActivityMembershipEnd, UserStatusActive, fmt.Sprintf("partner:%d %s", partnerID, reason)))
+	return errors.Join(errs...)
+}
+
 func (s *LocalUserService) RevokeAccessTokens(userID int) error {
 	lock := s.tokenCutoffLock(userID)
 	lock.Lock()
@@ -2062,6 +2139,11 @@ func (s *LocalUserService) createUserFromSocial(id ExternalIdentity) (*model.Use
 		}
 		return nil, err
 	}
+	if email != "" {
+		if _, err := tx.Query(ctx, qMarkEmailVerified, id.verificationMethod(), userId); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -2317,8 +2399,9 @@ func (s *LocalUserService) GetOrCreateUserFromSocial(id ExternalIdentity, signup
 }
 
 // GetUserFromExternal signs in the account linked by issuer and subject, or
-// the account owning an email Google or Apple verified, which is then linked.
-// Any other issuer asserting an existing account's email gets ErrIdentityNotLinked.
+// the account whose verified email Google or Apple also verified, which is
+// then linked. Any other issuer, or an account that never proved its email,
+// gets ErrIdentityNotLinked.
 func (s *LocalUserService) GetUserFromExternal(id ExternalIdentity) (*model.UserSession, error) {
 	if err := id.validate(); err != nil {
 		return nil, err
@@ -2342,7 +2425,7 @@ func (s *LocalUserService) GetUserFromExternal(id ExternalIdentity) (*model.User
 	if len(res.Rows) == 0 {
 		return nil, ErrNoAccount
 	}
-	if !id.linksByEmail() {
+	if !id.linksByEmail() || res.Rows[0][1] == nil {
 		return nil, ErrIdentityNotLinked
 	}
 	existing, err := s.GetUserByEmail(email)
@@ -2354,6 +2437,16 @@ func (s *LocalUserService) GetUserFromExternal(id ExternalIdentity) (*model.User
 	}
 	existing.Provider = id.Provider
 	return existing, nil
+}
+
+// MarkEmailVerified records that the user proved control of user_email by
+// method, an email_verification_method code.
+func (s *LocalUserService) MarkEmailVerified(userID int, method string) error {
+	if userID <= 0 || len(method) != 1 {
+		return fmt.Errorf("user: user and one-character verification method are required")
+	}
+	_, err := s.queryService.Query(s.ctx(), qMarkEmailVerified, method, userID)
+	return err
 }
 
 // LinkExternalIdentity links the identity to an authenticated account. The

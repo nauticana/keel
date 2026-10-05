@@ -55,6 +55,7 @@ const (
 	qAddAddress               = "add_address"
 	qAddDomain                = "add_domain"
 	qAddUserAccount           = "add_user_account"
+	qMarkEmailVerifiedByEmail = "mark_email_verified_by_email"
 	qAddPartnerUser           = "add_partner_user"
 	qAddUserPermission        = "add_user_permission"
 	qGetPlan                  = "get_plan"
@@ -113,9 +114,16 @@ VALUES
 `,
 	qAddUserAccount: `
 INSERT INTO user_account
- (id, first_name, last_name, user_name, user_email, status, passtext, passdate, login_attempts)
+ (id, first_name, last_name, user_name, user_email, status, passtext, passdate, login_attempts,
+  email_verification_method, email_verified_at)
 VALUES
- (?, ?, ?, ?, ?, 'I', ?, CURRENT_TIMESTAMP, 0)
+ (?, ?, ?, ?, ?, 'I', ?, CURRENT_TIMESTAMP, 0,
+  CAST(? AS CHAR(1)), CASE WHEN CAST(? AS CHAR(1)) IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)
+`,
+	qMarkEmailVerifiedByEmail: `
+UPDATE user_account
+   SET email_verified_at = CURRENT_TIMESTAMP, email_verification_method = 'P'
+ WHERE user_email = ?
 `,
 	qAddPartnerUser: `
 INSERT INTO partner_user
@@ -180,6 +188,9 @@ type PartnerRegistration struct {
 	Longitude      float64 `json:"longitude"`
 	DomainURL      string  `json:"domainUrl"`
 	PlanID         string  `json:"planId"`
+	// EmailVerified is set by a caller of RegisterImmediately that proved the
+	// address itself; the confirmation flow sets it from the confirmed code.
+	EmailVerified bool `json:"-"`
 	// Chosen offer (optional; from the plan's subscription_plan_price rows). When
 	// omitted, registration uses the plan's cheapest offer. PERIOD_TYPE codes.
 	BillingCycle string `json:"billingCycle,omitempty"`
@@ -517,7 +528,14 @@ func (r *RegistrationService) executeRegistration(ctx context.Context, data *Par
 	// Password is already bcrypt-hashed in the payload (or empty for
 	// password-less social signups).
 	userID := tx.GenID()
-	if _, err := tx.Query(ctx, qAddUserAccount, userID, data.FirstName, data.LastName, data.UserName, data.Email, data.Password); err != nil {
+	var verification any
+	switch {
+	case !skipMarkRegistration:
+		verification = EmailVerifiedByRegistration
+	case data.EmailVerified:
+		verification = EmailVerifiedByApplication
+	}
+	if _, err := tx.Query(ctx, qAddUserAccount, userID, data.FirstName, data.LastName, data.UserName, data.Email, data.Password, verification, verification); err != nil {
 		return nil, 0, classifyUniqueViolation(err)
 	}
 	if _, err := tx.Query(ctx, qAddPartnerUser, partnerID, userID); err != nil {
@@ -660,6 +678,9 @@ func (r *RegistrationService) ConfirmPasswordChange(ctx context.Context, email s
 		}
 		return fmt.Errorf("invalid or expired confirmation")
 	}
-	_, err = qs.Query(ctx, qSetUserRegistration, email)
+	if _, err = qs.Query(ctx, qSetUserRegistration, email); err != nil {
+		return err
+	}
+	_, err = qs.Query(ctx, qMarkEmailVerifiedByEmail, email)
 	return err
 }

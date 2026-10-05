@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/schema"
@@ -27,12 +28,17 @@ type vrow struct {
 	by                         int64
 	tokenHash, ref             string
 	checked                    time.Time
+	held                       time.Time
 	failing, lapsed, cancelled time.Time
 	cancelledBy                int64
 	lastErr                    string
 }
 
 func (r *vrow) current() bool { return r.lapsed.IsZero() && r.cancelled.IsZero() }
+
+func (r *vrow) heldWithin(now time.Time, seconds any) bool {
+	return r.current() && r.held.After(now.Add(-time.Duration(seconds.(int))*time.Second))
+}
 
 type chrow struct {
 	hash, recipient string
@@ -89,7 +95,7 @@ func nullStr(v any) string {
 
 func (r *vrow) fields() []any {
 	return []any{r.partner, r.url, r.at, r.name, r.method, r.by, r.ref, r.checked,
-		nullTime(r.failing), r.lastErr, nullTime(r.lapsed), nullTime(r.cancelled), r.cancelledBy}
+		nullTime(r.failing), r.lastErr, nullTime(r.lapsed), nullTime(r.cancelled), r.cancelledBy, r.held}
 }
 
 func (m *memStore) find(partner int64, url string, at time.Time) *vrow {
@@ -138,12 +144,25 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		if m.members[[2]int64{args[0].(int64), args[1].(int64)}] {
 			out.Rows = [][]any{{1}}
 		}
-	case qLockName:
-		out.Rows = [][]any{{1}}
+	case guard.QueryLock:
 	case qOtherHolders:
 		for _, r := range m.rows {
-			if r.current() && r.name == args[0] && slices.Contains(args[1].([]string), r.method) && r.partner != args[2] {
+			if r.heldWithin(m.now, args[3]) && r.name == args[0] && slices.Contains(args[1].([]string), r.method) && r.partner != args[2] {
 				out.Rows = [][]any{{r.partner}}
+			}
+		}
+	case qSupersede:
+		for _, r := range m.rows {
+			if r.current() && r.name == args[0] && slices.Contains(args[1].([]string), r.method) && r.partner != args[2] {
+				r.lapsed, r.lastErr = m.now, "superseded by another partner"
+			}
+		}
+	case qIdentityHolders:
+		seen := map[int64]bool{}
+		for _, r := range m.rows {
+			if r.heldWithin(m.now, args[2]) && r.name == args[0] && slices.Contains(args[1].([]string), r.method) && !seen[r.partner] {
+				seen[r.partner] = true
+				out.Rows = append(out.Rows, []any{r.partner})
 			}
 		}
 	case qCurrentSame:
@@ -155,7 +174,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	case qRefresh:
 		for _, r := range m.rows {
 			if r.current() && r.partner == args[2] && r.url == args[3] && r.method == args[4] {
-				r.checked, r.failing, r.lastErr, r.tokenHash, r.ref = m.now, time.Time{}, "", nullStr(args[0]), nullStr(args[1])
+				r.checked, r.held, r.failing, r.lastErr, r.tokenHash, r.ref = m.now, m.now, time.Time{}, "", nullStr(args[0]), nullStr(args[1])
 			}
 		}
 	case qInsert:
@@ -171,7 +190,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			}
 		}
 		m.rows = append(m.rows, &vrow{partner: args[0].(int64), url: args[1].(string), at: at, name: args[2].(string),
-			method: args[3].(string), by: args[4].(int64), tokenHash: nullStr(args[5]), ref: nullStr(args[6]), checked: m.now})
+			method: args[3].(string), by: args[4].(int64), tokenHash: nullStr(args[5]), ref: nullStr(args[6]), checked: m.now, held: m.now})
 	case qGetCurrent:
 		for _, r := range m.rows {
 			if r.current() && r.partner == args[0] && r.url == args[1] && r.method == args[2] {
@@ -239,7 +258,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		}
 	case qCheckHeld:
 		if r := m.find(args[0].(int64), args[1].(string), args[2].(time.Time)); r != nil {
-			r.checked, r.failing, r.lastErr = m.now, time.Time{}, ""
+			r.checked, r.held, r.failing, r.lastErr = m.now, m.now, time.Time{}, ""
 		}
 	case qCheckFailed:
 		if r := m.find(args[2].(int64), args[3].(string), args[4].(time.Time)); r != nil {

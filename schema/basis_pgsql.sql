@@ -191,6 +191,8 @@ CREATE TABLE IF NOT EXISTS user_account (
     last_name                            VARCHAR(80)   NOT NULL,
     user_name                            VARCHAR(80)   NOT NULL,
     user_email                           VARCHAR(255) ,
+    email_verified_at                    TIMESTAMP    ,
+    email_verification_method            CHAR(1)      ,
     phone                                VARCHAR(20)  ,
     locale                               VARCHAR(10)  ,
     status                               CHAR(1)       NOT NULL,
@@ -478,13 +480,16 @@ CREATE TABLE IF NOT EXISTS business_partner (
 CREATE SEQUENCE IF NOT EXISTS business_partner_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('business_partner', 'id', 'business_partner_seq') ON CONFLICT DO NOTHING;
 
--- Associates users with business partners
+-- Associates users with business partners. A user belongs to at most one partner at a time.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 CREATE TABLE IF NOT EXISTS partner_user (
     partner_id                           BIGINT        NOT NULL,
     user_id                              BIGINT        NOT NULL,
     begda                                TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     endda                                TIMESTAMP    ,
-    CONSTRAINT partner_user_pk PRIMARY KEY (partner_id, user_id, begda)
+    CONSTRAINT partner_user_pk PRIMARY KEY (partner_id, user_id, begda),
+    CONSTRAINT partner_user_no_overlap EXCLUDE USING gist (user_id WITH =, tsrange(begda, endda) WITH &&)
 );
 CREATE INDEX IF NOT EXISTS idx_partner_user_user ON partner_user(user_id);
 
@@ -525,6 +530,7 @@ CREATE TABLE IF NOT EXISTS partner_domain_verification (
     token_hash                           VARCHAR(64)  ,
     evidence_ref                         VARCHAR(255) ,
     last_checked_at                      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_held_at                         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     failing_since                        TIMESTAMP    ,
     last_error                           VARCHAR(500) ,
     lapsed_at                            TIMESTAMP    ,

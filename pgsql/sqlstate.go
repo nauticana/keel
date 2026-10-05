@@ -11,10 +11,12 @@ import (
 const (
 	sqlstateUniqueViolation     = "23505"
 	sqlstateForeignKeyViolation = "23503"
+	sqlstateExclusionViolation  = "23P01"
 )
 
 func IsUniqueViolation(err error) bool     { return hasSQLState(err, sqlstateUniqueViolation) }
 func IsForeignKeyViolation(err error) bool { return hasSQLState(err, sqlstateForeignKeyViolation) }
+func IsExclusionViolation(err error) bool  { return hasSQLState(err, sqlstateExclusionViolation) }
 
 func hasSQLState(err error, code string) bool {
 	var pgErr *pgconn.PgError

@@ -16,6 +16,7 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
@@ -185,7 +186,7 @@ func (s *Service) check(ctx context.Context, domainURL, method string, proof Dom
 }
 
 func (s *Service) record(ctx context.Context, partnerID, userID int64, domainURL string, ev *Evidence) (*Verification, error) {
-	tx, err := s.DB.BeginTx(ctx, queries)
+	tx, err := s.DB.BeginTx(ctx, TxQueries())
 	if err != nil {
 		return nil, err
 	}
@@ -223,15 +224,19 @@ func (s *Service) RecordTx(ctx context.Context, tx port.TxQueryService, partnerI
 		return nil, fmt.Errorf("%w: evidence is for %s, not %s", ErrInvalidDomain, ev.domainName, name)
 	}
 	if isIdentityMethod(ev.method) {
-		if _, err := tx.Query(ctx, qLockName, name); err != nil {
+		// Serializes identity recording per domain name across partners.
+		if err := guard.Lock(ctx, tx, "domain:"+name); err != nil {
 			return nil, err
 		}
-		other, err := tx.Query(ctx, qOtherHolders, name, identityMethods, partnerID)
+		other, err := tx.Query(ctx, qOtherHolders, name, identityMethods, partnerID, seconds(config.Config().DomainIdentityMaxAge))
 		if err != nil {
 			return nil, err
 		}
 		if len(other.Rows) > 0 {
 			return nil, ErrDomainHeld
+		}
+		if _, err := tx.Query(ctx, qSupersede, name, identityMethods, partnerID); err != nil {
+			return nil, err
 		}
 	}
 	same, err := tx.Query(ctx, qCurrentSame, partnerID, domainURL, ev.method)
@@ -322,16 +327,21 @@ func (s *Service) Holders(ctx context.Context, domain string, methods []string) 
 }
 
 // IdentityHolder returns the one partner whose current evidence for domain
-// uses an identity method, or ErrNotHeld.
+// uses an identity method and passed a check within domain_identity_max_age,
+// or ErrNotHeld. Evidence that stops passing, for any reason, stops counting.
 func (s *Service) IdentityHolder(ctx context.Context, domain string) (int64, error) {
-	holders, err := s.Holders(ctx, domain, identityMethods)
+	name, ok := DomainName(domain)
+	if !ok {
+		return 0, ErrNotHeld
+	}
+	res, err := s.query(ctx).Query(ctx, qIdentityHolders, name, identityMethods, seconds(config.Config().DomainIdentityMaxAge))
 	if err != nil {
 		return 0, err
 	}
-	if len(holders) != 1 {
+	if len(res.Rows) != 1 {
 		return 0, ErrNotHeld
 	}
-	return holders[0], nil
+	return common.AsInt64(res.Rows[0][0]), nil
 }
 
 // Cancel withdraws the partner's current evidence for the domain by method,
@@ -390,7 +400,7 @@ func (s *Service) Recheck(ctx context.Context, limit int) (RecheckSummary, error
 		}
 		v := verificationFromRow(row)
 		sum.Checked++
-		if err := s.recheckOne(ctx, qs, v, common.AsString(row[13]), &sum); err != nil {
+		if err := s.recheckOne(ctx, qs, v, common.AsString(row[14]), &sum); err != nil {
 			errs = append(errs, fmt.Errorf("%d %s %s: %w", v.PartnerID, v.DomainURL, v.Method, err))
 		}
 	}

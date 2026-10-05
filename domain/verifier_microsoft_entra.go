@@ -10,7 +10,9 @@ import (
 
 const (
 	EntraDomainsURL = "https://graph.microsoft.com/v1.0/domains"
-	EntraRolesURL   = "https://graph.microsoft.com/v1.0/me/memberOf/microsoft.graph.directoryRole"
+	// The OData cast needs $count and the ConsistencyLevel header; transitive
+	// membership includes roles assigned through a group.
+	EntraRolesURL = "https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole?$count=true"
 	// Directory role templates allowed to prove a domain: Global
 	// Administrator and Domain Name Administrator.
 	EntraGlobalAdministrator     = "62e90394-69f5-4237-9190-012177145e10"
@@ -20,7 +22,8 @@ const (
 // MicrosoftEntraVerifier proves the acting user administers the Entra tenant
 // that verified the domain (ME): the user holds an AdminRoles directory role
 // and the tenant lists the domain as verified. Reading domains alone is not
-// enough, since admin consent lets every member read them.
+// enough, since every member may read them. The grant needs Domain.Read.All
+// and a directory read permission that exposes role template ids.
 type MicrosoftEntraVerifier struct {
 	DomainsURL string   // empty uses EntraDomainsURL
 	RolesURL   string   // empty uses EntraRolesURL
@@ -50,13 +53,16 @@ func (v *MicrosoftEntraVerifier) Verify(ctx context.Context, proof DomainProof) 
 			return false, err
 		}
 		for _, r := range page.Value {
+			if r.RoleTemplateID == "" {
+				return false, fmt.Errorf("domain verification: the grant cannot read directory role details")
+			}
 			if slices.Contains(roles, strings.ToLower(r.RoleTemplateID)) {
 				admin = true
 				return true, nil
 			}
 		}
 		return false, nil
-	})
+	}, "ConsistencyLevel", "eventual")
 	if err != nil {
 		return "", err
 	}
@@ -93,7 +99,7 @@ func (v *MicrosoftEntraVerifier) Verify(ctx context.Context, proof DomainProof) 
 
 // graphPages follows @odata.nextLink on the first page's host until visit
 // returns true or maxProviderPages pages were read.
-func graphPages(ctx context.Context, first, accessToken string, visit func([]byte) (bool, error)) error {
+func graphPages(ctx context.Context, first, accessToken string, visit func([]byte) (bool, error), headers ...string) error {
 	start, err := url.Parse(first)
 	if err != nil {
 		return err
@@ -104,7 +110,7 @@ func graphPages(ctx context.Context, first, accessToken string, visit func([]byt
 			NextLink string `json:"@odata.nextLink"`
 		}
 		var raw rawJSON
-		if err := getProviderJSON(ctx, next, accessToken, &raw); err != nil {
+		if err := getProviderJSON(ctx, next, accessToken, &raw, headers...); err != nil {
 			return err
 		}
 		done, err := visit(raw)
@@ -123,7 +129,7 @@ func graphPages(ctx context.Context, first, accessToken string, visit func([]byt
 		}
 		next = page.NextLink
 	}
-	return nil
+	return errTooManyPages
 }
 
 func orDefault(v, fallback string) string {

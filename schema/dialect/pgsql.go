@@ -112,6 +112,9 @@ func (d *PgSQL) GenerateTable(table *schema.Table) string {
 	for _, chk := range table.Checks {
 		lines = append(lines, fmt.Sprintf("    CONSTRAINT %s CHECK (%s)", chk.Name, chk.Expression))
 	}
+	for _, ex := range table.Exclusions {
+		lines = append(lines, fmt.Sprintf("    CONSTRAINT %s EXCLUDE USING %s (%s)", ex.Name, ex.Using, ex.Expression))
+	}
 
 	// Join lines with commas
 	for i, line := range lines {

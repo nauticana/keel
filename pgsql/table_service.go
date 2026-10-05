@@ -765,8 +765,17 @@ func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID 
 		sqlText += " AND " + quoteIdent("user_id") + " = " + s.Placeholder(len(vals)+1)
 		vals = append(vals, userID)
 	}
+	sqlText += s.openRowGuard()
 	_, err := s.Client.Exec(ctx, sqlText, vals...)
 	return err
+}
+
+// openRowGuard keeps generic writes off rows whose endda is set.
+func (s *TableServicePgsql) openRowGuard() string {
+	if !s.Table.EndedReadOnly {
+		return ""
+	}
+	return " AND " + quoteIdent("endda") + " IS NULL"
 }
 
 func (s *TableServicePgsql) Patch(ctx context.Context, partnerID int64, userID int, key map[string]any, changes map[string]any) error {
@@ -844,7 +853,7 @@ func (s *TableServicePgsql) Patch(ctx context.Context, partnerID int64, userID i
 		vals = append(vals, userID)
 		where = append(where, quoteIdent("user_id")+" = "+s.Placeholder(len(vals)))
 	}
-	sqlText := "UPDATE " + s.quotedTable() + " SET " + strings.Join(set, ", ") + " WHERE " + strings.Join(where, " AND ")
+	sqlText := "UPDATE " + s.quotedTable() + " SET " + strings.Join(set, ", ") + " WHERE " + strings.Join(where, " AND ") + s.openRowGuard()
 	_, err := s.Client.Exec(ctx, sqlText, vals...)
 	return err
 }
@@ -939,6 +948,7 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 		}
 		sqlText = "DELETE FROM " + s.quotedTable() + " WHERE " + strings.Join(conditions, " AND ")
 	}
+	sqlText += s.openRowGuard()
 	_, err := s.Client.Exec(ctx, sqlText, vals...)
 	return err
 }

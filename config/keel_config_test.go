@@ -40,7 +40,7 @@ var keelTestFlagIDs = []string{
 	default_commission_rate_bp,
 	commission_hold_days, agency_payout_min_minor,
 	domain_challenge_ttl, domain_code_ttl, domain_challenge_attempts, domain_challenge_cooldown,
-	domain_recheck_interval, domain_recheck_grace, domain_verification_label,
+	domain_recheck_interval, domain_recheck_grace, domain_identity_max_age, domain_verification_label,
 }
 
 func keelRows() ConfigRows {
@@ -63,6 +63,7 @@ func keelRows() ConfigRows {
 	m[domain_challenge_cooldown] = ConfigRow{Default: "60"}
 	m[domain_recheck_interval] = ConfigRow{Default: "86400"}
 	m[domain_recheck_grace] = ConfigRow{Default: "259200"}
+	m[domain_identity_max_age] = ConfigRow{Default: "604800"}
 	m[domain_verification_label] = ConfigRow{Default: "domain-verification"}
 	return m
 }

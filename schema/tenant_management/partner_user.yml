@@ -1,5 +1,6 @@
 table: partner_user
-comment: Associates users with business partners
+comment: Associates users with business partners. A user belongs to at most one partner at a time.
+extensions: [btree_gist]
 columns:
   - name: partner_id
     type: BIGINT
@@ -26,3 +27,7 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+exclusions:
+  - name: partner_user_no_overlap
+    using: gist
+    expression: "user_id WITH =, tsrange(begda, endda) WITH &&"

@@ -61,12 +61,15 @@ func (v *GoogleBusinessVerifier) accounts(ctx context.Context, accessToken strin
 				out = append(out, a.Name)
 			}
 		}
-		if page.NextPageToken == "" || len(out) >= maxBusinessAccounts {
+		if page.NextPageToken == "" {
+			return out, nil
+		}
+		if len(out) >= maxBusinessAccounts {
 			break
 		}
 		token = page.NextPageToken
 	}
-	return out, nil
+	return nil, errTooManyPages
 }
 
 func (v *GoogleBusinessVerifier) matchingLocation(ctx context.Context, account string, proof DomainProof) (string, error) {
@@ -102,5 +105,5 @@ func (v *GoogleBusinessVerifier) matchingLocation(ctx context.Context, account s
 		}
 		token = page.NextPageToken
 	}
-	return "", nil
+	return "", errTooManyPages
 }

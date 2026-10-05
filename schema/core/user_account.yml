@@ -12,6 +12,13 @@ columns:
   - name: user_email
     type: VARCHAR(255)
     nullable: true
+  - name: email_verified_at
+    type: TIMESTAMP
+    nullable: true
+    comment: When user_email was last proven to belong to the user; NULL = never
+  - name: email_verification_method
+    type: CHAR(1)
+    nullable: true
   - name: phone
     type: VARCHAR(20)
     nullable: true

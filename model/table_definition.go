@@ -30,7 +30,11 @@ type TableDefinition struct {
 	//
 	// Auto-set in AbstractRepository.Init on the table whose name matches
 	// AbstractRepository.UserTableName.
-	PartnerUserScoped  bool
+	PartnerUserScoped bool
+	// EndedReadOnly marks an effective-dated table whose rows are immutable
+	// once endda is set: generic Update, Patch and Delete skip them. A change
+	// after that is a new row.
+	EndedReadOnly      bool
 	QuotaResource      string
 	QuotaPartnerColumn string
 	QuotaStringColumn  string

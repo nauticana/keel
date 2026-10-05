@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/port"
 )
 
@@ -301,7 +302,7 @@ func TestCheckThenRecordTxInCallerTransaction(t *testing.T) {
 		t.Fatalf("Domains = %v", got)
 	}
 	for name := range TxQueries() {
-		if !strings.HasPrefix(name, "dv_") {
+		if !strings.HasPrefix(name, "dv_") && name != guard.QueryLock {
 			t.Fatalf("query %q would collide with a caller's map", name)
 		}
 	}
@@ -351,6 +352,49 @@ func TestIdentityMethodsReturnsACopy(t *testing.T) {
 	methods[0] = MethodEmailCode
 	if isIdentityMethod(MethodEmailCode) || !isIdentityMethod(MethodDNSTXT) {
 		t.Fatal("caller mutation changed the identity-method policy")
+	}
+}
+
+// A provider error is not a verdict, so evidence that only errors never
+// lapses; it must still stop holding the domain once it has not passed a
+// check for domain_identity_max_age.
+func TestIdentityEvidenceGoesStaleWithoutAPassingCheck(t *testing.T) {
+	ctx := context.Background()
+	gw := &fakeVerifier{method: MethodGoogleWorkspace}
+	svc, store := setup(gw)
+	svc.AccessToken = func(context.Context, *Verification) (string, error) { return "t", nil }
+	if _, err := svc.Verify(ctx, partnerA, userA, "https://www.Example.com/", MethodGoogleWorkspace, DomainProof{AccessToken: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	gw.err = errors.New("http status 403")
+	cfg := config.Config()
+	for elapsed := time.Duration(0); elapsed < cfg.DomainIdentityMaxAge; elapsed += cfg.DomainRecheckInterval {
+		if holder, err := svc.IdentityHolder(ctx, "example.com"); err != nil || holder != partnerA {
+			t.Fatalf("after %s of errors: %d, %v", elapsed, holder, err)
+		}
+		store.tick(cfg.DomainRecheckInterval)
+		if sum, _ := svc.Recheck(ctx, 10); sum.Errored != 1 || sum.Lapsed != 0 {
+			t.Fatalf("provider error must not be a verdict: %+v", sum)
+		}
+	}
+	if _, err := svc.IdentityHolder(ctx, "example.com"); !errors.Is(err, ErrNotHeld) {
+		t.Fatalf("stale evidence still routes: %v", err)
+	}
+	if !store.rows[0].current() {
+		t.Fatal("stale evidence is not lapsed; a passing check revives it")
+	}
+	if _, err := svc.Verify(ctx, partnerB, userB, "example.com", MethodGoogleWorkspace, DomainProof{AccessToken: "t"}); !errors.Is(err, gw.err) {
+		t.Fatalf("partner B check: %v", err)
+	}
+	gw.err = nil
+	if _, err := svc.Verify(ctx, partnerB, userB, "example.com", MethodGoogleWorkspace, DomainProof{AccessToken: "t"}); err != nil {
+		t.Fatalf("stale evidence must not block the real owner: %v", err)
+	}
+	if holder, err := svc.IdentityHolder(ctx, "example.com"); err != nil || holder != partnerB {
+		t.Fatalf("new holder = %d, %v", holder, err)
+	}
+	if store.rows[0].current() {
+		t.Fatal("the superseded evidence must lapse, or a later passing check would leave two holders")
 	}
 }
 

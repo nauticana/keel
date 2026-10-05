@@ -54,6 +54,9 @@ type UserService interface {
 
 	// Refresh tokens
 	CreateRefreshToken(userID int) (string, error)
+	// EndMembership ends the user's membership of the partner, ends their role
+	// assignments and revokes their tokens.
+	EndMembership(partnerID int64, userID int, reason string) error
 	ValidateRefreshToken(token string) (*model.UserSession, error)
 	RevokeRefreshToken(token string) error
 	// LogoutEverywhere revokes every active refresh token for a user — the
@@ -120,6 +123,8 @@ type UserService interface {
 	// re-authenticated user. A non-nil session with an error from
 	// GetOrCreateUserFromSocial means the account was created but consent
 	// recording failed.
+	// MarkEmailVerified records that the user proved control of user_email.
+	MarkEmailVerified(userID int, method string) error
 	GetUserFromExternal(identity ExternalIdentity) (*model.UserSession, error)
 	GetOrCreateUserFromSocial(identity ExternalIdentity, signupConsent *SignupConsent) (session *model.UserSession, created bool, err error)
 	LinkExternalIdentity(userID int, identity ExternalIdentity) error

@@ -27,6 +27,10 @@ columns:
   - name: last_checked_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
+  - name: last_held_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+    comment: Last time a check found the evidence in place
   - name: failing_since
     type: TIMESTAMP
     nullable: true

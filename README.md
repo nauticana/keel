@@ -1119,6 +1119,14 @@ point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
 
 Login, `GetUserById`, token refresh and the phone, email and social lookups put the user's earliest current `partner_user` membership in the session (ordered by `begda`, then `partner_id`; ended memberships are ignored), so the partner does not change between refreshes. `UserService.ListPartners(userID)` returns every current membership in the same order.
 
+A user belongs to at most one partner at a time. PostgreSQL enforces it with the exclusion constraint `partner_user_no_overlap` (needs the `btree_gist` extension), so two memberships of one user can never overlap; an insert that would overlap fails with SQLSTATE 23P01 (`pgsql.IsExclusionViolation`). To move a user, end the membership and create a new row.
+
+### Ending a membership
+
+`UserService.EndMembership(partnerID, userID, reason)` sets `endda` on the open `partner_user` row and, in the same transaction, ends the user's open `user_permission` rows and revokes every refresh and access token; with `LocalUserService.OAuthTokens` set it also revokes the user's authorization-server refresh tokens. Rows are ended, never deleted. `handler.MembershipHandler` mounts `partner_user/end` for the session partner, gated by `PARTNER_USER` `END` (seeded for `PARTNER_ADMIN`).
+
+A `partner_user` or `user_permission` row is read-only once `endda` is set (`data.EndedReadOnlyTables`): generic Update, Patch and Delete skip it, and a later change is a new row. Setting `endda` through generic REST ends the row but revokes no tokens and ends no roles; use the route for that.
+
 ### `common.CallerSession` — who is calling, anywhere a context flows
 
 `CallerSessionFromContext(ctx)` reads what keel's OAuth, API-key and request-id middlewares bound — principal, subject, partner, session user, key, scopes, request id — and fails closed on an unauthenticated context. `WithCallerSession` is the inverse for workers acting on a claimed job, so a background task carries the same identity a request would.
@@ -1258,6 +1266,8 @@ For metadata-driven dynamic-schema reads, keep using `QueryService.Query` — th
 | `GW` | Google Workspace admin | The user administers the Google organization that verified the domain | With a grant |
 | `ME` | Microsoft Entra admin | The user holds a domain administrator role in the Entra tenant that verified the domain | With a grant |
 
+Provider grants: `GW` needs `admin.directory.domain.readonly` and matches verified domains and domain aliases; `ME` needs `Domain.Read.All` plus a directory read permission that exposes role template ids; `GS` needs `siteverification`. A listing longer than the page limit, or role details the grant cannot read, is an error, not a verdict.
+
 `domain.IdentityMethods()` returns the methods (`DT`, `GW`, `ME`) strong enough to route sign-in to a tenant. They are exclusive: recording one fails with `ErrDomainHeld` while another partner holds current identity evidence, and `IdentityHolder(domain)` returns the single holder or `ErrNotHeld`. Other methods are non-exclusive. Public suffixes, IP literals and free mailbox providers (`IsPublicDomain`) cannot be verified.
 
 Each verification is a `partner_domain_verification` row keyed `(partner_id, domain_url, verified_at)`. Proving a method that is already current refreshes that row; after a lapse or cancellation a new row is appended, so history is kept. A row is current while `lapsed_at` and `cancelled_at` are NULL.
@@ -1296,6 +1306,8 @@ _, err = domains.RecordTx(ctx, tx, partnerID, userID, domainURL, ev)
 Challenges store only the SHA-256 of the token or code, expire after `domain_challenge_ttl` (`domain_code_ttl` for `EC`), allow `domain_challenge_attempts` confirmations and are not reissued within `domain_challenge_cooldown`. `domain_verification_label` names the TXT prefix and file.
 
 A worker calls `Recheck(ctx, limit)` to re-verify `DT`, `HF` and, when `Service.AccessToken` supplies a current grant, the provider methods once evidence is older than `domain_recheck_interval`. A negative verdict marks the row failing and lapses it after `domain_recheck_grace`, then runs `Service.OnLapsed`; a check that cannot complete records `last_error` without a verdict.
+
+Identity evidence must also keep passing: `IdentityHolder` and the exclusivity rule count it only while its last passed check (`last_held_at`) is younger than `domain_identity_max_age` (default 7 days). Evidence that only errors, such as a demoted administrator's, therefore stops routing and stops blocking other partners without lapsing; a passing check revives it, and another partner's verification supersedes it. Run `Recheck` on a schedule, or identity evidence expires.
 
 `HTTPFileVerifier` fetches over HTTPS only, follows redirects only between the domain and its `www` host, reads at most 1 KiB and never dials a private, loopback or link-local address. Provider HTTP failures are not proof verdicts because statuses such as 403 can also mean missing scopes, quota exhaustion or a disabled API.
 
@@ -1551,7 +1563,9 @@ POST /public/login/social  { "provider": "google", "token": "eyJhbG..." }
 3. Return the token pair.
 ```
 
-Google and Apple link to an existing account by verified email, whatever its mail domain (Gmail, a Google Workspace domain, or any other address they verified), so a user who registered with an email can sign in with either provider. An unverified email, an Apple private-relay address, or an email asserted by any other issuer never selects an account: the owner signs in another way and calls `LinkSocial`, which requires the account password or a current 2FA code and a fresh provider token. A new account stores the email only when Google or Apple verified it.
+Google and Apple link to an existing account by verified email, whatever its mail domain (Gmail, a Google Workspace domain, or any other address they verified), so a user who registered with an email can sign in with either provider, provided the account proved that email (`user_account.email_verified_at`). An unverified email, an Apple private-relay address, or an email asserted by any other issuer never selects an account: the owner signs in another way and calls `LinkSocial`, which requires the account password or a current 2FA code and a fresh provider token. A new account stores the email only when Google or Apple verified it.
+
+`email_verified_at` and `email_verification_method` (constant `email_verification_method`) are set when the user proves the mailbox: `O` email code, `R` registration confirmation, `C` contact change, `P` password reset, `G`/`A` an account created by Google or Apple, `X` a `RegisterImmediately` caller that sets `PartnerRegistration.EmailVerified`, `L` rows backfilled at upgrade. An email typed at phone signup or at email-OTP registration stays unverified until its code is entered, so a planted account cannot capture the real owner's Google or Apple sign-in. `UserService.MarkEmailVerified` records a proof made elsewhere.
 
 `LoginGoogle` (`/public/login/gmail`, OAuth code) follows rules (a) to (c) through `GetUserFromExternal` and never creates an account. A locked, expired or deleted account is refused with `ErrAccountUnavailable` (403).
 
@@ -2931,7 +2945,7 @@ this summary can be checked directly against the generated schema.
 | `authorization_role` | RBAC role definitions |
 | `authorization_role_permission` | Object/action/scope grants assigned to roles |
 | `user_account_policy` | Password and account-policy settings |
-| `user_account` | User accounts with password, 2FA fields |
+| `user_account` | User accounts with password, 2FA fields, email verification time and method |
 | `user_permission` | User-to-role assignments |
 | `user_account_history` | Login audit trail |
 | `user_registration` | Email confirmation flow |

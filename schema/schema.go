@@ -26,6 +26,7 @@ type Table struct {
 	ForeignKeys []*ForeignKey `yaml:"foreign_keys,omitempty"`
 	Indexes     []*Index      `yaml:"indexes,omitempty"`
 	Checks      []*Check      `yaml:"checks,omitempty"`
+	Exclusions  []*Exclusion  `yaml:"exclusions,omitempty"`
 	Sequence    *Sequence     `yaml:"sequence,omitempty"`
 	Extensions  []string      `yaml:"extensions,omitempty"`
 	Order       int           `yaml:"order,omitempty"`
@@ -77,6 +78,15 @@ type Index struct {
 // Check represents a CHECK constraint.
 type Check struct {
 	Name       string `yaml:"name"`
+	Expression string `yaml:"expression"`
+}
+
+// Exclusion represents a PostgreSQL EXCLUDE constraint, such as one that
+// forbids overlapping periods. MySQL cannot express it, so the mysql dialect
+// omits it and the invariant must be service-enforced there.
+type Exclusion struct {
+	Name       string `yaml:"name"`
+	Using      string `yaml:"using"`
 	Expression string `yaml:"expression"`
 }
 
@@ -440,6 +450,15 @@ func (s *Schema) Validate() error {
 				return fmt.Errorf("schema: duplicate check constraint %q on table %q", chk.Name, t.Name)
 			}
 			checkNames[chk.Name] = struct{}{}
+		}
+		for _, ex := range t.Exclusions {
+			if ex.Name == "" || ex.Using == "" || ex.Expression == "" {
+				return fmt.Errorf("schema: exclusion on table %q needs name, using and expression", t.Name)
+			}
+			if _, dup := checkNames[ex.Name]; dup {
+				return fmt.Errorf("schema: duplicate constraint %q on table %q", ex.Name, t.Name)
+			}
+			checkNames[ex.Name] = struct{}{}
 		}
 	}
 	return nil

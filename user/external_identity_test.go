@@ -164,3 +164,45 @@ func TestUnverifiedEmailIsNotStored(t *testing.T) {
 		t.Fatal("an identity without a subject must be refused")
 	}
 }
+
+// An account whose email was never proven must not capture the sign-in of the
+// address's real owner; proving the mailbox enables linking.
+func TestUnverifiedAccountEmailDoesNotLink(t *testing.T) {
+	store := newMemStore()
+	store.addAccount(5, "victim@gmail.com", UserStatusActive)
+	store.accounts[5].verifiedBy = ""
+	svc := newLocalUserService(t, store)
+
+	id := google("g-victim", "victim@gmail.com")
+	if _, _, err := svc.GetOrCreateUserFromSocial(id, nil); !errors.Is(err, ErrIdentityNotLinked) {
+		t.Fatalf("planted account: %v", err)
+	}
+	if len(store.links) != 0 {
+		t.Fatal("no link may be written to an unverified account")
+	}
+	if err := svc.MarkEmailVerified(5, EmailVerifiedByCode); err != nil {
+		t.Fatal(err)
+	}
+	if session, _, err := svc.GetOrCreateUserFromSocial(id, nil); err != nil || session.Id != 5 {
+		t.Fatalf("after the mailbox is proven = %+v, %v", session, err)
+	}
+	if err := svc.MarkEmailVerified(5, "long"); err == nil {
+		t.Fatal("a method code is one character")
+	}
+}
+
+func TestSocialAccountRecordsEmailVerification(t *testing.T) {
+	store := newMemStore()
+	svc := newLocalUserService(t, store)
+	session, _, err := svc.GetOrCreateUserFromSocial(google("g-1", "a@acme.com"), nil)
+	if err != nil || store.accounts[session.Id].verifiedBy != EmailVerifiedByGoogle {
+		t.Fatalf("Google account = %+v, %v", store.accounts[session.Id], err)
+	}
+	apple := ExternalIdentity{Provider: "apple", Issuer: AppleIssuer, Subject: "a-1", Email: "b@acme.com", EmailVerified: true}
+	if session, _, err = svc.GetOrCreateUserFromSocial(apple, nil); err != nil || store.accounts[session.Id].verifiedBy != EmailVerifiedByApple {
+		t.Fatalf("Apple account = %+v, %v", store.accounts[session.Id], err)
+	}
+	if session, _, err = svc.GetOrCreateUserFromSocial(tenant("t-1", "c@acme.com"), nil); err != nil || store.accounts[session.Id].verifiedBy != "" {
+		t.Fatalf("untrusted issuer = %+v, %v", store.accounts[session.Id], err)
+	}
+}

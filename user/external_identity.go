@@ -58,6 +58,25 @@ func (id ExternalIdentity) emailTrusted() bool {
 	return (id.Provider == "google" && id.Issuer == GoogleIssuer) || (id.Provider == "apple" && id.Issuer == AppleIssuer)
 }
 
+// Email verification methods (constant email_verification_method).
+const (
+	EmailVerifiedByCode          = "O"
+	EmailVerifiedByRegistration  = "R"
+	EmailVerifiedByContactChange = "C"
+	EmailVerifiedByPasswordReset = "P"
+	EmailVerifiedByGoogle        = "G"
+	EmailVerifiedByApple         = "A"
+	EmailVerifiedByApplication   = "X"
+	EmailVerifiedLegacy          = "L"
+)
+
+func (id ExternalIdentity) verificationMethod() string {
+	if id.Provider == "apple" {
+		return EmailVerifiedByApple
+	}
+	return EmailVerifiedByGoogle
+}
+
 // linksByEmail reports whether the email may select an existing account. An
 // Apple relay address never belongs to another account.
 func (id ExternalIdentity) linksByEmail() bool {

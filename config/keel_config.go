@@ -130,6 +130,7 @@ const (
 	domain_challenge_cooldown     = "domain_challenge_cooldown"
 	domain_recheck_interval       = "domain_recheck_interval"
 	domain_recheck_grace          = "domain_recheck_grace"
+	domain_identity_max_age       = "domain_identity_max_age"
 	domain_verification_label     = "domain_verification_label"
 )
 
@@ -258,6 +259,7 @@ type KeelConfig struct {
 	DomainChallengeCooldown     time.Duration // domain_challenge_cooldown     60                 Minimum gap before a domain challenge is issued again
 	DomainRecheckInterval       time.Duration // domain_recheck_interval       86400              Age after which current domain evidence is re-checked
 	DomainRecheckGrace          time.Duration // domain_recheck_grace          259200             How long failing domain evidence stays current before it lapses
+	DomainIdentityMaxAge        time.Duration // domain_identity_max_age       604800             How long identity evidence counts after its last passed check
 	DomainVerificationLabel     string        // domain_verification_label     domain-verification  DNS TXT value prefix and HTTP file name of domain challenges
 }
 
@@ -382,6 +384,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.DomainChallengeCooldown = c.Duration(m, domain_challenge_cooldown)
 	c.DomainRecheckInterval = c.Duration(m, domain_recheck_interval)
 	c.DomainRecheckGrace = c.Duration(m, domain_recheck_grace)
+	c.DomainIdentityMaxAge = c.Duration(m, domain_identity_max_age)
 	c.DomainVerificationLabel = c.String(m, domain_verification_label)
 
 	if c.RefreshTokenTTL <= 0 {
@@ -421,6 +424,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 		if d <= 0 {
 			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", flag))
 		}
+	}
+	if c.DomainIdentityMaxAge <= c.DomainRecheckInterval {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must exceed %s, or healthy evidence expires between re-checks", domain_identity_max_age, domain_recheck_interval))
 	}
 	if c.DomainChallengeAttempts <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", domain_challenge_attempts))

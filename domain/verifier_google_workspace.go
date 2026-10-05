@@ -29,6 +29,10 @@ func (v *GoogleWorkspaceVerifier) Verify(ctx context.Context, proof DomainProof)
 		Domains []struct {
 			DomainName string `json:"domainName"`
 			Verified   bool   `json:"verified"`
+			Aliases    []struct {
+				DomainAliasName string `json:"domainAliasName"`
+				Verified        bool   `json:"verified"`
+			} `json:"domainAliases"`
 		} `json:"domains"`
 	}
 	if err := getProviderJSON(ctx, endpoint, proof.AccessToken, &page); err != nil {
@@ -37,6 +41,11 @@ func (v *GoogleWorkspaceVerifier) Verify(ctx context.Context, proof DomainProof)
 	for _, d := range page.Domains {
 		if d.Verified && coveredBy(proof.Domain, d.DomainName) {
 			return d.DomainName, nil
+		}
+		for _, a := range d.Aliases {
+			if a.Verified && coveredBy(proof.Domain, a.DomainAliasName) {
+				return a.DomainAliasName, nil
+			}
 		}
 	}
 	return "", fmt.Errorf("%w: %s is not a verified domain of the organization", ErrDomainNotProven, proof.Domain)

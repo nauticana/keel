@@ -70,11 +70,13 @@ seeds:
     columns: [id, caption]
     rows:
       - [PARTNER_DOMAIN, Partner Domain Actions]
+      - [PARTNER_USER, Partner User Actions]
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
     rows:
       - [PARTNER_DOMAIN, VERIFY, Verify a partner domain]
       - [PARTNER_DOMAIN, CANCEL, Cancel a partner domain verification]
+      - [PARTNER_USER, END, End a partner membership]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
@@ -127,3 +129,4 @@ seeds:
       - [PARTNER_ADMIN, TABLE, SELECT, partner_domain_verification]
       - [PARTNER_ADMIN, PARTNER_DOMAIN, VERIFY, partner_domain]
       - [PARTNER_ADMIN, PARTNER_DOMAIN, CANCEL, partner_domain]
+      - [PARTNER_ADMIN, PARTNER_USER, END, partner_user]

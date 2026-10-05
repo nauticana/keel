@@ -519,6 +519,8 @@ erDiagram
         VARCHAR last_name
         VARCHAR user_name
         VARCHAR user_email
+        TIMESTAMP email_verified_at
+        CHAR email_verification_method
         VARCHAR phone
         VARCHAR locale
         CHAR status
