@@ -1,0 +1,40 @@
+table: partner_domain_challenge
+comment: |
+  Open challenge of a challenge-based domain verification method: the SHA-256 of
+  the token or code, the email recipient of an email code (EC), and the guess count.
+  Issuing again replaces it; a successful confirmation deletes it.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: domain_url
+    type: VARCHAR(255)
+  - name: method
+    type: CHAR(2)
+  - name: token_hash
+    type: VARCHAR(64)
+  - name: recipient
+    type: VARCHAR(255)
+    nullable: true
+  - name: issued_by
+    type: BIGINT
+  - name: issued_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+  - name: attempts
+    type: SMALLINT
+    default: "0"
+primary_key: [partner_id, domain_url, method]
+foreign_keys:
+  - name: partner_domain_challenges
+    columns: [partner_id, domain_url]
+    references:
+      table: partner_domain
+      columns: [partner_id, domain_url]
+    on_delete: CASCADE
+  - name: partner_domain_challenge_issuer
+    columns: [issued_by]
+    references:
+      table: user_account
+      columns: [id]

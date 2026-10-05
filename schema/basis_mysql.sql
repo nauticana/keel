@@ -518,6 +518,55 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     CONSTRAINT partner_domains FOREIGN KEY (partner_id) REFERENCES business_partner(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- How a partner proved a domain, one row per executed verification. method is a
+-- domain_verification_method code; domain_name is the normalized host the proof
+-- covers. A row is current while lapsed_at and cancelled_at are NULL. Rows are
+-- written only by the domain verification service.
+CREATE TABLE IF NOT EXISTS partner_domain_verification (
+    partner_id                           BIGINT        NOT NULL,
+    domain_url                           VARCHAR(255)  NOT NULL,
+    verified_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    domain_name                          VARCHAR(255)  NOT NULL,
+    method                               CHAR(2)       NOT NULL,
+    verified_by                          BIGINT        NOT NULL,
+    token_hash                           VARCHAR(64)  ,
+    evidence_ref                         VARCHAR(255) ,
+    last_checked_at                      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    failing_since                        DATETIME     ,
+    last_error                           VARCHAR(500) ,
+    lapsed_at                            DATETIME     ,
+    cancelled_at                         DATETIME     ,
+    cancelled_by                         BIGINT       ,
+    PRIMARY KEY (partner_id, domain_url, verified_at),
+    CONSTRAINT partner_domain_verifications FOREIGN KEY (partner_id, domain_url) REFERENCES partner_domain(partner_id, domain_url) ON DELETE CASCADE,
+    CONSTRAINT partner_domain_verifier FOREIGN KEY (verified_by) REFERENCES user_account(id),
+    CONSTRAINT partner_domain_verification_canceller FOREIGN KEY (cancelled_by) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- partner_domain_verification_current_uq is a partial index on PostgreSQL (WHERE lapsed_at IS NULL AND cancelled_at IS NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX partner_domain_verification_current_uq ON partner_domain_verification(partner_id, domain_url, method);
+-- idx_partner_domain_verification_name is a partial index on PostgreSQL (WHERE lapsed_at IS NULL AND cancelled_at IS NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX idx_partner_domain_verification_name ON partner_domain_verification(domain_name, method);
+-- idx_partner_domain_verification_check is a partial index on PostgreSQL (WHERE lapsed_at IS NULL AND cancelled_at IS NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX idx_partner_domain_verification_check ON partner_domain_verification(last_checked_at);
+
+-- Open challenge of a challenge-based domain verification method: the SHA-256 of
+-- the token or code, the email recipient of an email code (EC), and the guess count.
+-- Issuing again replaces it; a successful confirmation deletes it.
+CREATE TABLE IF NOT EXISTS partner_domain_challenge (
+    partner_id                           BIGINT        NOT NULL,
+    domain_url                           VARCHAR(255)  NOT NULL,
+    method                               CHAR(2)       NOT NULL,
+    token_hash                           VARCHAR(64)   NOT NULL,
+    recipient                            VARCHAR(255) ,
+    issued_by                            BIGINT        NOT NULL,
+    issued_at                            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at                           DATETIME      NOT NULL,
+    attempts                             SMALLINT      NOT NULL DEFAULT 0,
+    PRIMARY KEY (partner_id, domain_url, method),
+    CONSTRAINT partner_domain_challenges FOREIGN KEY (partner_id, domain_url) REFERENCES partner_domain(partner_id, domain_url) ON DELETE CASCADE,
+    CONSTRAINT partner_domain_challenge_issuer FOREIGN KEY (issued_by) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Background worker registration and heartbeat
 CREATE TABLE IF NOT EXISTS service_registry (
     service_name                         VARCHAR(16)   NOT NULL,

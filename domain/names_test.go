@@ -1,4 +1,4 @@
-package common
+package domain
 
 import "testing"
 
@@ -65,5 +65,33 @@ func TestIsPublicDomainCoversMajorProviders(t *testing.T) {
 	}
 	if IsPublicDomain("rinovapergola.com") {
 		t.Error("a custom domain must not be classified public")
+	}
+}
+
+func TestDomainNameNormalizes(t *testing.T) {
+	for in, want := range map[string]string{
+		"Example.com":                    "example.com",
+		"https://www.Example.com/path":   "example.com",
+		"http://shop.example.co.uk:8080": "shop.example.co.uk",
+		"bücher.de":                      "xn--bcher-kva.de",
+		"example.com.":                   "example.com",
+	} {
+		if got, ok := DomainName(in); !ok || got != want {
+			t.Errorf("DomainName(%q) = %q, %v want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "localhost", "127.0.0.1", "[2001:db8::1]", "ftp://example.com", "https://user:pw@example.com", "mailto:a@example.com"} {
+		if got, ok := DomainName(in); ok {
+			t.Errorf("DomainName(%q) = %q, want refusal", in, got)
+		}
+	}
+}
+
+func TestASCIIHost(t *testing.T) {
+	if got, ok := ASCIIHost("BÜCHER.de."); !ok || got != "xn--bcher-kva.de" {
+		t.Fatalf("ASCIIHost = %q, %v", got, ok)
+	}
+	if _, ok := ASCIIHost(""); ok {
+		t.Fatal("empty host must be refused")
 	}
 }

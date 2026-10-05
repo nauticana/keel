@@ -1,0 +1,73 @@
+table: partner_domain_verification
+comment: |
+  How a partner proved a domain, one row per executed verification. method is a
+  domain_verification_method code; domain_name is the normalized host the proof
+  covers. A row is current while lapsed_at and cancelled_at are NULL. Rows are
+  written only by the domain verification service.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: domain_url
+    type: VARCHAR(255)
+  - name: verified_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: domain_name
+    type: VARCHAR(255)
+  - name: method
+    type: CHAR(2)
+  - name: verified_by
+    type: BIGINT
+  - name: token_hash
+    type: VARCHAR(64)
+    nullable: true
+  - name: evidence_ref
+    type: VARCHAR(255)
+    nullable: true
+  - name: last_checked_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: failing_since
+    type: TIMESTAMP
+    nullable: true
+  - name: last_error
+    type: VARCHAR(500)
+    nullable: true
+  - name: lapsed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: cancelled_at
+    type: TIMESTAMP
+    nullable: true
+  - name: cancelled_by
+    type: BIGINT
+    nullable: true
+primary_key: [partner_id, domain_url, verified_at]
+indexes:
+  - name: partner_domain_verification_current_uq
+    columns: [partner_id, domain_url, method]
+    unique: true
+    where: "lapsed_at IS NULL AND cancelled_at IS NULL"
+  - name: idx_partner_domain_verification_name
+    columns: [domain_name, method]
+    where: "lapsed_at IS NULL AND cancelled_at IS NULL"
+  - name: idx_partner_domain_verification_check
+    columns: [last_checked_at]
+    where: "lapsed_at IS NULL AND cancelled_at IS NULL"
+foreign_keys:
+  - name: partner_domain_verifications
+    columns: [partner_id, domain_url]
+    references:
+      table: partner_domain
+      columns: [partner_id, domain_url]
+    on_delete: CASCADE
+  - name: partner_domain_verifier
+    columns: [verified_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: partner_domain_verification_canceller
+    columns: [cancelled_by]
+    references:
+      table: user_account
+      columns: [id]

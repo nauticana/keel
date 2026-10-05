@@ -509,6 +509,47 @@ CREATE TABLE IF NOT EXISTS partner_domain (
     CONSTRAINT partner_domain_pk PRIMARY KEY (partner_id, domain_url)
 );
 
+-- How a partner proved a domain, one row per executed verification. method is a
+-- domain_verification_method code; domain_name is the normalized host the proof
+-- covers. A row is current while lapsed_at and cancelled_at are NULL. Rows are
+-- written only by the domain verification service.
+CREATE TABLE IF NOT EXISTS partner_domain_verification (
+    partner_id                           BIGINT        NOT NULL,
+    domain_url                           VARCHAR(255)  NOT NULL,
+    verified_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    domain_name                          VARCHAR(255)  NOT NULL,
+    method                               CHAR(2)       NOT NULL,
+    verified_by                          BIGINT        NOT NULL,
+    token_hash                           VARCHAR(64)  ,
+    evidence_ref                         VARCHAR(255) ,
+    last_checked_at                      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    failing_since                        TIMESTAMP    ,
+    last_error                           VARCHAR(500) ,
+    lapsed_at                            TIMESTAMP    ,
+    cancelled_at                         TIMESTAMP    ,
+    cancelled_by                         BIGINT       ,
+    CONSTRAINT partner_domain_verification_pk PRIMARY KEY (partner_id, domain_url, verified_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS partner_domain_verification_current_uq ON partner_domain_verification(partner_id, domain_url, method) WHERE lapsed_at IS NULL AND cancelled_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_partner_domain_verification_name ON partner_domain_verification(domain_name, method) WHERE lapsed_at IS NULL AND cancelled_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_partner_domain_verification_check ON partner_domain_verification(last_checked_at) WHERE lapsed_at IS NULL AND cancelled_at IS NULL;
+
+-- Open challenge of a challenge-based domain verification method: the SHA-256 of
+-- the token or code, the email recipient of an email code (EC), and the guess count.
+-- Issuing again replaces it; a successful confirmation deletes it.
+CREATE TABLE IF NOT EXISTS partner_domain_challenge (
+    partner_id                           BIGINT        NOT NULL,
+    domain_url                           VARCHAR(255)  NOT NULL,
+    method                               CHAR(2)       NOT NULL,
+    token_hash                           VARCHAR(64)   NOT NULL,
+    recipient                            VARCHAR(255) ,
+    issued_by                            BIGINT        NOT NULL,
+    issued_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at                           TIMESTAMP     NOT NULL,
+    attempts                             SMALLINT      NOT NULL DEFAULT 0,
+    CONSTRAINT partner_domain_challenge_pk PRIMARY KEY (partner_id, domain_url, method)
+);
+
 -- Background worker registration and heartbeat
 CREATE TABLE IF NOT EXISTS service_registry (
     service_name                         VARCHAR(16)   NOT NULL,
@@ -2078,6 +2119,51 @@ BEGIN
      WHERE constraint_name = 'partner_domains' AND table_name = 'partner_domain'
   ) THEN
     ALTER TABLE partner_domain ADD CONSTRAINT partner_domains FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_domain_verifications' AND table_name = 'partner_domain_verification'
+  ) THEN
+    ALTER TABLE partner_domain_verification ADD CONSTRAINT partner_domain_verifications FOREIGN KEY (partner_id, domain_url) REFERENCES partner_domain(partner_id, domain_url) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_domain_verifier' AND table_name = 'partner_domain_verification'
+  ) THEN
+    ALTER TABLE partner_domain_verification ADD CONSTRAINT partner_domain_verifier FOREIGN KEY (verified_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_domain_verification_canceller' AND table_name = 'partner_domain_verification'
+  ) THEN
+    ALTER TABLE partner_domain_verification ADD CONSTRAINT partner_domain_verification_canceller FOREIGN KEY (cancelled_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_domain_challenges' AND table_name = 'partner_domain_challenge'
+  ) THEN
+    ALTER TABLE partner_domain_challenge ADD CONSTRAINT partner_domain_challenges FOREIGN KEY (partner_id, domain_url) REFERENCES partner_domain(partner_id, domain_url) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_domain_challenge_issuer' AND table_name = 'partner_domain_challenge'
+  ) THEN
+    ALTER TABLE partner_domain_challenge ADD CONSTRAINT partner_domain_challenge_issuer FOREIGN KEY (issued_by) REFERENCES user_account(id);
   END IF;
 END $$;
 DO $$

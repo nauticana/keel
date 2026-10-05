@@ -8,9 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"golang.org/x/net/idna"
-
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/domain"
 	"github.com/nauticana/keel/port"
 )
 
@@ -62,8 +61,8 @@ func (s *PartnerDomainService) Owns(ctx context.Context, partnerID int64, rawURL
 		return "", ErrNoPartnerDomain
 	}
 	for _, row := range res.Rows {
-		domain, ok := domainHost(common.AsString(row[0]))
-		if ok && (host == domain || strings.HasSuffix(host, "."+domain)) {
+		name, ok := domain.DomainName(common.AsString(row[0]))
+		if ok && (host == name || strings.HasSuffix(host, "."+name)) {
 			return u.String(), nil
 		}
 	}
@@ -79,7 +78,7 @@ func parseHTTPURL(rawURL string) (*url.URL, string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, "", ErrInvalidURL
 	}
-	host, ok := asciiHost(u.Hostname())
+	host, ok := domain.ASCIIHost(u.Hostname())
 	if !ok {
 		return nil, "", ErrInvalidURL
 	}
@@ -90,33 +89,4 @@ func parseHTTPURL(rawURL string) (*url.URL, string, error) {
 	}
 	u.Fragment, u.RawFragment = "", ""
 	return u, host, nil
-}
-
-// domainHost reduces a stored domain_url ("Example.com", "https://www.example.com/")
-// to its comparable host.
-func domainHost(domainURL string) (string, bool) {
-	u, err := url.Parse(common.WithScheme(strings.ToLower(strings.TrimSpace(domainURL))))
-	if err != nil || u.User != nil || u.Opaque != "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return "", false
-	}
-	host, ok := asciiHost(u.Hostname())
-	if !ok {
-		return "", false
-	}
-	host = strings.TrimPrefix(host, "www.")
-	return host, strings.Contains(host, ".")
-}
-
-// asciiHost lowercases, drops a trailing dot and maps IDNs to punycode, so
-// look-alike spellings compare equal only when they are the same name.
-func asciiHost(host string) (string, bool) {
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	if host == "" {
-		return "", false
-	}
-	ascii, err := idna.Lookup.ToASCII(host)
-	if err != nil || ascii == "" {
-		return "", false
-	}
-	return ascii, true
 }

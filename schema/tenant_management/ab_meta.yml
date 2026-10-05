@@ -3,3 +3,5 @@ tables:
   - partner_user
   - partner_address
   - partner_domain
+  - partner_domain_verification
+  - partner_domain_challenge

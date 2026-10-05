@@ -2,8 +2,13 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 )
+
+var domainLabel = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+const maxDomainChallengeAttempts = 32766 // leaves one SMALLINT value for the exhausted state
 
 const (
 	http_api_port                 = "http_api_port"
@@ -119,6 +124,13 @@ const (
 	default_commission_rate_bp    = "default_commission_rate_bp"
 	commission_hold_days          = "commission_hold_days"
 	agency_payout_min_minor       = "agency_payout_min_minor"
+	domain_challenge_ttl          = "domain_challenge_ttl"
+	domain_code_ttl               = "domain_code_ttl"
+	domain_challenge_attempts     = "domain_challenge_attempts"
+	domain_challenge_cooldown     = "domain_challenge_cooldown"
+	domain_recheck_interval       = "domain_recheck_interval"
+	domain_recheck_grace          = "domain_recheck_grace"
+	domain_verification_label     = "domain_verification_label"
 )
 
 var _ ApplicationConfig = (*KeelConfig)(nil)
@@ -240,6 +252,13 @@ type KeelConfig struct {
 	DefaultCommissionRateBP     int           // default_commission_rate_bp    2000               Program agency commission rate (2000 = 20.00%)
 	CommissionHoldDays          int           // commission_hold_days          14                 Refund/dispute hold before an earning becomes payable
 	AgencyPayoutMinMinor        int64         // agency_payout_min_minor       2500               Minimum net agency payout; smaller balances roll forward
+	DomainChallengeTTL          time.Duration // domain_challenge_ttl          86400              Validity of a DNS or HTTP domain verification challenge
+	DomainCodeTTL               time.Duration // domain_code_ttl               900                Validity of an emailed domain verification code
+	DomainChallengeAttempts     int           // domain_challenge_attempts     5                  Confirmation tries per domain challenge
+	DomainChallengeCooldown     time.Duration // domain_challenge_cooldown     60                 Minimum gap before a domain challenge is issued again
+	DomainRecheckInterval       time.Duration // domain_recheck_interval       86400              Age after which current domain evidence is re-checked
+	DomainRecheckGrace          time.Duration // domain_recheck_grace          259200             How long failing domain evidence stays current before it lapses
+	DomainVerificationLabel     string        // domain_verification_label     domain-verification  DNS TXT value prefix and HTTP file name of domain challenges
 }
 
 // Apply parses Keel's flags; a missing catalog row aborts the load.
@@ -357,6 +376,13 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.DefaultCommissionRateBP = c.Int(m, default_commission_rate_bp)
 	c.CommissionHoldDays = c.Int(m, commission_hold_days)
 	c.AgencyPayoutMinMinor = c.Int64(m, agency_payout_min_minor)
+	c.DomainChallengeTTL = c.Duration(m, domain_challenge_ttl)
+	c.DomainCodeTTL = c.Duration(m, domain_code_ttl)
+	c.DomainChallengeAttempts = c.Int(m, domain_challenge_attempts)
+	c.DomainChallengeCooldown = c.Duration(m, domain_challenge_cooldown)
+	c.DomainRecheckInterval = c.Duration(m, domain_recheck_interval)
+	c.DomainRecheckGrace = c.Duration(m, domain_recheck_grace)
+	c.DomainVerificationLabel = c.String(m, domain_verification_label)
 
 	if c.RefreshTokenTTL <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", refresh_token_ttl))
@@ -390,6 +416,25 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.MemoryCacheMaxEntries < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", memory_cache_max_entries))
+	}
+	for flag, d := range map[string]time.Duration{domain_challenge_ttl: c.DomainChallengeTTL, domain_code_ttl: c.DomainCodeTTL, domain_recheck_interval: c.DomainRecheckInterval} {
+		if d <= 0 {
+			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", flag))
+		}
+	}
+	if c.DomainChallengeAttempts <= 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", domain_challenge_attempts))
+	} else if c.DomainChallengeAttempts > maxDomainChallengeAttempts {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot exceed %d", domain_challenge_attempts, maxDomainChallengeAttempts))
+	}
+	if c.DomainChallengeCooldown < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", domain_challenge_cooldown))
+	}
+	if c.DomainRecheckGrace < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", domain_recheck_grace))
+	}
+	if !domainLabel.MatchString(c.DomainVerificationLabel) {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: want 1-63 lowercase letters, digits or hyphens", domain_verification_label))
 	}
 	if c.WebhookClaimLeaseSeconds <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive — a zero lease makes every webhook claim instantly stealable", webhook_claim_lease_seconds))

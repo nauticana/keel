@@ -39,6 +39,8 @@ var keelTestFlagIDs = []string{
 	memory_cache_sweep_interval, memory_cache_max_entries,
 	default_commission_rate_bp,
 	commission_hold_days, agency_payout_min_minor,
+	domain_challenge_ttl, domain_code_ttl, domain_challenge_attempts, domain_challenge_cooldown,
+	domain_recheck_interval, domain_recheck_grace, domain_verification_label,
 }
 
 func keelRows() ConfigRows {
@@ -55,6 +57,13 @@ func keelRows() ConfigRows {
 	m[otp_send_window] = ConfigRow{Default: "600"}
 	m[otp_send_per_contact] = ConfigRow{Default: "3"}
 	m[otp_send_per_ip] = ConfigRow{Default: "10"}
+	m[domain_challenge_ttl] = ConfigRow{Default: "86400"}
+	m[domain_code_ttl] = ConfigRow{Default: "900"}
+	m[domain_challenge_attempts] = ConfigRow{Default: "5"}
+	m[domain_challenge_cooldown] = ConfigRow{Default: "60"}
+	m[domain_recheck_interval] = ConfigRow{Default: "86400"}
+	m[domain_recheck_grace] = ConfigRow{Default: "259200"}
+	m[domain_verification_label] = ConfigRow{Default: "domain-verification"}
 	return m
 }
 
@@ -145,6 +154,15 @@ func TestApplyKeel_RefreshTokenTTLIsPositive(t *testing.T) {
 	err := applyKeelForTest(&KeelConfig{}, m)
 	if err == nil || !strings.Contains(err.Error(), refresh_token_ttl) {
 		t.Fatalf("want %s validation error, got %v", refresh_token_ttl, err)
+	}
+}
+
+func TestApplyKeel_DomainChallengeAttemptsFitsStorage(t *testing.T) {
+	m := keelRows()
+	m[domain_challenge_attempts] = ConfigRow{Value: "32767"}
+	err := applyKeelForTest(&KeelConfig{}, m)
+	if err == nil || !strings.Contains(err.Error(), domain_challenge_attempts) {
+		t.Fatalf("want %s validation error, got %v", domain_challenge_attempts, err)
 	}
 }
 

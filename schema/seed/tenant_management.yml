@@ -1,6 +1,28 @@
 comment: Tenant Management seed data
 order: 80
 seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [domain_verification_method, Domain Verification Method]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [domain_verification_method, EC, Email code]
+      - [domain_verification_method, VE, Verified email]
+      - [domain_verification_method, GH, Google hosted domain]
+      - [domain_verification_method, GM, Google mail server]
+      - [domain_verification_method, HF, HTTP file]
+      - [domain_verification_method, DT, DNS TXT record]
+      - [domain_verification_method, GS, Google Search Console]
+      - [domain_verification_method, GB, Google Business Profile]
+      - [domain_verification_method, GW, Google Workspace admin]
+      - [domain_verification_method, ME, Microsoft Entra admin]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [domain_verification_method, partner_domain_verification, method]
+      - [domain_verification_method, partner_domain_challenge, method]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:
@@ -13,6 +35,8 @@ seeds:
     rows:
       - [partner_user, begda, R]
       - [partner_domain, created_at, R]
+      - [partner_domain_verification, verified_at, R]
+      - [partner_domain_verification, last_checked_at, R]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:
@@ -22,11 +46,13 @@ seeds:
       - [partner_address_countries, D, caption]
       - [partner_address_states, D, caption]
       - [partner_domains, S, "*"]
+      - [partner_domain_verifications, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
       - [business_partner, business_partner]
       - [partner_domain, partner_domain]
+      - [partner_domain_verification, partner_domain_verification]
       - [partner_user, partner_user]
       - [partner_address, partner_address]
       - [partner_registration, business_partner]
@@ -39,6 +65,16 @@ seeds:
       - [partner_registration, 1, 0, partner_users]
       - [partner_registration, 2, 0, partner_addresses]
       - [partner_registration, 3, 0, partner_domains]
+      - [partner_domain, 1, 0, partner_domain_verifications]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [PARTNER_DOMAIN, Partner Domain Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [PARTNER_DOMAIN, VERIFY, Verify a partner domain]
+      - [PARTNER_DOMAIN, CANCEL, Cancel a partner domain verification]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
@@ -50,6 +86,7 @@ seeds:
       - [APP_ADMIN, TABLE, SELECT, business_partner]
       - [APP_ADMIN, TABLE, SELECT, partner_address]
       - [APP_ADMIN, TABLE, SELECT, partner_domain]
+      - [APP_ADMIN, TABLE, SELECT, partner_domain_verification]
       - [APP_ADMIN, TABLE, SELECT, partner_user]
       - [SECURITY_ADMIN, PAGE, ACCESS, partner_registrations]
       - [SECURITY_ADMIN, PAGE, ACCESS, partner_addresses]
@@ -87,3 +124,6 @@ seeds:
       - [PARTNER_ADMIN, TABLE, INSERT, partner_domain]
       - [PARTNER_ADMIN, TABLE, UPDATE, partner_domain]
       - [PARTNER_ADMIN, TABLE, DELETE, partner_domain]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_domain_verification]
+      - [PARTNER_ADMIN, PARTNER_DOMAIN, VERIFY, partner_domain]
+      - [PARTNER_ADMIN, PARTNER_DOMAIN, CANCEL, partner_domain]

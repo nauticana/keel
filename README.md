@@ -42,7 +42,7 @@ graph TD
 
 | Package | Description |
 |---------|-------------|
-| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), string/DB helpers (`NullIfEmpty`, `Slugify`, `GenerateNumericCode`, `ParseDBTimestamp`), email/URL domain helpers (`DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`), HTTP response utilities (`WriteJSON`, `WriteError`/`WriteJSONError`), shared HTTP client with the typed `RequestJSON` helper, `PlainText` (HTML → text), and bootstrap flag variables |
+| `common` | Type conversion helpers (`AsString`, `AsInt64`, etc.), string/DB helpers (`NullIfEmpty`, `Slugify`, `GenerateNumericCode`, `ParseDBTimestamp`), HTTP response utilities (`WriteJSON`, `WriteError`/`WriteJSONError`), shared HTTP client with the typed `RequestJSON` helper, `PlainText` (HTML → text), and bootstrap flag variables |
 | `config` | DB-backed composite runtime configuration, flag parsing helpers, and atomic reload (see **Runtime Configuration**) |
 | `model` | Domain-agnostic models: `TableDefinition`, `TableColumn`, `ForeignKey`, `UserSession`, `PasswordPolicy`, `QueryResult`, `AppError`, `UserMenu`, `DeviceToken`, `TableChangeLog` |
 | `port` | Interface definitions for all pluggable components — **including database access** (`DatabaseRepository`, `QueryService`, `TxQueryService`, `TableService`, `TxView`), plus auth, cache, storage, messaging, login, ID generation, quota, web socket, table change logger, `TrustGuard` admission checks. Depend on these, not on concrete `pgsql`/`data` types. |
@@ -85,6 +85,7 @@ graph TD
 | `reference` | Public reference-data clients over `common.RequestJSON`: `CrUXClient` (Chrome UX Report p75 field data), `KGClient` (Google Knowledge Graph), `WikidataClient`, `IndexNowClient` (changed-URL submission), `Geocoder` / `GoogleGeocodeClient` (address ↔ point with a precision the caller can reject on); keys are named keystore secrets |
 | `geo` | `AddressService` fills `partner_address.latitude` / `longitude` from a `reference.Geocoder`, refusing a placement coarser than `MinPrecision` |
 | `notify` | Durable multi-channel notification delivery: `Queue.Enqueue`/`EnqueueTx` write one `notification` row per channel resolved from `notification_preference`, type defaults and app-forced channels, or exactly `Message.Channel` when set, dropping channels `Addressable` rejects (`notify.RecipientAddressable` checks email/phone on file, via `user.NewSQLRecipients` where no user service is built); `Worker` is a leased QueueWorker that sends through a `port.NotificationService` (typically `dispatcher.LocalNotificationService`) with backoff and a terminal failed state; a missing address (`port.ErrNotificationNoAddress`) is recorded suppressed |
+| `domain` | Domain names (`DomainName`, `ASCIIHost`, `DomainFromEmail`, `HostFromURL`, `RegistrableDomain`, `DomainsMatch`, `IsPublicDomain`) and domain verification: `Service` records how a partner proved a domain by one of ten methods, with history, re-check, lapse and cancellation; consumers choose the methods they honor. See [Domain Verification](#domain-verification) |
 | `approval` | Maker-checker approval of an application record: `Service.Submit` / `Decide` with `ErrSameActor` unless the partner's `approval_policy.allow_single_person` is set, one open request per record, `approval_event` audit, `OnDecided` hook inside the decision transaction, `AllowsSinglePerson`; `handler` maps its sentinels to 404/409/403 |
 | `erasure` | Personal-data erasure: `Service.Request` plans per-table actions from app `Classifier`s (delete / anonymize / hold with reason), `Worker` executes them with one `erasure_audit` row per changed row, legal holds (`user_legal_hold`) that block erasure, `DeleteAccount` and document retention, pseudonyms resolvable only through an audited lookup |
 | `outbox` | Transactional outbox: `EnqueueTx` captures an event in the same tx as a domain write and returns its id for same-tx references; `Worker` is a lease-based QueueWorker that drains `outbox_event` with retry/backoff/dead-letter, delivering via an injected `Dispatcher`; `HTTPDispatcher` is the signed-webhook implementation. No dual-write race. |
@@ -1239,6 +1240,68 @@ widgets, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Widget, error)
 ```
 
 For metadata-driven dynamic-schema reads, keep using `QueryService.Query` — the `[][]any` shape is intentional for the REST engine and table-action handlers; replacing it with typed scans would defeat the purpose.
+
+## Domain Verification
+
+`domain.Service` records how a partner proved one of its `partner_domain` rows. keel records evidence; it does not decide what is good enough. Each consumer passes the methods it honors to `Current`, `Domains` or `Holders`.
+
+| Code | Method | Proves | Re-checked |
+|------|--------|--------|------------|
+| `EC` | Email code | A mailbox on the domain: a code sent to an address sharing its registrable domain | No |
+| `VE` | Verified email | A mailbox on the domain: the acting user's verified email | No |
+| `GH` | Google hosted domain | Membership in the Google organization: the verified ID token's `hd` claim | No |
+| `GM` | Google mail server | A Google mailbox: a Google sign-in whose mail domain receives mail at Google | No |
+| `HF` | HTTP file | Control of the host's content: the token at `https://<domain>/.well-known/<label>.txt` | Yes |
+| `DT` | DNS TXT record | Control of DNS: `<label>=<token>` in a TXT record of the domain | Yes |
+| `GS` | Google Search Console | The Google account owns the DNS-verified domain property; not exclusive | With a grant |
+| `GB` | Google Business Profile | The user manages a verified listing naming the domain as its website; self-asserted | With a grant |
+| `GW` | Google Workspace admin | The user administers the Google organization that verified the domain | With a grant |
+| `ME` | Microsoft Entra admin | The user holds a domain administrator role in the Entra tenant that verified the domain | With a grant |
+
+`domain.IdentityMethods()` returns the methods (`DT`, `GW`, `ME`) strong enough to route sign-in to a tenant. They are exclusive: recording one fails with `ErrDomainHeld` while another partner holds current identity evidence, and `IdentityHolder(domain)` returns the single holder or `ErrNotHeld`. Other methods are non-exclusive. Public suffixes, IP literals and free mailbox providers (`IsPublicDomain`) cannot be verified.
+
+Each verification is a `partner_domain_verification` row keyed `(partner_id, domain_url, verified_at)`. Proving a method that is already current refreshes that row; after a lapse or cancellation a new row is appended, so history is kept. A row is current while `lapsed_at` and `cancelled_at` are NULL.
+
+```go
+domains := &domain.Service{
+    DB: db,
+    Verifiers: []domain.DomainVerifier{
+        &domain.DNSTXTVerifier{}, &domain.HTTPFileVerifier{}, domain.EmailCodeVerifier{},
+        domain.VerifiedEmailVerifier{}, &domain.GoogleWorkspaceVerifier{}, &domain.MicrosoftEntraVerifier{},
+    },
+}
+
+// Challenge methods (EC, DT, HF): issue, publish or deliver, confirm.
+ch, err := domains.Challenge(ctx, partnerID, userID, domainURL, domain.MethodDNSTXT, "")
+// publish ch.RecordValue as a TXT record on ch.RecordName, then:
+v, err := domains.Confirm(ctx, partnerID, userID, domainURL, domain.MethodDNSTXT, "")
+
+// Other methods on an existing domain; identity fields come from a verified
+// session or token, AccessToken from the acting user's provider grant.
+v, err = domains.Verify(ctx, partnerID, userID, domainURL, domain.MethodGoogleWorkspace,
+    domain.DomainProof{AccessToken: token})
+```
+
+A signup that proves the domain before the partner exists checks first and records inside the transaction that creates the partner, its `partner_domain` row and the membership:
+
+```go
+if err := domain.MailboxOnDomain(email, domainURL); err != nil { ... } // before sending a code
+ev, err := domains.Check(ctx, domainURL, domain.MethodVerifiedEmail,
+    domain.DomainProof{Email: email, EmailVerified: true})
+tx, err := db.BeginTx(ctx, common.MergeMaps(myQueries, domain.TxQueries()))
+// insert business_partner, partner_domain, partner_user ...
+_, err = domains.RecordTx(ctx, tx, partnerID, userID, domainURL, ev)
+```
+
+Challenges store only the SHA-256 of the token or code, expire after `domain_challenge_ttl` (`domain_code_ttl` for `EC`), allow `domain_challenge_attempts` confirmations and are not reissued within `domain_challenge_cooldown`. `domain_verification_label` names the TXT prefix and file.
+
+A worker calls `Recheck(ctx, limit)` to re-verify `DT`, `HF` and, when `Service.AccessToken` supplies a current grant, the provider methods once evidence is older than `domain_recheck_interval`. A negative verdict marks the row failing and lapses it after `domain_recheck_grace`, then runs `Service.OnLapsed`; a check that cannot complete records `last_error` without a verdict.
+
+`HTTPFileVerifier` fetches over HTTPS only, follows redirects only between the domain and its `www` host, reads at most 1 KiB and never dials a private, loopback or link-local address. Provider HTTP failures are not proof verdicts because statuses such as 403 can also mean missing scopes, quota exhaustion or a disabled API.
+
+`handler.DomainVerificationHandler` mounts `partner_domain/challenge`, `partner_domain/confirm` and `partner_domain/unverify`, gated by `PARTNER_DOMAIN` `VERIFY` and `CANCEL` on `partner_domain` (seeded for `PARTNER_ADMIN`). Set `SendCode` to deliver `EC` codes; the code is never returned to the client. Evidence is read through the generic `partner_domain` → `partner_domain_verification` REST child.
+
+A downstream method uses its own two-character code in `domain_verification_method` and its own `domain.DomainVerifier`.
 
 ## Two-Factor Authentication (2FA) & Trusted Devices
 
@@ -2875,6 +2938,8 @@ this summary can be checked directly against the generated schema.
 | `partner_user` | Effective-dated membership of users in partners |
 | `partner_address` | Partner addresses and geographic coordinates |
 | `partner_domain` | Domains owned or verified by partners |
+| `partner_domain_verification` | How a partner proved a domain, one row per verification, current until lapsed or cancelled |
+| `partner_domain_challenge` | Open hashed challenge of a challenge-based domain verification |
 | `column_display_attribute` | UI display and edit behavior for table columns |
 | `user_refresh_token` | Rotatable and revocable login refresh tokens |
 | `user_trusted_device` | Server-minted trusted-device credentials |
@@ -3162,6 +3227,7 @@ keel/
 ├── cmd/
 │   └── schemagen/             # CLI: YAML schema → DDL + seed SQL
 ├── common/                    # Type helpers, HTTP response envelope, shared HTTP client, flag variables
+├── domain/                    # Domain names and domain verification service + verifiers
 ├── model/                     # Domain-agnostic data shapes (UserSession, TableDefinition, AppError, ...)
 ├── port/                      # Pluggable component interfaces (login, messaging, notification, quota,
 │                              #   table change logger, web socket hub, ID generator)
@@ -3280,6 +3346,7 @@ Non-human principals draw on the *same* roles and matrix below, out of their own
 | TABLE | business_partner | | S | S | S | SIUD | SU |
 | TABLE | partner_address | | S | | | | SIUD |
 | TABLE | partner_domain | | S | | | | SIUD |
+| TABLE | partner_domain_verification | | S | | | | S |
 | TABLE | api_key | | S | S | | S | S |
 | **Subscriptions** | | | | | | | |
 | PAGE | subscription_plans | | A | | | A | S |

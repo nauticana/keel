@@ -1,9 +1,14 @@
-package common
+package domain
 
 import (
+	"net/netip"
+	"net/url"
 	"strings"
 
+	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/nauticana/keel/common"
 )
 
 // publicEmailDomains are free consumer mailboxes — a login from one proves no
@@ -64,6 +69,39 @@ func RegistrableDomain(hostOrURL string) string {
 func DomainsMatch(a, b string) bool {
 	ra := RegistrableDomain(a)
 	return ra != "" && ra == RegistrableDomain(b)
+}
+
+// ASCIIHost lowercases a host, drops a trailing dot and maps an IDN to
+// punycode, so look-alike spellings compare equal only when they are the same name.
+func ASCIIHost(host string) (string, bool) {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" {
+		return "", false
+	}
+	ascii, err := idna.Lookup.ToASCII(host)
+	if err != nil || ascii == "" {
+		return "", false
+	}
+	return ascii, true
+}
+
+// DomainName reduces a stored domain or URL ("Example.com",
+// "https://www.example.com/") to its comparable name: the ASCIIHost without a
+// leading "www.". It refuses credentials, non-http(s) schemes and dotless hosts.
+func DomainName(raw string) (string, bool) {
+	u, err := url.Parse(common.WithScheme(strings.ToLower(strings.TrimSpace(raw))))
+	if err != nil || u.User != nil || u.Opaque != "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	host, ok := ASCIIHost(u.Hostname())
+	if !ok {
+		return "", false
+	}
+	host = strings.TrimPrefix(host, "www.")
+	if _, err := netip.ParseAddr(host); err == nil {
+		return "", false
+	}
+	return host, strings.Contains(host, ".")
 }
 
 // IsPublicDomain reports whether a domain is a free/public email provider

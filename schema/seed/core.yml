@@ -152,6 +152,13 @@ seeds:
       - [default_commission_rate_bp, int, false, '2000', Program default agency commission rate in basis points (2000 = 20.00%); frozen per client at first earning unless the agency profile overrides it]
       - [commission_hold_days, int, false, '14', Refund/dispute hold in days before an agency earning becomes payable]
       - [agency_payout_min_minor, int64, false, '2500', Minimum netted agency payout in minor units; smaller balances roll to the next cycle]
+      - [domain_challenge_ttl, duration, false, '86400', Validity of a DNS or HTTP domain verification challenge (seconds)]
+      - [domain_code_ttl, duration, false, '900', Validity of an emailed domain verification code (seconds)]
+      - [domain_challenge_attempts, int, false, '5', Confirmation tries per domain verification challenge]
+      - [domain_challenge_cooldown, duration, false, '60', Minimum gap before a domain verification challenge is issued again (seconds; 0 disables)]
+      - [domain_recheck_interval, duration, false, '86400', Age after which current domain verification evidence is re-checked (seconds)]
+      - [domain_recheck_grace, duration, false, '259200', How long failing domain verification evidence stays current before it lapses (seconds; 0 lapses on the first failed re-check)]
+      - [domain_verification_label, string, false, domain-verification, 'DNS TXT value prefix and HTTP file name of domain verification challenges (lowercase letters, digits, hyphens)']
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
