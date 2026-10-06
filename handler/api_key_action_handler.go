@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	kcommon "github.com/nauticana/keel/common"
@@ -58,6 +59,10 @@ func (h *APIKeyActionHandler) generate(w http.ResponseWriter, r *http.Request) {
 		req.Scopes = "query"
 	}
 	key, prefix, err := h.Keys.InsertKey(r.Context(), session.PartnerId, int64(session.Id), req.KeyName, req.Scopes)
+	if errors.Is(err, service.ErrInvalidScopes) {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", err.Error())
+		return
+	}
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
 		return

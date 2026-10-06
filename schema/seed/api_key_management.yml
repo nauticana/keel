@@ -42,6 +42,4 @@ seeds:
       - [BUSINESS_ADMIN, TABLE, SELECT, api_key]
       - [PARTNER_ADMIN, PAGE, ACCESS, api_keys]
       - [PARTNER_ADMIN, TABLE, SELECT, api_key]
-      - [PARTNER_ADMIN, TABLE, INSERT, api_key]
-      - [PARTNER_ADMIN, TABLE, UPDATE, api_key]
       - [PARTNER_ADMIN, TABLE, DELETE, api_key]

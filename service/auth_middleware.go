@@ -55,6 +55,9 @@ func APIKeyAuthMiddleware(apiKeys *APIKeyService, journal logger.ApplicationLogg
 			ctx := context.WithValue(r.Context(), common.PartnerID, entry.PartnerID)
 			ctx = context.WithValue(ctx, common.ApiKeyID, entry.KeyID)
 			ctx = context.WithValue(ctx, common.Scopes, entry.Scopes)
+			if entry.UserID > 0 {
+				ctx = context.WithValue(ctx, common.UserID, entry.UserID)
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

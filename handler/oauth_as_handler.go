@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"html/template"
 	"net"
 	"net/http"
@@ -409,8 +410,14 @@ func (h *OAuthASHandler) writeOAuthError(w http.ResponseWriter, err error) {
 		return
 	}
 	status := http.StatusBadRequest
-	if code == "invalid_client" {
+	switch {
+	case code == "invalid_client":
 		status = http.StatusUnauthorized
+	case errors.Is(err, authserver.ErrOAuthClientLimit):
+		status = http.StatusServiceUnavailable
+		if h.Journal != nil {
+			h.Journal.Warning("oauth/as: registration refused: pending client limit")
+		}
 	}
 	writeJSON(w, status, map[string]string{"error": code})
 }

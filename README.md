@@ -665,7 +665,7 @@ What stays yours: the plan catalog + prices, the resource taxonomy + count SQL, 
 Keel ships an end-to-end API-key authentication stack for `/pubapi/*` traffic (REST) and standalone services (e.g. MCP servers built on [scout](https://github.com/nauticana/scout) exposed over Streamable HTTP). Three pieces, one chain:
 
 ```
-X-API-Key header → APIKeyAuthMiddleware → APIKeyService.LookupKey → context-injected (partner_id, api_key_id, scopes)
+X-API-Key header → APIKeyAuthMiddleware → APIKeyService.LookupKey → context-injected (partner_id, api_key_id, scopes, user_id)
 ```
 
 ### `service.APIKeyService` — key lifecycle + 5-min lookup cache
@@ -688,11 +688,11 @@ plainKey, prefix, err := apiKeys.InsertKey(ctx, partnerID, "production-key", "bu
 // plainKey is "myapp_<32-hex>"; show to user once and discard.
 ```
 
-`KeyPrefix` is intentionally required (panic-on-empty at `Init`) so per-product prefixes never collide across consumers (e.g. `myapp_*`, `inventory_*`). `LookupKey` caches by SHA-256 hash for 5 minutes; `InvalidateKey(hash)` clears a single entry on rotation/revocation. `LogUsage` increments the configured quota resource and updates `last_used_at`.
+`KeyPrefix` is intentionally required (panic-on-empty at `Init`) so per-product prefixes never collide across consumers (e.g. `myapp_*`, `inventory_*`). `ScopePolicy` refuses the scopes of a key to be generated (`ErrInvalidScopes`, a 400 from the `generate` action); a rolled key keeps its scopes. `LookupKey` caches by SHA-256 hash for 5 minutes; the entry carries the key's `UserID`, 0 for a partner-only key. `InvalidateKey(hash)` clears a single entry on rotation/revocation. `LogUsage` increments the configured quota resource and updates `last_used_at`.
 
 ### `service.APIKeyAuthMiddleware` — the reusable factory
 
-Generic `func(http.Handler) http.Handler` factory that validates `X-API-Key`, looks up via `APIKeyService`, enforces expiry, touches `last_used` async, and injects `common.PartnerID / ApiKeyID / Scopes` into the request context. Quota is a separate concern: compose `service.QuotaMiddleware` after auth so one gate covers X-API-Key and OAuth alike. **No path gating** — wrap arbitrary subtrees yourself.
+Generic `func(http.Handler) http.Handler` factory that validates `X-API-Key`, looks up via `APIKeyService`, enforces expiry, touches `last_used` async, and injects `common.PartnerID / ApiKeyID / Scopes` into the request context, plus `common.UserID` when the key has a user, so `CallerSessionFromContext` reports the key's user. Quota is a separate concern: compose `service.QuotaMiddleware` after auth so one gate covers X-API-Key and OAuth alike. **No path gating** — wrap arbitrary subtrees yourself.
 
 ```go
 auth := service.APIKeyAuthMiddleware(apiKeys, journal) // then: service.QuotaMiddleware(quota, "", "", journal)
@@ -736,13 +736,14 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 | Field | `APIKeyService.KeyPrefix` | Required. Per-product user-visible prefix (e.g., `"myapp_"`). |
 | Field | `APIKeyService.QuotaResource` | Optional. Defaults to `"API_CALLS"`. The resource id passed to `QuotaService.LogUsage` and `CheckQuota`. |
 | Field | `APIKeyService.QuotaCaption` | Optional. Defaults to `"public-api"`. The caption recorded in usage rows. |
+| Field | `APIKeyService.ScopePolicy` | Optional. Refuses scopes at generation. |
 | Schema | `api_key` table + sequence | Already in keel's `schema/api_key_management/api_key.yml`. No project-side schema. |
 
 ### Database Table
 
 | Table | Purpose |
 |---|---|
-| `api_key` | Issued keys: `id`, `partner_id`, `key_name`, `key_prefix` (visible), `key_hash` (SHA-256), `scopes` (CSV), `is_active`, `expires_at`, `last_used_at`. |
+| `api_key` | Issued keys: `id`, `partner_id`, `user_id` (NULL for a partner-only key), `key_name`, `key_prefix` (visible), `key_hash` (SHA-256), `scopes` (CSV), `is_active`, `expires_at`, `last_used_at`. Keys are minted and rolled only through the `generate` and `roll` table actions; the seed grants no generic insert or update. |
 
 ### `service.HttpBackend.CORSMiddleware` — cross-origin access
 
@@ -827,6 +828,8 @@ When the login page receives `?return=`, the SPA posts `{"return": <value>}` wit
 - `Revoke(ctx, userID, clientID)` revokes every refresh token of the pair, or returns `ErrGrantNotFound`; it is serialized with refresh rotation, so a concurrent refresh cannot keep the grant alive.
 - `Active(ctx, userID, clientID)` lets a resource server honor a revocation before the access token expires.
 - `PurgeUnauthorizedClients(ctx, olderThan)` deletes, in batches, public clients that registered for refresh tokens and never completed an authorization.
+
+Open registration is bounded by `ClientStoreDB.MaxPending`: at most that many such clients may be pending at once, counted under a transaction-scoped advisory lock, and one more registration is `ErrOAuthClientLimit` (`temporarily_unavailable`, 503, journaled). `Config.PublicClientsOnly` admits only those clients through registration, so confidential or non-refresh registrations cannot bypass the bound. A token's `sub` is `user:<id>`; `authserver.UserIDFromSubject` parses it for a resource server.
 
 An unauthenticated `/authorize` redirects to `LoginURL` with `return` set to the absolute authorize URL built from the configured issuer, so a login page on another origin knows where to send the user back.
 
@@ -3413,7 +3416,7 @@ Non-human principals draw on the *same* roles and matrix below, out of their own
 | TABLE | partner_address | | S | | | | SIUD |
 | TABLE | partner_domain | | S | | | | SIUD |
 | TABLE | partner_domain_verification | | S | | | | S |
-| TABLE | api_key | | S | S | | S | S |
+| TABLE | api_key | | S | S | | S | SD |
 | **Subscriptions** | | | | | | | |
 | PAGE | subscription_plans | | A | | | A | S |
 | PAGE | subscription_resources | | A | A | | A | |

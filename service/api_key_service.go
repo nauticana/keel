@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 type APIKeyCacheEntry struct {
 	PartnerID int64
 	KeyID     int64
+	UserID    int64 // 0 for a partner-only key
 	Scopes    string
 	CachedAt  time.Time
 	ExpiresAt time.Time
@@ -37,6 +39,10 @@ type APIKeyService struct {
 	// QuotaCaption is the caption passed to QuotaService.LogUsage.
 	// Defaults to "public-api" when empty.
 	QuotaCaption string
+
+	// ScopePolicy refuses the scopes of a key to be generated; nil admits any.
+	// A rolled key keeps its scopes unchecked.
+	ScopePolicy func(scopes string) error
 
 	// CacheTTL bounds how long a validated key stays trusted in memory, and
 	// therefore the worst-case lag before an is_active=FALSE revocation takes
@@ -68,7 +74,7 @@ VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?, ?)
 RETURNING id`,
 
 	validateAPIKey: `
-SELECT id, partner_id, scopes, expires_at
+SELECT id, partner_id, scopes, expires_at, user_id
   FROM api_key
  WHERE key_hash = ?
    AND is_active = TRUE`,
@@ -108,7 +114,21 @@ func (m *APIKeyService) Init(ctx context.Context) {
 	}
 }
 
+// ErrInvalidScopes wraps a ScopePolicy refusal.
+var ErrInvalidScopes = errors.New("api key scopes refused")
+
+// InsertKey mints a key for the partner, owned by userID when it is not
+// negative, and returns the plaintext key and its prefix.
 func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID int64, keyName string, scopes string) (string, string, error) {
+	if m.ScopePolicy != nil {
+		if err := m.ScopePolicy(scopes); err != nil {
+			return "", "", fmt.Errorf("%w: %v", ErrInvalidScopes, err)
+		}
+	}
+	return m.insertKey(ctx, partnerID, userID, keyName, scopes)
+}
+
+func (m *APIKeyService) insertKey(ctx context.Context, partnerID int64, userID int64, keyName string, scopes string) (string, string, error) {
 	randomBytes := make([]byte, 16)
 	if _, err := rand.Read(randomBytes); err != nil {
 		return "", "", err
@@ -177,6 +197,9 @@ func (m *APIKeyService) LookupKey(ctx context.Context, keyHash string) (*APIKeyC
 		ExpiresAt: expires,
 		CachedAt:  now,
 	}
+	if uid, ok := common.AsInt64OK(row[4]); ok {
+		entry.UserID = uid
+	}
 	m.mu.Lock()
 	m.cache[keyHash] = entry
 	m.mu.Unlock()
@@ -230,5 +253,5 @@ func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID in
 		userID = uid
 	}
 	m.InvalidateKey(oldHash)
-	return m.InsertKey(ctx, partnerID, userID, keyName, scopes)
+	return m.insertKey(ctx, partnerID, userID, keyName, scopes)
 }

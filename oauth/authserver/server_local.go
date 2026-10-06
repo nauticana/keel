@@ -44,6 +44,9 @@ const (
 	ErrOAuthInvalidScope       = oauthErr("invalid_scope")
 	ErrOAuthInvalidTarget      = oauthErr("invalid_target")
 	ErrOAuthAccessDenied       = oauthErr("access_denied")
+	// ErrOAuthClientLimit refuses a registration while ClientStoreDB.MaxPending
+	// unauthorized clients exist.
+	ErrOAuthClientLimit = oauthErr("temporarily_unavailable")
 )
 
 // ProtocolErrorCode reports the RFC 6749 error code for a client-facing AS error.
@@ -57,7 +60,18 @@ func ProtocolErrorCode(err error) (string, bool) {
 	return "", false
 }
 
-func subjectForUser(userID int64) string { return "user:" + strconv.FormatInt(userID, 10) }
+const subjectPrefix = "user:"
+
+func subjectForUser(userID int64) string { return subjectPrefix + strconv.FormatInt(userID, 10) }
+
+// UserIDFromSubject parses the sub claim of a token this AS issued.
+func UserIDFromSubject(sub string) (int64, bool) {
+	if !strings.HasPrefix(sub, subjectPrefix) {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(sub[len(subjectPrefix):], 10, 64)
+	return id, err == nil && id > 0
+}
 
 // Config holds the local AS's non-secret settings.
 type Config struct {
@@ -68,6 +82,9 @@ type Config struct {
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	CodeTTL         time.Duration
+	// PublicClientsOnly admits through registration only public clients with
+	// the refresh_token grant: the clients GrantService and the purge cover.
+	PublicClientsOnly bool
 }
 
 // Local is keel's local OAuth 2.1 authorization server.
@@ -170,6 +187,9 @@ func (a *Local) Register(ctx context.Context, req port.ClientRegistration) (*por
 	switch method {
 	case "none", "client_secret_basic", "client_secret_post":
 	default:
+		return nil, ErrOAuthInvalidRequest
+	}
+	if a.cfg.PublicClientsOnly && !purgeable(method, grants) {
 		return nil, ErrOAuthInvalidRequest
 	}
 	// Don't persist scopes the AS doesn't support (defense-in-depth with the
