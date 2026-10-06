@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/port"
 )
 
@@ -22,9 +23,15 @@ func TestClientStoreBoundsPendingClients(t *testing.T) {
 	if slices.Contains(repo.calls, oauthInsertClient) || repo.commits != 0 {
 		t.Fatalf("a refused client must not be inserted: %v", repo.calls)
 	}
-	if lock, count := slices.Index(repo.calls, oauthLockClients), slices.Index(repo.calls, oauthPendingCount); lock < 0 || count < lock {
+	if lock, count := slices.Index(repo.calls, guard.QueryLock), slices.Index(repo.calls, oauthPendingCount); lock < 0 || count < lock {
 		t.Fatalf("the count must run under the lock: %v", repo.calls)
 	}
+	rollbackErr := errors.New("rollback failed")
+	repo.rollbackErr = rollbackErr
+	if err := store.CreateClient(ctx, public); !errors.Is(err, ErrOAuthClientLimit) || !errors.Is(err, rollbackErr) {
+		t.Fatalf("limit and rollback errors must both be reported: %v", err)
+	}
+	repo.rollbackErr = nil
 
 	repo.rows[oauthPendingCount] = [][]any{{int64(1)}}
 	if err := store.CreateClient(ctx, public); err != nil || repo.commits != 1 {
@@ -35,6 +42,13 @@ func TestClientStoreBoundsPendingClients(t *testing.T) {
 	confidential := &port.OAuthClient{ClientID: "oc_2", TokenAuthMethod: "client_secret_basic", GrantTypes: []string{"client_credentials"}}
 	if err := store.CreateClient(ctx, confidential); err != nil || slices.Contains(repo.calls, oauthPendingCount) {
 		t.Fatalf("a client the purge does not cover is not counted: %v %v", err, repo.calls)
+	}
+
+	for _, rows := range [][][]any{nil, {{}}, {{"two"}}} {
+		repo.rows[oauthPendingCount] = rows
+		if err := store.CreateClient(ctx, public); err == nil {
+			t.Fatalf("malformed count %v must fail closed", rows)
+		}
 	}
 }
 

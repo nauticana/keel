@@ -668,9 +668,9 @@ Keel ships an end-to-end API-key authentication stack for `/pubapi/*` traffic (R
 X-API-Key header → APIKeyAuthMiddleware → APIKeyService.LookupKey → context-injected (partner_id, api_key_id, scopes, user_id)
 ```
 
-### `service.APIKeyService` — key lifecycle + 5-min lookup cache
+### `service.APIKeyService` — key lifecycle + lookup cache
 
-Manages issued keys: generates the user-visible string, stores its SHA-256 hash + prefix in the `api_key` table, looks up keys with a 5-minute process-local cache, enforces expiry and quotas via `port.QuotaService`. The schema is shipped in `basis.sql` (`api_key` + sequence).
+Manages issued keys: generates the user-visible string, stores its SHA-256 hash + prefix in the `api_key` table, and caches lookups in-process for one minute by default.
 
 ```go
 apiKeys := &service.APIKeyService{
@@ -684,11 +684,11 @@ apiKeys := &service.APIKeyService{
 apiKeys.Init(ctx)
 
 // Issuing a key (typically from a JWT-authed admin handler):
-plainKey, prefix, err := apiKeys.InsertKey(ctx, partnerID, "production-key", "businesses,search")
+plainKey, prefix, err := apiKeys.InsertKey(ctx, partnerID, userID, "production-key", "businesses,search")
 // plainKey is "myapp_<32-hex>"; show to user once and discard.
 ```
 
-`KeyPrefix` is intentionally required (panic-on-empty at `Init`) so per-product prefixes never collide across consumers (e.g. `myapp_*`, `inventory_*`). `ScopePolicy` refuses the scopes of a key to be generated (`ErrInvalidScopes`, a 400 from the `generate` action); a rolled key keeps its scopes. `LookupKey` caches by SHA-256 hash for 5 minutes; the entry carries the key's `UserID`, 0 for a partner-only key. `InvalidateKey(hash)` clears a single entry on rotation/revocation. `LogUsage` increments the configured quota resource and updates `last_used_at`.
+`KeyPrefix` is required. `ScopePolicy` can refuse generated-key scopes (`ErrInvalidScopes`, returned as 400 by the `generate` action); rotation preserves existing scopes. `LookupKey` caches by SHA-256 hash for `CacheTTL` and carries `UserID` (`0` for partner-only keys). `InvalidateKey` clears an entry on rotation or revocation.
 
 ### `service.APIKeyAuthMiddleware` — the reusable factory
 
@@ -803,6 +803,7 @@ Downstream handlers read identity with the same accessors as the X-API-Key path 
 | `oauth_audience` | Expected token audience = this resource's id (RFC 8707). |
 | `oauth_resource` | Canonical resource URL in the metadata doc. Empty → `oauth_audience`. |
 | `oauth_scopes_supported` | CSV scopes advertised in metadata. Optional. |
+| `oauth_max_pending_clients` | Maximum pending open registrations. `0` is unbounded; a positive value admits only public refresh-token clients. |
 
 All non-secret. For multiple issuers, construct one `resource.JWTValidator` per issuer and dispatch on the token's `iss`.
 
@@ -829,7 +830,7 @@ When the login page receives `?return=`, the SPA posts `{"return": <value>}` wit
 - `Active(ctx, userID, clientID)` lets a resource server honor a revocation before the access token expires.
 - `PurgeUnauthorizedClients(ctx, olderThan)` deletes, in batches, public clients that registered for refresh tokens and never completed an authorization.
 
-Open registration is bounded by `ClientStoreDB.MaxPending`: at most that many such clients may be pending at once, counted under a transaction-scoped advisory lock, and one more registration is `ErrOAuthClientLimit` (`temporarily_unavailable`, 503, journaled). `Config.PublicClientsOnly` admits only those clients through registration, so confidential or non-refresh registrations cannot bypass the bound. A token's `sub` is `user:<id>`; `authserver.UserIDFromSubject` parses it for a resource server.
+`oauth_max_pending_clients` bounds that pending set atomically; a positive value also admits only public refresh-token clients. One more registration returns `ErrOAuthClientLimit` (`temporarily_unavailable`, 503). Direct composition uses `ClientStoreDB.MaxPending` with `Config.PublicClientsOnly`. `authserver.UserIDFromSubject` parses the `user:<id>` token subject.
 
 An unauthenticated `/authorize` redirects to `LoginURL` with `return` set to the absolute authorize URL built from the configured issuer, so a login page on another origin knows where to send the user back.
 

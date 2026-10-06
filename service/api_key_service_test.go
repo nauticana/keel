@@ -78,3 +78,13 @@ func TestInsertKeyAppliesScopePolicy(t *testing.T) {
 		t.Fatalf("rolled key args = %v", args)
 	}
 }
+
+func TestInsertKeyWithoutUserUsesPartnerKey(t *testing.T) {
+	svc, qs := newAPIKeys(t)
+	if _, _, err := svc.InsertKey(context.Background(), 7, 0, "k", "query"); err != nil {
+		t.Fatal(err)
+	}
+	if qs.callIndex(insertAPIKey) < 0 || qs.callIndex(insertUserAPIKey) >= 0 {
+		t.Fatalf("calls = %+v", qs.calls)
+	}
+}

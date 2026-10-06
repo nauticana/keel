@@ -117,8 +117,7 @@ func (m *APIKeyService) Init(ctx context.Context) {
 // ErrInvalidScopes wraps a ScopePolicy refusal.
 var ErrInvalidScopes = errors.New("api key scopes refused")
 
-// InsertKey mints a key for the partner, owned by userID when it is not
-// negative, and returns the plaintext key and its prefix.
+// InsertKey mints a key for the partner and, when userID is positive, the user.
 func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID int64, keyName string, scopes string) (string, string, error) {
 	if m.ScopePolicy != nil {
 		if err := m.ScopePolicy(scopes); err != nil {
@@ -142,7 +141,7 @@ func (m *APIKeyService) insertKey(ctx context.Context, partnerID int64, userID i
 
 	var err error
 	var res *model.QueryResult
-	if userID < 0 {
+	if userID <= 0 {
 		res, err = m.qs.Query(ctx, insertAPIKey, partnerID, keyName, prefix, keyHash, scopes)
 	} else {
 		res, err = m.qs.Query(ctx, insertUserAPIKey, partnerID, keyName, prefix, keyHash, scopes, userID)
@@ -183,6 +182,9 @@ func (m *APIKeyService) LookupKey(ctx context.Context, keyHash string) (*APIKeyC
 	}
 
 	row := res.Rows[0]
+	if len(row) != 5 {
+		return nil, fmt.Errorf("api key lookup returned %d columns", len(row))
+	}
 	expires, _ := row[3].(time.Time)
 	if !expires.IsZero() && now.After(expires) {
 		// Persist the negative result by simply not caching — the next
@@ -233,7 +235,7 @@ func (m *APIKeyService) TouchLastUsed(ctx context.Context, keyID int64) error {
 // window via expires_at, then issues a fresh key inheriting its name, scopes,
 // and ownership (partner + user_id). The old key keeps working until grace
 // expiry so callers can swap without downtime; its cache entry is evicted so
-// the new expiry takes effect immediately rather than after the 5-minute TTL.
+// the new expiry takes effect immediately rather than after CacheTTL.
 // Returns the new plaintext key + prefix (shown once). Zero rows — the key is
 // not owned by partnerID or already inactive — returns ("", "", nil).
 func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID int64) (string, string, error) {
@@ -248,7 +250,7 @@ func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID in
 	oldHash, _ := row[0].(string)
 	keyName, _ := row[1].(string)
 	scopes, _ := row[2].(string)
-	userID := int64(-1) // NULL user_id (partner-only key) → re-issue partner-only
+	userID := int64(0)
 	if uid, ok := row[3].(int64); ok {
 		userID = uid
 	}

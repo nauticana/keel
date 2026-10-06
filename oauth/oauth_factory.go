@@ -68,7 +68,8 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 		if aud == "" {
 			aud = issuer
 		}
-		clients := &authserver.ClientStoreDB{DB: db}
+		maxPending := config.Config().OAuthMaxPendingClients
+		clients := &authserver.ClientStoreDB{DB: db, MaxPending: maxPending}
 		clients.Init(ctx)
 		codes := &authserver.CodeStoreDB{DB: db}
 		codes.Init(ctx)
@@ -82,13 +83,14 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 			resources = append(resources, config.Config().OAuthResource)
 		}
 		cfg := authserver.Config{
-			Issuer:          issuer,
-			DefaultAudience: aud,
-			Scopes:          common.SplitCSV(config.Config().OAuthScopesSupported),
-			Resources:       resources,
-			AccessTTL:       config.Config().OAuthAccessTokenTTL,
-			RefreshTTL:      config.Config().OAuthRefreshTokenTTL,
-			CodeTTL:         config.Config().OAuthCodeTTL,
+			Issuer:            issuer,
+			DefaultAudience:   aud,
+			Scopes:            common.SplitCSV(config.Config().OAuthScopesSupported),
+			Resources:         resources,
+			AccessTTL:         config.Config().OAuthAccessTokenTTL,
+			RefreshTTL:        config.Config().OAuthRefreshTokenTTL,
+			CodeTTL:           config.Config().OAuthCodeTTL,
+			PublicClientsOnly: maxPending > 0,
 		}
 		as := authserver.NewLocal(signer, clients, codes, tokens, cfg)
 		// validator is the single-audience resource-server validator for the

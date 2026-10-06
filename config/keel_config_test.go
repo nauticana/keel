@@ -15,7 +15,7 @@ var keelTestFlagIDs = []string{
 	oauth_issuer, oauth_jwks_url, oauth_audience, oauth_resource,
 	oauth_resources, oauth_scopes_supported, oauth_as_mode,
 	oauth_signing_key_secret, oauth_access_token_ttl, oauth_refresh_token_ttl,
-	oauth_code_ttl, oauth_max_auth_redirects, outbound_max_redirects,
+	oauth_code_ttl, oauth_max_pending_clients, oauth_max_auth_redirects, outbound_max_redirects,
 	outbound_max_rps, outbound_max_response_size, trusted_proxy_cidr, nats_url, nats_name,
 	nats_creds_secret, storage_mode, storage_bucket, s3_endpoint, storage_credential_secret, dms_max_bytes, scan_mode, scan_addr, extract_mode, extract_max_bytes,
 	storage_public_base_url, storage_account_url, storage_region, messaging_mode,
@@ -155,6 +155,15 @@ func TestApplyKeel_RefreshTokenTTLIsPositive(t *testing.T) {
 	err := applyKeelForTest(&KeelConfig{}, m)
 	if err == nil || !strings.Contains(err.Error(), refresh_token_ttl) {
 		t.Fatalf("want %s validation error, got %v", refresh_token_ttl, err)
+	}
+}
+
+func TestApplyKeel_RejectsNegativeOAuthPendingClientLimit(t *testing.T) {
+	m := keelRows()
+	m[oauth_max_pending_clients] = ConfigRow{Value: "-1"}
+	err := applyKeelForTest(&KeelConfig{}, m)
+	if err == nil || !strings.Contains(err.Error(), oauth_max_pending_clients) {
+		t.Fatalf("want %s validation error, got %v", oauth_max_pending_clients, err)
 	}
 }
 

@@ -69,6 +69,7 @@ seeds:
       - [oauth_access_token_ttl, duration, true, '3600', Access-token lifetime (seconds)]
       - [oauth_refresh_token_ttl, duration, true, '2592000', Refresh-token lifetime (seconds)]
       - [oauth_code_ttl, duration, true, '60', Authorization-code lifetime (seconds)]
+      - [oauth_max_pending_clients, int, true, '0', 'Maximum pending open OAuth registrations; 0 is unbounded']
       - [oauth_max_auth_redirects, int, false, '2', Max authorize->login bounces before 508]
       - [outbound_max_redirects, int, false, '10', Max redirects the outbound HTTP client follows]
       - [outbound_max_rps, float, true, '0', Global outbound HTTP rate cap (0 = unlimited)]

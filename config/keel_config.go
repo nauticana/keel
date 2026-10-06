@@ -40,6 +40,7 @@ const (
 	oauth_access_token_ttl        = "oauth_access_token_ttl"
 	oauth_refresh_token_ttl       = "oauth_refresh_token_ttl"
 	oauth_code_ttl                = "oauth_code_ttl"
+	oauth_max_pending_clients     = "oauth_max_pending_clients"
 	oauth_max_auth_redirects      = "oauth_max_auth_redirects"
 	outbound_max_redirects        = "outbound_max_redirects"
 	outbound_max_rps              = "outbound_max_rps"
@@ -169,6 +170,7 @@ type KeelConfig struct {
 	OAuthAccessTokenTTL         time.Duration // oauth_access_token_ttl        3600               Access-token lifetime (seconds)
 	OAuthRefreshTokenTTL        time.Duration // oauth_refresh_token_ttl       2592000            Refresh-token lifetime (seconds, default 30 days)
 	OAuthCodeTTL                time.Duration // oauth_code_ttl                60                 Authorization-code lifetime (seconds)
+	OAuthMaxPendingClients      int           // oauth_max_pending_clients     0                  Maximum pending open registrations; 0 is unbounded
 	OAuthMaxAuthRedirects       int           // oauth_max_auth_redirects      2                  Max /authorize→login bounces before 508
 	OutboundMaxRedirects        int           // outbound_max_redirects        10                 Max redirects the shared outbound HTTP client follows
 	OutboundMaxRPS              float64       // outbound_max_rps              0                  Global rate cap on the shared outbound HTTP client (0 = unlimited)
@@ -294,6 +296,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OAuthAccessTokenTTL = c.Duration(m, oauth_access_token_ttl)
 	c.OAuthRefreshTokenTTL = c.Duration(m, oauth_refresh_token_ttl)
 	c.OAuthCodeTTL = c.Duration(m, oauth_code_ttl)
+	c.OAuthMaxPendingClients = c.Int(m, oauth_max_pending_clients)
 	c.OAuthMaxAuthRedirects = c.Int(m, oauth_max_auth_redirects)
 	c.OutboundMaxRedirects = c.Int(m, outbound_max_redirects)
 	c.OutboundMaxRPS = c.Float(m, outbound_max_rps)
@@ -395,6 +398,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.OAuthAccessTokenCacheTTL < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_access_token_cache_ttl))
+	}
+	if c.OAuthMaxPendingClients < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_max_pending_clients))
 	}
 	if c.OutboundMaxResponseSize <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", outbound_max_response_size))

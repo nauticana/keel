@@ -14,18 +14,19 @@ import (
 
 type grantRepo struct {
 	port.DatabaseRepository
-	rows    map[string][][]any
-	args    map[string][]any
-	calls   []string
-	commits int
-	err     error
+	rows        map[string][][]any
+	args        map[string][]any
+	calls       []string
+	commits     int
+	err         error
+	rollbackErr error
 }
 
 func (r *grantRepo) BeginTx(context.Context, map[string]string) (port.TxQueryService, error) {
 	return r, nil
 }
 func (r *grantRepo) Commit(context.Context) error   { r.commits++; return nil }
-func (r *grantRepo) Rollback(context.Context) error { return nil }
+func (r *grantRepo) Rollback(context.Context) error { return r.rollbackErr }
 
 func (r *grantRepo) GetQueryService(context.Context, map[string]string) port.QueryService { return r }
 func (r *grantRepo) GenID() int64                                                         { return 0 }
