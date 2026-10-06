@@ -9,7 +9,7 @@
  },
  "migrations": [
   {
-   "version": "v1.2.96",
+   "version": "v1.2.97",
    "title": "Bounded client registration, API key user",
    "tags": [
     "additive"
