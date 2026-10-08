@@ -161,6 +161,14 @@ seeds:
       - [domain_recheck_grace, duration, false, '259200', How long failing domain verification evidence stays current before it lapses (seconds; 0 lapses on the first failed re-check)]
       - [domain_identity_max_age, duration, false, '604800', How long identity-grade domain evidence counts after its last passed check (seconds; must exceed domain_recheck_interval)]
       - [domain_verification_label, string, false, domain-verification, 'DNS TXT value prefix and HTTP file name of domain verification challenges (lowercase letters, digits, hyphens)']
+      - [signin_handoff_ttl, duration, false, '300', Validity of a single-use sign-in handoff or single sign-on test-launch code (seconds)]
+      - [sso_max_document_size, int64, false, '1048576', 'Largest identity provider document keel reads: single sign-on callback body, SAML response or SAML metadata (bytes)']
+      - [sso_metadata_max_stale, duration, false, '86400', How long cached OpenID Connect discovery keeps serving while the issuer is unreachable (seconds)]
+      - [sso_connection_cache_size, int, false, '1024', Identity provider connections whose parsed settings each node caches]
+      - [scim_max_active_tokens, int, false, '5', Active SCIM provisioning tokens a partner may hold]
+      - [scim_token_max_days, int, false, '3650', Longest SCIM provisioning token lifetime (days)]
+      - [scim_max_group_members, int, false, '10000', Members a SCIM group may list or receive in one request]
+      - [scim_max_patch_operations, int, false, '1000', Operations in one SCIM PATCH request]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
@@ -247,6 +255,7 @@ seeds:
       - [email_verification_method, P, Password reset]
       - [email_verification_method, G, Google]
       - [email_verification_method, A, Apple]
+      - [email_verification_method, T, Tenant identity provider]
       - [email_verification_method, X, Application]
       - [email_verification_method, L, Legacy]
       - [sign_in_method, P, Password]

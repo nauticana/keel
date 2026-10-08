@@ -117,3 +117,9 @@ groups:
     seed: seed/erasure.yml
     depends_on: [core]
     seed_depends_on: [core]
+
+  - name: sso
+    path: sso
+    seed: seed/sso.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: [core]

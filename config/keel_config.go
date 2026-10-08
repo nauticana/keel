@@ -128,6 +128,14 @@ const (
 	domain_challenge_ttl          = "domain_challenge_ttl"
 	domain_code_ttl               = "domain_code_ttl"
 	domain_challenge_attempts     = "domain_challenge_attempts"
+	signin_handoff_ttl            = "signin_handoff_ttl"
+	sso_max_document_size         = "sso_max_document_size"
+	sso_metadata_max_stale        = "sso_metadata_max_stale"
+	sso_connection_cache_size     = "sso_connection_cache_size"
+	scim_max_active_tokens        = "scim_max_active_tokens"
+	scim_token_max_days           = "scim_token_max_days"
+	scim_max_group_members        = "scim_max_group_members"
+	scim_max_patch_operations     = "scim_max_patch_operations"
 	domain_challenge_cooldown     = "domain_challenge_cooldown"
 	domain_recheck_interval       = "domain_recheck_interval"
 	domain_recheck_grace          = "domain_recheck_grace"
@@ -263,6 +271,14 @@ type KeelConfig struct {
 	DomainRecheckGrace          time.Duration // domain_recheck_grace          259200             How long failing domain evidence stays current before it lapses
 	DomainIdentityMaxAge        time.Duration // domain_identity_max_age       604800             How long identity evidence counts after its last passed check
 	DomainVerificationLabel     string        // domain_verification_label     domain-verification  DNS TXT value prefix and HTTP file name of domain challenges
+	SigninHandoffTTL            time.Duration // signin_handoff_ttl            300                Validity of a single-use sign-in handoff or test-launch code
+	SSOMaxDocumentSize          int64         // sso_max_document_size         1048576            Largest identity provider document read: callback body, SAML response or metadata (bytes)
+	SSOMetadataMaxStale         time.Duration // sso_metadata_max_stale        86400              How long cached identity provider discovery serves while the issuer is unreachable
+	SSOConnectionCacheSize      int           // sso_connection_cache_size     1024               Connections whose parsed identity provider settings each node caches
+	SCIMMaxActiveTokens         int           // scim_max_active_tokens        5                  Active provisioning tokens a partner may hold
+	SCIMTokenMaxDays            int           // scim_token_max_days           3650               Longest provisioning token lifetime (days)
+	SCIMMaxGroupMembers         int           // scim_max_group_members        10000              Members a provisioned group may list or receive in one request
+	SCIMMaxPatchOperations      int           // scim_max_patch_operations     1000               Operations in one provisioning PATCH request
 }
 
 // Apply parses Keel's flags; a missing catalog row aborts the load.
@@ -389,6 +405,14 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.DomainRecheckGrace = c.Duration(m, domain_recheck_grace)
 	c.DomainIdentityMaxAge = c.Duration(m, domain_identity_max_age)
 	c.DomainVerificationLabel = c.String(m, domain_verification_label)
+	c.SigninHandoffTTL = c.Duration(m, signin_handoff_ttl)
+	c.SSOMaxDocumentSize = c.Int64(m, sso_max_document_size)
+	c.SSOMetadataMaxStale = c.Duration(m, sso_metadata_max_stale)
+	c.SSOConnectionCacheSize = c.Int(m, sso_connection_cache_size)
+	c.SCIMMaxActiveTokens = c.Int(m, scim_max_active_tokens)
+	c.SCIMTokenMaxDays = c.Int(m, scim_token_max_days)
+	c.SCIMMaxGroupMembers = c.Int(m, scim_max_group_members)
+	c.SCIMMaxPatchOperations = c.Int(m, scim_max_patch_operations)
 
 	if c.RefreshTokenTTL <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", refresh_token_ttl))
@@ -447,6 +471,20 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if !domainLabel.MatchString(c.DomainVerificationLabel) {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: want 1-63 lowercase letters, digits or hyphens", domain_verification_label))
+	}
+	for flag, d := range map[string]time.Duration{signin_handoff_ttl: c.SigninHandoffTTL, sso_metadata_max_stale: c.SSOMetadataMaxStale} {
+		if d <= 0 {
+			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", flag))
+		}
+	}
+	if c.SSOMaxDocumentSize <= 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", sso_max_document_size))
+	}
+	for flag, n := range map[string]int{sso_connection_cache_size: c.SSOConnectionCacheSize, scim_max_active_tokens: c.SCIMMaxActiveTokens,
+		scim_token_max_days: c.SCIMTokenMaxDays, scim_max_group_members: c.SCIMMaxGroupMembers, scim_max_patch_operations: c.SCIMMaxPatchOperations} {
+		if n <= 0 {
+			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", flag))
+		}
 	}
 	if c.WebhookClaimLeaseSeconds <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive — a zero lease makes every webhook claim instantly stealable", webhook_claim_lease_seconds))

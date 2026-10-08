@@ -10,3 +10,7 @@ columns:
     default: "FALSE"
     comment: The role applies within the holder's partner; FALSE is a platform role
 primary_key: [id]
+indexes:
+  - name: authorization_role_scope_uq
+    columns: [id, partner_scoped]
+    unique: true

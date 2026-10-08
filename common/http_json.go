@@ -68,6 +68,11 @@ func RequestJSON(ctx context.Context, method, url string, headers map[string]str
 	return requestJSON(ctx, HTTPClient(), method, url, headers, payload)
 }
 
+// RequestJSONWith is RequestJSON through client, such as PublicHTTPClient.
+func RequestJSONWith(ctx context.Context, client *http.Client, method, url string, headers map[string]string, payload any) ([]byte, http.Header, error) {
+	return requestJSON(ctx, client, method, url, headers, payload)
+}
+
 func requestJSON(ctx context.Context, client *http.Client, method, url string, headers map[string]string, payload any) ([]byte, http.Header, error) {
 	limit := config.Config().OutboundMaxResponseSize
 	if limit <= 0 {

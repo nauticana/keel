@@ -14,8 +14,8 @@ func tokenMatches(token, tokenHash string) bool {
 		subtle.ConstantTimeCompare([]byte(common.Sha256Hex(token)), []byte(tokenHash)) == 1
 }
 
-// coveredBy reports whether name is parent or a subdomain of it.
-func coveredBy(name, parent string) bool {
+// CoveredBy reports whether the normalized host name is parent or a subdomain of it.
+func CoveredBy(name, parent string) bool {
 	parent = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(parent)), ".")
 	return parent != "" && (name == parent || strings.HasSuffix(name, "."+parent))
 }

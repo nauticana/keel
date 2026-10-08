@@ -1,0 +1,47 @@
+table: partner_scim_user
+comment: |
+  An account a partner's directory provisions over SCIM. user_name and
+  external_id are the directory's keys; active FALSE means the directory
+  deactivated the user, whose membership has ended. Roles of a provisioned
+  user come from its groups, not from sign-in claims.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+  - name: user_name
+    type: VARCHAR(255)
+  - name: external_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: active
+    type: BOOLEAN
+    default: "TRUE"
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, user_id]
+indexes:
+  - name: partner_scim_user_name_uq
+    columns: [partner_id, user_name]
+    unique: true
+  - name: partner_scim_user_external_uq
+    columns: [partner_id, external_id]
+    unique: true
+    where: "external_id IS NOT NULL"
+  - name: idx_partner_scim_user_user
+    columns: [user_id]
+foreign_keys:
+  - name: partner_scim_users
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_scim_user_accounts
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]

@@ -7,16 +7,15 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"syscall"
-	"time"
+
+	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 )
 
-const (
-	httpFileMaxBytes     = 1024
-	httpFileMaxRedirects = 3
-	httpFileTimeout      = 10 * time.Second
-)
+// httpFileMaxBytes is the format limit of a verification file, which holds
+// one token; anything longer is not a file keel issued.
+const httpFileMaxBytes = 1024
 
 // HTTPFileVerifier proves control of content on the host (HF): FileURL serves
 // the issued token over HTTPS. Redirects may only move between the domain and
@@ -40,12 +39,12 @@ func (v *HTTPFileVerifier) Verify(ctx context.Context, proof DomainProof) (strin
 	guarded := *client
 	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		host := req.URL.Hostname()
-		if len(via) >= httpFileMaxRedirects || req.URL.Scheme != "https" || (host != proof.Domain && host != "www."+proof.Domain) {
+		if len(via) >= config.Config().OutboundMaxRedirects || req.URL.Scheme != "https" || (host != proof.Domain && host != "www."+proof.Domain) {
 			return fmt.Errorf("%w: redirect to %s", ErrDomainNotProven, req.URL.Redacted())
 		}
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, httpFileTimeout)
+	ctx, cancel := context.WithTimeout(ctx, config.Config().DefaultOutboundTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, FileURL(proof.Domain), nil)
 	if err != nil {
@@ -76,29 +75,18 @@ func (v *HTTPFileVerifier) Verify(ctx context.Context, proof DomainProof) (strin
 }
 
 func publicHTTPClient() *http.Client {
-	dialer := &net.Dialer{Timeout: httpFileTimeout, Control: dialPublicOnly}
+	timeout := config.Config().DefaultOutboundTimeout
+	dialer := &net.Dialer{Timeout: timeout, Control: dialPublicOnly}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = dialer.DialContext
-	return &http.Client{Transport: transport, Timeout: httpFileTimeout}
+	return &http.Client{Transport: transport, Timeout: timeout}
 }
 
-// dialPublicOnly runs after resolution, so a hostname that resolves to an
-// internal address is refused too.
-func dialPublicOnly(_, address string, _ syscall.RawConn) error {
-	ap, err := netip.ParseAddrPort(address)
-	if err != nil {
-		return fmt.Errorf("%w: address %s", ErrDomainNotProven, address)
-	}
-	if !publicAddr(ap.Addr()) {
-		return fmt.Errorf("%w: %s is not a public address", ErrDomainNotProven, ap.Addr())
+// dialPublicOnly makes a host that resolves to an internal address a negative verdict.
+func dialPublicOnly(network, address string, c syscall.RawConn) error {
+	if err := common.DialPublicOnly(network, address, c); err != nil {
+		return fmt.Errorf("%w: %w", ErrDomainNotProven, err)
 	}
 	return nil
-}
-
-var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
-
-func publicAddr(a netip.Addr) bool {
-	a = a.Unmap()
-	return a.IsGlobalUnicast() && !a.IsPrivate() && !sharedAddressSpace.Contains(a)
 }

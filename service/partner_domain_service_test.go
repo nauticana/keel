@@ -72,3 +72,33 @@ func TestPartnerDomainRefuses(t *testing.T) {
 		t.Fatalf("zero service: %v", err)
 	}
 }
+
+func TestPartnerDomainNamesAndPrimary(t *testing.T) {
+	s, qs := ownsService("HTTPS://www.Shop.example/", "blog.example.org.", "not a domain")
+	names, err := s.Names(context.Background(), 5)
+	if err != nil || len(names) != 2 || names[0] != "shop.example" || names[1] != "blog.example.org" {
+		t.Fatalf("Names = %v, %v", names, err)
+	}
+	primary, err := s.Primary(context.Background(), 5)
+	if err != nil || primary != "HTTPS://www.Shop.example/" {
+		t.Fatalf("Primary = %q, %v; want the stored spelling", primary, err)
+	}
+	if qs.calls[0].args[0] != int64(5) {
+		t.Fatalf("queried partner %v", qs.calls[0].args)
+	}
+
+	none, _ := ownsService()
+	if _, err := none.Primary(context.Background(), 5); !errors.Is(err, ErrNoPartnerDomain) {
+		t.Fatalf("Primary without domains: %v", err)
+	}
+	unusable, _ := ownsService("not a domain")
+	if _, err := unusable.Names(context.Background(), 5); !errors.Is(err, ErrNoPartnerDomain) {
+		t.Fatalf("Names without usable domains: %v", err)
+	}
+	if _, err := s.Names(context.Background(), 0); !errors.Is(err, ErrInvalidPartner) {
+		t.Fatalf("Names for zero partner: %v", err)
+	}
+	if _, err := (&PartnerDomainService{}).Primary(context.Background(), 5); !errors.Is(err, ErrDomainStore) {
+		t.Fatalf("zero service: %v", err)
+	}
+}

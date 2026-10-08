@@ -3,11 +3,11 @@ package outbox
 import (
 	"errors"
 	"fmt"
-	"net"
-	"net/netip"
 	"net/url"
 	"strings"
 	"syscall"
+
+	"github.com/nauticana/keel/common"
 )
 
 var ErrEgressDenied = errors.New("outbox: webhook egress denied")
@@ -22,8 +22,6 @@ type EgressPolicy struct {
 	// addresses — in-cluster receivers and tests only.
 	AllowPrivateNetworks bool
 }
-
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 func (p EgressPolicy) checkURL(u *url.URL) error {
 	if u.Scheme != "https" {
@@ -60,22 +58,12 @@ func (p EgressPolicy) hostAllowed(host string) bool {
 
 // dialControl vets the resolved address, so a public name pointing at an
 // internal address (DNS rebinding) is refused at connect time.
-func (p EgressPolicy) dialControl(_, address string, _ syscall.RawConn) error {
+func (p EgressPolicy) dialControl(network, address string, c syscall.RawConn) error {
 	if p.AllowPrivateNetworks {
 		return nil
 	}
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrEgressDenied, err)
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrEgressDenied, err)
-	}
-	addr = addr.Unmap().WithZone("")
-	if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() ||
-		addr.IsLinkLocalUnicast() || cgnat.Contains(addr) {
-		return fmt.Errorf("%w: address %s is not public", ErrEgressDenied, addr)
+	if err := common.DialPublicOnly(network, address, c); err != nil {
+		return fmt.Errorf("%w: %w", ErrEgressDenied, err)
 	}
 	return nil
 }

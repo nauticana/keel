@@ -34,7 +34,7 @@ func (v *GoogleSiteVerifier) Verify(ctx context.Context, proof DomainProof) (str
 		return "", err
 	}
 	for _, item := range page.Items {
-		if item.Site.Type == "INET_DOMAIN" && coveredBy(proof.Domain, item.Site.Identifier) {
+		if item.Site.Type == "INET_DOMAIN" && CoveredBy(proof.Domain, item.Site.Identifier) {
 			return item.ID, nil
 		}
 	}

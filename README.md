@@ -59,6 +59,9 @@ graph TD
 | `limiter` | Admission control: `FairSlotLimiter` (weighted, per-partner round-robin concurrency), `LocalRateLimiter` (per-partner + fleet token buckets per lane), `DistributedRateLimiter` (partner×fleet fixed windows charged atomically through `cache.MultiScopeAdmitter`, local fallback while the store is down), `LimitError` with `Retry-After` |
 | `clock` | Injectable time: `Clock` interface, real `System`, and `Fake` for tests that advance time instead of sleeping |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` (hex or base64) for TOTP seeds, refresh tokens, vault values; secret-backed `LoadKEK` and `Sealer`; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest; `VerifyPKCS7Detached` checks a detached PKCS#7 signature against a stored certificate with an algorithm allow-list, `ParseCertificate` reads DER or PEM |
+| `oauth/oidc` | OpenID Connect relying party: `FetchDiscovery`, the authorization-code `Client` (PKCE, nonce, client secret or `private_key_jwt`), `Provider` (`port.IdentityProvider` over `partner_idp_oidc`), and the first-party `SocialVerifier` (Google and Apple ID tokens) and `GoogleCode` (Google code exchange) |
+| `sso` | Tenant single sign-on and directory provisioning: `Service` (domain-routed sign-in through a partner's own identity provider, connection configure / test / activate / disable, role mapping) and `Provisioning` (SCIM 2.0 users, groups and tokens) |
+| `sso/saml` | SAML 2.0 service provider behind `port.IdentityProvider`, kept apart so applications without SAML never link XML signature code |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
 | `guard` | Composable `guard.TrustGuard` admission checks for write/queue tools: `DuplicateGuard` (debounce, returns the in-flight id via `guard.DuplicateError`), `MaxCountGuard` / `MinCountGuard` (rate cap / floor), `MinAgeGuard`, composed by `GuardChain`. App-owned named SQL + thresholds injected. See **Trust Guards** below. |
 | `dispatcher` | `MailClient` (SMTP + HTML + attachments + REST mail API; `SendEmail` takes a `headers` map for RFC 8058 one-click unsubscribe etc.), `LocalNotificationService` (channel-keyed registry with suppression + dedupe), `SuppressionService` (table-backed `port.NotificationSuppressor`), `InboxService` (persisted in-app inbox, also the `"inbox"` channel), `EmailDispatcher` and `NewSMSDispatcher` (Twilio / Telnyx `port.MessageDispatcher` adapters) |
@@ -298,7 +301,7 @@ func main() {
 
     // 3. Bigint ID generator (fed into the repository for collision-free ids
     //    in federated deployments). See "Bigint ID Generation" below.
-    gen, err := data.NewSnowflakeGenerator(int64(*common.NodeId), data.EpochMs2026)
+    gen, err := data.NewNodeSnowflake() // --node_id, EpochMs2026
     if err != nil { log.Fatalf("snowflake: %v", err) }
 
     // 4. Database
@@ -946,6 +949,8 @@ var status *common.HTTPStatusError
 if errors.As(err, &status) && status.Unauthorized() { return ErrReauthorize }
 ```
 
+For a URL a partner or user chose, use `common.RequestJSONWith(ctx, common.PublicHTTPClient(), ...)`. `PublicHTTPClient` dials only public addresses, checked after DNS resolution, and ignores proxies; a refused address is `common.ErrNonPublicAddress`. `common.DialPublicOnly` and `common.IsPublicAddr` are the same check for a client with its own timeouts or redirect policy.
+
 ### `common.PlainText` — HTML to text
 
 Visible text of a document or fragment: `script`/`style`/`noscript`/`template`/`title` dropped, entities decoded, whitespace collapsed, a space where a block element separated two words (`<b>wo</b>rd` stays `word`).
@@ -1106,7 +1111,7 @@ rec, err := crux.RecordForURL(ctx, pageURL, reference.CrUXFormFactorPhone) // fa
 
 `ErrNoAPIKey` means "not tried" (no secret named, or it is empty); `ErrCrUXNoData` means CrUX publishes nothing for the URL or origin; an unpublished metric is `CrUXNoValue`. `KGClient.FindEntity` and `WikidataClient.FindEntity` return an empty match, not an error, when nothing is found. `WikidataClient.UserAgent` is required by Wikimedia policy. Other failures are `*common.HTTPStatusError`, so `RateLimited()` / `Transient()` classify them.
 
-`IndexNowClient{APIKey, KeyLocation}.Submit(ctx, host, urls)` posts in batches of 10,000 and stops at the first failed batch; 400/403/422/429 map to `ErrIndexNowBadRequest` / `KeyInvalid` / `URLMismatch` / `RateLimited`. The host must serve the key at `/<key>.txt` or `KeyLocation`. `VerifyKeyFile(ctx, host)` reads that file back and returns `ErrIndexNowKeyNotServed` when it is missing or different; a transient failure is a plain error, never a verdict about the host.
+`IndexNowClient{APIKey, KeyLocation}.Submit(ctx, host, urls)` posts in batches of 10,000 and stops at the first failed batch; 400/403/422/429 map to `ErrIndexNowBadRequest` / `KeyInvalid` / `URLMismatch` / `RateLimited`. The host must serve the key at `/<key>.txt` or `KeyLocation`. `VerifyKeyFile(ctx, host)` reads that file back through `common.PublicHTTPClient` (or `KeyFileClient` when set) and returns `ErrIndexNowKeyNotServed` when it is missing or different, or when the host resolves to an internal address; a transient failure is a plain error, never a verdict about the host.
 
 ### `reference.Geocoder` — address ↔ point, and the `geo` columns it fills
 
@@ -1127,6 +1132,8 @@ point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
 ### `service.PartnerDomainService` — does this URL belong to the partner?
 
 `Owns(ctx, partnerID, rawURL)` returns the normalized URL when its host is one of the partner's `partner_domain` rows or a subdomain of one (a stored `www.` is ignored, names compare as lowercase punycode), and refuses with `ErrInvalidURL` (not absolute http(s), or carrying credentials), `ErrInvalidPartner`, `ErrNoPartnerDomain`, `ErrURLNotOwned`, or `ErrDomainStore` when no database is wired. Check it before fetching a partner-supplied URL, so `evilexample.com` never passes for `example.com`.
+
+`Names(ctx, partnerID)` returns the partner's domains as normalized names, primary first, for matching many hosts with `domain.CoveredBy(host, name)` after one query. `Primary(ctx, partnerID)` returns the primary domain as stored, or the first domain when none is marked primary. Both return `ErrNoPartnerDomain` when the partner has no usable domain.
 
 ### `service.Health` — health check for any mux
 
@@ -1283,9 +1290,13 @@ For metadata-driven dynamic-schema reads, keep using `QueryService.Query` — th
 | `GW` | Google Workspace admin | The user administers the Google organization that verified the domain | With a grant |
 | `ME` | Microsoft Entra admin | The user holds a domain administrator role in the Entra tenant that verified the domain | With a grant |
 
+The `HF` check fetches over HTTPS through a public-address client within `default_outbound_timeout`, follows at most `outbound_max_redirects` redirects and only between the domain and its `www` host, and reads at most 1 KiB, since the file holds one token.
+
 Provider grants: `GW` needs `admin.directory.domain.readonly` and matches verified domains and domain aliases; `ME` needs `Domain.Read.All` plus a directory read permission that exposes role template ids; `GS` needs `siteverification`. A listing longer than the page limit, or role details the grant cannot read, is an error, not a verdict.
 
 `domain.IdentityMethods()` returns the methods (`DT`, `GW`, `ME`) strong enough to route sign-in to a tenant. They are exclusive: recording one fails with `ErrDomainHeld` while another partner holds current identity evidence, and `IdentityHolder(domain)` returns the single holder or `ErrNotHeld`. Other methods are non-exclusive. Public suffixes, IP literals and free mailbox providers (`IsPublicDomain`) cannot be verified.
+
+`domain.CoveredBy(name, parent)` is the normalized-name match every verifier uses: equal, or a subdomain on a label boundary.
 
 Each verification is a `partner_domain_verification` row keyed `(partner_id, domain_url, verified_at)`. Proving a method that is already current refreshes that row; after a lapse or cancellation a new row is appended, so history is kept. A row is current while `lapsed_at` and `cancelled_at` are NULL.
 
@@ -1651,6 +1662,8 @@ Soft-deleted accounts (`status='D'`) don't compete for the index — `DeleteAcco
 
 A provider is enabled by its client id: `google_client_id` enables Google, `apple_client_id` enables Apple, and a provider without one answers 400 `provider_not_enabled`. The setting is application-wide, not per partner; `application_config_value` can give each node its own id. The Google OAuth code flow (`LoginGoogle`) uses the same id with the `google_client_secret` secret.
 
+Verification lives in `oauth/oidc`: `SocialLoginHandler.Verifier` (an `oidc.SocialVerifier`) checks the ID tokens, and `PublicHandler.GoogleCode` (an `oidc.GoogleCode`) redeems `LoginGoogle`'s code without following redirects. Both are nil by default, which uses Google's and Apple's published endpoints; tests and applications with their own key sets set them.
+
 ### Requiring SSO
 
 `user_account_policy` rows are global when `partner_id` is NULL and otherwise apply to that partner's users; a partner's own row overrides the global one for each policy type, and `UserService.EffectivePolicies(partnerID)` returns them resolved that way. Only platform roles can write policy rows as seeded.
@@ -1663,11 +1676,11 @@ The policy type `SSO_REQUIRED` takes three values:
 | 1 | Any external identity: Google, Apple or the partner's own identity provider |
 | 2 | Only the partner's own identity provider |
 
-A sign-in counts as the partner's own identity provider (`sign_in_method` `T`) when it is a Google Workspace account whose hosted domain the user's partner holds by identity-grade domain evidence; wire `LocalUserService.TenantDomains` to the `domain.Service` to enable it. A personal Google or Apple account is `E` and does not satisfy value 2.
+A sign-in counts as the partner's own identity provider (`sign_in_method` `T`) when it comes through the partner's active connection (see Tenant Single Sign-On), or when it is a Google Workspace account whose hosted domain the user's partner holds by identity-grade domain evidence; wire `LocalUserService.TenantDomains` to the `domain.Service` to enable the latter. A personal Google or Apple account is `E` and does not satisfy value 2.
 
 `CheckSignInMethod(userID, method)` resolves the user's partner and the policy in one lookup and refuses with 403 `sso_required`; a failed lookup refuses too. keel calls it at password sign-in, at one-time-code sign-in, at Google and Apple sign-in and again when a 2FA step completes. A downstream login handler must call it, and set `session.SignInMethod`, before `SessionTokens`. Each session records its method, and a refresh is refused once the policy no longer admits it, so tightening the policy ends other sessions at their next refresh; a session without a method is admitted only by value 0.
 
-The password rules (`MIN_PASSWORD_*`, `MAX_ATTEMPTS`, `AUTO_UNLOCK_MINUTES`, `PASSWORD_EXPIRE_DAYS`) and `SESSION_MAX_HOURS` resolve the same way. A failed policy lookup refuses the operation instead of falling back to the global rules. `GetPasswordPolicy` and `/public/password/policy` report the global rules.
+The password rules (`MIN_PASSWORD_*`, `MAX_ATTEMPTS`, `AUTO_UNLOCK_MINUTES`, `PASSWORD_EXPIRE_DAYS`) `SESSION_MAX_HOURS` and `SSO_JIT_CREATE` resolve the same way. A failed policy lookup refuses the operation instead of falling back to the global rules. `GetPasswordPolicy` and `/public/password/policy` report the global rules.
 
 ### Registering Social Login Routes
 
@@ -1690,6 +1703,262 @@ srv.Handle(map[string]func(w, r){
 |-------|---------|
 | `user_external_identity` | External links keyed by `(issuer, subject)`, with one identity per issuer per account. `provider` is only the adapter/UI label. Phone registrations remain in `user_account.phone`. |
 | `user_account.passtext` | Nullable. NULL means "this account authenticates via social/OTP only; password login is disabled." |
+
+## Tenant Single Sign-On
+
+A partner (tenant) can sign its people in through its own identity provider: Microsoft Entra ID, Okta, Google Workspace, SAP Identity Authentication, Ping, AD FS or any other OpenID Connect or SAML 2.0 provider. Package `sso` holds the service and `handler.SSOHandler` the routes. Single sign-on is opt-in twice: the application mounts the routes, and a partner activates a connection. Applications that do neither see no change; password, one-time-code, Google and Apple sign-in work exactly as before.
+
+### Schema
+
+Schema group `sso` (depends on `core` and `tenant_management`):
+
+| Table | Holds |
+|---|---|
+| `partner_identity_provider` | The connection: protocol, status, issuer, subject and email claims, MFA requirement, last test |
+| `partner_idp_oidc` | OpenID Connect settings: client id, client authentication, scopes, and either an operator secret name or a sealed partner credential |
+| `partner_idp_saml` | SAML settings: the identity provider's metadata document |
+| `partner_idp_role_mapping` | A claim value mapped to a role |
+| `partner_idp_role_grant` | The role assignments a mapping made |
+
+The schema enforces three rules:
+- a partner has at most one active connection;
+- only a tested connection can be active;
+- a mapping can name only a `partner_scoped` role, through a composite foreign key on `authorization_role(id, partner_scoped)`, so generic REST insertion of a mapping can never grant a platform role.
+
+Codes come from `constant_value`: `identity_protocol` (`O` OpenID Connect, `S` SAML 2.0), `identity_provider_status` (`D` draft, `A` active, `X` disabled), `oidc_client_auth` (`P` client secret post, `B` client secret basic, `J` private key JWT). Linked identities stay in `user_external_identity`, keyed by issuer and subject. Policy stays in `user_account_policy`:
+- `SSO_REQUIRED` is described under Requiring SSO.
+- `SSO_JIT_CREATE` (global default 0) lets a first sign-in create the account when set to 1.
+
+### Wiring
+
+```go
+oidcProvider := &oidc.Provider{DB: db, Secrets: secrets, Sealer: credentialSealer}
+samlProvider := &saml.Provider{DB: db, EntityID: "https://api.example/public/sso/saml"} // optional
+ssoService := &sso.Service{
+    DB: db, Users: userSvc, Domains: domainSvc, Nonces: nonces, Sealer: credentialSealer,
+    Providers: map[string]port.IdentityProvider{oidc.ProtocolOIDC: oidcProvider, saml.Protocol: samlProvider},
+    // Optional: the operator's own app registrations a partner may pick.
+    OperatorClients: map[string]sso.OperatorClient{"entra": {ClientID: id, ClientAuth: sso.ClientSecretPost,
+        SecretName: "entra_client_secret", IssuerPrefix: "https://login.microsoftonline.com/"}},
+}
+ssoHandler := &handler.SSOHandler{AbstractHandler: abstract, DB: db, SSO: ssoService, Handoff: nonces,
+    PublicBaseURL: "https://api.example", FrontendReturnURL: "https://app.example/sso/return",
+    ServiceProviderMetadata: samlProvider} // optional
+srv.Handle(ssoHandler.PublicRoutes())                                // public mux
+srv.Handle(ssoHandler.Routes(common.RestPrefix + common.APIVersion)) // authenticated mux
+```
+
+- `Users` must also implement `user.TenantAccountCreator`, which `LocalUserService` does.
+- `Nonces` is the same `connect.NonceService` as `PublicHandler.Handoff`.
+- `credentialSealer` is a `crypto.Sealer` for partner-supplied client credentials.
+- Register `PublicBaseURL + "/public/sso/callback"` at each identity provider: as the redirect URI for OpenID Connect, and as the assertion consumer service for SAML. For SAML, the service provider entity id is `saml.Provider.EntityID`, and `/public/sso/saml/metadata` serves keel's metadata.
+- An application without SAML does not import `sso/saml`, so it never links XML signature code.
+
+### Sign-in
+
+1. `GET /public/sso/start?email=` finds the partner that holds the email's domain, or its nearest parent domain, by identity-grade evidence (`domain.IdentityHolder`, see Domain Verification), and that partner's active connection.
+2. It stores the pending sign-in in `auth_nonce` and binds it to the browser with an `HttpOnly`, `Secure` cookie on `/public/sso`. The cookie is `SameSite=None` so it also rides a SAML response's cross-site POST; the binding rests on the cookie's secret value, which only this browser holds. The browser is then redirected to the identity provider.
+3. The callback (`GET` or `POST /public/sso/callback`) consumes the pending sign-in once and completes the protocol.
+4. It then requires:
+   - the connection's exact issuer;
+   - an MFA method when the connection requires MFA;
+   - an email whose domain the same partner holds; for Google, also a hosted domain (`hd`) it holds.
+
+   An identity provider can therefore only vouch for its own organization's addresses. An `email` claim that the issuer does not verify, such as Entra ID's, cannot reach another tenant's account or a guest's.
+5. It signs in, in this order:
+   - the account linked to the identity's issuer and subject;
+   - or the partner's own account with that email, which it then links;
+   - or, only under `SSO_JIT_CREATE = 1`, a new account, or an account without a partner made a member.
+
+   An account of another partner is refused.
+6. Mapped roles are synchronized in the same transaction:
+   - a claim the issuer truncated grants nothing;
+   - a role the mapping granted ends when its claim disappears;
+   - a role assignment made any other way is never touched.
+
+   A user the directory provisions (Directory Provisioning) takes its roles from its groups instead.
+7. The session uses sign-in method `T`. The browser returns to `FrontendReturnURL?code=`, and the application trades the code at `/public/register/exchange`. The exchange skips keel's second factor for these sessions, because the identity provider owns MFA.
+
+Refusals return `FrontendReturnURL?error=`, one code each:
+
+| Code | Cause |
+|---|---|
+| `sso_unavailable` | No partner holds the domain with an active connection |
+| `sso_failed` | The callback or the identity provider's answer was invalid |
+| `mfa_required` | The connection requires MFA and the identity provider did not report it |
+| `sso_email_not_allowed` | The email or hosted domain is outside the partner's verified domains |
+| `sso_no_account` | No account, and the partner does not create one |
+| `sso_other_partner` | The account belongs to another partner |
+| `sso_required` | The partner requires its own identity provider for this account |
+| `account_unavailable` | The account is locked or expired |
+| `identity_linked` | The account already has a different identity from this issuer |
+| `domain_not_proven` | Test only: the identity provider's grant did not prove the domain |
+| `sso_test_mismatch` | Test only: someone other than the administrator signed in |
+| `server_error` | Anything else; the cause goes to the journal |
+
+### Settings
+
+| Flag | Default | Governs |
+|---|---|---|
+| `oauth_state_ttl_seconds` | 600 | How long a started sign-in may take to come back, and the binding cookie's lifetime |
+| `signin_handoff_ttl` | 300 s | Validity of the sign-in handoff code and the test-launch code |
+| `sso_max_document_size` | 1 MiB | Largest callback body, SAML response or SAML metadata |
+| `sso_metadata_max_stale` | 86400 s | How long cached OpenID Connect discovery serves while the issuer is unreachable |
+| `sso_connection_cache_size` | 1024 | Connections whose parsed settings each node caches |
+| `social_jwks_cache_ttl` | 3600 s | Refresh interval of OpenID Connect discovery and keys |
+| `outbound_max_response_size`, `default_outbound_timeout` | 16 MiB, 30 s | Token endpoint responses and identity provider requests |
+| `max_request_size` | 16 MiB | The `configure` body, including uploaded keys and metadata |
+
+### Administration
+
+Table actions on `partner_identity_provider`. They are granted to `PARTNER_ADMIN`; `APP_ADMIN` may only disable.
+
+| Action | What it does |
+|---|---|
+| `configure` | Creates a draft or edits a connection. Takes JSON, or multipart when `private_key` or `idp_metadata` is an uploaded file. Partner credentials are sealed. An active connection may only rotate its credential and edit its claims; changing its issuer or client needs a disable first, and a changed issuer or client voids the last test. |
+| `test` | Kind `R`: returns a launch URL for a sign-in by the calling administrator, who must be asserted with their own email. It records nothing but the test, except that Entra ID and Google connections also ask for the grant that records `ME` or `GW` domain evidence in the same round trip. |
+| `activate` | Needs a passed test and a held identity domain. A connection it replaces is disabled, its mapped roles end, and its sessions are revoked; provisioned users' groups are mapped through the new connection. |
+| `disable` | Stops routing at once and ends the connection's mapped roles. Disabling the active connection also signs out every session it signed in. |
+
+Role mappings (`partner_idp_role_mapping`) are ordinary generic REST children of the connection.
+
+### OpenID Connect connections
+
+`configure` takes `issuer`, `client_id`, `client_auth`, and `client_secret` or `private_key`, or an `operator_client` preset instead. It also takes `subject_claim`, `email_claim`, `scopes` (default `openid email profile`) and `require_mfa`.
+
+- **Discovery.** It is read from `<issuer>/.well-known/openid-configuration`. Its issuer must equal the connection's exactly, so a multi-tenant authority whose issuer is a `{tenantid}` template is refused.
+- **Flow.** Every sign-in uses the authorization code with PKCE (S256), a nonce and a state.
+- **ID token.** It must carry:
+  - the issuer;
+  - the client as audience, and `azp` when there are several audiences;
+  - an unexpired `exp`;
+  - the nonce;
+  - a signature by an algorithm both keel and the issuer accept (RSA, RSA-PSS or ECDSA; never `none` or symmetric).
+- **Token endpoint.** Requests to it never follow a redirect. Discovery, keys and token requests go through `common.PublicHTTPClient`, because a tenant administrator chooses the issuer.
+- **Client authentication.**
+  - A client secret is sent by post or basic authentication.
+  - `private_key_jwt` sends a one-minute assertion with a unique `jti`, naming the certificate by `x5t` and `x5t#S256`. The private key is uploaded as a PEM bundle with its certificate and sealed.
+  - A method the issuer does not list in `token_endpoint_auth_methods_supported` is refused.
+- **Operator presets.** `OperatorClients` lets the operator offer its own app registration, such as one multi-tenant Entra ID registration each customer administrator consents to. Its secret stays in the secret provider and is used only with issuers under the preset's `IssuerPrefix`, so a partner can never send it to an issuer of its choosing.
+- **MFA.** `require_mfa` needs `mfa` in the token's `amr`.
+- **Truncated claims.** Entra ID's `_claim_names` / `hasgroups` mark the groups claim as truncated (overage).
+
+**Microsoft Entra ID.**
+- Use the directory's own issuer, `https://login.microsoftonline.com/<tenant-id>/v2.0`. The shared `common`, `organizations` and `consumers` authorities, and the consumer directory, are refused.
+- The subject claim defaults to `oid`, which survives an app-registration change.
+- Map app roles (`roles`) rather than groups when a user may have more than the token's group limit.
+- A certificate key may live in Azure Key Vault through the `azure` secret provider when the operator registers it as a preset.
+
+**Google Workspace.** Use issuer `https://accounts.google.com`. The hosted domain must be held by the partner, so a personal Google account never signs in to a tenant.
+
+**Okta, SAP Identity Authentication, Ping, AD FS 2016+.** Use the organization's issuer URL. With SAP Identity Authentication in front of Entra ID, configure the issuer the browser meets.
+
+### SAML connections
+
+`configure` with `protocol` `S` takes `idp_metadata`, the identity provider's metadata XML. Its `entityID` becomes the issuer, and it needs a single sign-on service and a signing certificate. `subject_claim` defaults to `NameID`; any other value names an attribute. The email comes from `email_claim`, then the usual email attributes (`mail`, `emailaddress` and their URIs), then a NameID that is an address.
+
+- Requests use the HTTP-Redirect binding. Responses must arrive by HTTP-POST at the callback, which is checked as their destination.
+- Responses must answer the request this browser started, be signed by a certificate in the metadata, name keel's entity id as their audience, and be within their validity window (180 seconds of clock skew).
+- Identity-provider-initiated sign-in is refused.
+- A multi-factor authentication context, or Entra ID's `multipleauthn` method claim, counts as MFA.
+- Entra ID's `groups.link` attribute marks its groups claim as truncated.
+- Encrypted assertions and signed requests need `saml.Provider.Key` and `Certificate`.
+- Response parsing uses `github.com/crewjam/saml`, isolated in package `sso/saml`.
+
+### OpenID Connect client
+
+`oidc.Client` signs users in with one OpenID Provider. It needs no partner model, so an application with a single fixed identity provider, such as an appliance console, can use it directly:
+
+```go
+signer, cert, err := oidc.ParseClientKey(pemBundle) // private key, optionally its certificate
+client := &oidc.Client{
+    Issuer:       "https://login.microsoftonline.com/<tenant-id>/v2.0",
+    DiscoveryURL: "https://login.microsoftonline.com/<tenant-id>/v2.0/.well-known/openid-configuration",
+    ClientID:     clientID,
+    Credential:   oidc.ClientCredential{Method: oidc.AuthPrivateKey, Key: signer, Certificate: cert},
+    SubjectClaim: "oid",
+}
+redirect, err := client.Begin(ctx, port.IdentityBegin{State: state, RedirectURI: callbackURL})
+// store redirect.Pending server-side under state, send the browser to redirect.URL
+assertion, err := client.Complete(ctx, port.IdentityCallback{RedirectURI: callbackURL, Params: r.URL.Query(), Pending: stored})
+```
+
+Errors:
+- an OAuth error answer is `*oidc.TokenError`;
+- an error returned to the redirect URI is `*oidc.CallbackError`;
+- a failed check is `oidc.ErrInvalidResponse`;
+- unusable settings are `oidc.ErrBadConfiguration`.
+
+`IdentityAssertion.Claims` holds the multi-valued non-protocol claims. `AccessToken` is returned only when `Begin` asked for extra scopes.
+
+`port.IdentityProvider` (`Begin`, `Complete`) is the seam between the sign-in service and a protocol, so an application can add a provider keel does not ship.
+
+## Directory Provisioning (SCIM)
+
+A partner's directory (Entra ID, Okta, Google or any SCIM 2.0 client) creates, updates, deactivates and deletes users and groups at `PublicBaseURL + "/public/scim/v2"`. `sso.Provisioning` holds the service and `handler.SCIMHandler` the routes.
+
+```go
+provisioning := &sso.Provisioning{DB: db, Users: userSvc, Domains: domainSvc}
+scimHandler := &handler.SCIMHandler{AbstractHandler: abstract, DB: db, Provisioning: provisioning, PublicBaseURL: "https://api.example"}
+srv.Handle(scimHandler.PublicRoutes())                                // /public/scim/v2/...
+srv.Handle(scimHandler.Routes(common.RestPrefix + common.APIVersion)) // token actions
+```
+
+### Tokens
+
+A partner administrator issues a token with the `generate` table action on `partner_scim_token`. It is kind `V`: the token and the SCIM base URL are shown once. Only the token's SHA-256 is stored. Rules:
+- a partner holds at most `scim_max_active_tokens` active tokens (default 5);
+- a token may expire after up to `scim_token_max_days` days (default 3650);
+- `revoke` ends a token at once.
+
+The directory sends the token as `Authorization: Bearer scim_...`, and it selects the partner for every request.
+
+### Endpoints
+
+- `/Users` and `/Users/{id}`: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`.
+- `/Groups` and `/Groups/{id}`: the same methods.
+- `/ServiceProviderConfig`, `/ResourceTypes` and `/Schemas`: public.
+
+Request limits:
+- Lists take `startIndex` and `count`; `count` defaults to `default_list_page_size` and is capped at `max_list_page_size`.
+- Filters are `userName eq "..."` or `externalId eq "..."` for users, and `displayName eq "..."` or `externalId eq "..."` for groups; anything else is `invalidFilter`.
+- Bodies are capped at `max_request_size`, a PATCH at `scim_max_patch_operations` operations (default 1,000), and a group at `scim_max_group_members` members (default 10,000).
+
+Errors use the SCIM error schema:
+
+| Status | `scimType` | Cause |
+|---|---|---|
+| 401 | | Token missing, unknown, revoked or expired |
+| 404 | | Resource not found in the token's partner |
+| 409 | `uniqueness` | Taken key or email, or an account of another partner |
+| 400 | `invalidFilter` | Unsupported filter |
+| 400 | `invalidPath` | Unsupported patch path |
+| 400 | `invalidValue` | Missing or malformed attribute, or an email outside the partner's verified domains |
+| 413 | `tooMany` | A request limit was exceeded |
+| 500 | | Anything else; the cause goes only to the journal |
+
+### Users
+
+- **What keel keeps.** `userName` (compared without case), `externalId`, `name.givenName`, `name.familyName`, the primary email (else the first, else a `userName` that is an address) and `active`. Other attributes, such as the enterprise extension, phone numbers and addresses, are accepted and ignored.
+- **Email domain.** The email must lie in a domain the partner holds by identity-grade evidence.
+- **Creating.** A new email creates an account verified by the tenant (`email_verification_method` `T`) and, when active, a membership. An existing account with that email is adopted when it belongs to this partner or to none; an account of another partner is a conflict.
+- **Deactivating and reactivating.** `active` false ends the membership, its roles and its sessions at once (`UserService.EndMembership`). True again makes the account a member again.
+- **Deleting.** `DELETE` stops provisioning and ends the membership; the account remains, as for any former member.
+- **PATCH.** Accepts:
+  - operations in any case (`Replace`, `add`);
+  - booleans as JSON or as the strings `"True"` and `"False"`;
+  - path-less value objects;
+  - dotted paths (`name.givenName`);
+  - `emails[type eq "work"].value`.
+
+### Groups and roles
+
+- **Group keys.** A group keeps `displayName`, `externalId` and members. PATCH accepts member add, replace and remove by value list, `members[value eq "id"]`, and path-less value objects.
+- **Role mapping.** Group membership feeds the role mapping of the partner's active identity provider connection: a mapping matches when its `claim_value` equals a group's display name or external id, whatever its `claim_name`.
+- **Role changes.** A provisioned user's mapped roles change whenever its groups change, and sign-in leaves them alone, so a token without the groups claim never removes a directory role.
+- **No active connection.** Without one, the directory assigns no roles.
+- **Mapping edits.** A changed mapping reaches a provisioned user at its next group change or connection activation, and a signed-in user at its next sign-in.
+- **Inactive users.** An inactive user gets none.
 
 ## Consent Capture (PIPEDA / GDPR)
 
@@ -2857,7 +3126,7 @@ One node emits up to 4096 ids/ms (~4M/s). The 41-bit timestamp spans ~69 years.
 | File | What it is |
 |------|------------|
 | [port/id_generator.go](port/id_generator.go) | `BigintGenerator` interface — `NextID() int64` |
-| [data/generator_snowflake.go](data/generator_snowflake.go) | `SnowflakeGenerator` implementation + `NewSnowflakeGenerator(nodeID, epochMs)` + `EpochMs2026` |
+| [data/generator_snowflake.go](data/generator_snowflake.go) | `SnowflakeGenerator` implementation + `NewSnowflakeGenerator(nodeID, epochMs)` + `NewNodeSnowflake()` + `EpochMs2026` |
 | [common/variables.go](common/variables.go) | `--node_id` flag (default 0) |
 
 ### DI flow
@@ -3211,7 +3480,7 @@ The sessions `Register` and `RegisterWithIdentity` return passed `CheckSignInMet
 
 The plan's `activation_mode` decides the subscription: a free offer or `F` plan is active at once, `P` inserts a pending row that checkout activates, and `A` and `T` leave the row to checkout. `PaymentRequired` then sends the client to `PaymentURL`, or to the billing page when no checkout client is set. A checkout failure after the partner exists returns `ErrCheckout` with the other results valid.
 
-`PublicHandler.GetAuthRoutes(apiPrefix)` mounts `POST {apiPrefix}/register/partner` (`CreatePartner`, body `PartnerSetup`). A redirect-based provider signup hands the session to the browser with `PublicHandler.HandoffCode(ctx, session)`: a single-use code, valid five minutes, that `/public/register/exchange` trades for tokens after re-checking the account, the sign-in policy and 2FA.
+`PublicHandler.GetAuthRoutes(apiPrefix)` mounts `POST {apiPrefix}/register/partner` (`CreatePartner`, body `PartnerSetup`). A redirect-based provider signup hands the session to the browser with `PublicHandler.HandoffCode(ctx, session)`: a single-use code, valid for `signin_handoff_ttl` (default five minutes), that `/public/register/exchange` trades for tokens after re-checking the account, the sign-in policy and 2FA.
 
 Use the built-in `LocalUserService` directly:
 
@@ -3316,6 +3585,7 @@ keel/
 │   ├── oauth_server/          # OAuth clients, codes, refresh tokens
 │   ├── api_key_management/    # Public API keys
 │   ├── oauth_connect/         # Partner credentials and auth nonces
+│   ├── sso/                   # Tenant identity provider connections, role mappings, SCIM provisioning
 │   ├── subscription/          # Plans, prices, quotas, subscriptions, usage
 │   ├── payment/               # Payment methods and payment webhook log
 │   ├── payout/                # Bank information and payout webhook log

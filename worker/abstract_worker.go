@@ -51,7 +51,7 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 	}
 	a.Secret = secrets
 
-	gen, err := data.NewSnowflakeGenerator(int64(*common.NodeId), data.EpochMs2026)
+	gen, err := data.NewNodeSnowflake()
 	if err != nil {
 		return fmt.Errorf("worker %q: snowflake: %w", a.Caption, err)
 	}

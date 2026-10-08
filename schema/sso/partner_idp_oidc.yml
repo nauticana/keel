@@ -1,0 +1,37 @@
+table: partner_idp_oidc
+comment: |
+  OpenID Connect settings of an identity provider connection. The client
+  credential is either an operator-managed secret named in the secret provider
+  or a partner-supplied secret or certificate key sealed with the credential key.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: provider_id
+    type: BIGINT
+  - name: discovery_url
+    type: VARCHAR(500)
+  - name: client_id
+    type: VARCHAR(255)
+  - name: client_auth
+    type: CHAR(1)
+    default: P
+  - name: secret_name
+    type: VARCHAR(100)
+    nullable: true
+  - name: credential_sealed
+    type: TEXT
+    nullable: true
+  - name: scopes
+    type: VARCHAR(255)
+    default: openid email profile
+primary_key: [partner_id, provider_id]
+checks:
+  - name: chk_partner_idp_oidc_credential
+    expression: "(secret_name IS NULL) <> (credential_sealed IS NULL)"
+foreign_keys:
+  - name: partner_identity_provider_oidc
+    columns: [partner_id, provider_id]
+    references:
+      table: partner_identity_provider
+      columns: [partner_id, id]
+    on_delete: CASCADE

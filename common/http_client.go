@@ -38,7 +38,7 @@ func HTTPClient() *http.Client {
 		if config.Config().OutboundMaxRPS > 0 {
 			transport = &rateLimitedTransport{
 				base:    http.DefaultTransport,
-				limiter: rate.NewLimiter(rate.Limit(config.Config().OutboundMaxRPS), burstFor(config.Config().OutboundMaxRPS)),
+				limiter: newOutboundLimiter(config.Config().OutboundMaxRPS),
 			}
 		}
 		outboundClient = &http.Client{
@@ -80,6 +80,10 @@ func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, err
 		return nil, fmt.Errorf("outbound: rate limit wait: %w", err)
 	}
 	return t.base.RoundTrip(req)
+}
+
+func newOutboundLimiter(rps float64) *rate.Limiter {
+	return rate.NewLimiter(rate.Limit(rps), burstFor(rps))
 }
 
 func burstFor(rps float64) int {

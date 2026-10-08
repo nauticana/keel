@@ -1,0 +1,10 @@
+tables:
+  - partner_identity_provider
+  - partner_idp_oidc
+  - partner_idp_saml
+  - partner_idp_role_mapping
+  - partner_idp_role_grant
+  - partner_scim_token
+  - partner_scim_user
+  - partner_scim_group
+  - partner_scim_group_member

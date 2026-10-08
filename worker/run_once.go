@@ -40,7 +40,7 @@ func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.D
 	if err != nil {
 		return fmt.Errorf("RunOnce: secrets: %w", err)
 	}
-	gen, err := data.NewSnowflakeGenerator(int64(*common.NodeId), data.EpochMs2026)
+	gen, err := data.NewNodeSnowflake()
 	if err != nil {
 		return fmt.Errorf("RunOnce: snowflake: %w", err)
 	}

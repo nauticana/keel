@@ -1,0 +1,48 @@
+table: partner_scim_token
+comment: |
+  Bearer token a partner's directory uses to provision users and groups over
+  SCIM. Only the SHA-256 of the token is stored; it is shown once at creation.
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: caption
+    type: VARCHAR(80)
+  - name: token_hash
+    type: VARCHAR(64)
+  - name: created_by
+    type: BIGINT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: revoked_at
+    type: TIMESTAMP
+    nullable: true
+  - name: last_used_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: partner_scim_token_seq
+  column: id
+indexes:
+  - name: partner_scim_token_hash_uq
+    columns: [token_hash]
+    unique: true
+  - name: idx_partner_scim_token_partner
+    columns: [partner_id]
+foreign_keys:
+  - name: partner_scim_tokens
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_scim_token_creator
+    columns: [created_by]
+    references:
+      table: user_account
+      columns: [id]

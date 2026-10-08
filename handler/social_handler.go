@@ -6,61 +6,24 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
-	"sync"
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
-	"github.com/nauticana/keel/crypto"
+	"github.com/nauticana/keel/oauth/oidc"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
 
-// JWKs cache lifetimes for Google and Apple. Keys rotate on the order of
-// weeks; an hour is a comfortable refresh cadence. Both providers
-// publish a discovery URL whose contents are stable byte-for-byte
-// between rotations, so refreshing more often is just wasted bandwidth.
-const (
-	googleJWKsURL = "https://www.googleapis.com/oauth2/v3/certs"
-	appleJWKsURL  = "https://appleid.apple.com/auth/keys"
-	googleIssuer1 = user.GoogleIssuer
-	googleIssuer2 = "accounts.google.com"
-	appleIssuer   = user.AppleIssuer
-
-	socialNonceKey = "social_nonce:"
-)
-
-// Lazy package-scoped JWKs providers. Constructed on first use so the
-// fixed http.Client timeout doesn't fight with test setups that swap
-// http.DefaultClient.
-var (
-	googleJWKsOnce sync.Once
-	googleJWKs     *jwksProvider
-	appleJWKsOnce  sync.Once
-	appleJWKs      *jwksProvider
-)
-
-func getGoogleJWKs() *jwksProvider {
-	googleJWKsOnce.Do(func() {
-		googleJWKs = newJWKsProvider(googleJWKsURL, config.Config().SocialJWKSCacheTTL, common.HTTPClient())
-	})
-	return googleJWKs
-}
-
-func getAppleJWKs() *jwksProvider {
-	appleJWKsOnce.Do(func() {
-		appleJWKs = newJWKsProvider(appleJWKsURL, config.Config().SocialJWKSCacheTTL, common.HTTPClient())
-	})
-	return appleJWKs
-}
+const socialNonceKey = "social_nonce:"
 
 func init() {
 	RegisterErrorCode(user.ErrIdentityNotLinked, http.StatusConflict, "identity_not_linked")
 	RegisterErrorCode(user.ErrIdentityLinked, http.StatusConflict, "identity_linked")
 	RegisterErrorCode(user.ErrAccountUnavailable, http.StatusForbidden, "account_unavailable")
 	RegisterErrorCode(user.ErrSSORequired, http.StatusForbidden, "sso_required")
-	RegisterErrorCode(errProviderDisabled, http.StatusBadRequest, "provider_not_enabled")
+	RegisterErrorCode(oidc.ErrProviderDisabled, http.StatusBadRequest, "provider_not_enabled")
 }
 
 // SocialLoginHandler handles OAuth/social login (Google, Apple).
@@ -69,6 +32,8 @@ type SocialLoginHandler struct {
 	// NonceCache, when set, turns on single-use nonce binding: a GET issues,
 	// the POST login requires + consumes. Nil = nonce check off.
 	NonceCache cache.CacheService
+	// Verifier checks Google and Apple ID tokens; nil uses their published keys.
+	Verifier *oidc.SocialVerifier
 }
 
 // LoginSocial verifies a social provider ID token (POST). A GET on the same
@@ -96,12 +61,9 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Verify token signature against the provider's JWKs and extract
-	// claims. Both providers issue RS256 ID tokens; keel pins that
-	// algorithm and rejects everything else.
-	identity, nonce, err := verifySocialToken(r.Context(), req.Provider, req.Token)
-	if errors.Is(err, errProviderDisabled) {
-		h.WriteServiceError(w, r, errProviderDisabled)
+	identity, nonce, err := h.verifySocialToken(r.Context(), req.Provider, req.Token)
+	if errors.Is(err, oidc.ErrProviderDisabled) {
+		h.WriteServiceError(w, r, oidc.ErrProviderDisabled)
 		return
 	}
 	if err != nil {
@@ -171,7 +133,7 @@ func (h *SocialLoginHandler) LinkSocial(w http.ResponseWriter, r *http.Request) 
 	if !h.requireRecentAuth(w, session, req.Password, req.TwoFactorCode) {
 		return
 	}
-	identity, nonce, err := verifySocialToken(r.Context(), req.Provider, req.Token)
+	identity, nonce, err := h.verifySocialToken(r.Context(), req.Provider, req.Token)
 	if err != nil || (h.NonceCache != nil && !h.consumeSocialNonce(r.Context(), nonce)) {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
 		return
@@ -263,80 +225,26 @@ func buildSignupConsent(r *http.Request, req *socialLoginRequest) *user.SignupCo
 	}
 }
 
-// errProviderDisabled: the provider has no client id configured. A provider
-// is enabled by setting google_client_id or apple_client_id, application-wide
-// or per node.
-var errProviderDisabled = errors.New("sign-in provider is not enabled")
-
-// verifySocialToken validates the provider's RS256 ID token against its JWKs,
-// asserts iss/aud/exp, and returns the identity and the token's nonce.
-func verifySocialToken(ctx context.Context, provider, token string) (user.ExternalIdentity, string, error) {
-	switch provider {
-	case "google":
-		return verifyGoogleToken(ctx, token)
-	case "apple":
-		return verifyAppleToken(ctx, token)
-	default:
-		return user.ExternalIdentity{}, "", errProviderDisabled
+// verifySocialToken verifies a Google or Apple ID token and returns the
+// identity and the token's nonce.
+func (h *SocialLoginHandler) verifySocialToken(ctx context.Context, provider, token string) (user.ExternalIdentity, string, error) {
+	verifier := h.Verifier
+	if verifier == nil {
+		verifier = &oidc.SocialVerifier{}
 	}
-}
-
-// verifyGoogleToken accepts either published Google issuer form and the
-// configured google_client_id audience.
-func verifyGoogleToken(ctx context.Context, token string) (user.ExternalIdentity, string, error) {
-	aud := config.Config().GoogleClientID
-	if aud == "" {
-		return user.ExternalIdentity{}, "", errProviderDisabled
-	}
-	claims, err := crypto.VerifyRS256(ctx, getGoogleJWKs(), token, aud, "")
+	a, nonce, err := verifier.Verify(ctx, provider, token)
 	if err != nil {
 		return user.ExternalIdentity{}, "", err
 	}
-	iss, _ := claims["iss"].(string)
-	if iss != googleIssuer1 && iss != googleIssuer2 {
-		return user.ExternalIdentity{}, "", fmt.Errorf("google: unexpected issuer %q", iss)
-	}
-	id := identityFromClaims("google", googleIssuer1, claims)
-	if id.Subject == "" {
-		return user.ExternalIdentity{}, "", fmt.Errorf("google: missing sub")
-	}
-	id.FirstName, _ = claims["given_name"].(string)
-	id.LastName, _ = claims["family_name"].(string)
-	id.HostedDomain, _ = claims["hd"].(string)
-	nonce, _ := claims["nonce"].(string)
-	return id, nonce, nil
+	return socialIdentity(provider, a), nonce, nil
 }
 
-// verifyAppleToken requires the Apple issuer and apple_client_id audience.
-// Apple sends names only on the first sign-in, and never in the token.
-func verifyAppleToken(ctx context.Context, token string) (user.ExternalIdentity, string, error) {
-	aud := config.Config().AppleClientID
-	if aud == "" {
-		return user.ExternalIdentity{}, "", errProviderDisabled
-	}
-	claims, err := crypto.VerifyRS256(ctx, getAppleJWKs(), token, aud, appleIssuer)
-	if err != nil {
-		return user.ExternalIdentity{}, "", err
-	}
-	id := identityFromClaims("apple", appleIssuer, claims)
-	if id.Subject == "" {
-		return user.ExternalIdentity{}, "", fmt.Errorf("apple: missing sub")
-	}
-	nonce, _ := claims["nonce"].(string)
-	return id, nonce, nil
-}
-
-// identityFromClaims reads sub, email and email_verified, which providers send
-// as a JSON bool or string.
-func identityFromClaims(provider, issuer string, claims map[string]any) user.ExternalIdentity {
-	id := user.ExternalIdentity{Provider: provider, Issuer: issuer}
-	id.Subject, _ = claims["sub"].(string)
-	id.Email, _ = claims["email"].(string)
-	switch v := claims["email_verified"].(type) {
-	case bool:
-		id.EmailVerified = v
-	case string:
-		id.EmailVerified = v == "true"
+// socialIdentity maps a first-party assertion; only Google carries names and
+// a hosted domain in its token.
+func socialIdentity(provider string, a *port.IdentityAssertion) user.ExternalIdentity {
+	id := user.ExternalIdentity{Provider: provider, Issuer: a.Issuer, Subject: a.Subject, Email: a.Email, EmailVerified: a.EmailVerified}
+	if provider == oidc.ProviderGoogle {
+		id.FirstName, id.LastName, id.HostedDomain = a.GivenName, a.FamilyName, a.HostedDomain
 	}
 	return id
 }

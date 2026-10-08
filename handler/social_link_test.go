@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/oauth/oidc"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/user"
 )
 
@@ -55,13 +57,17 @@ func TestLinkSocialRequiresRecentAuthentication(t *testing.T) {
 	}
 }
 
-func TestIdentityFromClaims(t *testing.T) {
-	id := identityFromClaims("google", googleIssuer1, map[string]any{"sub": "1", "email": "a@acme.com", "email_verified": "true"})
-	if id.Provider != "google" || id.Issuer != googleIssuer1 || id.Subject != "1" || id.Email != "a@acme.com" || !id.EmailVerified {
-		t.Fatalf("identity = %+v", id)
+func TestSocialIdentityMapsOnlyGoogleProfileClaims(t *testing.T) {
+	a := &port.IdentityAssertion{Issuer: oidc.GoogleIssuer, Subject: "1", Email: "a@acme.com", EmailVerified: true,
+		GivenName: "Ada", FamilyName: "L", HostedDomain: "acme.com"}
+	id := socialIdentity("google", a)
+	if id != (user.ExternalIdentity{Provider: "google", Issuer: user.GoogleIssuer, Subject: "1", Email: "a@acme.com",
+		EmailVerified: true, FirstName: "Ada", LastName: "L", HostedDomain: "acme.com"}) {
+		t.Fatalf("google identity = %+v", id)
 	}
-	if identityFromClaims("apple", appleIssuer, map[string]any{"email_verified": false}).EmailVerified {
-		t.Fatal("email_verified false")
+	a.Issuer = oidc.AppleIssuer
+	if id := socialIdentity("apple", a); id.FirstName != "" || id.HostedDomain != "" || id.Issuer != user.AppleIssuer {
+		t.Fatalf("apple identity = %+v", id)
 	}
 }
 

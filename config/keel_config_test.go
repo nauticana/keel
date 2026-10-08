@@ -41,6 +41,8 @@ var keelTestFlagIDs = []string{
 	commission_hold_days, agency_payout_min_minor,
 	domain_challenge_ttl, domain_code_ttl, domain_challenge_attempts, domain_challenge_cooldown,
 	domain_recheck_interval, domain_recheck_grace, domain_identity_max_age, domain_verification_label,
+	signin_handoff_ttl, sso_max_document_size, sso_metadata_max_stale, sso_connection_cache_size,
+	scim_max_active_tokens, scim_token_max_days, scim_max_group_members, scim_max_patch_operations,
 }
 
 func keelRows() ConfigRows {
@@ -58,6 +60,14 @@ func keelRows() ConfigRows {
 	m[otp_send_per_contact] = ConfigRow{Default: "3"}
 	m[otp_send_per_ip] = ConfigRow{Default: "10"}
 	m[domain_challenge_ttl] = ConfigRow{Default: "86400"}
+	m[signin_handoff_ttl] = ConfigRow{Default: "300"}
+	m[sso_max_document_size] = ConfigRow{Default: "1048576"}
+	m[sso_metadata_max_stale] = ConfigRow{Default: "86400"}
+	m[sso_connection_cache_size] = ConfigRow{Default: "1024"}
+	m[scim_max_active_tokens] = ConfigRow{Default: "5"}
+	m[scim_token_max_days] = ConfigRow{Default: "3650"}
+	m[scim_max_group_members] = ConfigRow{Default: "10000"}
+	m[scim_max_patch_operations] = ConfigRow{Default: "1000"}
 	m[domain_code_ttl] = ConfigRow{Default: "900"}
 	m[domain_challenge_attempts] = ConfigRow{Default: "5"}
 	m[domain_challenge_cooldown] = ConfigRow{Default: "60"}

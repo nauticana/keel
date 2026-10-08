@@ -81,7 +81,7 @@ func (v *MicrosoftEntraVerifier) Verify(ctx context.Context, proof DomainProof) 
 			return false, err
 		}
 		for _, d := range page.Value {
-			if d.IsVerified && coveredBy(proof.Domain, d.ID) {
+			if d.IsVerified && CoveredBy(proof.Domain, d.ID) {
 				ref = strings.ToLower(d.ID)
 				return true, nil
 			}

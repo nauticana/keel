@@ -44,7 +44,7 @@ func (v *GoogleMXVerifier) Verify(ctx context.Context, proof DomainProof) (strin
 	}
 	for _, mx := range mxs {
 		host := strings.TrimSuffix(strings.ToLower(mx.Host), ".")
-		if coveredBy(host, "google.com") || coveredBy(host, "googlemail.com") {
+		if CoveredBy(host, "google.com") || CoveredBy(host, "googlemail.com") {
 			return mailDomain, nil
 		}
 	}

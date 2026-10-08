@@ -95,3 +95,21 @@ func TestASCIIHost(t *testing.T) {
 		t.Fatal("empty host must be refused")
 	}
 }
+
+func TestCoveredBy(t *testing.T) {
+	for _, c := range []struct {
+		name, parent string
+		want         bool
+	}{
+		{"example.com", "example.com", true},
+		{"shop.example.com", "Example.COM.", true},
+		{"evilexample.com", "example.com", false},
+		{"example.com.evil.net", "example.com", false},
+		{"example.com", "", false},
+		{"example.com", "shop.example.com", false},
+	} {
+		if got := CoveredBy(c.name, c.parent); got != c.want {
+			t.Errorf("CoveredBy(%q, %q) = %v, want %v", c.name, c.parent, got, c.want)
+		}
+	}
+}

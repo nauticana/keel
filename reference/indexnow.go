@@ -31,6 +31,9 @@ type IndexNowClient struct {
 	APIKey
 	Endpoint    string // empty = DefaultIndexNowEndpoint
 	KeyLocation string // empty = the protocol default https://<host>/<key>.txt
+	// KeyFileClient reads the key file back; nil = common.PublicHTTPClient,
+	// because the host is chosen by a partner.
+	KeyFileClient *http.Client
 }
 
 type indexNowRequest struct {
@@ -69,8 +72,8 @@ func (c *IndexNowClient) Submit(ctx context.Context, host string, urls []string)
 
 // VerifyKeyFile reads the key file back from host and compares it to the key.
 // A missing or mismatched file, or a KeyLocation on another host, is
-// ErrIndexNowKeyNotServed; a transient failure is not, so a caller never
-// records an outage as a verdict.
+// ErrIndexNowKeyNotServed, as is a host resolving to an internal address; a
+// transient failure is not, so a caller never records an outage as a verdict.
 func (c *IndexNowClient) VerifyKeyFile(ctx context.Context, host string) error {
 	if host == "" {
 		return fmt.Errorf("reference: indexnow host required")
@@ -83,8 +86,15 @@ func (c *IndexNowClient) VerifyKeyFile(ctx context.Context, host string) error {
 	if err != nil {
 		return err
 	}
-	body, _, err := common.RequestJSON(ctx, http.MethodGet, location, map[string]string{"Accept": "text/plain, */*"}, nil)
+	httpc := c.KeyFileClient
+	if httpc == nil {
+		httpc = common.PublicHTTPClient()
+	}
+	body, _, err := common.RequestJSONWith(ctx, httpc, http.MethodGet, location, map[string]string{"Accept": "text/plain, */*"}, nil)
 	if err != nil {
+		if errors.Is(err, common.ErrNonPublicAddress) {
+			return fmt.Errorf("%w: %s does not resolve to a public address", ErrIndexNowKeyNotServed, host)
+		}
 		var status *common.HTTPStatusError
 		if errors.As(err, &status) && status.Permanent() {
 			return fmt.Errorf("%w: %s: http status %d", ErrIndexNowKeyNotServed, host, status.Status)

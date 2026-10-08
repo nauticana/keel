@@ -6,16 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/oauth/connect"
 	"github.com/nauticana/keel/user"
 )
 
-const (
-	handoffPurpose    = "signin_handoff"
-	handoffTTLSeconds = 300
-)
+const handoffPurpose = "signin_handoff"
+
+// handoffTTLSeconds is signin_handoff_ttl in the seconds NonceService takes.
+func handoffTTLSeconds() int { return int(config.Config().SigninHandoffTTL / time.Second) }
 
 func init() {
 	RegisterErrorCode(user.ErrInvalidConfirmation, http.StatusBadRequest, "invalid_confirmation")
@@ -71,23 +74,30 @@ func (h *PublicHandler) checkoutTolerated(w http.ResponseWriter, r *http.Request
 type handoffGrant struct {
 	UserID       int    `json:"userId"`
 	SignInMethod string `json:"signInMethod"`
+	// IdentityProvider marks a sign-in by the partner's own identity
+	// provider, which owns multi-factor authentication for it.
+	IdentityProvider bool `json:"idp,omitempty"`
 }
 
 // HandoffCode stores a completed sign-in under a single-use code, for a
 // redirect that must not carry tokens. The client trades it at
 // /public/register/exchange within five minutes.
 func (h *PublicHandler) HandoffCode(ctx context.Context, session *model.UserSession) (string, error) {
-	if h.Handoff == nil {
+	return createHandoff(ctx, h.Handoff, session, false)
+}
+
+func createHandoff(ctx context.Context, nonces *connect.NonceService, session *model.UserSession, identityProvider bool) (string, error) {
+	if nonces == nil {
 		return "", errors.New("handoff: no nonce service")
 	}
 	if session == nil || session.Id <= 0 || session.SignInMethod == "" {
 		return "", errors.New("handoff: a signed-in session is required")
 	}
-	grant, err := json.Marshal(handoffGrant{UserID: session.Id, SignInMethod: session.SignInMethod})
+	grant, err := json.Marshal(handoffGrant{UserID: session.Id, SignInMethod: session.SignInMethod, IdentityProvider: identityProvider})
 	if err != nil {
 		return "", err
 	}
-	return h.Handoff.Create(ctx, handoffPurpose, string(grant))
+	return nonces.Create(ctx, handoffPurpose, string(grant))
 }
 
 // ExchangeHandoff trades a HandoffCode for tokens. The account and sign-in
@@ -109,7 +119,7 @@ func (h *PublicHandler) ExchangeHandoff(w http.ResponseWriter, r *http.Request) 
 		h.WriteServiceError(w, r, err)
 		return
 	}
-	payload, ok, err := h.Handoff.Consume(r.Context(), req.Code, handoffPurpose, handoffTTLSeconds)
+	payload, ok, err := h.Handoff.Consume(r.Context(), req.Code, handoffPurpose, handoffTTLSeconds())
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
@@ -130,7 +140,7 @@ func (h *PublicHandler) ExchangeHandoff(w http.ResponseWriter, r *http.Request) 
 	}
 	session.SignInMethod = grant.SignInMethod
 	session.SessionMaxAge = maxAge
-	if h.secondFactorPending(w, r, session) {
+	if !grant.IdentityProvider && h.secondFactorPending(w, r, session) {
 		return
 	}
 	resp, err := h.SessionTokens(session)

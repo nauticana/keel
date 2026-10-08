@@ -1,18 +1,15 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/connect"
+	"github.com/nauticana/keel/oauth/oidc"
 	"github.com/nauticana/keel/rest"
 	"github.com/nauticana/keel/secret"
 	"github.com/nauticana/keel/user"
@@ -26,6 +23,8 @@ type PublicHandler struct {
 	FolderHTML      string
 	// Handoff, initialized, mounts the exchange of a HandoffCode for tokens.
 	Handoff *connect.NonceService
+	// GoogleCode redeems LoginGoogle's code; nil uses Google's endpoints.
+	GoogleCode *oidc.GoogleCode
 }
 
 // GetPublicRoutes returns the unauthenticated routes served by PublicHandler.
@@ -246,87 +245,24 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	form := url.Values{
-		"code":          {req.Code},
-		"client_id":     {clientID},
-		"client_secret": {clientSecret},
-		"redirect_uri":  {req.RedirectURI},
-		"grant_type":    {"authorization_code"},
+	exchange := h.GoogleCode
+	if exchange == nil {
+		exchange = &oidc.GoogleCode{}
 	}
-	tokenReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
-	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to build token request")
+	a, err := exchange.Identity(r.Context(), clientID, clientSecret, req.Code, req.RedirectURI)
+	var tokenErr *oidc.TokenError
+	switch {
+	case errors.As(err, &tokenErr):
+		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", tokenErr.Error())
 		return
-	}
-	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	tokenResp, err := common.HTTPClient().Do(tokenReq)
-	if err != nil {
+	case errors.Is(err, oidc.ErrEmailNotVerified):
+		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "email not verified")
+		return
+	case err != nil:
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to exchange token")
 		return
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, tokenResp.Body)
-		_ = tokenResp.Body.Close()
-	}()
-
-	var tokenData struct {
-		AccessToken      string `json:"access_token"`
-		Error            string `json:"error"`
-		ErrorDescription string `json:"error_description"`
-	}
-	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenData); err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to parse token response")
-		return
-	}
-	if tokenData.Error != "" || tokenData.AccessToken == "" {
-		detail := "token exchange failed"
-		if tokenData.Error != "" {
-			detail = "token exchange failed: " + tokenData.Error
-			if tokenData.ErrorDescription != "" {
-				detail += " — " + tokenData.ErrorDescription
-			}
-		}
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", detail)
-		return
-	}
-
-	userInfoReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "https://www.googleapis.com/oauth2/v2/userinfo", nil)
-	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to build user-info request")
-		return
-	}
-	userInfoReq.Header.Set("Authorization", "Bearer "+tokenData.AccessToken)
-	userInfoResp, err := common.HTTPClient().Do(userInfoReq)
-	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to fetch user info")
-		return
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, userInfoResp.Body)
-		_ = userInfoResp.Body.Close()
-	}()
-
-	var userInfo struct {
-		ID            string `json:"id"`
-		Email         string `json:"email"`
-		VerifiedEmail bool   `json:"verified_email"`
-		GivenName     string `json:"given_name"`
-		FamilyName    string `json:"family_name"`
-		HostedDomain  string `json:"hd"`
-	}
-	if err := json.NewDecoder(userInfoResp.Body).Decode(&userInfo); err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to parse user info")
-		return
-	}
-	if !userInfo.VerifiedEmail {
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "email not verified")
-		return
-	}
-
-	identity := user.ExternalIdentity{
-		Provider: "google", Issuer: googleIssuer1, Subject: userInfo.ID, Email: userInfo.Email, EmailVerified: true,
-		HostedDomain: userInfo.HostedDomain, FirstName: userInfo.GivenName, LastName: userInfo.FamilyName,
-	}
+	identity := socialIdentity(oidc.ProviderGoogle, a)
 	session, err := h.UserService.GetUserFromExternal(identity)
 	if err != nil {
 		if mapped := socialSignInError(err); mapped != nil {

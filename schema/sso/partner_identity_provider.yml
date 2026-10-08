@@ -1,0 +1,85 @@
+table: partner_identity_provider
+comment: |
+  A partner's connection to its own identity provider. Protocol settings live in
+  the protocol's child table. A partner has at most one active connection, and
+  only a tested connection can be active. Status changes only through the
+  sign-in service.
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: caption
+    type: VARCHAR(80)
+  - name: protocol
+    type: CHAR(1)
+  - name: status
+    type: CHAR(1)
+    default: D
+  - name: issuer
+    type: VARCHAR(255)
+    comment: Exact issuer or SAML entity id the IdP asserts
+  - name: subject_claim
+    type: VARCHAR(100)
+    default: sub
+  - name: email_claim
+    type: VARCHAR(100)
+    default: email
+  - name: require_mfa
+    type: BOOLEAN
+    default: "FALSE"
+    comment: Refuse an assertion whose authentication methods lack a multi-factor value
+  - name: created_by
+    type: BIGINT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: tested_by
+    type: BIGINT
+    nullable: true
+  - name: tested_at
+    type: TIMESTAMP
+    nullable: true
+    comment: Last successful test sign-in by a partner administrator
+  - name: status_changed_by
+    type: BIGINT
+    nullable: true
+  - name: status_changed_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: partner_identity_provider_seq
+  column: id
+indexes:
+  - name: partner_identity_provider_partner_uq
+    columns: [partner_id, id]
+    unique: true
+  - name: partner_identity_provider_active_uq
+    columns: [partner_id]
+    unique: true
+    where: "status = 'A'"
+checks:
+  - name: chk_partner_identity_provider_tested
+    expression: "status <> 'A' OR tested_at IS NOT NULL"
+foreign_keys:
+  - name: partner_identity_providers
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+  - name: partner_identity_provider_creator
+    columns: [created_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: partner_identity_provider_tester
+    columns: [tested_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: partner_identity_provider_status_changer
+    columns: [status_changed_by]
+    references:
+      table: user_account
+      columns: [id]

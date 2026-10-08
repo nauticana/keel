@@ -1,0 +1,33 @@
+table: partner_idp_role_grant
+comment: |
+  Marks a role assignment made by a connection's role mapping, so a later
+  sign-in can end it when the identity provider stops asserting the claim.
+  Assignments made any other way are never touched by the mapping.
+columns:
+  - name: user_id
+    type: BIGINT
+  - name: role_id
+    type: VARCHAR(30)
+  - name: begda
+    type: TIMESTAMP
+  - name: partner_id
+    type: BIGINT
+  - name: provider_id
+    type: BIGINT
+primary_key: [user_id, role_id, begda]
+indexes:
+  - name: idx_partner_idp_role_grant_provider
+    columns: [partner_id, provider_id]
+foreign_keys:
+  - name: partner_idp_role_grant_permission
+    columns: [user_id, role_id, begda]
+    references:
+      table: user_permission
+      columns: [user_id, role_id, begda]
+    on_delete: CASCADE
+  - name: partner_identity_provider_role_grants
+    columns: [partner_id, provider_id]
+    references:
+      table: partner_identity_provider
+      columns: [partner_id, id]
+    on_delete: CASCADE

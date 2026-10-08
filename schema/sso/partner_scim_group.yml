@@ -1,0 +1,39 @@
+table: partner_scim_group
+comment: A group a partner's directory provisions over SCIM; its name and external id feed the role mapping.
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: display_name
+    type: VARCHAR(255)
+  - name: external_id
+    type: VARCHAR(255)
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: partner_scim_group_seq
+  column: id
+indexes:
+  - name: partner_scim_group_partner_uq
+    columns: [partner_id, id]
+    unique: true
+  - name: partner_scim_group_name_uq
+    columns: [partner_id, display_name]
+    unique: true
+  - name: partner_scim_group_external_uq
+    columns: [partner_id, external_id]
+    unique: true
+    where: "external_id IS NOT NULL"
+foreign_keys:
+  - name: partner_scim_groups
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]

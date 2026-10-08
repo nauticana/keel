@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"testing"
 
@@ -137,19 +136,13 @@ func TestHTTPFileVerifier(t *testing.T) {
 	}
 }
 
-func TestDefaultHTTPClientRefusesInternalAddresses(t *testing.T) {
-	for addr, public := range map[string]bool{
-		"127.0.0.1:443": false, "10.1.2.3:443": false, "169.254.169.254:80": false, "100.64.0.1:443": false,
-		"[::1]:443": false, "[::ffff:192.168.0.1]:443": false, "[fe80::1]:443": false,
-		"8.8.8.8:443": true, "[2001:4860:4860::8888]:443": true,
-	} {
-		err := dialPublicOnly("tcp", addr, nil)
-		if (err == nil) != public {
-			t.Errorf("dialPublicOnly(%s) = %v, want public=%v", addr, err, public)
-		}
+func TestDefaultHTTPClientRefusesInternalAddressesAsVerdict(t *testing.T) {
+	err := dialPublicOnly("tcp", "169.254.169.254:80", nil)
+	if !errors.Is(err, ErrDomainNotProven) || !errors.Is(err, common.ErrNonPublicAddress) {
+		t.Fatalf("dialPublicOnly = %v, want a negative verdict", err)
 	}
-	if publicAddr(netip.Addr{}) {
-		t.Fatal("the zero address is not public")
+	if err := dialPublicOnly("tcp", "8.8.8.8:443", nil); err != nil {
+		t.Fatalf("dialPublicOnly(public) = %v", err)
 	}
 }
 

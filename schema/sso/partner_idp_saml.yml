@@ -1,0 +1,19 @@
+table: partner_idp_saml
+comment: |
+  SAML 2.0 settings of an identity provider connection: the identity
+  provider's metadata document, whose entityID is the connection's issuer.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: provider_id
+    type: BIGINT
+  - name: idp_metadata
+    type: TEXT
+primary_key: [partner_id, provider_id]
+foreign_keys:
+  - name: partner_identity_provider_saml
+    columns: [partner_id, provider_id]
+    references:
+      table: partner_identity_provider
+      columns: [partner_id, id]
+    on_delete: CASCADE

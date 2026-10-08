@@ -39,11 +39,11 @@ func (v *GoogleWorkspaceVerifier) Verify(ctx context.Context, proof DomainProof)
 		return "", err
 	}
 	for _, d := range page.Domains {
-		if d.Verified && coveredBy(proof.Domain, d.DomainName) {
+		if d.Verified && CoveredBy(proof.Domain, d.DomainName) {
 			return d.DomainName, nil
 		}
 		for _, a := range d.Aliases {
-			if a.Verified && coveredBy(proof.Domain, a.DomainAliasName) {
+			if a.Verified && CoveredBy(proof.Domain, a.DomainAliasName) {
 				return a.DomainAliasName, nil
 			}
 		}

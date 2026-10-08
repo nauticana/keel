@@ -382,6 +382,7 @@ CREATE TABLE IF NOT EXISTS authorization_role (
     partner_scoped                       TINYINT(1)    NOT NULL DEFAULT 0,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX authorization_role_scope_uq ON authorization_role(id, partner_scoped);
 
 -- Role-based permission assignments
 CREATE TABLE IF NOT EXISTS authorization_role_permission (
@@ -1861,3 +1862,157 @@ CREATE TABLE IF NOT EXISTS user_pseudonym_lookup (
     CONSTRAINT user_pseudonym_lookups FOREIGN KEY (user_id) REFERENCES user_account(id),
     CONSTRAINT user_pseudonym_lookup_actor FOREIGN KEY (actor_id) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A partner's connection to its own identity provider. Protocol settings live in
+-- the protocol's child table. A partner has at most one active connection, and
+-- only a tested connection can be active. Status changes only through the
+-- sign-in service.
+CREATE TABLE IF NOT EXISTS partner_identity_provider (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    protocol                             CHAR(1)       NOT NULL,
+    status                               CHAR(1)       NOT NULL DEFAULT 'D',
+    issuer                               VARCHAR(255)  NOT NULL,
+    subject_claim                        VARCHAR(100)  NOT NULL DEFAULT 'sub',
+    email_claim                          VARCHAR(100)  NOT NULL DEFAULT 'email',
+    require_mfa                          TINYINT(1)    NOT NULL DEFAULT 0,
+    created_by                           BIGINT        NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    tested_by                            BIGINT       ,
+    tested_at                            DATETIME     ,
+    status_changed_by                    BIGINT       ,
+    status_changed_at                    DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_identity_providers FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT partner_identity_provider_creator FOREIGN KEY (created_by) REFERENCES user_account(id),
+    CONSTRAINT partner_identity_provider_tester FOREIGN KEY (tested_by) REFERENCES user_account(id),
+    CONSTRAINT partner_identity_provider_status_changer FOREIGN KEY (status_changed_by) REFERENCES user_account(id),
+    CONSTRAINT chk_partner_identity_provider_tested CHECK (status <> 'A' OR tested_at IS NOT NULL)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX partner_identity_provider_partner_uq ON partner_identity_provider(partner_id, id);
+-- partner_identity_provider_active_uq is a partial index on PostgreSQL (WHERE status = 'A'); MySQL cannot enforce it — service-enforced
+CREATE INDEX partner_identity_provider_active_uq ON partner_identity_provider(partner_id);
+
+-- OpenID Connect settings of an identity provider connection. The client
+-- credential is either an operator-managed secret named in the secret provider
+-- or a partner-supplied secret or certificate key sealed with the credential key.
+CREATE TABLE IF NOT EXISTS partner_idp_oidc (
+    partner_id                           BIGINT        NOT NULL,
+    provider_id                          BIGINT        NOT NULL,
+    discovery_url                        VARCHAR(500)  NOT NULL,
+    client_id                            VARCHAR(255)  NOT NULL,
+    client_auth                          CHAR(1)       NOT NULL DEFAULT 'P',
+    secret_name                          VARCHAR(100) ,
+    credential_sealed                    TEXT         ,
+    scopes                               VARCHAR(255)  NOT NULL DEFAULT 'openid email profile',
+    PRIMARY KEY (partner_id, provider_id),
+    CONSTRAINT partner_identity_provider_oidc FOREIGN KEY (partner_id, provider_id) REFERENCES partner_identity_provider(partner_id, id) ON DELETE CASCADE,
+    CONSTRAINT chk_partner_idp_oidc_credential CHECK ((secret_name IS NULL) <> (credential_sealed IS NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- SAML 2.0 settings of an identity provider connection: the identity
+-- provider's metadata document, whose entityID is the connection's issuer.
+CREATE TABLE IF NOT EXISTS partner_idp_saml (
+    partner_id                           BIGINT        NOT NULL,
+    provider_id                          BIGINT        NOT NULL,
+    idp_metadata                         TEXT          NOT NULL,
+    PRIMARY KEY (partner_id, provider_id),
+    CONSTRAINT partner_identity_provider_saml FOREIGN KEY (partner_id, provider_id) REFERENCES partner_identity_provider(partner_id, id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Grants a role to a user whose assertion carries claim_value in claim_name. The
+-- constant partner_scoped column and its foreign key admit only partner-scoped
+-- roles, so a mapping can never grant a platform role.
+CREATE TABLE IF NOT EXISTS partner_idp_role_mapping (
+    partner_id                           BIGINT        NOT NULL,
+    provider_id                          BIGINT        NOT NULL,
+    claim_name                           VARCHAR(100)  NOT NULL,
+    claim_value                          VARCHAR(255)  NOT NULL,
+    role_id                              VARCHAR(30)   NOT NULL,
+    partner_scoped                       TINYINT(1)    NOT NULL DEFAULT 1,
+    PRIMARY KEY (partner_id, provider_id, claim_name, claim_value, role_id),
+    CONSTRAINT partner_identity_provider_role_mappings FOREIGN KEY (partner_id, provider_id) REFERENCES partner_identity_provider(partner_id, id) ON DELETE CASCADE,
+    CONSTRAINT partner_idp_role_mapping_roles FOREIGN KEY (role_id, partner_scoped) REFERENCES authorization_role(id, partner_scoped),
+    CONSTRAINT chk_partner_idp_role_mapping_scoped CHECK (partner_scoped)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Marks a role assignment made by a connection's role mapping, so a later
+-- sign-in can end it when the identity provider stops asserting the claim.
+-- Assignments made any other way are never touched by the mapping.
+CREATE TABLE IF NOT EXISTS partner_idp_role_grant (
+    user_id                              BIGINT        NOT NULL,
+    role_id                              VARCHAR(30)   NOT NULL,
+    begda                                DATETIME      NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    provider_id                          BIGINT        NOT NULL,
+    PRIMARY KEY (user_id, role_id, begda),
+    CONSTRAINT partner_idp_role_grant_permission FOREIGN KEY (user_id, role_id, begda) REFERENCES user_permission(user_id, role_id, begda) ON DELETE CASCADE,
+    CONSTRAINT partner_identity_provider_role_grants FOREIGN KEY (partner_id, provider_id) REFERENCES partner_identity_provider(partner_id, id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_partner_idp_role_grant_provider ON partner_idp_role_grant(partner_id, provider_id);
+
+-- Bearer token a partner's directory uses to provision users and groups over
+-- SCIM. Only the SHA-256 of the token is stored; it is shown once at creation.
+CREATE TABLE IF NOT EXISTS partner_scim_token (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    token_hash                           VARCHAR(64)   NOT NULL,
+    created_by                           BIGINT        NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at                           DATETIME     ,
+    revoked_at                           DATETIME     ,
+    last_used_at                         DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_scim_tokens FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT partner_scim_token_creator FOREIGN KEY (created_by) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX partner_scim_token_hash_uq ON partner_scim_token(token_hash);
+CREATE INDEX idx_partner_scim_token_partner ON partner_scim_token(partner_id);
+
+-- An account a partner's directory provisions over SCIM. user_name and
+-- external_id are the directory's keys; active FALSE means the directory
+-- deactivated the user, whose membership has ended. Roles of a provisioned
+-- user come from its groups, not from sign-in claims.
+CREATE TABLE IF NOT EXISTS partner_scim_user (
+    partner_id                           BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    user_name                            VARCHAR(255)  NOT NULL,
+    external_id                          VARCHAR(255) ,
+    active                               TINYINT(1)    NOT NULL DEFAULT 1,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (partner_id, user_id),
+    CONSTRAINT partner_scim_users FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT partner_scim_user_accounts FOREIGN KEY (user_id) REFERENCES user_account(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX partner_scim_user_name_uq ON partner_scim_user(partner_id, user_name);
+CREATE UNIQUE INDEX partner_scim_user_external_uq ON partner_scim_user(partner_id, external_id);
+CREATE INDEX idx_partner_scim_user_user ON partner_scim_user(user_id);
+
+-- A group a partner's directory provisions over SCIM; its name and external id feed the role mapping.
+CREATE TABLE IF NOT EXISTS partner_scim_group (
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT        NOT NULL,
+    display_name                         VARCHAR(255)  NOT NULL,
+    external_id                          VARCHAR(255) ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT partner_scim_groups FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX partner_scim_group_partner_uq ON partner_scim_group(partner_id, id);
+CREATE UNIQUE INDEX partner_scim_group_name_uq ON partner_scim_group(partner_id, display_name);
+CREATE UNIQUE INDEX partner_scim_group_external_uq ON partner_scim_group(partner_id, external_id);
+
+-- Membership of a provisioned user in a provisioned group.
+CREATE TABLE IF NOT EXISTS partner_scim_group_member (
+    partner_id                           BIGINT        NOT NULL,
+    group_id                             BIGINT        NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    PRIMARY KEY (partner_id, group_id, user_id),
+    CONSTRAINT partner_scim_group_members FOREIGN KEY (partner_id, group_id) REFERENCES partner_scim_group(partner_id, id) ON DELETE CASCADE,
+    CONSTRAINT partner_scim_user_groups FOREIGN KEY (partner_id, user_id) REFERENCES partner_scim_user(partner_id, user_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE INDEX idx_partner_scim_group_member_user ON partner_scim_group_member(partner_id, user_id);

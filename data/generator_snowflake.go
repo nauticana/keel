@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
-
 	"github.com/nauticana/keel/port"
 )
 
@@ -97,6 +97,12 @@ func NewSnowflakeGenerator(nodeID int64, epochMs int64) (*SnowflakeGenerator, er
 		epochMs: epochMs,
 		now:     time.Now,
 	}, nil
+}
+
+// NewNodeSnowflake returns the generator for this process's --node_id and
+// EpochMs2026. Every concurrently running process needs its own node id.
+func NewNodeSnowflake() (*SnowflakeGenerator, error) {
+	return NewSnowflakeGenerator(int64(*common.NodeId), EpochMs2026)
 }
 
 // WithStatePath enables on-disk persistence of the generator's

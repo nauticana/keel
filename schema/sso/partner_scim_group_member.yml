@@ -1,0 +1,26 @@
+table: partner_scim_group_member
+comment: Membership of a provisioned user in a provisioned group.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: group_id
+    type: BIGINT
+  - name: user_id
+    type: BIGINT
+primary_key: [partner_id, group_id, user_id]
+indexes:
+  - name: idx_partner_scim_group_member_user
+    columns: [partner_id, user_id]
+foreign_keys:
+  - name: partner_scim_group_members
+    columns: [partner_id, group_id]
+    references:
+      table: partner_scim_group
+      columns: [partner_id, id]
+    on_delete: CASCADE
+  - name: partner_scim_user_groups
+    columns: [partner_id, user_id]
+    references:
+      table: partner_scim_user
+      columns: [partner_id, user_id]
+    on_delete: CASCADE

@@ -87,6 +87,7 @@ const (
 
 	PolicySSORequired     = "SSO_REQUIRED"
 	PolicySessionMaxHours = "SESSION_MAX_HOURS" // 0 is unlimited
+	PolicySSOJITCreate    = "SSO_JIT_CREATE"    // 1 creates the account at first tenant sign-in
 
 	UserActivityCreate        = "C"
 	UserActivityLogin         = "L"
@@ -171,6 +172,7 @@ const (
 	qActiveLegalHold                 = "active_legal_hold"
 	qTokensValidAfter                = "tokens_valid_after"
 	qRevokeAccessTokens              = "revoke_access_tokens"
+	qUpdateTenantMember              = "update_tenant_member"
 	qSetSingleDevicePolicy           = "set_single_device_policy"
 	qRevokePriorOnSingleDevicePolicy = "revoke_prior_on_single_device_policy"
 
@@ -541,6 +543,15 @@ VALUES (?, ?, ?, ?)
 
 	qUserIDByEmail: `SELECT id, email_verified_at FROM user_account WHERE user_email = ?`,
 
+	// A changed email is the tenant's word for it; an unchanged one keeps its proof.
+	qUpdateTenantMember: `
+UPDATE user_account
+   SET first_name = ?, last_name = ?,
+       email_verified_at = CASE WHEN user_email = ? THEN email_verified_at ELSE CURRENT_TIMESTAMP END,
+       email_verification_method = CASE WHEN user_email = ? THEN email_verification_method ELSE 'T' END,
+       user_email = ?
+ WHERE id = ?`,
+
 	qMarkEmailVerified: `
 UPDATE user_account
    SET email_verified_at = CURRENT_TIMESTAMP, email_verification_method = ?
@@ -846,7 +857,7 @@ func applyPolicy(p *model.PasswordPolicy, policyType string, value int) bool {
 		p.AutoUnlock = int64(value) * int64(time.Minute)
 	case "AUTO_LOGOUT_MINUTES":
 		p.AutoLogout = int64(value) * int64(time.Minute)
-	case PolicySSORequired, PolicySessionMaxHours:
+	case PolicySSORequired, PolicySessionMaxHours, PolicySSOJITCreate:
 	default:
 		return false
 	}
@@ -1188,7 +1199,7 @@ func (s *LocalUserService) GetUserByEmail(email string) (*model.UserSession, err
 		return nil, err
 	}
 	if len(res.Rows) == 0 {
-		return nil, fmt.Errorf("user account not found for email: %s", email)
+		return nil, fmt.Errorf("%w: email %s", ErrNoAccount, email)
 	}
 	row := res.Rows[0]
 	userAccountId := int(common.AsInt64(row[0]))

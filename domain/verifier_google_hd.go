@@ -15,7 +15,7 @@ func (GoogleHDVerifier) Method() string { return MethodGoogleHD }
 
 func (GoogleHDVerifier) Verify(_ context.Context, proof DomainProof) (string, error) {
 	hd := strings.ToLower(strings.TrimSpace(proof.HostedDomain))
-	if !coveredBy(proof.Domain, hd) {
+	if !CoveredBy(proof.Domain, hd) {
 		return "", ErrDomainNotProven
 	}
 	return hd, nil

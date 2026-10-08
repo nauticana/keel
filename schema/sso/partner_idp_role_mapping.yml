@@ -1,0 +1,35 @@
+table: partner_idp_role_mapping
+comment: |
+  Grants a role to a user whose assertion carries claim_value in claim_name. The
+  constant partner_scoped column and its foreign key admit only partner-scoped
+  roles, so a mapping can never grant a platform role.
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: provider_id
+    type: BIGINT
+  - name: claim_name
+    type: VARCHAR(100)
+  - name: claim_value
+    type: VARCHAR(255)
+  - name: role_id
+    type: VARCHAR(30)
+  - name: partner_scoped
+    type: BOOLEAN
+    default: "TRUE"
+primary_key: [partner_id, provider_id, claim_name, claim_value, role_id]
+checks:
+  - name: chk_partner_idp_role_mapping_scoped
+    expression: "partner_scoped"
+foreign_keys:
+  - name: partner_identity_provider_role_mappings
+    columns: [partner_id, provider_id]
+    references:
+      table: partner_identity_provider
+      columns: [partner_id, id]
+    on_delete: CASCADE
+  - name: partner_idp_role_mapping_roles
+    columns: [role_id, partner_scoped]
+    references:
+      table: authorization_role
+      columns: [id, partner_scoped]

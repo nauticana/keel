@@ -37,6 +37,7 @@ seeds:
       - [9, AUTO_LOGOUT_MINUTES, 5]
       - [10, SSO_REQUIRED, 0]
       - [11, SESSION_MAX_HOURS, 0]
+      - [12, SSO_JIT_CREATE, 0]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:

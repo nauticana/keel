@@ -126,6 +126,8 @@ flowchart BT
     agency --> tenant_management
     agency --> payout
     agency --> billing
+    sso --> core
+    sso --> tenant_management
 
     core["Core (see diagram above)"]
 
@@ -150,13 +152,37 @@ flowchart BT
         partner_user["partner_user"]
         partner_address["partner_address"]
         partner_domain["partner_domain"]
+        partner_domain_verification["partner_domain_verification"]
+        partner_domain_challenge["partner_domain_challenge"]
         user_account_policy["user_account_policy"]
     end
 
     partner_user --> business_partner
     partner_address --> business_partner
     partner_domain --> business_partner
+    partner_domain_verification --> partner_domain
+    partner_domain_challenge --> partner_domain
     user_account_policy --> business_partner
+
+    subgraph sso["Tenant Single Sign-On"]
+        direction TB
+        partner_identity_provider["partner_identity_provider"]
+        partner_idp_oidc["partner_idp_oidc"]
+        partner_idp_role_mapping["partner_idp_role_mapping"]
+        partner_idp_saml["partner_idp_saml"]
+        partner_idp_role_grant["partner_idp_role_grant"]
+        partner_scim_token["partner_scim_token"]
+        partner_scim_user["partner_scim_user"]
+        partner_scim_group["partner_scim_group"]
+        partner_scim_group_member["partner_scim_group_member"]
+    end
+
+    partner_idp_oidc --> partner_identity_provider
+    partner_idp_saml --> partner_identity_provider
+    partner_idp_role_mapping --> partner_identity_provider
+    partner_idp_role_grant --> partner_identity_provider
+    partner_scim_group_member --> partner_scim_group
+    partner_scim_group_member --> partner_scim_user
 
     subgraph oauth_server["OAuth Authorization Server"]
         direction TB
@@ -635,13 +661,18 @@ erDiagram
 
 ```mermaid
 erDiagram
+    business_partner o|--o{ user_account_policy : "partner_account_policies"
     business_partner ||--o{ partner_user : "partner_users"
     business_partner ||--o{ partner_domain : "partner_domains"
-    business_partner o|--o{ user_account_policy : "partner_account_policies"
     business_partner ||--o{ partner_address : "partner_addresses"
-    user_account ||--o{ partner_user : "user_partners"
-    country o|--o{ partner_address : "partner_address_countries"
+    partner_domain ||--o{ partner_domain_verification : "partner_domain_verifications"
+    partner_domain ||--o{ partner_domain_challenge : "partner_domain_challenges"
+    partner_user }o--|| user_account : "user_partners"
+    partner_domain_verification }o--|| user_account : "partner_domain_verifier"
+    partner_domain_verification }o--|o user_account : "partner_domain_verification_canceller"
+    partner_domain_challenge }o--|| user_account : "partner_domain_challenge_issuer"
     state o|--o{ partner_address : "partner_address_states"
+    country o|--o{ partner_address : "partner_address_countries"
 
     business_partner {
         BIGINT id PK
@@ -676,6 +707,34 @@ erDiagram
         BOOLEAN is_primary
         TIMESTAMP created_at
     }
+    partner_domain_verification {
+        BIGINT partner_id PK,FK
+        VARCHAR domain_url PK,FK
+        TIMESTAMP verified_at PK
+        VARCHAR domain_name
+        CHAR method
+        BIGINT verified_by FK
+        VARCHAR token_hash
+        VARCHAR evidence_ref
+        TIMESTAMP last_checked_at
+        TIMESTAMP last_held_at
+        TIMESTAMP failing_since
+        VARCHAR last_error
+        TIMESTAMP lapsed_at
+        TIMESTAMP cancelled_at
+        BIGINT cancelled_by FK
+    }
+    partner_domain_challenge {
+        BIGINT partner_id PK,FK
+        VARCHAR domain_url PK,FK
+        CHAR method PK
+        VARCHAR token_hash
+        VARCHAR recipient
+        BIGINT issued_by FK
+        TIMESTAMP issued_at
+        TIMESTAMP expires_at
+        SMALLINT attempts
+    }
     user_account {
         BIGINT id PK
     }
@@ -685,6 +744,143 @@ erDiagram
     state {
         CHAR country_id PK
         CHAR id PK
+    }
+```
+
+### Tenant Single Sign-On
+
+A partner connects its own identity provider. Protocol settings live in a child table per protocol: `partner_idp_oidc` for OpenID Connect, `partner_idp_saml` (the identity provider's metadata) for SAML 2.0. A partner has at most one active connection, and only a tested one. A role mapping carries the constant `partner_scoped = TRUE` into a composite foreign key on `authorization_role(id, partner_scoped)`, so a mapping can name only a partner-scoped role. `partner_idp_role_grant` marks the `user_permission` rows a mapping created, so a later sign-in ends only those when the claim disappears. Sign-in policy, including `SSO_REQUIRED` and `SSO_JIT_CREATE`, stays in `user_account_policy`; linked identities stay in `user_external_identity`.
+
+```mermaid
+erDiagram
+    business_partner ||--o{ partner_identity_provider : "partner_identity_providers"
+    partner_identity_provider ||--o| partner_idp_oidc : "partner_identity_provider_oidc"
+    partner_identity_provider ||--o| partner_idp_saml : "partner_identity_provider_saml"
+    partner_identity_provider ||--o{ partner_idp_role_mapping : "partner_identity_provider_role_mappings"
+    authorization_role ||--o{ partner_idp_role_mapping : "partner_idp_role_mapping_roles"
+    partner_identity_provider ||--o{ partner_idp_role_grant : "partner_identity_provider_role_grants"
+    user_permission ||--o| partner_idp_role_grant : "partner_idp_role_grant_permission"
+    user_account ||--o{ partner_identity_provider : "partner_identity_provider_creator"
+    user_account o|--o{ partner_identity_provider : "partner_identity_provider_tester"
+    user_account o|--o{ partner_identity_provider : "partner_identity_provider_status_changer"
+
+    partner_identity_provider {
+        BIGINT id PK
+        BIGINT partner_id FK
+        VARCHAR caption
+        CHAR protocol
+        CHAR status
+        VARCHAR issuer
+        VARCHAR subject_claim
+        VARCHAR email_claim
+        BOOLEAN require_mfa
+        BIGINT created_by FK
+        TIMESTAMP created_at
+        BIGINT tested_by FK
+        TIMESTAMP tested_at
+        BIGINT status_changed_by FK
+        TIMESTAMP status_changed_at
+    }
+    partner_idp_oidc {
+        BIGINT partner_id PK,FK
+        BIGINT provider_id PK,FK
+        VARCHAR discovery_url
+        VARCHAR client_id
+        CHAR client_auth
+        VARCHAR secret_name
+        TEXT credential_sealed
+        VARCHAR scopes
+    }
+    partner_idp_saml {
+        BIGINT partner_id PK,FK
+        BIGINT provider_id PK,FK
+        TEXT idp_metadata
+    }
+    partner_idp_role_mapping {
+        BIGINT partner_id PK,FK
+        BIGINT provider_id PK,FK
+        VARCHAR claim_name PK
+        VARCHAR claim_value PK
+        VARCHAR role_id PK,FK
+        BOOLEAN partner_scoped FK
+    }
+    partner_idp_role_grant {
+        BIGINT user_id PK,FK
+        VARCHAR role_id PK,FK
+        TIMESTAMP begda PK,FK
+        BIGINT partner_id FK
+        BIGINT provider_id FK
+    }
+    business_partner {
+        BIGINT id PK
+    }
+    authorization_role {
+        VARCHAR id PK
+        BOOLEAN partner_scoped
+    }
+    user_permission {
+        BIGINT user_id PK
+        VARCHAR role_id PK
+        TIMESTAMP begda PK
+        TIMESTAMP endda
+    }
+    user_account {
+        BIGINT id PK
+    }
+```
+
+### Directory Provisioning (SCIM)
+
+A partner's directory provisions users and groups over SCIM 2.0 with a partner-scoped token, of which only the SHA-256 is stored. `partner_scim_user` keeps the directory's keys for an account and whether the directory has deactivated it; deactivation ends the `partner_user` membership. Group membership feeds the role mapping of the partner's active identity provider connection, so provisioned users take their roles from their groups.
+
+```mermaid
+erDiagram
+    business_partner ||--o{ partner_scim_token : "partner_scim_tokens"
+    business_partner ||--o{ partner_scim_user : "partner_scim_users"
+    business_partner ||--o{ partner_scim_group : "partner_scim_groups"
+    user_account ||--o{ partner_scim_token : "partner_scim_token_creator"
+    user_account ||--o{ partner_scim_user : "partner_scim_user_accounts"
+    partner_scim_group ||--o{ partner_scim_group_member : "partner_scim_group_members"
+    partner_scim_user ||--o{ partner_scim_group_member : "partner_scim_user_groups"
+
+    partner_scim_token {
+        BIGINT id PK
+        BIGINT partner_id FK
+        VARCHAR caption
+        VARCHAR token_hash
+        BIGINT created_by FK
+        TIMESTAMP created_at
+        TIMESTAMP expires_at
+        TIMESTAMP revoked_at
+        TIMESTAMP last_used_at
+    }
+    partner_scim_user {
+        BIGINT partner_id PK,FK
+        BIGINT user_id PK,FK
+        VARCHAR user_name
+        VARCHAR external_id
+        BOOLEAN active
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+    partner_scim_group {
+        BIGINT id PK
+        BIGINT partner_id FK
+        VARCHAR display_name
+        VARCHAR external_id
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+    partner_scim_group_member {
+        BIGINT partner_id PK,FK
+        BIGINT group_id PK,FK
+        BIGINT user_id PK,FK
+    }
+    business_partner {
+        BIGINT id PK
+    }
+    user_account {
+        BIGINT id PK
     }
 ```
 

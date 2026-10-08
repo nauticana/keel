@@ -27,7 +27,8 @@ var partnerDomainQueries = map[string]string{
 	qPartnerDomains: "SELECT domain_url FROM partner_domain WHERE partner_id = ? ORDER BY is_primary DESC, domain_url",
 }
 
-// PartnerDomainService answers whether a URL belongs to a partner's domains.
+// PartnerDomainService reads a partner's domains and answers whether a URL
+// belongs to them.
 type PartnerDomainService struct {
 	DB port.DatabaseRepository
 
@@ -46,27 +47,70 @@ func (s *PartnerDomainService) Owns(ctx context.Context, partnerID int64, rawURL
 	if err != nil {
 		return "", err
 	}
-	if s == nil || s.DB == nil {
-		return "", ErrDomainStore
-	}
-	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, partnerDomainQueries) })
-	if s.qs == nil {
-		return "", ErrDomainStore
-	}
-	res, err := s.qs.Query(ctx, qPartnerDomains, partnerID)
+	names, err := s.Names(ctx, partnerID)
 	if err != nil {
-		return "", fmt.Errorf("partner domain: list for partner %d: %w", partnerID, err)
+		return "", err
 	}
-	if len(res.Rows) == 0 {
-		return "", ErrNoPartnerDomain
-	}
-	for _, row := range res.Rows {
-		name, ok := domain.DomainName(common.AsString(row[0]))
-		if ok && (host == name || strings.HasSuffix(host, "."+name)) {
+	for _, name := range names {
+		if domain.CoveredBy(host, name) {
 			return u.String(), nil
 		}
 	}
 	return "", ErrURLNotOwned
+}
+
+// Names returns the partner's domains as normalized names (see
+// domain.DomainName), primary first; ErrNoPartnerDomain when it has none.
+func (s *PartnerDomainService) Names(ctx context.Context, partnerID int64) ([]string, error) {
+	stored, err := s.list(ctx, partnerID)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(stored))
+	for _, d := range stored {
+		if name, ok := domain.DomainName(d); ok {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, ErrNoPartnerDomain
+	}
+	return names, nil
+}
+
+// Primary returns the partner's primary domain as stored, or its first domain
+// when none is marked primary; ErrNoPartnerDomain when it has none.
+func (s *PartnerDomainService) Primary(ctx context.Context, partnerID int64) (string, error) {
+	stored, err := s.list(ctx, partnerID)
+	if err != nil {
+		return "", err
+	}
+	return stored[0], nil
+}
+
+func (s *PartnerDomainService) list(ctx context.Context, partnerID int64) ([]string, error) {
+	if partnerID <= 0 {
+		return nil, ErrInvalidPartner
+	}
+	if s == nil || s.DB == nil {
+		return nil, ErrDomainStore
+	}
+	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, partnerDomainQueries) })
+	if s.qs == nil {
+		return nil, ErrDomainStore
+	}
+	res, err := s.qs.Query(ctx, qPartnerDomains, partnerID)
+	if err != nil {
+		return nil, fmt.Errorf("partner domain: list for partner %d: %w", partnerID, err)
+	}
+	if len(res.Rows) == 0 {
+		return nil, ErrNoPartnerDomain
+	}
+	stored := make([]string, len(res.Rows))
+	for i, row := range res.Rows {
+		stored[i] = common.AsString(row[0])
+	}
+	return stored, nil
 }
 
 func parseHTTPURL(rawURL string) (*url.URL, string, error) {

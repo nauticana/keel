@@ -48,7 +48,7 @@ func TestIndexNowVerifyKeyFile(t *testing.T) {
 	}))
 	defer srv.Close()
 	host := strings.TrimPrefix(srv.URL, "http://")
-	client := &IndexNowClient{APIKey: testKey, KeyLocation: srv.URL + "/k-123.txt"}
+	client := &IndexNowClient{APIKey: testKey, KeyLocation: srv.URL + "/k-123.txt", KeyFileClient: srv.Client()}
 	ctx := context.Background()
 
 	if err := client.VerifyKeyFile(ctx, host); err != nil {
@@ -91,11 +91,23 @@ func TestIndexNowKeyFileURLDefaultsToProtocolLocation(t *testing.T) {
 func TestIndexNowVerifyKeyFileErrorOmitsKey(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	host := strings.TrimPrefix(srv.URL, "http://")
-	client := &IndexNowClient{APIKey: testKey, KeyLocation: srv.URL + "/k-123.txt"}
+	client := &IndexNowClient{APIKey: testKey, KeyLocation: srv.URL + "/k-123.txt", KeyFileClient: srv.Client()}
 	srv.Close()
 
 	err := client.VerifyKeyFile(context.Background(), host)
 	if err == nil || errors.Is(err, ErrIndexNowKeyNotServed) || strings.Contains(err.Error(), "k-123") {
 		t.Fatalf("unreachable host: %v", err)
+	}
+}
+
+func TestIndexNowVerifyKeyFileRefusesInternalHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("an internal host must never be reached by default")
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	client := &IndexNowClient{APIKey: testKey, KeyLocation: srv.URL + "/k-123.txt"}
+	if err := client.VerifyKeyFile(context.Background(), host); !errors.Is(err, ErrIndexNowKeyNotServed) {
+		t.Fatalf("internal host: %v", err)
 	}
 }
