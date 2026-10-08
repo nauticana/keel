@@ -99,12 +99,12 @@ func (h *PublicHandler) ExchangeHandoff(w http.ResponseWriter, r *http.Request) 
 	}
 	var req struct {
 		Code string `json:"code"`
-		sessionLimit
+		SessionLimit
 	}
 	if !h.ReadStrictRequest(w, r, &req) || !h.RequireFields(w, map[string]string{"code": req.Code}) {
 		return
 	}
-	maxAge, err := req.maxAge()
+	maxAge, err := req.MaxAge()
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return

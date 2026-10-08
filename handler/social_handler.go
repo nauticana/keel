@@ -90,7 +90,7 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "provider and token are required")
 		return
 	}
-	maxAge, err := req.maxAge()
+	maxAge, err := req.MaxAge()
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
@@ -240,7 +240,7 @@ type socialLoginRequest struct {
 	PolicyLanguage string          `json:"policyLanguage,omitempty"`
 	Region         string          `json:"region,omitempty"`
 	Consents       map[string]bool `json:"consents,omitempty"`
-	sessionLimit
+	SessionLimit
 }
 
 // buildSignupConsent turns the optional consent fields on the request plus

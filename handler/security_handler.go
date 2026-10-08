@@ -119,7 +119,7 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		LoginToken  string `json:"loginToken"`
 		TrustDevice bool   `json:"trustDevice"`
 		DeviceName  string `json:"deviceName"`
-		sessionLimit
+		SessionLimit
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -128,7 +128,7 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "code is required")
 		return
 	}
-	maxAge, err := req.maxAge()
+	maxAge, err := req.MaxAge()
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
@@ -219,7 +219,7 @@ func (h *SecurityHandler) VerifyBackupCode(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Code       string `json:"code"`
 		LoginToken string `json:"loginToken"`
-		sessionLimit
+		SessionLimit
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -228,7 +228,7 @@ func (h *SecurityHandler) VerifyBackupCode(w http.ResponseWriter, r *http.Reques
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "code and loginToken are required")
 		return
 	}
-	maxAge, err := req.maxAge()
+	maxAge, err := req.MaxAge()
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return

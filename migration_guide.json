@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.99",
+   "title": "Exported sign-in session limit",
+   "tags": [
+    "additive"
+   ],
+   "summary": "An app's own login route can parse sessionMaxDays with keel's bounds.",
+   "body_markdown": "- Embed `handler.SessionLimit` in a login request and set `session.SessionMaxAge` from `MaxAge()` before `SessionTokens`.\n- `MaxAge()` returns `handler.ErrInvalidSessionMaxDays`, registered as 400 `invalid_session_max_days`; an absent field is no limit.\n- Replace an app-side copy of the field, its 1–3650 bounds and its error."
+  },
+  {
    "version": "v1.2.98",
    "title": "Sign-in session lifetime, role principal, run a schedule now",
    "tags": [

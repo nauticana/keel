@@ -157,7 +157,7 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
-		sessionLimit
+		SessionLimit
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -166,7 +166,7 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "username and password are required")
 		return
 	}
-	maxAge, err := req.maxAge()
+	maxAge, err := req.MaxAge()
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
@@ -216,7 +216,7 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Code        string `json:"code"`
 		RedirectURI string `json:"redirectUri"`
-		sessionLimit
+		SessionLimit
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -225,7 +225,7 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "code is required")
 		return
 	}
-	maxAge, err := req.maxAge()
+	maxAge, err := req.MaxAge()
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
