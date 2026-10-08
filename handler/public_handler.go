@@ -157,12 +157,18 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		sessionLimit
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
 	}
 	if req.Username == "" || req.Password == "" {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "username and password are required")
+		return
+	}
+	maxAge, err := req.maxAge()
+	if err != nil {
+		h.WriteServiceError(w, r, err)
 		return
 	}
 
@@ -181,6 +187,7 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session.SignInMethod = user.SignInPassword
+	session.SessionMaxAge = maxAge
 
 	if h.secondFactorPending(w, r, session) {
 		return
@@ -209,12 +216,18 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Code        string `json:"code"`
 		RedirectURI string `json:"redirectUri"`
+		sessionLimit
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
 	}
 	if req.Code == "" {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "code is required")
+		return
+	}
+	maxAge, err := req.maxAge()
+	if err != nil {
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	// Fallback for popup/JS-SDK flows that use `postmessage` as the implicit redirect URI.
@@ -327,6 +340,7 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 	if !h.admitExternalSignIn(w, r, session, identity) {
 		return
 	}
+	session.SessionMaxAge = maxAge
 
 	if h.secondFactorPending(w, r, session) {
 		return

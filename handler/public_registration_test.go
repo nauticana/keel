@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/connect"
@@ -43,6 +44,7 @@ type handoffSignIn struct {
 	twoFactor bool
 	refuse    bool
 	refreshed []string // sign-in methods of minted refresh tokens
+	maxAge    time.Duration
 }
 
 func (u *handoffSignIn) GetUserById(id int) (*model.UserSession, error) {
@@ -55,8 +57,9 @@ func (u *handoffSignIn) CheckSignInMethod(int, string) error {
 	return nil
 }
 func (u *handoffSignIn) CreateJWT(*model.UserSession) (string, error) { return "jwt", nil }
-func (u *handoffSignIn) CreateRefreshToken(_ int, method string) (string, error) {
+func (u *handoffSignIn) CreateRefreshToken(_ int, method string, maxAge time.Duration) (string, error) {
 	u.refreshed = append(u.refreshed, method)
+	u.maxAge = maxAge
 	return "refresh", nil
 }
 func (u *handoffSignIn) CreateLoginToken(int, string) (string, error) { return "login-token", nil }
@@ -95,6 +98,26 @@ func TestHandoffCodeIsSingleUse(t *testing.T) {
 	}
 	if _, err := h.HandoffCode(context.Background(), &model.UserSession{Id: 7}); err == nil {
 		t.Fatal("a session without a sign-in method must not be handed off")
+	}
+}
+
+func TestHandoffExchangeCapsSessionLifetime(t *testing.T) {
+	users := &handoffSignIn{}
+	h := newSignInHandoff(t, users)
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ExchangeHandoff(rec, httptest.NewRequest(http.MethodPost, "/public/register/exchange", strings.NewReader(body)))
+		return rec
+	}
+	for _, days := range []string{"-1", "0", "3651"} {
+		code, _ := h.HandoffCode(context.Background(), &model.UserSession{Id: 7, SignInMethod: user.SignInTenant})
+		if rec := post(`{"code":"` + code + `","sessionMaxDays":` + days + `}`); rec.Code != http.StatusBadRequest || len(users.refreshed) != 0 {
+			t.Fatalf("sessionMaxDays %s: %d %s", days, rec.Code, rec.Body.String())
+		}
+	}
+	code, _ := h.HandoffCode(context.Background(), &model.UserSession{Id: 7, SignInMethod: user.SignInTenant})
+	if rec := post(`{"code":"` + code + `","sessionMaxDays":30}`); rec.Code != http.StatusOK || users.maxAge != 30*24*time.Hour {
+		t.Fatalf("status %d maxAge %v", rec.Code, users.maxAge)
 	}
 }
 

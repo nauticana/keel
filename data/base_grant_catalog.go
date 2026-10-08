@@ -44,7 +44,7 @@ type GrantSource struct {
 var sqlIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // BaseGrantCatalog is the shipped GrantCatalog: usable as constructed, knowing
-// only the human kind. Safe for concurrent use.
+// the human and role kinds. Safe for concurrent use.
 type BaseGrantCatalog struct {
 	// GlobalRoles gates the partner-scope bypass; empty means nobody bypasses.
 	GlobalRoles []string
@@ -58,7 +58,8 @@ var _ port.GrantCatalog = (*BaseGrantCatalog)(nil)
 // DefaultGrantCatalog is used by any data layer given no catalog of its own.
 var DefaultGrantCatalog = NewGrantCatalog()
 
-// NewGrantCatalog returns a catalog holding the human kind and GlobalRoleIDs.
+// NewGrantCatalog returns a catalog holding the human and role kinds and
+// GlobalRoleIDs.
 func NewGrantCatalog() *BaseGrantCatalog {
 	return &BaseGrantCatalog{
 		GlobalRoles: append([]string(nil), GlobalRoleIDs...),
@@ -73,6 +74,9 @@ func NewGrantCatalog() *BaseGrantCatalog {
 func (c *BaseGrantCatalog) Register(kind model.PrincipalKind, src GrantSource) error {
 	if strings.TrimSpace(string(kind)) == "" {
 		return fmt.Errorf("data: principal kind is required")
+	}
+	if kind == model.PrincipalRole {
+		return fmt.Errorf("data: principal kind %q is built in", kind)
 	}
 	if !sqlIdentifier.MatchString(src.Table) {
 		return fmt.Errorf("data: principal kind %q: invalid assignment table %q", kind, src.Table)
@@ -111,11 +115,13 @@ func (c *BaseGrantCatalog) ReadQuery(kind model.PrincipalKind) string {
 func (c *BaseGrantCatalog) Queries() map[string]string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make(map[string]string, len(c.sources)*2+1)
+	out := make(map[string]string, len(c.sources)*2+3)
 	for kind, src := range c.sources {
 		out[c.CheckQuery(kind)] = src.checkPermissionSQL()
 		out[c.ReadQuery(kind)] = src.readAuthorizationSQL()
 	}
+	out[c.CheckQuery(model.PrincipalRole)] = roleCheckPermissionSQL
+	out[c.ReadQuery(model.PrincipalRole)] = roleReadAuthorizationSQL
 	out[QCheckGlobalRole] = globalRoleSQL(c.GlobalRoles, c.sources[model.PrincipalUser])
 	return out
 }
@@ -124,6 +130,13 @@ func (c *BaseGrantCatalog) Queries() map[string]string {
 // filter. An arity mismatch errors, so a misconfigured principal fails closed
 // instead of matching another scope's grants.
 func (c *BaseGrantCatalog) Args(p model.Principal) ([]any, error) {
+	if p.Kind == model.PrincipalRole {
+		role, _ := p.ID.(string)
+		if strings.TrimSpace(role) == "" || len(p.Scope) != 0 {
+			return nil, fmt.Errorf("data: role principal needs a role id and no scope")
+		}
+		return []any{role}, nil
+	}
 	src, ok := c.Source(p.Kind)
 	if !ok {
 		return nil, fmt.Errorf("data: principal kind %q is not registered", p.Kind)
@@ -174,6 +187,26 @@ SELECT authorization_object_id, action, low_limit, high_limit
    AND is_active IS TRUE
 `
 }
+
+// The role kind reads authorization_role_permission directly, with the same
+// argument order and low_limit rule as an assignment-table kind.
+const (
+	roleCheckPermissionSQL = `
+SELECT a.low_limit, a.high_limit, a.bypass_scope
+  FROM authorization_role_permission a
+ WHERE a.is_active IS TRUE
+   AND a.authorization_object_id = ?
+   AND a.action = ?
+   AND a.role_id = ?
+   AND (a.low_limit = ? OR a.low_limit = '*')
+`
+	roleReadAuthorizationSQL = `
+SELECT authorization_object_id, action, low_limit, high_limit
+  FROM authorization_role_permission
+ WHERE role_id = ?
+   AND is_active IS TRUE
+`
+)
 
 // globalRoleSQL inlines the role allowlist: role ids are framework constants,
 // and `?` cannot expand to a variable-length IN list portably.

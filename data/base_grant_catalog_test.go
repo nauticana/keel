@@ -30,6 +30,38 @@ func TestBaseGrantCatalog_UserKindShape(t *testing.T) {
 	}
 }
 
+func TestBaseGrantCatalog_RoleKind(t *testing.T) {
+	c := NewGrantCatalog()
+	q := c.Queries()
+	check := q[c.CheckQuery(model.PrincipalRole)]
+	for _, want := range []string{"FROM authorization_role_permission a", "a.role_id = ?", "a.low_limit = '*'", "a.is_active IS TRUE"} {
+		if !strings.Contains(check, want) {
+			t.Errorf("missing %q in:\n%s", want, check)
+		}
+	}
+	if read := q[c.ReadQuery(model.PrincipalRole)]; !strings.Contains(read, "WHERE role_id = ?") {
+		t.Errorf("unexpected read-authorization SQL:\n%s", read)
+	}
+
+	args, err := c.Args(model.RolePrincipal("PARTNER_OPER"))
+	if err != nil || len(args) != 1 || args[0] != "PARTNER_OPER" {
+		t.Fatalf("args = %v, %v", args, err)
+	}
+	for name, p := range map[string]model.Principal{
+		"blank role":   model.RolePrincipal(" "),
+		"non-string":   {Kind: model.PrincipalRole, ID: 7},
+		"scoped role":  {Kind: model.PrincipalRole, ID: "PARTNER_OPER", Scope: []any{int64(1)}},
+		"zero subject": {Kind: model.PrincipalRole},
+	} {
+		if _, err := c.Args(p); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	if err := c.Register(model.PrincipalRole, GrantSource{Table: "role_map", Subject: "id"}); err == nil {
+		t.Error("the role kind must not be re-registered")
+	}
+}
+
 func TestBaseGrantCatalog_FilteredKind(t *testing.T) {
 	const kind model.PrincipalKind = "agent"
 	c := NewGrantCatalog()

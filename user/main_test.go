@@ -56,6 +56,7 @@ type refreshRow struct {
 	revoked bool
 	started time.Time
 	method  string
+	maxAge  any
 }
 
 // now is the store clock; tests move it with clock.
@@ -134,6 +135,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			row.started = started
 		}
 		row.method, _ = args[4].(string)
+		row.maxAge = args[5]
 		m.tokens[args[1].(string)] = row
 	case qRevokeRefreshToken:
 		if t := m.tokens[args[0].(string)]; t != nil {
@@ -162,7 +164,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 				method = t.method
 			}
 			age := int64(m.now().Sub(t.started) / time.Second)
-			out.Rows = [][]any{{int64(t.user), "F", "L", "", status, false, partner, nil, nil, t.started, method, age}}
+			out.Rows = [][]any{{int64(t.user), "F", "L", "", status, false, partner, nil, nil, t.started, method, age, t.maxAge}}
 		}
 	case qEndMembership:
 		k := [2]int64{int64(args[0].(int)), args[1].(int64)}

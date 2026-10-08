@@ -37,8 +37,10 @@ type UserSession struct {
 	// SignInMethod is how the session signed in (constant sign_in_method);
 	// the login handler sets it before minting tokens.
 	SignInMethod string `json:"-"`
-	ExpiresAt    int64  `json:"-"`
-	IssuedAt     int64  `json:"-"`
+	// SessionMaxAge, when positive, ends the session that long after sign-in.
+	SessionMaxAge time.Duration `json:"-"`
+	ExpiresAt     int64         `json:"-"`
+	IssuedAt      int64         `json:"-"`
 	// NewRefreshToken is populated by ValidateRefreshToken when it
 	// rotates the presented token. Clients must overwrite their
 	// stored refresh-token value with this on every refresh response;

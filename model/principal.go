@@ -1,10 +1,15 @@
 package model
 
 // PrincipalKind selects which assignment table a principal's role grants come
-// from. keel ships PrincipalUser; register others on a data.BaseGrantCatalog.
+// from. keel ships PrincipalUser and PrincipalRole; register others on a
+// data.BaseGrantCatalog.
 type PrincipalKind string
 
-const PrincipalUser PrincipalKind = "user"
+const (
+	PrincipalUser PrincipalKind = "user"
+	// PrincipalRole is a role itself, granted exactly that role's permissions.
+	PrincipalRole PrincipalKind = "role"
+)
 
 // Principal is the subject of an authorization decision. The zero value has no
 // kind and is never authorized.
@@ -17,6 +22,11 @@ type Principal struct {
 // UserPrincipal is the human subject identified by user_account.id.
 func UserPrincipal(userID int) Principal {
 	return Principal{Kind: PrincipalUser, ID: userID}
+}
+
+// RolePrincipal answers "what may this role do" without an assignment row.
+func RolePrincipal(roleID string) Principal {
+	return Principal{Kind: PrincipalRole, ID: roleID}
 }
 
 // Valid reports whether the principal names a subject; whether its kind is

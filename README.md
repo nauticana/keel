@@ -993,6 +993,8 @@ for _, task := range due {           // due, err := sched.Due(ctx, "review_poll"
 
 Calendar-aligned work enrolls with a cadence instead of an interval: `sched.ScheduleCalendar(ctx, partnerID, "weekly_report", worker.Weekly(time.Monday, 9*60, loc))` or `worker.Monthly(1, 0, loc)` (a day past the month's end runs on its last day). The slot is local time in a named zone; `Complete` sets the next run to the first slot after completion, so missed slots are not replayed. Re-enrolling with the same cadence keeps the pending slot; a changed cadence moves it. `Due` fails, without handing out, a schedule whose time zone no longer loads.
 
+`RunNow(ctx, partnerID, taskKind)` makes an enrolled tenant due at the store clock for an on-demand run, keeping its interval, cadence and failure backoff; it returns `worker.ErrNotScheduled` for a tenant that is not enrolled.
+
 Due-ness lives in `work_schedule`, so an empty run still counts and failures back off exponentially. Each `ScheduledTask` carries a lease token; `Complete` and `Fail` return `worker.ErrScheduleClaimLost` for a claim that was re-claimed after its lease lapsed, or whose tenant was dropped. The interval and task remain app-owned.
 
 ### Notification suppression and dedupe
@@ -1361,7 +1363,7 @@ When `twoFactorRequired` is `true`, the frontend redirects to a 2FA verification
 
 ### Refresh tokens
 
-Every login path (`LoginLocal`, `LoginGoogle`, `VerifyOTP`, `LoginSocial`, `Verify2FA`, `VerifyBackupCode`) answers with an access `token` (JWT, `session_timeout` seconds) and a `refreshToken` (`refresh_token_ttl` seconds, default 30 days). Downstream login handlers mint the same pair with `AbstractHandler.SessionTokens(session)` and add their own fields to the returned map. A refresh is refused with 401 when the account is locked, expired or deleted, or when the session is older than the `SESSION_MAX_HOURS` policy (hours since sign-in; 0, the default, is unlimited).
+Every login path (`LoginLocal`, `LoginGoogle`, `VerifyOTP`, `LoginSocial`, `Verify2FA`, `VerifyBackupCode`) answers with an access `token` (JWT, `session_timeout` seconds) and a `refreshToken` (`refresh_token_ttl` seconds, default 30 days). Downstream login handlers mint the same pair with `AbstractHandler.SessionTokens(session)` and add their own fields to the returned map. A refresh is refused with 401 when the account is locked, expired or deleted, or when the session is older than the `SESSION_MAX_HOURS` policy (hours since sign-in; 0, the default, is unlimited). Each of these routes and `/public/register/exchange` also accepts an optional `sessionMaxDays` (1–3650) that ends the session that many days after sign-in however often it refreshes; it is read from the request that mints the tokens, so a 2FA client sends it again with the second factor. Without it the session renews as before.
 
 ```
 POST /public/token/refresh  { "refreshToken": "…" }
@@ -3355,7 +3357,7 @@ Keel defines 6 shared roles. Projects may add domain-specific roles (e.g., SEO_A
 
 ### Principals — who a grant is evaluated for
 
-Every permission check takes a `model.Principal` — `{Kind, ID, Scope}` — not a user id. `model.UserPrincipal(id)` is the built-in human subject, granted out of `user_permission`. The zero `Principal` is never authorized.
+Every permission check takes a `model.Principal` — `{Kind, ID, Scope}` — not a user id. `model.UserPrincipal(id)` is the built-in human subject, granted out of `user_permission`. `model.RolePrincipal(roleID)` is the role itself, checked directly against `authorization_role_permission` with the same `low_limit` and `bypass_scope` rules, for asking what a role may do without an assignment table. The zero `Principal` is never authorized.
 
 To authorize non-human subjects (agents, service accounts, workloads), register where their grants live before repository `Init`, and inject the catalog:
 

@@ -60,7 +60,7 @@ func (h *AbstractHandler) SessionTokens(session *model.UserSession) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	refresh, err := h.UserService.CreateRefreshToken(session.Id, session.SignInMethod)
+	refresh, err := h.UserService.CreateRefreshToken(session.Id, session.SignInMethod, session.SessionMaxAge)
 	if err != nil {
 		return nil, err
 	}

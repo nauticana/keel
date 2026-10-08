@@ -32,7 +32,7 @@ func TestEndMembershipEndsRolesAndRevokesSessions(t *testing.T) {
 	svc := newLocalUserService(t, store)
 	oauth := &revokedOAuth{}
 	svc.OAuthTokens = oauth
-	token, _ := svc.CreateRefreshToken(7, SignInPassword)
+	token, _ := svc.CreateRefreshToken(7, SignInPassword, 0)
 	if session, err := svc.ValidateRefreshToken(token); err != nil || session.PartnerId != 11 {
 		t.Fatalf("refresh before = %+v, %v", session, err)
 	} else {
@@ -90,7 +90,7 @@ func TestRefreshRefusesUnavailableAccount(t *testing.T) {
 		store := memberStore()
 		store.addAccount(7, "a@acme.com", UserStatusActive)
 		svc := newLocalUserService(t, store)
-		token, _ := svc.CreateRefreshToken(7, SignInPassword)
+		token, _ := svc.CreateRefreshToken(7, SignInPassword, 0)
 		store.accounts[7].status = status
 		if _, err := svc.ValidateRefreshToken(token); !errors.Is(err, ErrInvalidRefreshToken) || !errors.Is(err, ErrAccountUnavailable) {
 			t.Errorf("status %s: %v", status, err)
@@ -189,12 +189,51 @@ func TestSSORequiredLevels(t *testing.T) {
 	}
 }
 
+func TestSignInLifetimeSurvivesRotation(t *testing.T) {
+	store := memberStore()
+	svc := newLocalUserService(t, store)
+	if _, err := svc.CreateRefreshToken(7, SignInPassword, -time.Hour); err == nil {
+		t.Fatal("a negative lifetime must be refused")
+	}
+	maxDuration := time.Duration(1<<63 - 1)
+	if _, err := svc.CreateRefreshToken(7, SignInPassword, maxDuration); err != nil {
+		t.Fatalf("a large positive lifetime must not overflow: %v", err)
+	}
+	for _, row := range store.tokens {
+		if want := int64(maxDuration/time.Second + 1); row.maxAge != want {
+			t.Fatalf("rounded lifetime = %v", row.maxAge)
+		}
+	}
+	token, err := svc.CreateRefreshToken(7, SignInPassword, 10*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		store.clock += 3 * time.Hour
+		session, err := svc.ValidateRefreshToken(token)
+		if err != nil {
+			t.Fatalf("refresh inside the sign-in lifetime: %v", err)
+		}
+		token = session.NewRefreshToken
+	}
+	store.clock += 3 * time.Hour
+	if _, err := svc.ValidateRefreshToken(token); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("refresh after the sign-in lifetime: %v", err)
+	}
+
+	token, _ = svc.CreateRefreshToken(7, SignInPassword, 0)
+	store.clock += 1000 * time.Hour
+	if _, err := svc.ValidateRefreshToken(token); err != nil {
+		t.Fatalf("no lifetime renews without limit: %v", err)
+	}
+}
+
 func TestSessionMaxHoursEndsARenewedSession(t *testing.T) {
 	store := memberStore()
 	store.policies[0] = map[string]int{PolicySessionMaxHours: 100}
 	store.policies[11] = map[string]int{PolicySessionMaxHours: 10}
 	svc := newLocalUserService(t, store)
-	token, _ := svc.CreateRefreshToken(7, SignInPassword)
+	token, _ := svc.CreateRefreshToken(7, SignInPassword, 0)
 	for range 3 {
 		store.clock += 3 * time.Hour
 		session, err := svc.ValidateRefreshToken(token)
@@ -291,7 +330,7 @@ func TestRequiredSSOEndsOtherSessionsAtRefresh(t *testing.T) {
 	issue := func() map[string]string {
 		tokens := map[string]string{}
 		for name, method := range map[string]string{"password": SignInPassword, "otp": SignInOTP, "unknown": "", "external": SignInExternal, "tenant": SignInTenant} {
-			tokens[name], _ = svc.CreateRefreshToken(7, method)
+			tokens[name], _ = svc.CreateRefreshToken(7, method, 0)
 		}
 		return tokens
 	}

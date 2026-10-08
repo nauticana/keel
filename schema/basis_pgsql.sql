@@ -258,6 +258,7 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
     token_hash                           VARCHAR(128)  NOT NULL,
     expires_at                           TIMESTAMP     NOT NULL,
     session_started_at                   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    session_max_seconds                  BIGINT       ,
     sign_in_method                       CHAR(1)      ,
     revoked_at                           TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,

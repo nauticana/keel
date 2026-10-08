@@ -551,12 +551,18 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		OTPToken string `json:"otpToken"`
 		Code     string `json:"code"`
+		sessionLimit
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
 	}
 	if req.OTPToken == "" || req.Code == "" {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "otpToken and code are required")
+		return
+	}
+	maxAge, err := req.maxAge()
+	if err != nil {
+		h.WriteServiceError(w, r, err)
 		return
 	}
 
@@ -600,6 +606,7 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session.SignInMethod = user.SignInOTP
+	session.SessionMaxAge = maxAge
 
 	resp, err := h.SessionTokens(session)
 	if err != nil {

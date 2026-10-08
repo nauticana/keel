@@ -90,6 +90,11 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "provider and token are required")
 		return
 	}
+	maxAge, err := req.maxAge()
+	if err != nil {
+		h.WriteServiceError(w, r, err)
+		return
+	}
 
 	// Verify token signature against the provider's JWKs and extract
 	// claims. Both providers issue RS256 ID tokens; keel pins that
@@ -133,6 +138,7 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 	if !h.admitExternalSignIn(w, r, session, identity) {
 		return
 	}
+	session.SessionMaxAge = maxAge
 	resp, err := h.SessionTokens(session)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create token")
@@ -234,6 +240,7 @@ type socialLoginRequest struct {
 	PolicyLanguage string          `json:"policyLanguage,omitempty"`
 	Region         string          `json:"region,omitempty"`
 	Consents       map[string]bool `json:"consents,omitempty"`
+	sessionLimit
 }
 
 // buildSignupConsent turns the optional consent fields on the request plus

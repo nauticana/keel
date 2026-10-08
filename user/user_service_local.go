@@ -458,8 +458,8 @@ DELETE FROM user_registration
 `,
 
 	qInsertRefreshToken: `
-INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at, session_started_at, sign_in_method)
-VALUES (nextval('user_refresh_token_seq'), ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP), ?)
+INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at, session_started_at, sign_in_method, session_max_seconds)
+VALUES (nextval('user_refresh_token_seq'), ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP), ?, ?)
 `,
 	qEndMembership: `
 UPDATE partner_user SET endda = CURRENT_TIMESTAMP
@@ -473,7 +473,7 @@ UPDATE user_permission SET endda = CURRENT_TIMESTAMP
 	qGetRefreshToken: `
 SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id, U.phone,
        U.last_login_attempt, t.session_started_at, t.sign_in_method,
-       CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - t.session_started_at)) AS BIGINT)
+       CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - t.session_started_at)) AS BIGINT), t.session_max_seconds
   FROM user_refresh_token t
   JOIN user_account U ON U.id = t.user_id
 ` + sessionPartnerJoin + `
@@ -1499,7 +1499,18 @@ func (s *LocalUserService) forgetTokenCutoff(userID int) {
 
 // CreateRefreshToken starts a session. signInMethod is a sign_in_method code,
 // or empty when unknown; an unknown method cannot refresh once SSO is required.
-func (s *LocalUserService) CreateRefreshToken(userID int, signInMethod string) (string, error) {
+func (s *LocalUserService) CreateRefreshToken(userID int, signInMethod string, maxAge time.Duration) (string, error) {
+	if maxAge < 0 {
+		return "", fmt.Errorf("create refresh token: negative session lifetime")
+	}
+	var maxSeconds any
+	if maxAge > 0 {
+		seconds := maxAge / time.Second
+		if maxAge%time.Second != 0 {
+			seconds++
+		}
+		maxSeconds = int64(seconds)
+	}
 	ctx := s.ctx()
 	raw, err := generateRandomToken(48)
 	if err != nil {
@@ -1523,7 +1534,7 @@ func (s *LocalUserService) CreateRefreshToken(userID int, signInMethod string) (
 		return "", fmt.Errorf("create refresh token: revoke prior tokens: %w", err)
 	}
 	hash := sha256Hex(raw)
-	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, hash, refreshTokenExpiry(), nil, nullIfEmpty(signInMethod)); err != nil {
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, hash, refreshTokenExpiry(), nil, nullIfEmpty(signInMethod), maxSeconds); err != nil {
 		return "", fmt.Errorf("create refresh token: insert: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1641,8 +1652,12 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 	if err != nil {
 		return nil, fmt.Errorf("rotate refresh token: policies: %w", err)
 	}
-	if hours := policies[PolicySessionMaxHours]; hours > 0 && common.AsInt64(row[11]) >= int64(hours)*3600 {
+	age := common.AsInt64(row[11])
+	if hours := policies[PolicySessionMaxHours]; hours > 0 && age >= int64(hours)*3600 {
 		return nil, fmt.Errorf("%w: session exceeded %s", ErrInvalidRefreshToken, PolicySessionMaxHours)
+	}
+	if limit, ok := common.AsInt64OK(row[12]); ok && limit > 0 && age >= limit {
+		return nil, fmt.Errorf("%w: session exceeded its sign-in lifetime", ErrInvalidRefreshToken)
 	}
 	// A session ends when SSO_REQUIRED no longer admits the way it signed in.
 	if !ssoAdmits(policies[PolicySSORequired], method) {
@@ -1667,7 +1682,7 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 	// revoking the old token in the same transaction makes concurrent reuse
 	// deterministic: only one caller can rotate a token successfully.
 	rotatedHash := sha256Hex(rotated)
-	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, rotatedHash, refreshTokenExpiry(), row[9], nullIfEmpty(method)); err != nil {
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, rotatedHash, refreshTokenExpiry(), row[9], nullIfEmpty(method), row[12]); err != nil {
 		return nil, fmt.Errorf("rotate refresh token: %w", err)
 	}
 	if _, err := tx.Query(ctx, qRevokeRefreshToken, hash); err != nil {

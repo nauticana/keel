@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.98",
+   "title": "Sign-in session lifetime, role principal, run a schedule now",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "A sign-in can fix its session's total lifetime. A role can be authorized as a principal without an assignment table. An enrolled schedule can be made due at once.",
+   "body_markdown": "### Sessions\n\n- `UserService.CreateRefreshToken(userID, signInMethod)` becomes `CreateRefreshToken(userID, signInMethod, maxAge)`; pass `0` for the previous behavior. `AbstractHandler.SessionTokens` passes `UserSession.SessionMaxAge`.\n- Sign-in requests accept an optional `sessionMaxDays` (1–3650). The session ends that long after sign-in, carried through every rotation; a refresh past it returns 401. Out-of-range values return 400 `invalid_session_max_days`.\n- Schema: `user_refresh_token.session_max_seconds BIGINT NULL`. Reload the `core` group.\n\n### Authorization\n\n- `model.RolePrincipal(roleID)` (kind `model.PrincipalRole`) is checked directly against `authorization_role_permission` with the usual `low_limit` and `bypass_scope` rules. `BaseGrantCatalog` ships it; `Register` refuses the kind. An assignment table that only mapped a synthetic id to a role can be dropped.\n\n### Worker\n\n- `Scheduler.RunNow(ctx, partnerID, taskKind)` makes an enrolled tenant due at the store clock, keeping its interval, cadence and failure backoff; a tenant that is not enrolled returns `worker.ErrNotScheduled`. Replace drop-and-reschedule for on-demand runs."
+  },
+  {
    "version": "v1.2.97",
    "title": "Bounded client registration, API key user",
    "tags": [

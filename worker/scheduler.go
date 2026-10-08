@@ -25,6 +25,7 @@ const (
 	qScheduleDone   = "work_schedule_complete"
 	qScheduleFail   = "work_schedule_fail"
 	qScheduleDrop   = "work_schedule_drop"
+	qScheduleRunNow = "work_schedule_run_now"
 	qScheduleClock  = "work_schedule_clock"
 )
 
@@ -85,6 +86,13 @@ RETURNING partner_id
 	qScheduleDrop: `
 DELETE FROM work_schedule WHERE partner_id = ? AND task_kind = ?
 `,
+	// Failures and cadence are kept: an on-demand run that fails backs off as
+	// any other, and a completed one resumes the regular rotation.
+	qScheduleRunNow: `
+UPDATE work_schedule SET next_run_at = CURRENT_TIMESTAMP
+ WHERE partner_id = ? AND task_kind = ?
+RETURNING partner_id
+`,
 	qScheduleClock: `SELECT CURRENT_TIMESTAMP`,
 }
 
@@ -92,6 +100,9 @@ DELETE FROM work_schedule WHERE partner_id = ? AND task_kind = ?
 // lapsed and another worker re-claimed it, or the tenant was dropped mid-run.
 // The run's outcome was not recorded; the current owner's will be.
 var ErrScheduleClaimLost = errors.New("scheduler: claim lost")
+
+// ErrNotScheduled: the tenant is not enrolled in the task.
+var ErrNotScheduled = errors.New("scheduler: not scheduled")
 
 // ScheduledTask is one tenant claimed for one recurring task kind.
 type ScheduledTask struct {
@@ -200,6 +211,26 @@ func (s *Scheduler) Drop(ctx context.Context, partnerID int64, taskKind string) 
 	}
 	_, err = qs.Query(ctx, qScheduleDrop, partnerID, taskKind)
 	return err
+}
+
+// RunNow makes an enrolled tenant due at the store clock, keeping its interval,
+// cadence and failure count. A run already in progress satisfies the request.
+func (s *Scheduler) RunNow(ctx context.Context, partnerID int64, taskKind string) error {
+	if partnerID <= 0 || taskKind == "" {
+		return fmt.Errorf("scheduler: partnerID and taskKind required")
+	}
+	qs, err := s.queries(ctx)
+	if err != nil {
+		return err
+	}
+	res, err := qs.Query(ctx, qScheduleRunNow, partnerID, taskKind)
+	if err != nil {
+		return fmt.Errorf("scheduler: run %s now for partner %d: %w", taskKind, partnerID, err)
+	}
+	if res == nil || len(res.Rows) == 0 {
+		return fmt.Errorf("%w: %s for partner %d", ErrNotScheduled, taskKind, partnerID)
+	}
+	return nil
 }
 
 // Due claims up to limit tenants due for taskKind and returns them. Every

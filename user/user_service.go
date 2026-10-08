@@ -1,6 +1,8 @@
 package user
 
 import (
+	"time"
+
 	"github.com/nauticana/keel/model"
 )
 
@@ -53,7 +55,9 @@ type UserService interface {
 	VerifyPasswordByID(userID int, password string) (bool, error)
 
 	// Refresh tokens
-	CreateRefreshToken(userID int, signInMethod string) (string, error)
+	// CreateRefreshToken starts a session; a positive maxAge ends it that long
+	// after sign-in however often it is refreshed, zero renews without limit.
+	CreateRefreshToken(userID int, signInMethod string, maxAge time.Duration) (string, error)
 	// EffectivePolicies returns each policy type's value for a partner: its own
 	// row when it has one, else the global row.
 	EffectivePolicies(partnerID int64) (map[string]int, error)

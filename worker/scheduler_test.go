@@ -167,6 +167,30 @@ func TestSchedulerRoundsSubsecondDurationsUp(t *testing.T) {
 	}
 }
 
+func TestSchedulerRunNow(t *testing.T) {
+	qs := &fakeQS{fixed: map[string]*model.QueryResult{qScheduleRunNow: qr([]any{int64(7)})}}
+	s := newScheduler(qs)
+	if err := s.RunNow(context.Background(), 7, "geogrid_scan"); err != nil {
+		t.Fatal(err)
+	}
+	if args := qs.argsFor(qScheduleRunNow); len(args) != 2 || args[0].(int64) != 7 || args[1].(string) != "geogrid_scan" {
+		t.Fatalf("run-now args = %v", args)
+	}
+	if qs.countCalls(qScheduleUpsert)+qs.countCalls(qScheduleDrop) != 0 {
+		t.Fatal("RunNow must not re-enroll the tenant")
+	}
+}
+
+func TestSchedulerRunNowRequiresEnrollment(t *testing.T) {
+	s := newScheduler(&fakeQS{})
+	if err := s.RunNow(context.Background(), 7, "geogrid_scan"); !errors.Is(err, ErrNotScheduled) {
+		t.Fatalf("err = %v, want ErrNotScheduled", err)
+	}
+	if err := s.RunNow(context.Background(), 0, "geogrid_scan"); err == nil || errors.Is(err, ErrNotScheduled) {
+		t.Fatalf("missing partner: err = %v", err)
+	}
+}
+
 func TestSchedulerWithoutDatabase(t *testing.T) {
 	s := &Scheduler{}
 	if err := s.Schedule(context.Background(), 1, "k", time.Hour); err == nil {
