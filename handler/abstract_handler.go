@@ -2,16 +2,13 @@ package handler
 
 import (
 	"context"
-	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
@@ -364,7 +361,7 @@ func EnsureRequestID(r *http.Request) *http.Request {
 	if r == nil || common.RequestIDFromContext(r.Context()) != "" {
 		return r
 	}
-	return r.WithContext(common.WithRequestID(r.Context(), newRequestID()))
+	return r.WithContext(common.WithRequestID(r.Context(), common.NewRequestID()))
 }
 
 // WriteError writes an RFC 7807 problem-detail response. Status 5xx
@@ -410,7 +407,7 @@ func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, s
 		requestID = common.RequestIDFromContext(r.Context())
 	}
 	if requestID == "" {
-		requestID = newRequestID()
+		requestID = common.NewRequestID()
 	}
 	if status >= http.StatusInternalServerError {
 		if cause == "" {
@@ -433,54 +430,6 @@ func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, s
 		RequestID: requestID,
 	}
 	_ = json.NewEncoder(w).Encode(problem)
-}
-
-// newRequestID returns a fresh opaque token used as the per-request
-// correlation id when no middleware-bound value is in scope. Twelve
-// alphanumeric characters (~71 bits of entropy) is plenty to keep
-// collisions rare across access-log volume.
-//
-// Each character is drawn uniformly from the alphabet via crypto/rand
-// rather than `byte%len(alphabet)`, which would skew the first
-// (256 mod len) characters by ~1 unit of bias. Negligible in practice
-// but trivial to remove. On RNG failure a process-startup-derived
-// fallback id is returned so 5xx responses always carry a usable
-// correlation id rather than an empty string.
-func newRequestID() string {
-	const alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	out := make([]byte, 12)
-	max := big.NewInt(int64(len(alphabet)))
-	for i := range out {
-		n, err := crand.Int(crand.Reader, max)
-		if err != nil {
-			return fallbackRequestID()
-		}
-		out[i] = alphabet[n.Int64()]
-	}
-	return string(out)
-}
-
-// fallbackRequestID is the last-resort id used when crypto/rand fails
-// (extremely unlikely on supported platforms but reachable on a kernel
-// that's exhausted entropy or jailed). The id is unique-per-process
-// monotonic, suffixed onto a startup nonce so two processes don't
-// collide. Producing a stable correlation id always — instead of an
-// empty string — is the design goal.
-var fallbackCounter atomic.Uint64
-
-// fallbackPrefix is rolled at process start. Best-effort: if even the
-// fallback rand fails we use a constant — the resulting ids still
-// correlate within a single process via the counter suffix.
-var fallbackPrefix = func() string {
-	var b [4]byte
-	if _, err := crand.Read(b[:]); err == nil {
-		return fmt.Sprintf("nokey%x", b)
-	}
-	return "nokey0000"
-}()
-
-func fallbackRequestID() string {
-	return fmt.Sprintf("%s-%d", fallbackPrefix, fallbackCounter.Add(1))
 }
 
 // ScrubAuthHeader returns a derived *http.Request with secret-bearing

@@ -1,11 +1,11 @@
 package common
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/nauticana/keel/config"
 )
 
 // APIResponse is the standard envelope returned by every keel-served REST
@@ -51,7 +51,7 @@ func writeEnvelope(w http.ResponseWriter, status int, data interface{}, paginati
 		Data:       data,
 		Pagination: pagination,
 		Meta: &APIMeta{
-			RequestID: newRequestID(),
+			RequestID: responseRequestID(w),
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			Version:   "v1",
 		},
@@ -59,10 +59,24 @@ func writeEnvelope(w http.ResponseWriter, status int, data interface{}, paginati
 	json.NewEncoder(w).Encode(resp)
 }
 
-func newRequestID() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "req_" + time.Now().UTC().Format("20060102T150405.000000")
+// responseRequestID reuses the middleware-bound id, then its response header.
+func responseRequestID(w http.ResponseWriter) string {
+	for current, depth := w, 0; current != nil && depth < 16; depth++ {
+		if carrier, ok := current.(interface{ RequestID() string }); ok {
+			if id := carrier.RequestID(); id != "" {
+				return id
+			}
+		}
+		unwrapper, ok := current.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		current = unwrapper.Unwrap()
 	}
-	return "req_" + hex.EncodeToString(b)
+	if header := config.Config().RequestIDHeader; header != "" {
+		if id := w.Header().Get(header); id != "" {
+			return id
+		}
+	}
+	return NewRequestID()
 }

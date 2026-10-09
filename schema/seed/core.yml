@@ -78,6 +78,7 @@ seeds:
       - [outbound_max_rps, float, true, '0', Global outbound HTTP rate cap (0 = unlimited)]
       - [outbound_max_response_size, int64, false, '16777216', Response body cap for common.RequestJSON (bytes)]
       - [trusted_proxy_cidr, string, false, '', CSV of CIDRs whose forwarded-for headers are honored]
+      - [request_id_header, string, false, X-Request-Id, 'Correlation-id header, adopted from trusted proxies and set on every response; empty disables it']
       - [nats_url, string, true, '', NATS server URL]
       - [nats_name, string, true, '', NATS client name surfaced in observability]
       - [nats_creds_secret, string, true, '', Secret NAME holding the NATS .creds file content (empty = no creds)]

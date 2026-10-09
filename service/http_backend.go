@@ -130,6 +130,7 @@ func (h *HttpBackend) Handle(functions map[string]func(w http.ResponseWriter, r 
 		// every response, including short-circuited middleware errors.
 		h.handler = h.SecurityHeadersMiddleware(h.handler)
 		h.handler = h.AccessLogMiddleware(h.handler)
+		h.handler = h.RequestIDMiddleware(h.handler)
 	}
 	if h.registered == nil {
 		h.registered = map[string]struct{}{}

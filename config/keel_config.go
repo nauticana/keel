@@ -49,6 +49,7 @@ const (
 	outbound_max_rps              = "outbound_max_rps"
 	outbound_max_response_size    = "outbound_max_response_size"
 	trusted_proxy_cidr            = "trusted_proxy_cidr"
+	request_id_header             = "request_id_header"
 	nats_url                      = "nats_url"
 	nats_name                     = "nats_name"
 	nats_creds_secret             = "nats_creds_secret"
@@ -189,6 +190,7 @@ type KeelConfig struct {
 	OutboundMaxRedirects        int           // outbound_max_redirects        10                 Max redirects the shared outbound HTTP client follows
 	OutboundMaxRPS              float64       // outbound_max_rps              0                  Global rate cap on the shared outbound HTTP client (0 = unlimited)
 	TrustedProxyCIDR            string        // trusted_proxy_cidr            ""                 CSV of CIDRs whose forwarded-for headers are honored
+	RequestIDHeader             string        // request_id_header             X-Request-Id       Correlation-id header, adopted from trusted proxies and set on every response; empty disables it
 	NatsURL                     string        // nats_url                      ""                 NATS server URL
 	NatsName                    string        // nats_name                     ""                 NATS client name surfaced in NATS observability
 	NatsCredsSecret             string        // nats_creds_secret             ""                 Secret NAME holding the NATS .creds file content (Synadia Cloud); empty = no creds
@@ -327,6 +329,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OutboundMaxRPS = c.Float(m, outbound_max_rps)
 	c.OutboundMaxResponseSize = c.Int64(m, outbound_max_response_size)
 	c.TrustedProxyCIDR = c.String(m, trusted_proxy_cidr)
+	c.RequestIDHeader = c.String(m, request_id_header)
 	c.NatsURL = c.String(m, nats_url)
 	c.NatsName = c.String(m, nats_name)
 	c.NatsCredsSecret = c.String(m, nats_creds_secret)

@@ -895,7 +895,7 @@ Each row records what keel implements of an IETF or OASIS specification, what it
 | Specification | Status |
 |---|---|
 | RFC 6749 OAuth 2.0 client | `state` is single-use and bound to the user and partner who started the flow (§10.12); the callback completes only through `/api/oauth/{provider}/complete` by that user. `client_secret_basic` form-encodes its values. A token response must carry an `access_token`, and a `token_type`, when present, must be `bearer`. |
-| RFC 7636 PKCE | S256 for Google and any provider with `BaseProvider.UsePKCE`; the others rely on the bound `state` and the client secret. |
+| RFC 7636 PKCE | S256 for Google, X and any provider with `BaseProvider.UsePKCE`; the others rely on the bound `state` and the client secret. |
 
 ### Directory provisioning (SCIM)
 
@@ -1041,6 +1041,8 @@ sqlsmoke.Run(t, conn, map[string]map[string]string{"orders": orderQueries}) // o
 1. The app calls `GET authorize` with the user's session and sends the browser to the returned consent URL.
 2. The provider redirects to `callback`, which checks it and returns the browser to `FrontendReturnURL?connect={provider}&ticket={ticket}`. It creates nothing.
 3. The signed-in app posts `{"ticket": "..."}` to `complete`. keel connects only for the user and partner who started the flow: 403 for anyone else, 400 for a spent or expired ticket (`oauth_state_ttl_seconds`).
+
+`client` ships `NewGoogleProvider` (and `NewGBPProvider`), `NewMetaProvider`, `NewShopifyProvider`, `NewTikTokProvider` (TikTok's `client_key` authorize and form exchange; stores the refresh token) and `NewXProvider` (PKCE, `offline.access` always requested); `NewOAuth2Provider` covers any other standard service. Scopes are the caller's. Register their refreshes with `connect.NewRefresher`: Google with `RefreshOAuth2Lib` on `google.Endpoint`, X with `connect.XRefreshSpec` (HTTP Basic, rotating refresh token), TikTok with `connect.TikTokRefreshSpec`.
 
 `Nonce` (the `connect.NonceService`) holds the tickets; without it callbacks fail closed. `connect.CredentialStoreDB` enforces the binding through `client.WithInitiator`; an application's own `client.CredentialStore` must record the initiator at `CreateOAuthState` and compare it at `ConsumeOAuthState` the same way.
 
@@ -2826,6 +2828,22 @@ clock in the same transaction and keeps the rows. Authorization code depends on
 agency's active delegations holding at least one unexpired role, and `HasRole`
 returns nil or `ErrDelegationNoAccess`.
 
+`agency.TenantResolver` answers which partners a caller may act in, for
+surfaces where one identity spans tenants (an API, an MCP server).
+`Authorized(ctx, model.TenantCaller)` lists the user's current own partners,
+then the clients delegated to any of them when the user holds
+`AGENCY/MANAGE_CLIENTS`, or the one partner an API key is bound to; an inactive
+user or a malformed caller is `ErrTenantCaller`. A delegated `model.Tenant`
+carries its `Level`: the highest of the injected `Levels` (lowest first) the
+delegation holds; roles not listed grant nothing. A client the user also belongs
+to stays own; one several agencies share resolves at the highest level. `Resolve` picks a requested tenant, the only one for `0`,
+or returns `TenantChoiceError` (`ErrTenantRequired`); a tenant outside the set
+is `ErrTenantNotFound`, never forbidden. `DelegationPrincipal(level)` is the
+role principal (`LevelRoles`) a delegated caller is authorized as instead of
+its own roles, and `Delegable(scope)` is false for the `NeverDelegated` grant
+scopes. `CacheTTL` bounds how long a revocation keeps resolving;
+`AuthorizedFresh` bypasses it before an irreversible action.
+
 The agency commission, provenance, and payout runtime is PostgreSQL-only. The
 MySQL artifact includes the tables for schema portability, but it does not
 provide a runnable implementation of the transaction/query semantics.
@@ -3073,7 +3091,8 @@ Selection is driven by flag variables:
 
     Grant the write permission only to services that call `PutSecret`; read-only services keep their existing role.
 - `--log_type=local|gcp|aws|azure`
-  - `HttpBackend` writes one access record per request through `ApplicationLogger.Access` — `METHOD /path STATUS BYTES MILLIS CLIENT_IP` — as the outermost middleware, so rejections from CORS, TLS guard, API-key and SSO layers are recorded too, and a handler panic is recorded as 500 before it propagates. Query strings are excluded because public confirmation URLs can contain credentials. `CLIENT_IP` comes from `common.TrustedClientIP`, so forwarding headers are honored only behind `trusted_proxy_cidr`. `/health` and `/ready` are logged only when they fail (status ≥ 400). A nil `Journal` leaves requests unchanged. `local` lands it in `<name>_access_<date>.log`; `gcp` and `azure` route it to the `<name>_access` log name; `aws` writes it to the same CloudWatch stream as server records with an `[ACCESS]` prefix.
+  - `HttpBackend` binds one request id per request into `common.RequestID` before anything else runs, so every route, keel handler or not, shares it with its logs and sanitized errors. The id is echoed in the `request_id_header` response header (default `X-Request-Id`; empty disables the header) and in the `{data, meta}` envelope; an inbound value is adopted only from a peer inside `trusted_proxy_cidr` and only when it is 1–128 characters of letters, digits and `-._:`. Add the header to `ExposeHeaders` for cross-origin browser clients.
+  - `HttpBackend` writes one access record per request through `ApplicationLogger.Access` — `METHOD /path STATUS BYTES MILLIS CLIENT_IP REQUEST_ID` (`-` when none is bound) — as the outermost middleware after the request id, so rejections from CORS, TLS guard, API-key and SSO layers are recorded too, and a handler panic is recorded as 500 before it propagates. Query strings are excluded because public confirmation URLs can contain credentials. `CLIENT_IP` comes from `common.TrustedClientIP`, so forwarding headers are honored only behind `trusted_proxy_cidr`. `/health` and `/ready` are logged only when they fail (status ≥ 400). A nil `Journal` leaves requests unchanged. `local` lands it in `<name>_access_<date>.log`; `gcp` and `azure` route it to the `<name>_access` log name; `aws` writes it to the same CloudWatch stream as server records with an `[ACCESS]` prefix.
   - `azure` ships records to Azure Monitor / Log Analytics via the Logs Ingestion API; set `--azure_logs_endpoint` (DCE), `--azure_logs_dcr` (rule immutable id), and `--azure_logs_stream`. Auth uses `azidentity.DefaultAzureCredential` (managed identity with the "Monitoring Metrics Publisher" role on the DCR). `gcp` already emits structured JSON to stdout, which Azure container platforms (AKS / Container Apps / App Service) and the Azure Monitor Agent on VMs also ingest — use `azure` only when you need the app to push directly to a Log Analytics table.
 - `storage_mode=s3|gcs|azure|file`
   - An `ObjectStorage` is bound to one bucket (Azure container, file root folder) described by a `storage.Spec{Mode, Bucket, Project, Region, Endpoint, AccountURL, PublicBaseURL, CredentialSecret}`. `storage.New(ctx, spec, secrets)` verifies the bucket exists (`ErrBucketNotFound` otherwise) and never creates one — **deployment prerequisite**: the runtime identity needs list permission on the bucket (GCS `storage.objects.list`, held by `roles/storage.objectViewer`; S3 `s3:ListBucket`; Azure container read), which object-only policies granting just get/put lack; `storage.CreateBucket(ctx, spec, secrets)` is the separate admin call (GCS needs `Project`; S3 sends `LocationConstraint` from `Region` except for `us-east-1`). `storage.NewFromConfig(ctx, secrets, bucket)` builds the spec from the flags below. `HttpBackend.Storage` and `JobExecutor.Storage` (populated by `worker.AbstractWorker.Run` when `storage_mode` is set) are bound to `storage_bucket`. Empty `storage_mode` disables storage (the field stays `nil`). An app with several buckets holds one `storage.NewBuckets(secrets)` and calls `Get(ctx, bucket)`, which builds each bucket's store once (`ErrNoBucket` for a blank name, `ErrNotConfigured` when `storage_mode` is empty).
@@ -4042,7 +4061,13 @@ read will be rejected.
   (SQLSTATE 23505 → treat as duplicate, see
   [payment/webhook_processor.go](payment/webhook_processor.go)).
 - **`UserSpecific` / `PartnerSpecific` row scoping** is automatic via the
-  table flag — don't re-implement scoping in raw SQL unless the operation
+  table flag. A table is `PartnerSpecific` when its `partner_id` column
+  references `business_partner` (`PartnerTableName`), directly or through the
+  `partner_id` of another `PartnerSpecific` table at any depth, as any column of
+  a composite key; so a composite child needs no direct partner key. A table
+  that references the partner through another column (`agency_partner_id`,
+  `client_partner_id`) is multi-actor and is not scoped: grant its generic
+  CRUD to global roles only. Don't re-implement scoping in raw SQL unless the operation
   legitimately crosses actors (e.g. `OnboardingService.ListReusableAccounts`
   spans partners by design).
 

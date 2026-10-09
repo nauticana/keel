@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -40,11 +41,9 @@ type AbstractRepository struct {
 	LoadColumnsFn    func(ctx context.Context) (map[string][]*model.TableColumn, error)
 	CreateTableSvcFn func(ctx context.Context, table *model.TableDefinition) port.TableService
 
-	// PartnerTableName is the table whose presence in a child's FK
-	// graph marks the child as PartnerSpecific (the partner_id column
-	// is auto-injected as a filter by TableService). Defaults to
-	// "business_partner". Lifted out of a hardcode in v0.4.1 (P1-39)
-	// so projects with a different multi-tenant root can opt in.
+	// PartnerTableName is the tenant root a partner_id column must reach,
+	// directly or through partner-specific parents, to make its table
+	// PartnerSpecific. Defaults to "business_partner".
 	PartnerTableName string
 
 	// UserTableName is the user-account table whose presence as a
@@ -353,9 +352,6 @@ func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.Que
 			r.ForeignKeys[constraintName] = fk
 			parentTable.Children = append(parentTable.Children, fk)
 			childTable.Parents = append(childTable.Parents, fk)
-			if parentName == r.partnerTable() {
-				childTable.PartnerSpecific = true
-			}
 			// UserSpecific opt-in: parent is the user-account table AND
 			// the FK column is literally named `user_id`. The column
 			// check stops multi-actor tables (ride.rider_id, ride.
@@ -406,7 +402,24 @@ func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.Que
 			}
 		}
 	}
+	if root := r.TableDefinitions[r.partnerTable()]; root != nil {
+		r.markPartnerSpecific(root)
+	}
 	return nil
+}
+
+// markPartnerSpecific flags, below parent, every table whose foreign key to it
+// includes a partner_id column, at any depth and any key position. The partner
+// root itself stays unflagged; a table reaching the partner only through another
+// column (agency_partner_id) is multi-actor and stays unflagged too.
+func (r *AbstractRepository) markPartnerSpecific(parent *model.TableDefinition) {
+	for _, fk := range parent.Children {
+		if fk.Child.PartnerSpecific || !slices.Contains(fk.Columns, "partner_id") {
+			continue
+		}
+		fk.Child.PartnerSpecific = true
+		r.markPartnerSpecific(fk.Child)
+	}
 }
 
 func (r *AbstractRepository) GetForeignKeys(ctx context.Context) (*model.QueryResult, error) {

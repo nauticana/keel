@@ -62,7 +62,8 @@ var (
 
 // AccessLogMiddleware writes one ApplicationLogger.Access line per request:
 // method, escaped path (query excluded: confirmation links carry codes),
-// status, response bytes, duration and the trusted-proxy-gated client IP.
+// status, response bytes, duration, the trusted-proxy-gated client IP and the
+// request id.
 // Outermost in the chain so rejections from inner middleware are recorded;
 // a handler panic logs 500 and re-panics. Healthy probe hits are skipped.
 func (h *HttpBackend) AccessLogMiddleware(next http.Handler) http.Handler {
@@ -84,9 +85,13 @@ func (h *HttpBackend) AccessLogMiddleware(next http.Handler) http.Handler {
 			if isProbePath(r.URL.Path) && status < http.StatusBadRequest {
 				return
 			}
-			h.Journal.Access(fmt.Sprintf("%s %s %d %dB %dms %s",
+			requestID := common.RequestIDFromContext(r.Context())
+			if requestID == "" {
+				requestID = "-"
+			}
+			h.Journal.Access(fmt.Sprintf("%s %s %d %dB %dms %s %s",
 				r.Method, r.URL.EscapedPath(), status, rec.bytes,
-				time.Since(start).Milliseconds(), common.TrustedClientIP(r)))
+				time.Since(start).Milliseconds(), common.TrustedClientIP(r), requestID))
 		}()
 		next.ServeHTTP(rec, r)
 		completed = true

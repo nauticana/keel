@@ -3,9 +3,11 @@ package model
 import "fmt"
 
 type TableDefinition struct {
-	TableName       string
-	PascalName      string
-	Caption         string
+	TableName  string
+	PascalName string
+	Caption    string
+	// PartnerSpecific is set when the partner_id column reaches the partner
+	// table through foreign keys; generic CRUD pins it to the caller's partner.
 	PartnerSpecific bool
 	// UserSpecific is set when the table has a column literally named
 	// `user_id` whose FK references the user_account table. The CRUD

@@ -16,7 +16,7 @@ import (
 // Empty config trusts nothing and returns the peer address.
 func TrustedClientIP(r *http.Request) string {
 	remote := RemoteHost(r.RemoteAddr)
-	if !isTrustedProxy(remote) {
+	if !FromTrustedProxy(r) {
 		return remote
 	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
@@ -30,6 +30,11 @@ func TrustedClientIP(r *http.Request) string {
 		return strings.TrimSpace(real)
 	}
 	return remote
+}
+
+// FromTrustedProxy reports whether the socket peer is inside trusted_proxy_cidr.
+func FromTrustedProxy(r *http.Request) bool {
+	return isTrustedProxy(RemoteHost(r.RemoteAddr))
 }
 
 // RequireTrustedProxyCIDR errors unless trusted_proxy_cidr holds at least one
