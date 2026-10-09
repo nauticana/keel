@@ -29,6 +29,9 @@ const (
 	cors_origin                   = "cors_origin"
 	google_client_id              = "google_client_id"
 	apple_client_id               = "apple_client_id"
+	apple_team_id                 = "apple_team_id"
+	apple_key_id                  = "apple_key_id"
+	apple_key_secret              = "apple_key_secret"
 	oauth_issuer                  = "oauth_issuer"
 	oauth_jwks_url                = "oauth_jwks_url"
 	oauth_audience                = "oauth_audience"
@@ -167,6 +170,9 @@ type KeelConfig struct {
 	CORSOrigin                  string        // cors_origin                   ""                 Allowed CORS origin
 	GoogleClientID              string        // google_client_id              ""                 Google OAuth client id; set it to enable Google sign-in
 	AppleClientID               string        // apple_client_id               ""                 Apple Sign-In client id; set it to enable Apple sign-in
+	AppleTeamID                 string        // apple_team_id                 ""                 Apple developer team id that signs the Sign in with Apple client secret
+	AppleKeyID                  string        // apple_key_id                  ""                 Sign in with Apple key id (.p8 key)
+	AppleKeySecret              string        // apple_key_secret              apple_key          Secret name holding the Sign in with Apple .p8 PEM
 	OAuthIssuer                 string        // oauth_issuer                  ""                 OAuth 2.1 AS issuer URL trusted by the resource-server validator
 	OAuthJWKSURL                string        // oauth_jwks_url                ""                 JWKS URL used to verify access-token signatures
 	OAuthAudience               string        // oauth_audience                ""                 Expected access-token audience (RFC 8707)
@@ -301,6 +307,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.CORSOrigin = c.String(m, cors_origin)
 	c.GoogleClientID = c.String(m, google_client_id)
 	c.AppleClientID = c.String(m, apple_client_id)
+	c.AppleTeamID = c.String(m, apple_team_id)
+	c.AppleKeyID = c.String(m, apple_key_id)
+	c.AppleKeySecret = c.String(m, apple_key_secret)
 	c.OAuthIssuer = c.String(m, oauth_issuer)
 	c.OAuthJWKSURL = c.String(m, oauth_jwks_url)
 	c.OAuthAudience = c.String(m, oauth_audience)

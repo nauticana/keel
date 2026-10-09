@@ -29,6 +29,7 @@ type memStore struct {
 	partners   map[int][][]any // qListPartners rows per user
 	accounts   map[int]*account
 	links      map[string]int    // issuer|subject → user id
+	grants     map[string]string // issuer|subject → provider_grant
 	members    map[[2]int64]bool // {user, partner} with an open membership
 	tokens     map[string]*refreshRow
 	loginRow   []any                    // qUserByLogin row
@@ -44,7 +45,7 @@ type memStore struct {
 
 func newMemStore(userIDs ...int) *memStore {
 	m := &memStore{users: map[int]bool{}, cutoffs: map[int]time.Time{}, holds: map[int]bool{}, deleted: map[int]bool{}, failQuery: map[string]error{},
-		accounts: map[int]*account{}, links: map[string]int{}, members: map[[2]int64]bool{}, tokens: map[string]*refreshRow{}, policies: map[int64]map[string]int{}}
+		accounts: map[int]*account{}, links: map[string]int{}, grants: map[string]string{}, members: map[[2]int64]bool{}, tokens: map[string]*refreshRow{}, policies: map[int64]map[string]int{}}
 	for _, id := range userIDs {
 		m.users[id] = true
 	}
@@ -232,6 +233,24 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			}
 		}
 		m.links[k] = args[0].(int)
+		if g, ok := args[4].(string); ok {
+			m.grants[k] = g
+		}
+	case qStoreIdentityGrant:
+		m.grants[fmt.Sprint(args[1], "|", args[2])] = args[0].(string)
+	case qIdentityGrantsForUser:
+		for k, uid := range m.links {
+			if g := m.grants[k]; uid == args[0].(int) && g != "" {
+				out.Rows = append(out.Rows, []any{strings.SplitN(k, "|", 2)[0], g})
+			}
+		}
+	case qDeleteExternalIdentities:
+		for k, uid := range m.links {
+			if uid == args[0].(int) {
+				delete(m.links, k)
+				delete(m.grants, k)
+			}
+		}
 	case qCreateSocialUser:
 		email, _ := args[3].(string)
 		if email != "" && m.userByEmail(email) != 0 {

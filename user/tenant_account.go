@@ -58,7 +58,7 @@ func (s *LocalUserService) CreateTenantAccountTx(ctx context.Context, tx port.Tx
 	if err != nil {
 		return nil, err
 	}
-	if _, err := local.Query(ctx, qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject); err != nil {
+	if _, err := local.Query(ctx, qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject, nil); err != nil {
 		if pgsql.IsUniqueViolation(err) {
 			return nil, ErrAccountExists
 		}

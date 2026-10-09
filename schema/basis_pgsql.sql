@@ -305,6 +305,7 @@ CREATE TABLE IF NOT EXISTS user_external_identity (
     provider                             VARCHAR(20)   NOT NULL,
     issuer                               VARCHAR(255)  NOT NULL,
     subject                              VARCHAR(255)  NOT NULL,
+    provider_grant                       TEXT         ,
     CONSTRAINT user_external_identity_pk PRIMARY KEY (issuer, subject)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS user_external_identity_user_issuer_uq ON user_external_identity(user_id, issuer);

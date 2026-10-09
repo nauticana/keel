@@ -311,6 +311,7 @@ CREATE TABLE IF NOT EXISTS user_external_identity (
     provider                             VARCHAR(20)   NOT NULL,
     issuer                               VARCHAR(255)  NOT NULL,
     subject                              VARCHAR(255)  NOT NULL,
+    provider_grant                       TEXT         ,
     PRIMARY KEY (issuer, subject),
     CONSTRAINT user_external_identities FOREIGN KEY (user_id) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

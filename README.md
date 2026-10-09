@@ -59,7 +59,7 @@ graph TD
 | `limiter` | Admission control: `FairSlotLimiter` (weighted, per-partner round-robin concurrency), `LocalRateLimiter` (per-partner + fleet token buckets per lane), `DistributedRateLimiter` (partner×fleet fixed windows charged atomically through `cache.MultiScopeAdmitter`, local fallback while the store is down), `LimitError` with `Retry-After` |
 | `clock` | Injectable time: `Clock` interface, real `System`, and `Fake` for tests that advance time instead of sleeping |
 | `crypto` | At-rest field encryption: AES-256-GCM `Seal`/`Open`/`IsSealed`/`DecodeKEK` (hex or base64) for TOTP seeds, refresh tokens, vault values; secret-backed `LoadKEK` and `Sealer`; `EncryptToken`/`DecryptToken` string wrappers (`enc:v1:` envelope) for tokens at rest; `VerifyPKCS7Detached` checks a detached PKCS#7 signature against a stored certificate with an algorithm allow-list, `ParseCertificate` reads DER or PEM |
-| `oauth/oidc` | OpenID Connect relying party: `FetchDiscovery`, the authorization-code `Client` (PKCE, nonce, client secret or `private_key_jwt`), `Provider` (`port.IdentityProvider` over `partner_idp_oidc`), and the first-party `SocialVerifier` (Google and Apple ID tokens) and `GoogleCode` (Google code exchange) |
+| `oauth/oidc` | OpenID Connect relying party: `FetchDiscovery`, the authorization-code `Client` (PKCE, nonce, client secret or `private_key_jwt`), `Provider` (`port.IdentityProvider` over `partner_idp_oidc`), and the first-party `SocialVerifier` (Google and Apple ID tokens), `GoogleCode` (Google code exchange) and `AppleGrants` (Apple code exchange and grant revocation) |
 | `sso` | Tenant single sign-on and directory provisioning: `Service` (domain-routed sign-in through a partner's own identity provider, connection configure / test / activate / disable, role mapping) and `Provisioning` (SCIM 2.0 users, groups and tokens) |
 | `sso/saml` | SAML 2.0 service provider behind `port.IdentityProvider`, kept apart so applications without SAML never link XML signature code |
 | `service` | Cross-cutting services that bind multiple ports: `APIKeyService` (issue/lookup/revoke), `APIKeyAuthMiddleware`, JWT `SSOMiddleware`, `HttpBackend` (HTTP server with hardened defaults), `QuotaServiceDb` (`port.QuotaService` impl) |
@@ -886,6 +886,7 @@ Each row records what keel implements of an IETF or OASIS specification, what it
 | OpenID Connect Core 1.0 | `state`, `nonce` and S256 PKCE on every request. An ID token's `iss` must match exactly and its `aud` must be only the client id, since keel trusts no other audience (§3.1.3.7); `azp`, when present, must be the client id, except for Google, whose mobile sign-in names the app's own client. |
 | OpenID Connect Discovery 1.0 | The discovered issuer must equal the configured one, and every endpoint must be `https`. |
 | RFC 7523 JWT client authentication | `private_key_jwt`: `iss` and `sub` are the client id, `aud` the token endpoint, a random `jti`, one-minute lifetime. |
+| RFC 7009 Revocation (client) | Sign in with Apple: the refresh token redeemed at sign-in is revoked with `token_type_hint=refresh_token` when the account is deleted. The code's ID token is verified for signature, expiry, issuer, audience and subject before the refresh token is kept. |
 | SAML 2.0 Web SSO (OASIS) | Signed responses or assertions, SHA-256 or stronger only. `InResponseTo` binds to the stored request; IdP-initiated sign-in is refused. Every audience restriction must name the SP entity id; a bearer confirmation must name the callback URL and be valid now; `Destination` and `Recipient` are checked. NameID is requested `unspecified`, and a transient NameID is never a subject. |
 | RFC 6595 SAML SASL mechanism | Not applicable: keel serves HTTP. |
 
@@ -1589,7 +1590,7 @@ These tables must exist (defined in `schema/core/`):
 
 ### Account-deletion semantics
 
-`DeleteAccount` is a **soft delete**, not a hard DELETE. Ride history, invoices, payment records, audit rows — anything that FK's back to `user_account(id)` — stays pointing at the same row. What changes: PII is anonymized (`first_name`→`Deleted`, `last_name`→`User`, `user_email`→`deleted+<id>@local.invalid`, `phone`→NULL, `passtext`→NULL, 2FA cleared, `user_name`→`deleted-<id>`), status flips to `'D'`, `deleted_at` stamps, all refresh tokens revoked, trusted devices deleted, social-provider links deleted, `UserActivityDelete` history row written with the supplied reason.
+`DeleteAccount` is a **soft delete**, not a hard DELETE. Ride history, invoices, payment records, audit rows — anything that FK's back to `user_account(id)` — stays pointing at the same row. What changes: PII is anonymized (`first_name`→`Deleted`, `last_name`→`User`, `user_email`→`deleted+<id>@local.invalid`, `phone`→NULL, `passtext`→NULL, 2FA cleared, `user_name`→`deleted-<id>`), status flips to `'D'`, `deleted_at` stamps, all refresh tokens revoked, trusted devices deleted, social-provider links deleted and the provider grants they kept revoked (see Revoking Sign in with Apple), `UserActivityDelete` history row written with the supplied reason.
 
 `DeleteAccount` also sets `user_account.tokens_valid_after`, so `ParseJWT` rejects every access token issued before it (`RevokeAccessTokens` does this alone; nodes cache the cutoff for `access_revocation_cache_ttl` seconds and fail closed when it cannot be read). It refuses with `user.ErrLegalHold` (409 on the account endpoint) while `user_legal_hold` has an unreleased row for the user. For a full, audited erasure across application tables, see the `erasure` package.
 
@@ -1746,6 +1747,26 @@ A provider is enabled by its client id: `google_client_id` enables Google, `appl
 
 Verification lives in `oauth/oidc`: `SocialLoginHandler.Verifier` (an `oidc.SocialVerifier`) checks the ID tokens, and `PublicHandler.GoogleCode` (an `oidc.GoogleCode`) redeems `LoginGoogle`'s code without following redirects. Both are nil by default, which uses Google's and Apple's published endpoints; tests and applications with their own key sets set them.
 
+### Revoking Sign in with Apple
+
+Apple expects an app to revoke the user's Sign in with Apple grant when the account is deleted. Revocation needs an Apple refresh token, which only the authorization code yields, so wire `oidc.AppleGrants`:
+
+```go
+sealer, _ := crypto.NewSealer(ctx, secrets, "apple_grant_kek")
+apple, err := oidc.NewAppleGrants(ctx, secrets, sealer)
+socialHandler.Apple = apple       // Apple sign-in and LinkSocial require "code"
+userService.GrantRevoker = apple  // DeleteAccount revokes the stored grant
+userService.Journal = journal     // a failed revocation is logged here
+```
+
+With `Apple` set, an Apple `POST /public/login/social` or `LinkSocial` must carry the authorization code beside the ID token (`{"provider":"apple","token":…,"code":…}`); a missing code is 400 and a code Apple refuses, or one issued to another Apple account, is 401. The refresh token is sealed and kept in `user_external_identity.provider_grant`; a later sign-in with a code replaces it. `DeleteAccount` revokes it after the deletion commits; a failed revocation does not undo the deletion and is written to `Journal`. Set `RedirectURI` when the code comes from the web flow.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `apple_team_id` | `` | Team id that signs the client secret (JWT `iss`) |
+| `apple_key_id` | `` | Key id of the Sign in with Apple `.p8` key |
+| `apple_key_secret` | `apple_key` | Secret name holding the `.p8` PEM |
+
 ### Requiring SSO
 
 `user_account_policy` rows are global when `partner_id` is NULL and otherwise apply to that partner's users; a partner's own row overrides the global one for each policy type, and `UserService.EffectivePolicies(partnerID)` returns them resolved that way. Only platform roles can write policy rows as seeded.
@@ -1783,7 +1804,7 @@ srv.Handle(map[string]func(w, r){
 
 | Table | Purpose |
 |-------|---------|
-| `user_external_identity` | External links keyed by `(issuer, subject)`, with one identity per issuer per account. `provider` is only the adapter/UI label. Phone registrations remain in `user_account.phone`. |
+| `user_external_identity` | External links keyed by `(issuer, subject)`, with one identity per issuer per account. `provider` is only the adapter/UI label; `provider_grant` is a sealed provider refresh token revoked on account deletion. Phone registrations remain in `user_account.phone`. |
 | `user_account.passtext` | Nullable. NULL means "this account authenticates via social/OTP only; password login is disabled." |
 
 ## Tenant Single Sign-On

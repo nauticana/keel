@@ -19,6 +19,7 @@ import (
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/domain"
+	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
@@ -170,6 +171,8 @@ const (
 	qMarkEmailVerified               = "mark_email_verified"
 	qAnonymizeUserAccount            = "anonymize_user_account"
 	qDeleteExternalIdentities        = "delete_external_identities_for_user"
+	qIdentityGrantsForUser           = "identity_grants_for_user"
+	qStoreIdentityGrant              = "store_identity_grant"
 	qDeleteTrustedDevices            = "delete_trusted_devices_for_user"
 	qLockUserAccount                 = "lock_user_account"
 	qActiveLegalHold                 = "active_legal_hold"
@@ -540,9 +543,11 @@ VALUES (?, ?, ?, ?, ?, 'A', ?)
 `,
 
 	qLinkExternalIdentity: `
-INSERT INTO user_external_identity (user_id, provider, issuer, subject)
-VALUES (?, ?, ?, ?)
+INSERT INTO user_external_identity (user_id, provider, issuer, subject, provider_grant)
+VALUES (?, ?, ?, ?, ?)
 `,
+
+	qStoreIdentityGrant: `UPDATE user_external_identity SET provider_grant = ? WHERE issuer = ? AND subject = ?`,
 
 	qUserIDByEmail: `SELECT id, email_verified_at FROM user_account WHERE user_email = ?`,
 
@@ -586,6 +591,10 @@ UPDATE user_account
 	qActiveLegalHold:    `SELECT 1 FROM user_legal_hold WHERE user_id = ? AND released_at IS NULL LIMIT 1`,
 	qTokensValidAfter:   `SELECT tokens_valid_after FROM user_account WHERE id = ?`,
 	qRevokeAccessTokens: `UPDATE user_account SET tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ? RETURNING tokens_valid_after`,
+
+	qIdentityGrantsForUser: `
+SELECT issuer, provider_grant FROM user_external_identity WHERE user_id = ? AND provider_grant IS NOT NULL
+`,
 
 	qDeleteExternalIdentities: `
 DELETE FROM user_external_identity WHERE user_id = ?
@@ -732,6 +741,10 @@ type LocalUserService struct {
 	// hosted domain the user's partner holds counts as the partner's own
 	// identity provider (SignInTenant).
 	TenantDomains *domain.Service
+	// GrantRevoker revokes the provider grants of a deleted account; Journal
+	// records a revocation that failed. Both are optional.
+	GrantRevoker port.IdentityGrantRevoker
+	Journal      logger.ApplicationLogger
 
 	// Ctx is the parent context used by every service method that needs
 	// to issue a DB query. Set by NewLocalUserService / Init from the
@@ -2420,7 +2433,7 @@ func (s *LocalUserService) insertIdentityAccount(ctx context.Context, q port.Que
 	if err != nil {
 		return 0, "", err
 	}
-	if _, err := q.Query(ctx, qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject); err != nil {
+	if _, err := q.Query(ctx, qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject, common.NullIfEmpty(id.Grant)); err != nil {
 		if pgsql.IsUniqueViolation(err) {
 			return 0, "", ErrIdentityLinked
 		}
@@ -2690,6 +2703,9 @@ func (s *LocalUserService) GetUserFromExternal(id ExternalIdentity) (*model.User
 		return nil, err
 	}
 	if linked != nil {
+		if err := s.storeIdentityGrant(id); err != nil {
+			return nil, err
+		}
 		_ = s.AddUserHistory(linked.Id, 0, "", UserActivityLogin, "A", "social:"+id.Provider)
 		return linked, nil
 	}
@@ -2744,17 +2760,27 @@ func (s *LocalUserService) LinkExternalIdentity(userID int, id ExternalIdentity)
 	}
 	if len(res.Rows) > 0 {
 		if int(common.AsInt64(res.Rows[0][0])) == userID {
-			return nil
+			return s.storeIdentityGrant(id)
 		}
 		return ErrIdentityLinked
 	}
-	if _, err := s.queryService.Query(s.ctx(), qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject); err != nil {
+	if _, err := s.queryService.Query(s.ctx(), qLinkExternalIdentity, userID, id.Provider, id.Issuer, id.Subject, common.NullIfEmpty(id.Grant)); err != nil {
 		if pgsql.IsUniqueViolation(err) {
 			return ErrIdentityLinked
 		}
 		return err
 	}
 	return s.AddUserHistory(userID, 0, "", UserActivityLogin, "A", "link:"+id.Provider)
+}
+
+// storeIdentityGrant replaces the grant kept with an existing link; an
+// identity without one leaves the stored grant.
+func (s *LocalUserService) storeIdentityGrant(id ExternalIdentity) error {
+	if id.Grant == "" {
+		return nil
+	}
+	_, err := s.queryService.Query(s.ctx(), qStoreIdentityGrant, id.Grant, id.Issuer, id.Subject)
+	return err
 }
 
 // recordSignupConsent is the private bridge between signup flows and
@@ -2780,11 +2806,25 @@ func (s *LocalUserService) recordSignupConsent(userID int, email string, sc *Sig
 // DeleteAccount anonymizes the user_account row in place (preserving FK
 // integrity for history rows that legal retention requires), revokes every
 // access and refresh token, deletes trusted devices and social-provider links,
-// and records a UserActivityDelete history entry. Refuses with ErrLegalHold
-// while the user has an unreleased legal hold.
+// revokes the provider grants those links kept, and records a
+// UserActivityDelete history entry. Refuses with ErrLegalHold while the user
+// has an unreleased legal hold.
 func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
+	grants, err := s.deleteAccount(userID)
+	if err != nil {
+		return err
+	}
+	s.revokeGrants(userID, grants)
+	return s.AddUserHistory(userID, 0, "", UserActivityDelete, UserStatusDeleted, reason)
+}
+
+type identityGrant struct{ issuer, sealed string }
+
+// deleteAccount anonymizes the account and returns the grants its dropped
+// links kept.
+func (s *LocalUserService) deleteAccount(userID int) ([]identityGrant, error) {
 	if userID <= 0 {
-		return fmt.Errorf("delete: user id is required")
+		return nil, fmt.Errorf("delete: user id is required")
 	}
 	lock := s.tokenCutoffLock(userID)
 	lock.Lock()
@@ -2792,7 +2832,7 @@ func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
 	ctx := s.ctx()
 	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	committed := false
 	defer func() {
@@ -2802,17 +2842,25 @@ func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
 	}()
 	locked, err := tx.Query(ctx, qLockUserAccount, userID)
 	if err != nil {
-		return fmt.Errorf("delete: lock user_account: %w", err)
+		return nil, fmt.Errorf("delete: lock user_account: %w", err)
 	}
 	if len(locked.Rows) == 0 {
-		return fmt.Errorf("delete: user %d not found", userID)
+		return nil, fmt.Errorf("delete: user %d not found", userID)
 	}
 	hold, err := tx.Query(ctx, qActiveLegalHold, userID)
 	if err != nil {
-		return fmt.Errorf("delete: check legal hold: %w", err)
+		return nil, fmt.Errorf("delete: check legal hold: %w", err)
 	}
 	if len(hold.Rows) > 0 {
-		return ErrLegalHold
+		return nil, ErrLegalHold
+	}
+	res, err := tx.Query(ctx, qIdentityGrantsForUser, userID)
+	if err != nil {
+		return nil, fmt.Errorf("delete: read identity grants: %w", err)
+	}
+	grants := make([]identityGrant, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		grants = append(grants, identityGrant{issuer: common.AsString(row[0]), sealed: common.AsString(row[1])})
 	}
 	steps := []struct {
 		query, what string
@@ -2826,15 +2874,29 @@ func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
 	}
 	for _, step := range steps {
 		if _, err := tx.Query(ctx, step.query, step.args...); err != nil {
-			return fmt.Errorf("delete: %s: %w", step.what, err)
+			return nil, fmt.Errorf("delete: %s: %w", step.what, err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("delete: commit: %w", err)
+		return nil, fmt.Errorf("delete: commit: %w", err)
 	}
 	committed = true
 	s.forgetTokenCutoff(userID)
-	return s.AddUserHistory(userID, 0, "", UserActivityDelete, UserStatusDeleted, reason)
+	return grants, nil
+}
+
+// revokeGrants revokes a deleted account's provider grants. The deletion
+// stands either way; a failed revocation is journaled.
+func (s *LocalUserService) revokeGrants(userID int, grants []identityGrant) {
+	for _, g := range grants {
+		err := errors.New("no GrantRevoker configured")
+		if s.GrantRevoker != nil {
+			err = s.GrantRevoker.RevokeGrant(s.ctx(), g.issuer, g.sealed)
+		}
+		if err != nil && s.Journal != nil {
+			s.Journal.Error(fmt.Sprintf("delete: user %d: revoke grant from %s: %v", userID, g.issuer, err))
+		}
+	}
 }
 
 // --- Helpers ---

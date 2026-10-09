@@ -9,6 +9,10 @@ columns:
     type: VARCHAR(255)
   - name: subject
     type: VARCHAR(255)
+  - name: provider_grant
+    type: TEXT
+    nullable: true
+    comment: Provider refresh token sealed by its adapter, revoked when the account is deleted
 primary_key: [issuer, subject]
 indexes:
   - name: user_external_identity_user_issuer_uq

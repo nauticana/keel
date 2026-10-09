@@ -90,19 +90,27 @@ func (v *SocialVerifier) Verify(ctx context.Context, provider, token string) (*p
 }
 
 func (v *SocialVerifier) keys() (*crypto.JWKSProvider, *crypto.JWKSProvider) {
-	google, apple := v.GoogleKeys, v.AppleKeys
-	if google == nil || apple == nil {
-		defaultKeysOnce.Do(func() {
-			ttl := config.Config().SocialJWKSCacheTTL
-			defaultGoogle = crypto.NewJWKSProvider(googleKeysURL, ttl, common.HTTPClient())
-			defaultApple = crypto.NewJWKSProvider(appleKeysURL, ttl, common.HTTPClient())
-		})
-		if google == nil {
-			google = defaultGoogle
-		}
-		if apple == nil {
-			apple = defaultApple
-		}
+	return googleKeySet(v.GoogleKeys), appleKeySet(v.AppleKeys)
+}
+
+func googleKeySet(set *crypto.JWKSProvider) *crypto.JWKSProvider {
+	if set != nil {
+		return set
 	}
-	return google, apple
+	defaultKeysOnce.Do(initDefaultKeys)
+	return defaultGoogle
+}
+
+func appleKeySet(set *crypto.JWKSProvider) *crypto.JWKSProvider {
+	if set != nil {
+		return set
+	}
+	defaultKeysOnce.Do(initDefaultKeys)
+	return defaultApple
+}
+
+func initDefaultKeys() {
+	ttl := config.Config().SocialJWKSCacheTTL
+	defaultGoogle = crypto.NewJWKSProvider(googleKeysURL, ttl, common.HTTPClient())
+	defaultApple = crypto.NewJWKSProvider(appleKeysURL, ttl, common.HTTPClient())
 }

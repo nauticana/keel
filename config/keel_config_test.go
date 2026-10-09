@@ -12,6 +12,7 @@ var keelTestFlagIDs = []string{
 	http_api_port, https_port, tls_cert, tls_key, max_tls_version, metrics_addr,
 	session_timeout, refresh_token_ttl, access_revocation_cache_ttl, otp_ttl_seconds, mail_mode, smtp_host, smtp_port,
 	smtp_user, smtp_from, cors_origin, google_client_id, apple_client_id,
+	apple_team_id, apple_key_id, apple_key_secret,
 	oauth_issuer, oauth_jwks_url, oauth_audience, oauth_resource,
 	oauth_resources, oauth_scopes_supported, oauth_as_mode,
 	oauth_signing_key_secret, oauth_access_token_ttl, oauth_refresh_token_ttl,

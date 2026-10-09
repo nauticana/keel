@@ -515,6 +515,7 @@ erDiagram
         VARCHAR provider
         VARCHAR issuer PK
         VARCHAR subject PK
+        TEXT provider_grant
     }
     device_token {
         BIGINT id PK

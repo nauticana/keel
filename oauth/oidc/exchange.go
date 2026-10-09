@@ -16,8 +16,9 @@ import (
 
 // TokenSet is the part of a token endpoint answer the relying party reads.
 type TokenSet struct {
-	AccessToken string `json:"access_token"`
-	IDToken     string `json:"id_token"`
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type tokenErrorBody struct {

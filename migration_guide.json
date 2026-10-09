@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.103",
+   "title": "Revoke Sign in with Apple on account deletion",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "An Apple sign-in can keep the grant its authorization code redeems, and DeleteAccount revokes it, as Apple expects when an account is deleted.",
+   "body_markdown": "### Schema (breaking)\n\n`user_external_identity` gains `provider_grant TEXT` (nullable). Every link insert writes it, so apply it before deploying:\n\n```sql\nALTER TABLE user_external_identity ADD COLUMN provider_grant TEXT;\n```\n\nThree config flags are required: `apple_team_id`, `apple_key_id`, `apple_key_secret` (default `apple_key`). Re-seed `application_config_flag`.\n\n### Apple grants (additive)\n\n- `oidc.AppleGrants` (`NewAppleGrants(ctx, secrets, sealer)`) redeems the Apple authorization code with an ES256 client secret signed by the `.p8` key, verifies the code's ID token against Apple's keys (`AppleKeys` overrides them) and that it names the verified subject, and returns the refresh token sealed. `RevokeGrant` revokes it at Apple. `RedirectURI` is for codes from the web flow.\n- `SocialLoginHandler.Apple`: when set, Apple `LoginSocial` and `LinkSocial` require `code` beside `token` (400 without it, 401 when Apple refuses it) and pass the sealed grant on `user.ExternalIdentity.Grant`. Unset, nothing changes.\n- `LocalUserService.GrantRevoker` (`port.IdentityGrantRevoker`) and `Journal`: `DeleteAccount` revokes the stored grants after the deletion commits; a failure is journaled and does not undo the deletion. A sign-in or link with a grant replaces the stored one.\n- `oidc.TokenSet` adds `RefreshToken`.\n\n### Migration steps\n\n1. Apply the `ALTER TABLE` and the three `application_config_flag` rows.\n2. To revoke Apple grants: store the Sign in with Apple `.p8` under `apple_key`, set `apple_team_id` and `apple_key_id`, build `AppleGrants` with a dedicated KEK sealer, and set it on `SocialLoginHandler.Apple` and `LocalUserService.GrantRevoker`, with `LocalUserService.Journal`.\n3. Ship clients that post the Apple authorization code before setting `Apple`; older clients get 400. Accounts that signed in before have no grant until their next Apple sign-in."
+  },
+  {
    "version": "v1.2.102",
    "title": "Re-authentication by one-time code, one-query grant set",
    "tags": [

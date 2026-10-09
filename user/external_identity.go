@@ -31,6 +31,7 @@ type ExternalIdentity struct {
 	FirstName     string
 	LastName      string
 	Phone         string
+	Grant         string // provider grant sealed by its adapter, revoked when the account is deleted
 }
 
 // Canonical issuers stored for Google and Apple identities.

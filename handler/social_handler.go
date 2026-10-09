@@ -34,6 +34,10 @@ type SocialLoginHandler struct {
 	NonceCache cache.CacheService
 	// Verifier checks Google and Apple ID tokens; nil uses their published keys.
 	Verifier *oidc.SocialVerifier
+	// Apple, when set, requires an Apple sign-in or link to carry the
+	// authorization code and keeps the grant it redeems, so account deletion
+	// can revoke it.
+	Apple *oidc.AppleGrants
 }
 
 // LoginSocial verifies a social provider ID token (POST). A GET on the same
@@ -78,6 +82,9 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
 		return
 	}
+	if !h.redeemAppleGrant(w, r, &identity, req.Code) {
+		return
+	}
 
 	signupConsent := buildSignupConsent(r, &req)
 	session, isNewUser, err := h.UserService.GetOrCreateUserFromSocial(identity, signupConsent)
@@ -120,6 +127,7 @@ func (h *SocialLoginHandler) LinkSocial(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		Provider string `json:"provider"`
 		Token    string `json:"token"`
+		Code     string `json:"code,omitempty"`
 		RecentAuth
 	}
 	session, ok := h.ReadAuthRequest(w, r, &req)
@@ -135,6 +143,9 @@ func (h *SocialLoginHandler) LinkSocial(w http.ResponseWriter, r *http.Request) 
 	identity, nonce, err := h.verifySocialToken(r.Context(), req.Provider, req.Token)
 	if err != nil || (h.NonceCache != nil && !h.consumeSocialNonce(r.Context(), nonce)) {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
+		return
+	}
+	if !h.redeemAppleGrant(w, r, &identity, req.Code) {
 		return
 	}
 	if err := h.UserService.LinkExternalIdentity(session.Id, identity); err != nil {
@@ -193,8 +204,9 @@ func (h *SocialLoginHandler) consumeSocialNonce(ctx context.Context, nonce strin
 // `consents` is non-empty, the new-user branch records each entry in
 // consent_event. `consents` is ignored on re-auth of an existing user.
 type socialLoginRequest struct {
-	Provider       string          `json:"provider"` // google, apple
-	Token          string          `json:"token"`    // ID token from the provider
+	Provider       string          `json:"provider"`       // google, apple
+	Token          string          `json:"token"`          // ID token from the provider
+	Code           string          `json:"code,omitempty"` // Apple authorization code
 	PolicyType     string          `json:"policyType,omitempty"`
 	PolicyVersion  string          `json:"policyVersion,omitempty"`
 	PolicyRegion   string          `json:"policyRegion,omitempty"`
@@ -236,6 +248,30 @@ func (h *SocialLoginHandler) verifySocialToken(ctx context.Context, provider, to
 		return user.ExternalIdentity{}, "", err
 	}
 	return socialIdentity(provider, a), nonce, nil
+}
+
+// redeemAppleGrant attaches the sealed grant of an Apple identity's code when
+// Apple is set; it writes the refusal and returns false otherwise.
+func (h *SocialLoginHandler) redeemAppleGrant(w http.ResponseWriter, r *http.Request, identity *user.ExternalIdentity, code string) bool {
+	if h.Apple == nil || identity.Provider != oidc.ProviderApple {
+		return true
+	}
+	if code == "" {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "code is required for apple")
+		return false
+	}
+	sealed, err := h.Apple.Redeem(r.Context(), code, identity.Subject)
+	var refused *oidc.TokenError
+	if errors.As(err, &refused) || errors.Is(err, oidc.ErrInvalidResponse) {
+		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
+		return false
+	}
+	if err != nil {
+		h.WriteServiceError(w, r, err)
+		return false
+	}
+	identity.Grant = sealed
+	return true
 }
 
 // socialIdentity maps a first-party assertion; only Google carries names and
