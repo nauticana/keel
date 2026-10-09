@@ -176,7 +176,7 @@ SELECT a.low_limit, a.high_limit, a.bypass_scope
 
 func (src GrantSource) readAuthorizationSQL() string {
 	return `
-SELECT authorization_object_id, action, low_limit, high_limit
+SELECT authorization_object_id, action, low_limit, high_limit, bypass_scope
   FROM authorization_role_permission
  WHERE role_id IN (
        SELECT role_id
@@ -201,7 +201,7 @@ SELECT a.low_limit, a.high_limit, a.bypass_scope
    AND (a.low_limit = ? OR a.low_limit = '*')
 `
 	roleReadAuthorizationSQL = `
-SELECT authorization_object_id, action, low_limit, high_limit
+SELECT authorization_object_id, action, low_limit, high_limit, bypass_scope
   FROM authorization_role_permission
  WHERE role_id = ?
    AND is_active IS TRUE

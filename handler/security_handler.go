@@ -73,22 +73,17 @@ func (h *SecurityHandler) GetAuthRoutes() map[string]func(w http.ResponseWriter,
 // requireRecentAuth so a stolen JWT cannot silently displace a legitimate
 // authenticator's seed.
 //
-// POST /api/user/2fa/setup  { "password": "<current password>" }
-//
-//	or { "twoFactorCode": "<current TOTP, when re-rotating>" }
+// POST /api/user/2fa/setup  RecentAuth
 func (h *SecurityHandler) Setup2FA(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var req struct {
-		Password      string `json:"password"`
-		TwoFactorCode string `json:"twoFactorCode"`
-	}
+	var req RecentAuth
 	session, ok := h.ReadAuthRequest(w, r, &req)
 	if !ok {
 		return
 	}
-	if !h.requireRecentAuth(w, session, req.Password, req.TwoFactorCode) {
+	if !h.requireRecentAuth(w, r, session, req) {
 		return
 	}
 
@@ -300,10 +295,10 @@ func (h *SecurityHandler) Disable2FA(w http.ResponseWriter, r *http.Request) {
 	}
 	// Validate both factors. We deliberately call requireRecentAuth twice —
 	// once with each factor — so removing 2FA always requires the union.
-	if !h.requireRecentAuth(w, session, req.Password, "") {
+	if !h.requireRecentAuth(w, r, session, RecentAuth{Password: req.Password}) {
 		return
 	}
-	if !h.requireRecentAuth(w, session, "", req.Code) {
+	if !h.requireRecentAuth(w, r, session, RecentAuth{TwoFactorCode: req.Code}) {
 		return
 	}
 
@@ -405,22 +400,17 @@ func (h *SecurityHandler) userOwnsDevice(userID int, deviceID int64) (bool, erro
 // Gated by requireRecentAuth so a stolen JWT cannot drop legitimate
 // sessions on every other device the user owns.
 //
-// POST /api/user/logout-everywhere
-//
-//	{ "password": "<current>" }   or   { "twoFactorCode": "<TOTP>" }
+// POST /api/user/logout-everywhere  RecentAuth
 func (h *SecurityHandler) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var req struct {
-		Password      string `json:"password"`
-		TwoFactorCode string `json:"twoFactorCode"`
-	}
+	var req RecentAuth
 	session, ok := h.ReadAuthRequest(w, r, &req)
 	if !ok {
 		return
 	}
-	if !h.requireRecentAuth(w, session, req.Password, req.TwoFactorCode) {
+	if !h.requireRecentAuth(w, r, session, req) {
 		return
 	}
 	if err := h.UserService.LogoutEverywhere(session.Id); err != nil {
@@ -435,10 +425,7 @@ func (h *SecurityHandler) LogoutEverywhere(w http.ResponseWriter, r *http.Reques
 // requireRecentAuth — account deletion is irreversible, so a stolen JWT
 // alone must never be sufficient.
 //
-// DELETE /api/user/account
-//
-//	{ "password": "<current>", "reason": "..." }
-//	  or { "twoFactorCode": "<TOTP>", "reason": "..." }
+// DELETE /api/user/account  RecentAuth plus an optional "reason"
 //
 // A legal hold answers 409 without naming the hold.
 func (h *SecurityHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
@@ -446,15 +433,14 @@ func (h *SecurityHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Reason        string `json:"reason"`
-		Password      string `json:"password"`
-		TwoFactorCode string `json:"twoFactorCode"`
+		Reason string `json:"reason"`
+		RecentAuth
 	}
 	session, ok := h.ReadAuthRequest(w, r, &req)
 	if !ok {
 		return
 	}
-	if !h.requireRecentAuth(w, session, req.Password, req.TwoFactorCode) {
+	if !h.requireRecentAuth(w, r, session, req.RecentAuth) {
 		return
 	}
 	if err := h.UserService.DeleteAccount(session.Id, req.Reason); err != nil {

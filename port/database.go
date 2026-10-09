@@ -30,6 +30,10 @@ type DatabaseRepository interface {
 	// when the principal's kind is unregistered or the auth query is unwired.
 	CheckActionPermission(ctx context.Context, principal model.Principal, authObject, action, scope string) (bool, bool)
 
+	// ActionGrants reads all of a principal's grants in one query; its Allows
+	// answers exactly as CheckActionPermission does.
+	ActionGrants(ctx context.Context, principal model.Principal) (model.GrantSet, error)
+
 	// RunInTx executes fn inside a database transaction. fn receives a
 	// TxView that yields TableService instances bound to the in-flight
 	// tx — every call through that view ends up in the same DB

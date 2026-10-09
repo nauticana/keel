@@ -10,7 +10,8 @@ type GrantCatalog interface {
 	Queries() map[string]string
 	// CheckQuery names the single-grant lookup for a kind.
 	CheckQuery(kind model.PrincipalKind) string
-	// ReadQuery names the full-grant-list lookup for a kind.
+	// ReadQuery names the full-grant-list lookup for a kind. Rows are object,
+	// action, low_limit, high_limit and bypass_scope, in that order.
 	ReadQuery(kind model.PrincipalKind) string
 	// Args returns a principal's bind arguments, erroring when its kind is
 	// unregistered or its scope arity is wrong, so a check fails closed.

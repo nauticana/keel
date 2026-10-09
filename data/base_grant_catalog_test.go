@@ -25,7 +25,7 @@ func TestBaseGrantCatalog_UserKindShape(t *testing.T) {
 	if !ok {
 		t.Fatal("user read-authorization query missing")
 	}
-	if !strings.Contains(read, "FROM user_permission") || !strings.Contains(read, "user_id = ?") {
+	if !strings.Contains(read, "FROM user_permission") || !strings.Contains(read, "user_id = ?") || !strings.Contains(read, "bypass_scope") {
 		t.Errorf("unexpected read-authorization SQL:\n%s", read)
 	}
 }
@@ -39,7 +39,7 @@ func TestBaseGrantCatalog_RoleKind(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, check)
 		}
 	}
-	if read := q[c.ReadQuery(model.PrincipalRole)]; !strings.Contains(read, "WHERE role_id = ?") {
+	if read := q[c.ReadQuery(model.PrincipalRole)]; !strings.Contains(read, "WHERE role_id = ?") || !strings.Contains(read, "bypass_scope") {
 		t.Errorf("unexpected read-authorization SQL:\n%s", read)
 	}
 

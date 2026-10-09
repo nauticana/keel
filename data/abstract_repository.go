@@ -110,19 +110,9 @@ func (r *AbstractRepository) IsGlobalRole(ctx context.Context, userID int) bool 
 	return len(res.Rows) > 0
 }
 
-// CheckActionPermission generalises the table-bound CheckPermission
-// helper on AbstractTableService: any (authObject, action) pair scoped
-// to the given `scope` string (typically a table_name or "*") is
-// checked against the grant table registered for the principal's kind.
-//
-// Used by TableAction middleware to gate per-table custom actions —
-// see keel/handler/WrapTableAction. authObject + action are the
-// (uppercased) authorization_object + authorization_object_action
-// values registered by the downstream app.
-//
-// Scope semantics mirror AbstractTableService.CheckPermission: an exact
-// `low_limit == scope` grant returns ownScope=false; a '*' grant returns
-// ownScope=true. Only exact + '*' are honored (KR-003).
+// CheckActionPermission answers one (authObject, action, scope) question for
+// principal with the GrantSet.Allows rule. Only exact and '*' low_limit values
+// match (KR-003).
 func (r *AbstractRepository) CheckActionPermission(ctx context.Context, principal model.Principal, authObject, action, scope string) (bool, bool) {
 	if authObject == "" || action == "" || r.AuthQuery == nil {
 		return false, false
@@ -134,26 +124,39 @@ func (r *AbstractRepository) CheckActionPermission(ctx context.Context, principa
 	}
 	args = append([]any{authObject, action}, append(args, scope)...)
 	res, err := r.AuthQuery.Query(ctx, catalog.CheckQuery(principal.Kind), args...)
-	if err != nil || len(res.Rows) == 0 {
+	if err != nil {
 		return false, false
 	}
-	wildcardMatched := false
+	var grants model.GrantSet
 	for _, rec := range res.Rows {
-		lowLimit := common.AsString(rec[0])
-		// Exact + '*' only, matching CheckPermission and the generated
-		// grant query (KR-003). An exact scope grant is owner-scoped
-		// (ownScope=false); a '*' grant is broad (ownScope=true).
-		if lowLimit == scope {
-			return true, false
-		}
-		if lowLimit == "*" {
-			wildcardMatched = true
-		}
+		grants.Add(authObject, action, common.AsString(rec[0]), common.AsBool(rec[2]))
 	}
-	if wildcardMatched {
-		return true, true
+	return grants.Allows(authObject, action, scope)
+}
+
+// ActionGrants reads every active grant of principal in one query, for callers
+// that ask many CheckActionPermission questions of the same principal.
+func (r *AbstractRepository) ActionGrants(ctx context.Context, principal model.Principal) (model.GrantSet, error) {
+	if r.AuthQuery == nil {
+		return model.GrantSet{}, fmt.Errorf("data: authorization query service is not initialized")
 	}
-	return false, false
+	catalog := r.Grants()
+	args, err := catalog.Args(principal)
+	if err != nil {
+		return model.GrantSet{}, err
+	}
+	res, err := r.AuthQuery.Query(ctx, catalog.ReadQuery(principal.Kind), args...)
+	if err != nil {
+		return model.GrantSet{}, err
+	}
+	var grants model.GrantSet
+	for _, rec := range res.Rows {
+		if len(rec) < 5 {
+			return model.GrantSet{}, fmt.Errorf("data: %s returned %d columns, want 5", catalog.ReadQuery(principal.Kind), len(rec))
+		}
+		grants.Add(common.AsString(rec[0]), common.AsString(rec[1]), common.AsString(rec[2]), common.AsBool(rec[4]))
+	}
+	return grants, nil
 }
 
 func (r *AbstractRepository) Init(ctx context.Context) error {

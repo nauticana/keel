@@ -81,6 +81,9 @@ const (
 	SignInExternal = "E" // an identity provider not proven to be the partner's
 	SignInTenant   = "T" // the partner's own identity provider
 
+	// OTPPurposeReauth binds a one-time code to re-authenticating a signed-in user.
+	OTPPurposeReauth = "reauth"
+
 	// SSO_REQUIRED values.
 	SSOAnyIdentity     = 1 // any external identity
 	SSOPartnerIdentity = 2 // the partner's own identity provider only
@@ -185,9 +188,9 @@ const (
 	qGenerateOTP                   = "generate_otp"
 	qVerifyOTP                     = "verify_otp"
 	qIncrementOTP                  = "increment_otp_attempts"
-	qIncrementOTPByID              = "increment_otp_attempts_by_id"
+	qClaimOTPAttempt               = "claim_otp_attempt"
 	qClearOTP                      = "clear_otp"
-	qClearOTPByID                  = "clear_otp_by_id"
+	qConsumeOTPByID                = "consume_otp_by_id"
 	qUpdateProfile                 = "update_profile"
 	qSetUserEmail                  = "set_user_email"
 	qSetUserPhone                  = "set_user_phone"
@@ -687,16 +690,18 @@ UPDATE user_otp SET attempts = attempts + 1
    AND id = (SELECT MAX(id) FROM user_otp WHERE user_id = ?)
 `,
 
-	qIncrementOTPByID: `
-UPDATE user_otp SET attempts = attempts + 1 WHERE id = ?
+	qClaimOTPAttempt: `
+UPDATE user_otp SET attempts = attempts + 1 WHERE id = ? AND attempts < ?
+RETURNING id
 `,
 
 	qClearOTP: `
 DELETE FROM user_otp WHERE user_id = ?
 `,
 
-	qClearOTPByID: `
-DELETE FROM user_otp WHERE id = ?
+	qConsumeOTPByID: `
+DELETE FROM user_otp WHERE id = ? AND code = ?
+RETURNING id
 `,
 }
 
@@ -972,16 +977,8 @@ func (s *LocalUserService) bumpLoginAttempts(userID int, reason string) (int, er
 	return attempts, nil
 }
 
-// verifyPasswordByID is the re-auth-gate verify path: looks up the
-// password hash by user id (so phone/social signups, whose Subject
-// is "First Last" rather than user_name, can still re-auth via the
-// password they happen to have set), bcrypt-compares, and bumps the
-// shared login_attempts counter on mismatch (MAJOR 8 atomic). On
-// success the counter is reset via qSetLastLogin.
-//
-// Used by handler.requireRecentAuth — see BLOCKER 3 for the bug
-// this replaces (the previous implementation looked up by
-// session.Subject, which silently failed for non-password signups).
+// verifyPasswordByID looks the hash up by id, so users whose Subject is not a
+// user_name can still re-authenticate, and counts a mismatch as a failed login.
 func (s *LocalUserService) verifyPasswordByID(userID int, password string) (bool, error) {
 	ctx := s.ctx()
 	res, err := s.queryService.Query(ctx, qUserById, userID)
@@ -1009,12 +1006,6 @@ func (s *LocalUserService) verifyPasswordByID(userID int, password string) (bool
 	return true, nil
 }
 
-// VerifyPasswordByID is the public re-auth-gate verify path. Used by
-// handler.requireRecentAuth so the gate works for users whose
-// session.Subject isn't the canonical user_name (phone-OTP /
-// social-login signups). Returns (true, nil) on a correct password,
-// (false, nil) on mismatch, (false, err) on a service / lookup
-// failure.
 func (s *LocalUserService) VerifyPasswordByID(userID int, password string) (bool, error) {
 	return s.verifyPasswordByID(userID, password)
 }
@@ -2153,42 +2144,42 @@ func (s *LocalUserService) GenerateOTP(userId int, purpose string) (string, erro
 	return otp, nil
 }
 
-// VerifyOTP validates a 6-digit OTP. Three correctness invariants:
-//   - Comparison is constant-time (subtle.ConstantTimeCompare) so the
-//     6-digit space cannot be enumerated via response timing.
-//   - On mismatch, the per-OTP attempts counter is incremented inline so
-//     a forgetful caller cannot bypass the attempt cap by skipping
-//     IncrementOTPAttempts.
-//   - On match, the OTP row is consumed (DELETE) so a single code can
-//     never be reused. Callers that previously relied on a follow-up
-//     ClearOTP are unaffected — the second clear is a no-op.
+// VerifyOTP checks a code in constant time. Each attempt is claimed under the
+// cap before comparing and a match deletes the row, both atomically, so
+// concurrent requests can neither exceed the cap nor reuse a code.
 func (s *LocalUserService) VerifyOTP(userId int, purpose, code string) error {
 	ctx := s.ctx()
-	// purpose binds the code to the flow it was minted for.
 	res, err := s.queryService.Query(ctx, qVerifyOTP, userId, purpose)
 	if err != nil || len(res.Rows) == 0 {
 		return fmt.Errorf("no active OTP")
 	}
 	otpID := common.AsInt64(res.Rows[0][0])
 	storedCode := common.AsString(res.Rows[0][1])
-	attempts := int(common.AsInt32(res.Rows[0][2]))
-	policy, policyErr := s.policyFor(userId)
-	if policyErr != nil {
-		return policyErr
+	policy, err := s.policyFor(userId)
+	if err != nil {
+		return err
 	}
 	cap := policy.MaxAttempts
 	if cap <= 0 {
 		cap = 5
 	}
-	if attempts >= cap {
+	claimed, err := s.queryService.Query(ctx, qClaimOTPAttempt, otpID, cap)
+	if err != nil {
+		return fmt.Errorf("claim OTP attempt: %w", err)
+	}
+	if claimed == nil || len(claimed.Rows) == 0 {
 		return fmt.Errorf("max attempts exceeded")
 	}
 	if subtle.ConstantTimeCompare([]byte(storedCode), []byte(code)) != 1 {
-		_, _ = s.queryService.Query(ctx, qIncrementOTPByID, otpID)
 		return fmt.Errorf("invalid OTP")
 	}
-	// Single-use: delete the verified row on success so it cannot be replayed.
-	_, _ = s.queryService.Query(ctx, qClearOTPByID, otpID)
+	consumed, err := s.queryService.Query(ctx, qConsumeOTPByID, otpID, code)
+	if err != nil {
+		return fmt.Errorf("consume OTP: %w", err)
+	}
+	if consumed == nil || len(consumed.Rows) == 0 {
+		return fmt.Errorf("invalid OTP")
+	}
 	return nil
 }
 

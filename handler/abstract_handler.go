@@ -534,29 +534,6 @@ func (h *AbstractHandler) logProblem(r *http.Request, requestID string, status i
 	log(fmt.Sprintf("request_id=%s status=%d user=%d%s %s: %s", requestID, status, userID, where, title, cause))
 }
 
-// requireRecentAuth makes the caller re-enter a password or current 2FA code
-// before a security-sensitive change, so a stolen JWT alone cannot make it.
-func (h *AbstractHandler) requireRecentAuth(w http.ResponseWriter, session *model.UserSession, password, twoFactorCode string) bool {
-	if password == "" && twoFactorCode == "" {
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "password or current 2FA code is required")
-		return false
-	}
-	if password != "" {
-		ok, err := h.UserService.VerifyPasswordByID(session.Id, password)
-		if err != nil || !ok {
-			h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "re-authentication failed")
-			return false
-		}
-		return true
-	}
-	valid, err := h.UserService.Verify2FA(session.Id, twoFactorCode)
-	if err != nil || !valid {
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "re-authentication failed")
-		return false
-	}
-	return true
-}
-
 // admitExternalSignIn classifies a verified external sign-in, checks it
 // against the SSO policy and records the method on the session. It writes the
 // response and returns false when the sign-in is refused.

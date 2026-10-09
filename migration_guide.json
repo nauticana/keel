@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.102",
+   "title": "Re-authentication by one-time code, one-query grant set",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "Users without a password or 2FA can re-authenticate with a one-time code, so they can delete their account. A principal's grants can be read once and checked many times with the CheckActionPermission rule.",
+   "body_markdown": "### Re-authentication by one-time code (additive)\n\n- New `POST /api/user/reauth/send` from `OTPHandler.GetAuthRoutes()` sends the signed-in user a code (purpose `user.OTPPurposeReauth`) to the email (default) or phone on file. Body `{\"channel\": \"email\"|\"phone\"}`; it shares the OTP send caps and needs `Cache`.\n- Setup 2FA, logout-everywhere, account deletion and social link accept `reauthCode` beside `password` and `twoFactorCode` (`handler.RecentAuth`). The code is single-use and refused with 403 where the SSO policy refuses OTP sign-in.\n- Mount the new route behind JWT middleware; request bodies are otherwise unchanged.\n\n### Grant set (breaking for custom repositories)\n\n- `port.DatabaseRepository` adds `ActionGrants(ctx, principal) (model.GrantSet, error)`, implemented by `data.AbstractRepository` with one `GrantCatalog.ReadQuery`. A custom repository must add it.\n- `GrantCatalog.ReadQuery` rows add `bypass_scope` as column five after object, action, low and high; update custom catalogs.\n- `model.GrantSet.Allows(object, action, scope)` returns `(allowed, ownScope)` exactly as `CheckActionPermission`, which now uses the same rule.\n- Behavior: `CheckActionPermission` now honors `bypass_scope` on a `'*'` grant (`ownScope=false`), as table permission checks already did.\n\n### One-time codes\n\n- `VerifyOTP` claims each attempt atomically under the cap and consumes a matching code atomically, so concurrent requests can neither exceed the attempt cap nor reuse a code. A database error now fails the verification."
+  },
+  {
    "version": "v1.2.101",
    "title": "Standards compliance: OAuth server, connect flow, sign-in, SCIM",
    "tags": [

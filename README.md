@@ -1490,11 +1490,13 @@ Three changes to the public surface:
 |--------|------|-------------|
 | POST | `/api/user/2fa/setup` | Generate TOTP secret, QR URI, and 10 backup codes. **Side effect:** revokes all active refresh tokens (user re-auths on next refresh). |
 | POST | `/api/user/2fa/verify` | Confirm 2FA setup by verifying a TOTP code |
-| POST | `/api/user/2fa/disable` | Disable 2FA (requires current TOTP code). **Side effect:** revokes all active refresh tokens. |
+| POST | `/api/user/2fa/disable` | Disable 2FA (requires the password and a current TOTP code). **Side effect:** revokes all active refresh tokens. |
 | GET | `/api/user/trusted-device/list` | List trusted devices for the authenticated user |
 | POST | `/api/user/trusted-device/revoke` | Revoke a trusted device by ID. **Side effect:** revokes all active refresh tokens. |
 | POST | `/api/user/logout-everywhere` | Revoke every active refresh token (user will re-auth on every device) |
 | DELETE | `/api/user/account` | Soft-delete the caller's account (anonymize + cascade revoke). Body `{reason}` optional. Returns 204. |
+
+2FA setup, logout-everywhere, account deletion and `LinkSocial` need re-authentication in the body (`handler.RecentAuth`): `password`, a current `twoFactorCode`, or a `reauthCode` sent by `POST /api/user/reauth/send` (below), so users who sign in only by one-time code or a social provider can still pass. A `reauthCode` is single-use, bound to the `reauth` purpose, and refused with 403 where the SSO policy refuses OTP sign-in.
 
 **Self-service profile (`ProfileHandler`)** -- a logged-in user editing their own account. Construct with a `port.NotificationSender`; mount the routes returned by `GetAuthRoutes()` behind your JWT middleware. Name/locale apply immediately; email/phone are verify-before-apply (a code is sent to the NEW value, change lands on confirm). If `Notify` is nil, phone change returns 503 so email change can ship before an SMS provider is wired.
 
@@ -1624,6 +1626,7 @@ The `otpToken` is a server-issued opaque value (32 random bytes, base64-URL) bou
 | POST | `/public/otp/send` | Generate and send OTP. Rate limited per `otp_send_window` (default 10 min): `otp_send_per_contact` (default 3, keyed on the E.164 form so unnormalized variants share the quota) AND `otp_send_per_ip` (default 10, mitigates SMS-pumping across enumerated numbers). A cap of 0 disables it and journals a warning on every send. |
 | POST | `/public/otp/verify` | Verify OTP code, returns JWT on success (max 5 attempts) |
 | POST | `/public/otp/resend` | Clear and regenerate OTP for an existing session |
+| POST | `/api/user/reauth/send` | Signed in: send a `reauthCode` to the email (default) or phone on file. Body `{"channel": "email"\|"phone"}`; returns `{channel, resendCountdownSec}`. Shares the per-contact and per-IP caps. |
 
 ### Registering OTP Routes
 
@@ -1643,6 +1646,7 @@ srv.Handle(map[string]func(w, r){
     "/public/otp/verify": otpHandler.VerifyOTP,
     "/public/otp/resend": otpHandler.ResendOTP,
 })
+srv.Handle(otpHandler.GetAuthRoutes())  // /api/user/reauth/send
 ```
 
 ### Database Tables
@@ -1670,7 +1674,7 @@ POST /public/login/social  { "provider": "google", "token": "eyJhbG..." }
 3. Return the token pair.
 ```
 
-Google and Apple link to an existing account by verified email, whatever its mail domain (Gmail, a Google Workspace domain, or any other address they verified), so a user who registered with an email can sign in with either provider, provided the account proved that email (`user_account.email_verified_at`). An unverified email, an Apple private-relay address, or an email asserted by any other issuer never selects an account: the owner signs in another way and calls `LinkSocial`, which requires the account password or a current 2FA code and a fresh provider token. A new account stores the email only when Google or Apple verified it.
+Google and Apple link to an existing account by verified email, whatever its mail domain (Gmail, a Google Workspace domain, or any other address they verified), so a user who registered with an email can sign in with either provider, provided the account proved that email (`user_account.email_verified_at`). An unverified email, an Apple private-relay address, or an email asserted by any other issuer never selects an account: the owner signs in another way and calls `LinkSocial`, which requires re-authentication (`RecentAuth`) and a fresh provider token. A new account stores the email only when Google or Apple verified it.
 
 `email_verified_at` and `email_verification_method` (constant `email_verification_method`) are set when the user proves the mailbox: `O` email code, `R` registration confirmation, `C` contact change, `P` password reset, `G`/`A` an account created by Google or Apple, `X` a proof the application made and recorded with `MarkEmailVerified`, `L` rows backfilled at upgrade. An email typed at phone signup or at email-OTP registration stays unverified until its code is entered, so a planted account cannot capture the real owner's Google or Apple sign-in. `UserService.MarkEmailVerified` records a proof made elsewhere.
 
@@ -3728,6 +3732,8 @@ allowed, ownScope := db.CheckActionPermission(ctx,
     model.Principal{Kind: "agent", ID: agentID, Scope: []any{tenantID}},
     "REPORT", "RUN", "monthly_revenue")
 ```
+
+To answer many questions for one principal, `db.ActionGrants(ctx, principal)` reads its grants in one query; the returned `model.GrantSet.Allows(object, action, scope)` gives the same answer as `CheckActionPermission`.
 
 keel generates each kind's SQL from its `GrantSource`, so effective dating, the `low_limit` exact-or-`'*'` rule and `bypass_scope` cannot drift between kinds. A scope-arity mismatch fails closed; table and column names are validated as SQL identifiers at registration.
 

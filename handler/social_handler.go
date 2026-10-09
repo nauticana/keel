@@ -118,10 +118,9 @@ func (h *SocialLoginHandler) LinkSocial(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Provider      string `json:"provider"`
-		Token         string `json:"token"`
-		Password      string `json:"password"`
-		TwoFactorCode string `json:"twoFactorCode"`
+		Provider string `json:"provider"`
+		Token    string `json:"token"`
+		RecentAuth
 	}
 	session, ok := h.ReadAuthRequest(w, r, &req)
 	if !ok {
@@ -130,7 +129,7 @@ func (h *SocialLoginHandler) LinkSocial(w http.ResponseWriter, r *http.Request) 
 	if !h.RequireFields(w, map[string]string{"provider": req.Provider, "token": req.Token}) {
 		return
 	}
-	if !h.requireRecentAuth(w, session, req.Password, req.TwoFactorCode) {
+	if !h.requireRecentAuth(w, r, session, req.RecentAuth) {
 		return
 	}
 	identity, nonce, err := h.verifySocialToken(r.Context(), req.Provider, req.Token)
