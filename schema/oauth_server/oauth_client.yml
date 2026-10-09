@@ -1,5 +1,5 @@
 table: oauth_client
-comment: OAuth 2.1 registered clients (Dynamic Client Registration)
+comment: OAuth 2.1 clients, openly registered (RFC 7591) or operator-provisioned
 columns:
   - name: id
     type: BIGINT
@@ -21,6 +21,10 @@ columns:
   - name: token_auth_method
     type: VARCHAR(40)
     default: "none"
+  - name: registered
+    type: BOOLEAN
+    default: "FALSE"
+    comment: TRUE = open registration; only these count toward the pending bound and are purged
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP

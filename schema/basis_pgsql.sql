@@ -603,7 +603,7 @@ CREATE TABLE IF NOT EXISTS work_schedule (
 );
 CREATE INDEX IF NOT EXISTS idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
 
--- OAuth 2.1 registered clients (Dynamic Client Registration)
+-- OAuth 2.1 clients, openly registered (RFC 7591) or operator-provisioned
 CREATE TABLE IF NOT EXISTS oauth_client (
     id                                   BIGINT        NOT NULL,
     client_id                            VARCHAR(64)   NOT NULL,
@@ -613,6 +613,7 @@ CREATE TABLE IF NOT EXISTS oauth_client (
     grant_types                          VARCHAR(500)  NOT NULL,
     scopes                               VARCHAR(1000),
     token_auth_method                    VARCHAR(40)   NOT NULL DEFAULT 'none',
+    registered                           BOOLEAN       NOT NULL DEFAULT FALSE,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT oauth_client_pk PRIMARY KEY (id)
 );
@@ -621,7 +622,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_client_client_id ON oauth_client(cli
 CREATE SEQUENCE IF NOT EXISTS oauth_client_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('oauth_client', 'id', 'oauth_client_seq') ON CONFLICT DO NOTHING;
 
--- Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
+-- Single-use OAuth 2.1 authorization codes, kept until a day past expiry to detect replay; partner_id is a denormalized snapshot for quota attribution
 CREATE TABLE IF NOT EXISTS oauth_authorization_code (
     id                                   BIGINT        NOT NULL,
     code_hash                            CHAR(64)      NOT NULL,
@@ -634,6 +635,7 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_code (
     code_challenge_method                VARCHAR(10)   NOT NULL,
     resource                             VARCHAR(500) ,
     expires_at                           TIMESTAMP     NOT NULL,
+    consumed_at                          TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT oauth_authorization_code_pk PRIMARY KEY (id)
 );

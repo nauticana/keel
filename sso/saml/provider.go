@@ -18,18 +18,35 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/beevik/etree"
 	crewjam "github.com/crewjam/saml"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
+	dsig "github.com/russellhaering/goxmldsig"
 )
 
 // Protocol is the identity_protocol code of SAML connections.
 const Protocol = "S"
 
 const (
-	nameIDClaim = "NameID"
+	nameIDClaim  = "NameID"
+	bearerMethod = "urn:oasis:names:tc:SAML:2.0:cm:bearer"
+)
+
+// Signature and digest algorithms accepted on responses and assertions.
+// goxmldsig also accepts SHA-1, which keel refuses.
+var (
+	signatureMethods = map[string]bool{
+		dsig.RSASHA256SignatureMethod: true, dsig.RSASHA384SignatureMethod: true, dsig.RSASHA512SignatureMethod: true,
+		dsig.ECDSASHA256SignatureMethod: true, dsig.ECDSASHA384SignatureMethod: true, dsig.ECDSASHA512SignatureMethod: true,
+	}
+	digestMethods = map[string]bool{
+		"http://www.w3.org/2001/04/xmlenc#sha256": true, "http://www.w3.org/2001/04/xmldsig-more#sha384": true,
+		"http://www.w3.org/2001/04/xmlenc#sha512": true,
+	}
 )
 
 var (
@@ -145,7 +162,29 @@ func (p *Provider) Complete(ctx context.Context, conn port.IdentityConnection, c
 	if err != nil {
 		return nil, err
 	}
-	assertion, err := sp.ParseXMLResponse(raw, []string{pend.RequestID}, sp.AcsURL)
+	assertion, err := parseResponse(sp, raw, pend.RequestID)
+	if err != nil {
+		return nil, err
+	}
+	if assertion.Issuer.Value != conn.Issuer {
+		return nil, fmt.Errorf("%w: issuer %q", ErrInvalidResponse, assertion.Issuer.Value)
+	}
+	if err := checkAssertion(assertion, p.EntityID, sp.AcsURL.String(), crewjam.TimeNow()); err != nil {
+		return nil, err
+	}
+	return assertionFor(conn, assertion)
+}
+
+// parseResponse verifies the response with crewjam, which dereferences a
+// signed assertion's Subject, Conditions and SubjectConfirmationData
+// without checking that they exist; such a panic is a refused response.
+func parseResponse(sp *crewjam.ServiceProvider, raw []byte, requestID string) (as *crewjam.Assertion, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			as, err = nil, fmt.Errorf("%w: malformed assertion", ErrInvalidResponse)
+		}
+	}()
+	as, err = sp.ParseXMLResponse(raw, []string{requestID}, sp.AcsURL)
 	if err != nil {
 		var invalid *crewjam.InvalidResponseError
 		if errors.As(err, &invalid) {
@@ -153,10 +192,55 @@ func (p *Provider) Complete(ctx context.Context, conn port.IdentityConnection, c
 		}
 		return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
 	}
-	if assertion.Issuer.Value != conn.Issuer {
-		return nil, fmt.Errorf("%w: issuer %q", ErrInvalidResponse, assertion.Issuer.Value)
+	return as, nil
+}
+
+// checkAssertion adds what crewjam leaves open: at least one
+// AudienceRestriction, each naming keel (SAML Core §2.5.1.4), and a bearer
+// confirmation addressed to the callback that is still valid (SAML Profiles
+// §4.1.4.2).
+func checkAssertion(as *crewjam.Assertion, entityID, acs string, now time.Time) error {
+	if as.Subject == nil || as.Conditions == nil {
+		return fmt.Errorf("%w: assertion without subject or conditions", ErrInvalidResponse)
 	}
-	return assertionFor(conn, assertion)
+	if len(as.Conditions.AudienceRestrictions) == 0 {
+		return fmt.Errorf("%w: assertion without audience restriction", ErrInvalidResponse)
+	}
+	for _, r := range as.Conditions.AudienceRestrictions {
+		if r.Audience.Value != entityID {
+			return fmt.Errorf("%w: audience restriction %q excludes the service provider", ErrInvalidResponse, r.Audience.Value)
+		}
+	}
+	for _, sc := range as.Subject.SubjectConfirmations {
+		d := sc.SubjectConfirmationData
+		if sc.Method == bearerMethod && d != nil && d.Recipient == acs &&
+			!d.NotBefore.Add(-crewjam.MaxClockSkew).After(now) && now.Before(d.NotOnOrAfter.Add(crewjam.MaxClockSkew)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: no valid bearer subject confirmation", ErrInvalidResponse)
+}
+
+// strongSignatures verifies XML signatures as crewjam does, refusing SHA-1.
+type strongSignatures struct{}
+
+var _ crewjam.SignatureVerifier = strongSignatures{}
+
+func (strongSignatures) VerifySignature(vc *dsig.ValidationContext, el *etree.Element) error {
+	for _, m := range el.FindElements(".//Signature/SignedInfo/SignatureMethod") {
+		if alg := m.SelectAttrValue("Algorithm", ""); !signatureMethods[alg] {
+			return fmt.Errorf("signature method %q is not accepted", alg)
+		}
+	}
+	for _, m := range el.FindElements(".//Signature/SignedInfo/Reference/DigestMethod") {
+		if alg := m.SelectAttrValue("Algorithm", ""); !digestMethods[alg] {
+			return fmt.Errorf("digest method %q is not accepted", alg)
+		}
+	}
+	if _, err := vc.Validate(el); err != nil {
+		return fmt.Errorf("cannot validate signature on %s: %w", el.Tag, err)
+	}
+	return nil
 }
 
 // Metadata is keel's service provider metadata for identity provider
@@ -167,7 +251,8 @@ func (p *Provider) Metadata(callback string) ([]byte, error) {
 	if err != nil || acs.Scheme != "https" || p.EntityID == "" {
 		return nil, fmt.Errorf("%w: entity id and https callback are required", ErrBadConfiguration)
 	}
-	sp := &crewjam.ServiceProvider{EntityID: p.EntityID, AcsURL: *acs, MetadataURL: *acs, Key: p.Key, Certificate: p.Certificate}
+	sp := &crewjam.ServiceProvider{EntityID: p.EntityID, AcsURL: *acs, MetadataURL: *acs, Key: p.Key, Certificate: p.Certificate,
+		AuthnNameIDFormat: crewjam.UnspecifiedNameIDFormat}
 	return xml.MarshalIndent(sp.Metadata(), "", "  ")
 }
 
@@ -190,15 +275,18 @@ func assertionFor(conn port.IdentityConnection, as *crewjam.Assertion) (*port.Id
 			}
 		}
 	}
-	nameID := ""
+	nameID, nameIDFormat := "", ""
 	if as.Subject != nil && as.Subject.NameID != nil {
-		nameID = strings.TrimSpace(as.Subject.NameID.Value)
+		nameID, nameIDFormat = strings.TrimSpace(as.Subject.NameID.Value), as.Subject.NameID.Format
 	}
 	subjectClaim := conn.SubjectClaim
 	if subjectClaim == "" {
 		subjectClaim = nameIDClaim
 	}
 	if subjectClaim == nameIDClaim {
+		if nameIDFormat == string(crewjam.TransientNameIDFormat) {
+			return nil, fmt.Errorf("%w: a transient NameID is not a stable subject; configure a persistent NameID or a subject attribute", ErrInvalidResponse)
+		}
 		a.Subject = nameID
 	} else {
 		a.Subject = first(a.Claims, subjectClaim)
@@ -268,7 +356,8 @@ func (p *Provider) serviceProvider(ctx context.Context, conn port.IdentityConnec
 	sp := &crewjam.ServiceProvider{
 		EntityID: p.EntityID, AcsURL: *acs, MetadataURL: *acs, IDPMetadata: md,
 		Key: p.Key, Certificate: p.Certificate, AllowIDPInitiated: false,
-		HTTPClient: common.PublicHTTPClient(),
+		HTTPClient: common.PublicHTTPClient(), SignatureVerifier: strongSignatures{},
+		AuthnNameIDFormat: crewjam.UnspecifiedNameIDFormat,
 	}
 	if p.Key != nil && p.Certificate != nil {
 		sp.SignatureMethod = signatureMethod(p.Key)

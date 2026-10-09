@@ -617,7 +617,7 @@ CREATE TABLE IF NOT EXISTS work_schedule (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
 
--- OAuth 2.1 registered clients (Dynamic Client Registration)
+-- OAuth 2.1 clients, openly registered (RFC 7591) or operator-provisioned
 CREATE TABLE IF NOT EXISTS oauth_client (
     id                                   BIGINT        NOT NULL,
     client_id                            VARCHAR(64)   NOT NULL,
@@ -627,12 +627,13 @@ CREATE TABLE IF NOT EXISTS oauth_client (
     grant_types                          VARCHAR(500)  NOT NULL,
     scopes                               VARCHAR(1000),
     token_auth_method                    VARCHAR(40)   NOT NULL DEFAULT 'none',
+    registered                           TINYINT(1)    NOT NULL DEFAULT 0,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_oauth_client_client_id ON oauth_client(client_id);
 
--- Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
+-- Single-use OAuth 2.1 authorization codes, kept until a day past expiry to detect replay; partner_id is a denormalized snapshot for quota attribution
 CREATE TABLE IF NOT EXISTS oauth_authorization_code (
     id                                   BIGINT        NOT NULL,
     code_hash                            CHAR(64)      NOT NULL,
@@ -645,6 +646,7 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_code (
     code_challenge_method                VARCHAR(10)   NOT NULL,
     resource                             VARCHAR(500) ,
     expires_at                           DATETIME      NOT NULL,
+    consumed_at                          DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT oauth_authorization_code_user FOREIGN KEY (user_id) REFERENCES user_account(id),

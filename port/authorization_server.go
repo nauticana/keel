@@ -14,10 +14,14 @@ type AuthorizationServer interface {
 	Metadata() AuthServerMetadata                                               // RFC 8414
 	JWKS() JWKS                                                                 // token-signing public keys
 	Register(ctx context.Context, req ClientRegistration) (*OAuthClient, error) // RFC 7591 DCR
+	// Provision creates an operator-managed client, with any grant the AS serves.
+	Provision(ctx context.Context, req ClientRegistration) (*OAuthClient, error)
 	// ValidateAuthorizeRequest checks client_id + redirect_uri + PKCE before any
 	// user interaction (so the consent UI shows only for a legitimate client and
 	// errors never redirect to an unregistered URI), and returns the effective
 	// granted scopes so the consent page shows exactly what will be granted.
+	// An error found after the client and redirect_uri are valid comes with the
+	// client, so it can be returned to the redirect_uri (RFC 6749 §4.1.2.1).
 	ValidateAuthorizeRequest(ctx context.Context, req AuthorizeRequest) (*OAuthClient, []string, error)
 	Authorize(ctx context.Context, req AuthorizeRequest) (*AuthorizeResult, error)           // issue code after auth+consent
 	Token(ctx context.Context, req TokenRequest) (*TokenResponse, error)                     // dispatched by grant_type
@@ -33,7 +37,7 @@ type GrantHandler interface {
 	Handle(ctx context.Context, req TokenRequest, client *OAuthClient) (*TokenResponse, error)
 }
 
-// OAuthClientStore persists DCR-registered clients.
+// OAuthClientStore persists OAuth clients.
 type OAuthClientStore interface {
 	CreateClient(ctx context.Context, c *OAuthClient) error
 	GetClient(ctx context.Context, clientID string) (*OAuthClient, error)
@@ -41,9 +45,9 @@ type OAuthClientStore interface {
 	DeleteClient(ctx context.Context, clientID string) error
 }
 
-// AuthCodeStore holds single-use authorization codes. Back it with the cache
-// (codes are short-lived and hot) to spare the small DB pool. ConsumeCode must
-// atomically fetch-and-delete so a code is redeemable at most once.
+// AuthCodeStore holds single-use authorization codes. ConsumeCode must mark a
+// code used atomically, so it is redeemable at most once, and return a code
+// presented again with Replayed set, so the grant it issued can be revoked.
 type AuthCodeStore interface {
 	SaveCode(ctx context.Context, c *AuthCode, ttl time.Duration) error
 	ConsumeCode(ctx context.Context, code string) (*AuthCode, error)
@@ -58,6 +62,10 @@ type OAuthTokenStore interface {
 	RevokeRefreshToken(ctx context.Context, tokenHash string) error
 	RevokeFamily(ctx context.Context, familyID string) error
 	RevokeForUser(ctx context.Context, userID int64) error
+	// RevokeGrant revokes every refresh token the client holds for the user;
+	// none is not an error. GrantActive reports whether one is still live.
+	RevokeGrant(ctx context.Context, userID int64, clientID string) error
+	GrantActive(ctx context.Context, userID int64, clientID string) (bool, error)
 	// Rotate atomically revokes oldHash and inserts t, so a crash can't leave a
 	// gap where both the old and new refresh token are usable (or neither).
 	Rotate(ctx context.Context, oldHash string, t *RefreshToken) error
@@ -85,6 +93,12 @@ type AuthServerMetadata struct {
 	GrantTypesSupported               []string `json:"grant_types_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported,omitempty"`
+	// RFC 8414 defaults these to [query fragment] and [client_secret_basic];
+	// stating them keeps clients from assuming what the AS does not do.
+	ResponseModesSupported                     []string `json:"response_modes_supported,omitempty"`
+	RevocationEndpointAuthMethodsSupported     []string `json:"revocation_endpoint_auth_methods_supported,omitempty"`
+	IntrospectionEndpointAuthMethodsSupported  []string `json:"introspection_endpoint_auth_methods_supported,omitempty"`
+	AuthorizationResponseIssParameterSupported bool     `json:"authorization_response_iss_parameter_supported,omitempty"` // RFC 9207
 }
 
 // OAuthClient is a registered client (RFC 7591). SecretHash is set only for
@@ -98,6 +112,7 @@ type OAuthClient struct {
 	TokenAuthMethod string // none | client_secret_basic | client_secret_post
 	Name            string
 	CreatedAt       time.Time
+	Registered      bool   // created by open registration, not Provision
 	Secret          string // plaintext, set only on the registration response — never persisted
 }
 
@@ -152,6 +167,7 @@ type AuthCode struct {
 	CodeChallengeMethod string
 	Resource            string
 	ExpiresAt           time.Time
+	Replayed            bool // already redeemed once
 }
 
 // TokenRequest is a parsed /token request; which fields apply depends on GrantType.
@@ -175,6 +191,8 @@ type TokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	Scope        string `json:"scope,omitempty"`
+	// IssuedTokenType is set by token exchange (RFC 8693 §2.2.1).
+	IssuedTokenType string `json:"issued_token_type,omitempty"`
 }
 
 // RefreshToken is the persisted (hashed) refresh token plus its rotation family.

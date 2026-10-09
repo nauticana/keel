@@ -37,7 +37,10 @@ var scimStatuses = []struct {
 	{sso.ErrSCIMConflict, http.StatusConflict, "uniqueness"},
 	{sso.ErrSCIMInvalidFilter, http.StatusBadRequest, "invalidFilter"},
 	{sso.ErrSCIMInvalidPath, http.StatusBadRequest, "invalidPath"},
-	{sso.ErrSCIMTooMany, http.StatusRequestEntityTooLarge, "tooMany"},
+	{sso.ErrSCIMNoTarget, http.StatusBadRequest, "noTarget"},
+	{sso.ErrSCIMMutability, http.StatusBadRequest, "mutability"},
+	// Operation and member limits bound values, not bytes; tooMany is only for filters.
+	{sso.ErrSCIMTooMany, http.StatusBadRequest, "invalidValue"},
 	{sso.ErrSCIMInvalidValue, http.StatusBadRequest, "invalidValue"},
 }
 
@@ -57,7 +60,10 @@ func (h *SCIMHandler) PublicRoutes() map[string]func(http.ResponseWriter, *http.
 	return map[string]func(http.ResponseWriter, *http.Request){
 		scimPath + "/ServiceProviderConfig": h.serviceProviderConfig,
 		scimPath + "/ResourceTypes":         h.resourceTypes,
+		scimPath + "/ResourceTypes/{id}":    h.resourceType,
 		scimPath + "/Schemas":               h.schemas,
+		scimPath + "/Schemas/{id}":          h.schema,
+		scimPath + "/Me":                    h.me,
 		scimPath + "/Users":                 h.authenticated(h.users),
 		scimPath + "/Users/{id}":            h.authenticated(h.user),
 		scimPath + "/Groups":                h.authenticated(h.groups),
@@ -144,12 +150,12 @@ func (h *SCIMHandler) authenticated(next func(http.ResponseWriter, *http.Request
 func (h *SCIMHandler) users(w http.ResponseWriter, r *http.Request, partnerID int64) {
 	switch r.Method {
 	case http.MethodGet:
-		start, count, err := pageParams(r)
+		q, err := listQuery(r)
 		if err != nil {
 			h.scimError(w, r, err)
 			return
 		}
-		list, err := h.Provisioning.ListUsers(r.Context(), partnerID, r.URL.Query().Get("filter"), start, count)
+		list, err := h.Provisioning.ListUsers(r.Context(), partnerID, q)
 		if err != nil {
 			h.scimError(w, r, err)
 			return
@@ -157,7 +163,7 @@ func (h *SCIMHandler) users(w http.ResponseWriter, r *http.Request, partnerID in
 		for _, u := range list.Resources {
 			h.locate(u.Meta, "Users", u.ID)
 		}
-		h.scimJSON(w, http.StatusOK, list)
+		h.scimList(w, r, projection(r, sso.SchemaUser), list.TotalResults, list.StartIndex, list.Resources)
 	case http.MethodPost:
 		var in sso.SCIMUser
 		if !h.scimRead(w, r, &in) {
@@ -204,12 +210,13 @@ func (h *SCIMHandler) user(w http.ResponseWriter, r *http.Request, partnerID int
 func (h *SCIMHandler) groups(w http.ResponseWriter, r *http.Request, partnerID int64) {
 	switch r.Method {
 	case http.MethodGet:
-		start, count, err := pageParams(r)
+		q, err := listQuery(r)
 		if err != nil {
 			h.scimError(w, r, err)
 			return
 		}
-		list, err := h.Provisioning.ListGroups(r.Context(), partnerID, r.URL.Query().Get("filter"), start, count)
+		q.Members = projection(r, sso.SchemaGroup).Includes("members")
+		list, err := h.Provisioning.ListGroups(r.Context(), partnerID, q)
 		if err != nil {
 			h.scimError(w, r, err)
 			return
@@ -217,7 +224,7 @@ func (h *SCIMHandler) groups(w http.ResponseWriter, r *http.Request, partnerID i
 		for _, g := range list.Resources {
 			h.locate(g.Meta, "Groups", g.ID)
 		}
-		h.scimJSON(w, http.StatusOK, list)
+		h.scimList(w, r, projection(r, sso.SchemaGroup), list.TotalResults, list.StartIndex, list.Resources)
 	case http.MethodPost:
 		var in sso.SCIMGroup
 		if !h.scimRead(w, r, &in) {
@@ -234,8 +241,7 @@ func (h *SCIMHandler) group(w http.ResponseWriter, r *http.Request, partnerID in
 	id := r.PathValue("id")
 	switch r.Method {
 	case http.MethodGet:
-		withMembers := !strings.Contains(strings.ToLower(r.URL.Query().Get("excludedAttributes")), "members")
-		g, err := h.Provisioning.GetGroup(r.Context(), partnerID, id, withMembers)
+		g, err := h.Provisioning.GetGroup(r.Context(), partnerID, id, projection(r, sso.SchemaGroup).Includes("members"))
 		h.groupResult(w, r, http.StatusOK, g, err)
 	case http.MethodPut:
 		var in sso.SCIMGroup
@@ -267,8 +273,7 @@ func (h *SCIMHandler) userResult(w http.ResponseWriter, r *http.Request, status 
 		h.scimError(w, r, err)
 		return
 	}
-	h.locate(u.Meta, "Users", u.ID)
-	h.scimJSON(w, status, u)
+	h.resourceResult(w, r, status, sso.SchemaUser, h.locate(u.Meta, "Users", u.ID), u)
 }
 
 func (h *SCIMHandler) groupResult(w http.ResponseWriter, r *http.Request, status int, g *sso.SCIMGroup, err error) {
@@ -276,18 +281,66 @@ func (h *SCIMHandler) groupResult(w http.ResponseWriter, r *http.Request, status
 		h.scimError(w, r, err)
 		return
 	}
-	h.locate(g.Meta, "Groups", g.ID)
-	h.scimJSON(w, status, g)
+	h.resourceResult(w, r, status, sso.SchemaGroup, h.locate(g.Meta, "Groups", g.ID), g)
 }
 
-func (h *SCIMHandler) locate(meta *sso.SCIMMeta, resource, id string) {
-	if meta != nil {
-		meta.Location = strings.TrimRight(h.PublicBaseURL, "/") + scimPath + "/" + resource + "/" + id
+// resourceResult writes a projected resource; a created one also carries
+// its location in the Location header (RFC 7644 §3.3).
+func (h *SCIMHandler) resourceResult(w http.ResponseWriter, r *http.Request, status int, schema, location string, resource any) {
+	out, err := projection(r, schema).Apply(resource)
+	if err != nil {
+		h.scimError(w, r, err)
+		return
 	}
+	if status == http.StatusCreated {
+		w.Header().Set("Location", location)
+	}
+	h.scimJSON(w, status, out)
+}
+
+func (h *SCIMHandler) scimList(w http.ResponseWriter, r *http.Request, p sso.SCIMProjection, total, start int, resources any) {
+	var items []any
+	raw, err := json.Marshal(resources)
+	if err == nil {
+		err = json.Unmarshal(raw, &items)
+	}
+	for i := 0; err == nil && i < len(items); i++ {
+		items[i], err = p.Apply(items[i])
+	}
+	if err != nil {
+		h.scimError(w, r, err)
+		return
+	}
+	h.scimJSON(w, http.StatusOK, sso.SCIMList[any]{
+		Schemas: []string{sso.SchemaListResponse}, TotalResults: total, StartIndex: start, ItemsPerPage: len(items), Resources: items,
+	})
+}
+
+func projection(r *http.Request, schema string) sso.SCIMProjection {
+	q := r.URL.Query()
+	return sso.NewSCIMProjection(schema, q.Get("attributes"), q.Get("excludedAttributes"))
+}
+
+// locate sets and returns the resource's location.
+func (h *SCIMHandler) locate(meta *sso.SCIMMeta, resource, id string) string {
+	location := h.url(resource + "/" + id)
+	if meta != nil {
+		meta.Location = location
+	}
+	return location
+}
+
+func (h *SCIMHandler) url(path string) string {
+	return strings.TrimRight(h.PublicBaseURL, "/") + scimPath + "/" + path
 }
 
 func (h *SCIMHandler) scimRead(w http.ResponseWriter, r *http.Request, v any) bool {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, config.Config().MaxRequestSize))
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		h.scimWrite(w, http.StatusRequestEntityTooLarge, "", fmt.Sprintf("the body exceeds %d bytes", tooLarge.Limit))
+		return false
+	}
 	if err != nil {
 		h.scimError(w, r, fmt.Errorf("%w: body: %v", sso.ErrSCIMInvalidValue, err))
 		return false
@@ -324,6 +377,13 @@ func (h *SCIMHandler) scimError(w http.ResponseWriter, r *http.Request, err erro
 	if status == http.StatusInternalServerError && h.Journal != nil {
 		h.Journal.Error(fmt.Sprintf("scim %s %s: %v", r.Method, r.URL.Path, err))
 	}
+	if status == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+	}
+	h.scimWrite(w, status, scimType, detail)
+}
+
+func (h *SCIMHandler) scimWrite(w http.ResponseWriter, status int, scimType, detail string) {
 	body := map[string]any{"schemas": []string{sso.SchemaError}, "status": strconv.Itoa(status), "detail": detail}
 	if scimType != "" {
 		body["scimType"] = scimType
@@ -332,28 +392,33 @@ func (h *SCIMHandler) scimError(w http.ResponseWriter, r *http.Request, err erro
 }
 
 func (h *SCIMHandler) methodNotAllowed(w http.ResponseWriter, r *http.Request) {
-	body := map[string]any{"schemas": []string{sso.SchemaError}, "status": "405", "detail": r.Method + " is not supported here"}
-	h.scimJSON(w, http.StatusMethodNotAllowed, body)
+	h.scimWrite(w, http.StatusMethodNotAllowed, "", r.Method+" is not supported here")
 }
 
-func pageParams(r *http.Request) (int, int, error) {
-	parse := func(name string) (int, error) {
+// listQuery reads filter, startIndex and count. Out-of-range numbers are
+// clamped by the service (RFC 7644 §3.4.2.4); only non-integers are refused.
+func listQuery(r *http.Request) (sso.SCIMListQuery, error) {
+	q := sso.SCIMListQuery{Filter: r.URL.Query().Get("filter")}
+	parse := func(name string) (*int, error) {
 		raw := r.URL.Query().Get(name)
 		if raw == "" {
-			return 0, nil
+			return nil, nil
 		}
-		value, err := strconv.Atoi(raw)
-		if err != nil || value < 0 {
-			return 0, fmt.Errorf("%w: %s must be a non-negative integer", sso.ErrSCIMInvalidValue, name)
+		v, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s must be an integer", sso.ErrSCIMInvalidValue, name)
 		}
-		return value, nil
+		return &v, nil
 	}
 	start, err := parse("startIndex")
 	if err != nil {
-		return 0, 0, err
+		return q, err
 	}
-	count, err := parse("count")
-	return start, count, err
+	if start != nil {
+		q.StartIndex = *start
+	}
+	q.Count, err = parse("count")
+	return q, err
 }
 
 func (h *SCIMHandler) serviceProviderConfig(w http.ResponseWriter, r *http.Request) {
@@ -362,7 +427,7 @@ func (h *SCIMHandler) serviceProviderConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	h.scimJSON(w, http.StatusOK, map[string]any{
-		"schemas":               []string{"urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"},
+		"schemas":               []string{sso.SchemaServiceConfig},
 		"patch":                 map[string]bool{"supported": true},
 		"bulk":                  map[string]any{"supported": false, "maxOperations": 0, "maxPayloadSize": 0},
 		"filter":                map[string]any{"supported": true, "maxResults": config.Config().MaxListPageSize},
@@ -370,7 +435,16 @@ func (h *SCIMHandler) serviceProviderConfig(w http.ResponseWriter, r *http.Reque
 		"sort":                  map[string]bool{"supported": false},
 		"etag":                  map[string]bool{"supported": false},
 		"authenticationSchemes": []map[string]any{{"type": "oauthbearertoken", "name": "Bearer token", "description": "Provisioning token issued by a partner administrator", "primary": true}},
+		"meta":                  sso.SCIMMeta{ResourceType: "ServiceProviderConfig", Location: h.url("ServiceProviderConfig")},
 	})
+}
+
+func (h *SCIMHandler) resourceTypeList() []map[string]any {
+	item := func(id, endpoint, schema, description string) map[string]any {
+		return map[string]any{"schemas": []string{sso.SchemaResourceType}, "id": id, "name": id, "endpoint": endpoint,
+			"description": description, "schema": schema, "meta": sso.SCIMMeta{ResourceType: "ResourceType", Location: h.url("ResourceTypes/" + id)}}
+	}
+	return []map[string]any{item("User", "/Users", sso.SchemaUser, "User account"), item("Group", "/Groups", sso.SchemaGroup, "Group")}
 }
 
 func (h *SCIMHandler) resourceTypes(w http.ResponseWriter, r *http.Request) {
@@ -378,13 +452,32 @@ func (h *SCIMHandler) resourceTypes(w http.ResponseWriter, r *http.Request) {
 		h.methodNotAllowed(w, r)
 		return
 	}
+	types := h.resourceTypeList()
 	h.scimJSON(w, http.StatusOK, sso.SCIMList[map[string]any]{
-		Schemas: []string{sso.SchemaListResponse}, TotalResults: 2, StartIndex: 1, ItemsPerPage: 2,
-		Resources: []map[string]any{
-			{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ResourceType"}, "id": "User", "name": "User", "endpoint": "/Users", "schema": sso.SchemaUser},
-			{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ResourceType"}, "id": "Group", "name": "Group", "endpoint": "/Groups", "schema": sso.SchemaGroup},
-		},
+		Schemas: []string{sso.SchemaListResponse}, TotalResults: len(types), StartIndex: 1, ItemsPerPage: len(types), Resources: types,
 	})
+}
+
+func (h *SCIMHandler) resourceType(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.methodNotAllowed(w, r)
+		return
+	}
+	for _, t := range h.resourceTypeList() {
+		if t["id"] == r.PathValue("id") {
+			h.scimJSON(w, http.StatusOK, t)
+			return
+		}
+	}
+	h.scimError(w, r, sso.ErrSCIMNotFound)
+}
+
+func (h *SCIMHandler) schemaList() []sso.SCIMSchema {
+	schemas := sso.SCIMSchemas()
+	for i := range schemas {
+		schemas[i].Meta.Location = h.url("Schemas/" + schemas[i].ID)
+	}
+	return schemas
 }
 
 func (h *SCIMHandler) schemas(w http.ResponseWriter, r *http.Request) {
@@ -392,17 +485,27 @@ func (h *SCIMHandler) schemas(w http.ResponseWriter, r *http.Request) {
 		h.methodNotAllowed(w, r)
 		return
 	}
-	attr := func(name, typ string, required bool) map[string]any {
-		return map[string]any{"name": name, "type": typ, "multiValued": false, "required": required, "mutability": "readWrite", "returned": "default", "uniqueness": "none"}
-	}
-	h.scimJSON(w, http.StatusOK, sso.SCIMList[map[string]any]{
-		Schemas: []string{sso.SchemaListResponse}, TotalResults: 2, StartIndex: 1, ItemsPerPage: 2,
-		Resources: []map[string]any{
-			{"id": sso.SchemaUser, "name": "User", "attributes": []map[string]any{
-				attr("userName", "string", true), attr("externalId", "string", false), attr("name", "complex", false),
-				attr("displayName", "string", false), attr("emails", "complex", false), attr("active", "boolean", false)}},
-			{"id": sso.SchemaGroup, "name": "Group", "attributes": []map[string]any{
-				attr("displayName", "string", true), attr("externalId", "string", false), attr("members", "complex", false)}},
-		},
+	schemas := h.schemaList()
+	h.scimJSON(w, http.StatusOK, sso.SCIMList[sso.SCIMSchema]{
+		Schemas: []string{sso.SchemaListResponse}, TotalResults: len(schemas), StartIndex: 1, ItemsPerPage: len(schemas), Resources: schemas,
 	})
+}
+
+func (h *SCIMHandler) schema(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.methodNotAllowed(w, r)
+		return
+	}
+	for _, s := range h.schemaList() {
+		if s.ID == r.PathValue("id") {
+			h.scimJSON(w, http.StatusOK, s)
+			return
+		}
+	}
+	h.scimError(w, r, sso.ErrSCIMNotFound)
+}
+
+// me answers /Me: a provisioning token authenticates a directory, not a user (RFC 7644 §3.11).
+func (h *SCIMHandler) me(w http.ResponseWriter, _ *http.Request) {
+	h.scimWrite(w, http.StatusNotImplemented, "", "/Me is not supported")
 }

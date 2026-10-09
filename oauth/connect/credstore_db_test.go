@@ -164,28 +164,44 @@ func TestOAuthStateRoundTripAndMismatch(t *testing.T) {
 	s, _ := newTestStore(t)
 	nonceQS := &fakeQS{next: map[string]*model.QueryResult{}}
 	s.Nonce = &NonceService{qs: nonceQS}
+	owner := client.WithInitiator(context.Background(), client.Initiator{UserID: 3, PartnerID: 7})
 
+	if _, err := s.CreateOAuthState(context.Background(), 7, "square", nil); !errors.Is(err, ErrStateNotBound) {
+		t.Fatalf("state without an initiator: %v", err)
+	}
+	if _, err := s.CreateOAuthState(owner, 8, "square", nil); !errors.Is(err, ErrStateNotBound) {
+		t.Fatalf("state for another partner: %v", err)
+	}
 	// Create captures the payload it stored (arg[2] of the insert).
-	if _, err := s.CreateOAuthState(context.Background(), 7, "square", map[string]string{client.StateEntityKey: "42", "shop": "x"}); err != nil {
+	if _, err := s.CreateOAuthState(owner, 7, "square", map[string]string{client.StateEntityKey: "42", "shop": "x"}); err != nil {
 		t.Fatal(err)
 	}
 	ins, _ := nonceQS.last(qNonceInsert)
 	payload := ins.args[2].(string)
+	consume := func(ctx context.Context, provider string) (int64, map[string]string, error) {
+		nonceQS.next[qNoncePeek] = &model.QueryResult{Rows: [][]any{{payload}}}
+		nonceQS.next[qNonceConsume] = &model.QueryResult{Rows: [][]any{{payload}}}
+		return s.ConsumeOAuthState(ctx, "state", provider)
+	}
 
-	// Consume returns that payload; provider match yields partner + extra.
-	nonceQS.next[qNonceConsume] = &model.QueryResult{Rows: [][]any{{payload}}}
-	pid, extra, err := s.ConsumeOAuthState(context.Background(), "state", "square")
+	pid, extra, err := consume(owner, "square")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pid != 7 || extra[client.StateEntityKey] != "42" || extra["shop"] != "x" {
 		t.Fatalf("consumed pid=%d extra=%v", pid, extra)
 	}
-
-	// Provider mismatch is rejected.
-	nonceQS.next[qNonceConsume] = &model.QueryResult{Rows: [][]any{{payload}}}
-	if _, _, err := s.ConsumeOAuthState(context.Background(), "state", "clover"); err == nil {
+	if _, _, err := consume(owner, "clover"); err == nil {
 		t.Fatal("expected provider mismatch error")
+	}
+	for _, ctx := range []context.Context{
+		context.Background(),
+		client.WithInitiator(context.Background(), client.Initiator{UserID: 4, PartnerID: 7}),
+		client.WithInitiator(context.Background(), client.Initiator{UserID: 3, PartnerID: 9}),
+	} {
+		if _, _, err := consume(ctx, "square"); !errors.Is(err, ErrStateNotBound) {
+			t.Fatalf("state completed by someone else: %v", err)
+		}
 	}
 }
 

@@ -32,6 +32,7 @@ require (
 	github.com/nyaruka/phonenumbers v1.7.2
 	github.com/pquerna/otp v1.5.0
 	github.com/redis/go-redis/v9 v9.19.0
+	github.com/russellhaering/goxmldsig v1.4.0
 	github.com/smallstep/pkcs7 v0.2.1
 	golang.org/x/crypto v0.53.0
 	golang.org/x/sync v0.21.0
@@ -55,7 +56,6 @@ require (
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/rs/zerolog v1.26.1 // indirect
-	github.com/russellhaering/goxmldsig v1.4.0 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect

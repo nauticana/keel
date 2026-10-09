@@ -176,15 +176,38 @@ func TestCodeFlowRefusals(t *testing.T) {
 	}
 }
 
-func TestSeveralAudiencesNeedAuthorizedParty(t *testing.T) {
+func TestAudienceAndAuthorizedParty(t *testing.T) {
 	withConfig(t, "", "")
-	idp := newFakeIdP(t)
-	c := idp.client(secretPost)
-	_, p, pend := begin(t, c)
-	idp.claims = idp.baseClaims("client-1", p.Nonce)
-	idp.claims["aud"], idp.claims["azp"] = []any{"client-1", "api"}, "client-1"
-	if _, err := complete(c, pend, callback("st-1")); err != nil {
-		t.Fatalf("azp naming the client: %v", err)
+	for name, tc := range map[string]struct {
+		aud any
+		azp any
+		ok  bool
+	}{
+		"sole audience":                 {aud: "client-1", ok: true},
+		"sole audience, azp the client": {aud: []any{"client-1"}, azp: "client-1", ok: true},
+		"azp another client":            {aud: "client-1", azp: "client-2"},
+		"azp not a string":              {aud: "client-1", azp: 7},
+		"another audience, azp client":  {aud: []any{"client-1", "api"}, azp: "client-1"},
+		"another audience, no azp":      {aud: []any{"client-1", "api"}},
+		"client is not an audience":     {aud: []any{"api"}, azp: "client-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			idp := newFakeIdP(t)
+			c := idp.client(secretPost)
+			_, p, pend := begin(t, c)
+			idp.claims = idp.baseClaims("client-1", p.Nonce)
+			idp.claims["aud"] = tc.aud
+			if tc.azp != nil {
+				idp.claims["azp"] = tc.azp
+			}
+			_, err := complete(c, pend, callback("st-1"))
+			if tc.ok && err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalidResponse) {
+				t.Fatalf("Complete = %v, want ErrInvalidResponse", err)
+			}
+		})
 	}
 }
 

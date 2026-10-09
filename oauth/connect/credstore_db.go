@@ -259,6 +259,7 @@ func (s *CredentialStoreDB) open(stored string) (string, error) {
 
 type oauthStatePayload struct {
 	PartnerID int64             `json:"partner_id"`
+	UserID    int64             `json:"user_id"`
 	Provider  string            `json:"provider"`
 	Extra     map[string]string `json:"extra,omitempty"`
 }
@@ -267,7 +268,11 @@ func (s *CredentialStoreDB) CreateOAuthState(ctx context.Context, partnerID int6
 	if s.Nonce == nil {
 		return "", fmt.Errorf("connect: nonce store not configured")
 	}
-	payload, err := json.Marshal(oauthStatePayload{PartnerID: partnerID, Provider: provider, Extra: extra})
+	initiator, ok := client.InitiatorFrom(ctx)
+	if !ok || initiator.PartnerID != partnerID {
+		return "", ErrStateNotBound
+	}
+	payload, err := json.Marshal(oauthStatePayload{PartnerID: partnerID, UserID: initiator.UserID, Provider: provider, Extra: extra})
 	if err != nil {
 		return "", err
 	}
@@ -278,7 +283,8 @@ func (s *CredentialStoreDB) ConsumeOAuthState(ctx context.Context, state, provid
 	if s.Nonce == nil {
 		return 0, nil, fmt.Errorf("connect: nonce store not configured")
 	}
-	raw, ok, err := s.Nonce.Consume(ctx, state, "oauth_state", config.Config().OAuthStateTTLSeconds)
+	ttl := config.Config().OAuthStateTTLSeconds
+	raw, ok, err := s.Nonce.Peek(ctx, state, "oauth_state", ttl)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -291,6 +297,14 @@ func (s *CredentialStoreDB) ConsumeOAuthState(ctx context.Context, state, provid
 	}
 	if p.Provider != provider {
 		return 0, nil, fmt.Errorf("oauth state provider mismatch")
+	}
+	if initiator, ok := client.InitiatorFrom(ctx); !ok || initiator.UserID != p.UserID || initiator.PartnerID != p.PartnerID {
+		return 0, nil, ErrStateNotBound
+	}
+	if _, consumed, err := s.Nonce.Consume(ctx, state, "oauth_state", ttl); err != nil {
+		return 0, nil, err
+	} else if !consumed {
+		return 0, nil, fmt.Errorf("invalid or expired oauth state")
 	}
 	return p.PartnerID, p.Extra, nil
 }
@@ -564,6 +578,10 @@ func (s *CredentialStoreDB) ConnectionsByShopDomain(ctx context.Context, provide
 
 // ErrNoActiveConnection means the partner has no status 'A' connection to the provider.
 var ErrNoActiveConnection = errors.New("no active connection")
+
+// ErrStateNotBound refuses a connect state used without, or by someone other
+// than, the signed-in user and partner who created it.
+var ErrStateNotBound = errors.New("oauth state is not bound to the signed-in user")
 
 const (
 	connectionTypeOAuth = "O"

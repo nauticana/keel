@@ -1,5 +1,5 @@
 table: oauth_authorization_code
-comment: Single-use OAuth 2.1 authorization codes; partner_id is a denormalized snapshot for quota attribution
+comment: Single-use OAuth 2.1 authorization codes, kept until a day past expiry to detect replay; partner_id is a denormalized snapshot for quota attribution
 columns:
   - name: id
     type: BIGINT
@@ -26,6 +26,9 @@ columns:
     nullable: true
   - name: expires_at
     type: TIMESTAMP
+  - name: consumed_at
+    type: TIMESTAMP
+    nullable: true
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP

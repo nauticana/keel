@@ -120,8 +120,9 @@ func (h *OAuthASHandler) register(w http.ResponseWriter, r *http.Request) {
 		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 		ClientName              string   `json:"client_name"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
-		h.writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	if err := dec.Decode(&body); err != nil || requireJSONEOF(dec) != nil {
+		h.refuseRegistration(w, authserver.ErrOAuthInvalidClientMetadata)
 		return
 	}
 	client, err := h.AS.Register(r.Context(), port.ClientRegistration{
@@ -132,30 +133,43 @@ func (h *OAuthASHandler) register(w http.ResponseWriter, r *http.Request) {
 		Name:            body.ClientName,
 	})
 	if err != nil {
-		h.writeOAuthError(w, err)
+		h.refuseRegistration(w, err)
 		return
 	}
 	resp := map[string]any{
 		"client_id":                  client.ClientID,
+		"client_id_issued_at":        client.CreatedAt.Unix(),
 		"redirect_uris":              client.RedirectURIs,
 		"grant_types":                client.GrantTypes,
+		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": client.TokenAuthMethod,
-		"client_name":                client.Name,
-		"scope":                      strings.Join(client.Scopes, " "),
+	}
+	if client.Name != "" {
+		resp["client_name"] = client.Name
+	}
+	if len(client.Scopes) > 0 {
+		resp["scope"] = strings.Join(client.Scopes, " ")
 	}
 	if client.Secret != "" {
 		resp["client_secret"] = client.Secret
+		resp["client_secret_expires_at"] = 0 // RFC 7591: required with a secret; 0 = never
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+func (h *OAuthASHandler) refuseRegistration(w http.ResponseWriter, err error) {
+	if _, ok := authserver.ProtocolErrorCode(err); ok && h.Journal != nil && !errors.Is(err, authserver.ErrOAuthClientLimit) {
+		h.Journal.Warning("oauth/as: registration refused: " + err.Error())
+	}
+	h.writeOAuthError(w, err)
+}
+
 func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	get := func(k string) string { return strings.TrimSpace(r.Form.Get(k)) }
-	if get("response_type") != "code" {
-		http.Error(w, "unsupported response_type (only 'code')", http.StatusBadRequest)
+	if err := r.ParseForm(); err != nil || repeatedParam(r.Form) {
+		http.Error(w, "invalid_request", http.StatusBadRequest)
 		return
 	}
+	get := func(k string) string { return strings.TrimSpace(r.Form.Get(k)) }
 	req := port.AuthorizeRequest{
 		ClientID:            get("client_id"),
 		RedirectURI:         get("redirect_uri"),
@@ -170,6 +184,10 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	client, scopes, err := h.AS.ValidateAuthorizeRequest(r.Context(), req)
 	if err != nil {
 		if code, ok := authserver.ProtocolErrorCode(err); ok {
+			if client != nil {
+				h.redirectErr(w, r, req.RedirectURI, code, req.State)
+				return
+			}
 			http.Error(w, code, http.StatusBadRequest)
 			return
 		}
@@ -177,6 +195,10 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 			h.Journal.Error("oauth/as: validate authorize: " + err.Error())
 		}
 		http.Error(w, "server_error", http.StatusInternalServerError)
+		return
+	}
+	if get("response_type") != "code" {
+		h.redirectErr(w, r, req.RedirectURI, "unsupported_response_type", req.State)
 		return
 	}
 	user := h.resolveUser(r)
@@ -216,6 +238,7 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	if res.State != "" {
 		q.Set("state", res.State)
 	}
+	q.Set("iss", h.AS.Metadata().Issuer) // RFC 9207
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
 }
@@ -225,7 +248,10 @@ func (h *OAuthASHandler) token(w http.ResponseWriter, r *http.Request) {
 		h.writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
 		return
 	}
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil || repeatedParam(r.PostForm) {
+		h.writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
+		return
+	}
 	get := func(k string) string { return strings.TrimSpace(r.PostForm.Get(k)) }
 	req := port.TokenRequest{
 		GrantType:        get("grant_type"),
@@ -245,6 +271,7 @@ func (h *OAuthASHandler) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache") // RFC 6749 §5.1
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -253,7 +280,10 @@ func (h *OAuthASHandler) revoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil || repeatedParam(r.PostForm) {
+		h.writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
+		return
+	}
 	// RFC 7009: 200 on success/no-op; 401 only when client auth fails.
 	if err := h.AS.Revoke(r.Context(), strings.TrimSpace(r.PostForm.Get("token")),
 		strings.TrimSpace(r.PostForm.Get("token_type_hint")), extractClientAuth(r)); err != nil {
@@ -268,7 +298,10 @@ func (h *OAuthASHandler) introspect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil || repeatedParam(r.PostForm) {
+		h.writeOAuthError(w, authserver.ErrOAuthInvalidRequest)
+		return
+	}
 	res, err := h.AS.Introspect(r.Context(), strings.TrimSpace(r.PostForm.Get("token")), extractClientAuth(r))
 	if err != nil {
 		h.writeOAuthError(w, err)
@@ -325,6 +358,26 @@ func authRetryCount(r *http.Request) int {
 	return n
 }
 
+// repeatedParam reports a parameter sent more than once (RFC 6749 §3.1, §3.2).
+func repeatedParam(v url.Values) bool {
+	for _, values := range v {
+		if len(values) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// consentPolicy replaces the API-wide policy, whose form-action 'none' would
+// block the consent post and the redirect it answers with.
+func consentPolicy(redirectURI string) string {
+	target := "'self'"
+	if u, err := url.Parse(redirectURI); err == nil && u.Host != "" {
+		target += " " + u.Scheme + "://" + u.Host
+	}
+	return "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action " + target
+}
+
 func (h *OAuthASHandler) redirectErr(w http.ResponseWriter, r *http.Request, redirectURI, code, state string) {
 	u, err := url.Parse(redirectURI)
 	if err != nil {
@@ -336,6 +389,7 @@ func (h *OAuthASHandler) redirectErr(w http.ResponseWriter, r *http.Request, red
 	if state != "" {
 		q.Set("state", state)
 	}
+	q.Set("iss", h.AS.Metadata().Issuer)
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
 }
@@ -366,6 +420,8 @@ func (h *OAuthASHandler) renderConsent(w http.ResponseWriter, r *http.Request, c
 		view.Fields["csrf"] = tok
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", consentPolicy(req.RedirectURI))
 	_ = consentTemplate.Execute(w, view)
 }
 
@@ -413,13 +469,18 @@ func (h *OAuthASHandler) writeOAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case code == "invalid_client":
 		status = http.StatusUnauthorized
+		w.Header().Set("WWW-Authenticate", `Basic realm="oauth"`) // RFC 6749 §5.2
 	case errors.Is(err, authserver.ErrOAuthClientLimit):
 		status = http.StatusServiceUnavailable
 		if h.Journal != nil {
 			h.Journal.Warning("oauth/as: registration refused: pending client limit")
 		}
 	}
-	writeJSON(w, status, map[string]string{"error": code})
+	body := map[string]string{"error": code}
+	if desc := authserver.ProtocolErrorDescription(err); desc != "" {
+		body["error_description"] = desc
+	}
+	writeJSON(w, status, body)
 }
 
 var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>

@@ -11,6 +11,7 @@ import (
 
 const (
 	qNonceInsert  = "nonce_insert"
+	qNoncePeek    = "nonce_peek"
 	qNonceConsume = "nonce_consume"
 )
 
@@ -25,6 +26,11 @@ DELETE FROM auth_nonce
  WHERE nonce = ? AND purpose = ?
    AND created_at > CURRENT_TIMESTAMP - (? * INTERVAL '1 second')
 RETURNING payload
+`,
+	qNoncePeek: `
+SELECT payload FROM auth_nonce
+ WHERE nonce = ? AND purpose = ?
+   AND created_at > CURRENT_TIMESTAMP - (? * INTERVAL '1 second')
 `,
 }
 
@@ -56,7 +62,17 @@ func (s *NonceService) Create(ctx context.Context, purpose, payload string) (str
 // Consume deletes the nonce and returns its payload if present, matching
 // purpose, and younger than ttlSeconds.
 func (s *NonceService) Consume(ctx context.Context, nonce, purpose string, ttlSeconds int) (string, bool, error) {
-	res, err := s.qs.Query(ctx, qNonceConsume, nonce, purpose, ttlSeconds)
+	return s.queryNonce(ctx, qNonceConsume, nonce, purpose, ttlSeconds)
+}
+
+// Peek returns an unexpired nonce without consuming it, so a caller can check
+// who may consume it before Consume spends it.
+func (s *NonceService) Peek(ctx context.Context, nonce, purpose string, ttlSeconds int) (string, bool, error) {
+	return s.queryNonce(ctx, qNoncePeek, nonce, purpose, ttlSeconds)
+}
+
+func (s *NonceService) queryNonce(ctx context.Context, query string, args ...any) (string, bool, error) {
+	res, err := s.qs.Query(ctx, query, args...)
 	if err != nil {
 		return "", false, err
 	}

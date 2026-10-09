@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,18 +25,23 @@ type TokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
+// ErrInvalidTokenResponse: a 2xx token reply carries no access token or a
+// token type other than bearer (RFC 6749 §5.1, §7.1).
+var ErrInvalidTokenResponse = errors.New("oauth client: token response is invalid")
+
 // ExchangeOption mutates the token request before it's sent (e.g. HTTP Basic auth).
 type ExchangeOption func(*http.Request)
 
-// WithBasicAuth authenticates the client via HTTP Basic (Twitter/X, Reddit).
-func WithBasicAuth(username, password string) ExchangeOption {
-	return func(req *http.Request) { req.SetBasicAuth(username, password) }
+// WithBasicAuth authenticates the client via HTTP Basic (Twitter/X, Reddit),
+// form-urlencoding the id and secret first (RFC 6749 §2.3.1).
+func WithBasicAuth(clientID, clientSecret string) ExchangeOption {
+	return func(req *http.Request) { req.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(clientSecret)) }
 }
 
 // ManualTokenExchange POSTs a form-encoded token request and parses the JSON
 // reply — for providers whose exchange doesn't fit the oauth2 library (Shopify,
-// PKCE flows). Only 2xx is accepted; the body is capped at 1 MiB. Pass opts
-// (e.g. WithBasicAuth) for header-based client auth.
+// PKCE flows). Only 2xx with an access token is accepted; the body is capped
+// at 1 MiB. Pass opts (e.g. WithBasicAuth) for header-based client auth.
 func ManualTokenExchange(ctx context.Context, tokenURL string, form url.Values, opts ...ExchangeOption) (TokenResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -65,6 +71,7 @@ func ManualTokenExchangeJSON(ctx context.Context, endpointURL string, params map
 // sendTokenRequest sends a prepared token/refresh request and parses the JSON
 // reply. Callers set the Content-Type; this adds Accept, applies opts, and blocks
 // redirects so the client_secret in the body is never resent to another host.
+// An omitted token_type is tolerated because Shopify and Clover omit it.
 func sendTokenRequest(req *http.Request, opts ...ExchangeOption) (TokenResponse, error) {
 	var tr TokenResponse
 	req.Header.Set("Accept", "application/json")
@@ -86,7 +93,13 @@ func sendTokenRequest(req *http.Request, opts ...ExchangeOption) (TokenResponse,
 		return tr, fmt.Errorf("token exchange HTTP %d", resp.StatusCode)
 	}
 	if err := json.Unmarshal(body, &tr); err != nil {
-		return tr, fmt.Errorf("parse token response: %w", err)
+		return TokenResponse{}, fmt.Errorf("parse token response: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return TokenResponse{}, fmt.Errorf("%w: no access_token", ErrInvalidTokenResponse)
+	}
+	if tr.TokenType != "" && !strings.EqualFold(tr.TokenType, "bearer") {
+		return TokenResponse{}, fmt.Errorf("%w: token_type %q", ErrInvalidTokenResponse, tr.TokenType)
 	}
 	return tr, nil
 }

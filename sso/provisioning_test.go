@@ -79,11 +79,11 @@ func TestProvisionUserLifecycle(t *testing.T) {
 	if _, err := p.CreateUser(ctx, acme, scimUser("ada@acme.example", "ada2@acme.example", true)); !errors.Is(err, ErrSCIMConflict) {
 		t.Fatalf("duplicate userName = %v", err)
 	}
-	list, err := p.ListUsers(ctx, acme, `userName eq "ADA@acme.example"`, 1, 10)
+	list, err := p.ListUsers(ctx, acme, SCIMListQuery{Filter: `userName eq "ADA@acme.example"`})
 	if err != nil || list.TotalResults != 1 || list.Resources[0].ID != u.ID {
 		t.Fatalf("filter = %+v %v", list, err)
 	}
-	if list, err := p.ListUsers(ctx, 99, "", 1, 10); err != nil || list.TotalResults != 0 {
+	if list, err := p.ListUsers(ctx, 99, SCIMListQuery{}); err != nil || list.TotalResults != 0 {
 		t.Fatalf("another partner sees %+v %v", list, err)
 	}
 	if _, err := p.GetUser(ctx, 99, u.ID); !errors.Is(err, ErrSCIMNotFound) {
@@ -131,7 +131,7 @@ func TestProvisionUserRefusals(t *testing.T) {
 	if u, err := p.CreateUser(ctx, acme, scimUser("bob@acme.example", "bob@acme.example", true)); err != nil || u.ID != "9" || f.users.accounts[9].PartnerId != acme {
 		t.Fatalf("adopting a partnerless account = %+v %v", u, err)
 	}
-	if _, err := p.ListUsers(ctx, acme, `title sw "x"`, 1, 10); !errors.Is(err, ErrSCIMInvalidFilter) {
+	if _, err := p.ListUsers(ctx, acme, SCIMListQuery{Filter: `title sw "x"`}); !errors.Is(err, ErrSCIMInvalidFilter) {
 		t.Fatalf("unsupported filter = %v", err)
 	}
 }
@@ -295,6 +295,7 @@ func TestPatchParsing(t *testing.T) {
 		"remove active":   {{Op: "remove", Path: "active"}},
 		"bad boolean":     {{Op: "replace", Path: "active", Value: json.RawMessage(`"maybe"`)}},
 		"pathless remove": {{Op: "remove"}},
+		"undefined path":  {{Op: "replace", Path: "favoriteColor", Value: json.RawMessage(`"x"`)}},
 	} {
 		if err := applyUserPatch(&SCIMUser{UserName: "a"}, bad); err == nil {
 			t.Errorf("%s accepted", name)
@@ -302,9 +303,6 @@ func TestPatchParsing(t *testing.T) {
 	}
 	if _, err := parseGroupPatch([]SCIMPatchOp{{Op: "replace", Path: "owner", Value: json.RawMessage(`"x"`)}}); !errors.Is(err, ErrSCIMInvalidPath) {
 		t.Fatalf("unsupported group path = %v", err)
-	}
-	if _, err := ParseSCIMFilter(`userName eq "a" and active eq true`, "userName"); !errors.Is(err, ErrSCIMInvalidFilter) {
-		t.Fatalf("compound filter = %v", err)
 	}
 }
 
@@ -326,5 +324,26 @@ func TestActivationMapsProvisionedGroups(t *testing.T) {
 	}
 	if _, ok := f.store.grants[uid]["PARTNER_ADMIN"]; !ok {
 		t.Fatalf("activation must map provisioned groups: %v", f.store.grants[uid])
+	}
+}
+
+func TestGroupListsCarryMembersWhenIncluded(t *testing.T) {
+	p, _ := newProvisioning(t)
+	ctx := context.Background()
+	u, err := p.CreateUser(ctx, acme, scimUser("ada@acme.example", "ada@acme.example", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.CreateGroup(ctx, acme, &SCIMGroup{DisplayName: "Admins", Members: []SCIMRef{{Value: u.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, members := range []bool{true, false} {
+		list, err := p.ListGroups(ctx, acme, SCIMListQuery{Members: members})
+		if err != nil || len(list.Resources) != 1 {
+			t.Fatalf("list = %+v %v", list, err)
+		}
+		if got := len(list.Resources[0].Members); (got == 1) != members {
+			t.Fatalf("members requested %v, got %d", members, got)
+		}
 	}
 }

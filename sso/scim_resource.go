@@ -8,11 +8,16 @@ import (
 
 // SCIM schema URNs (RFC 7643, RFC 7644).
 const (
-	SchemaUser         = "urn:ietf:params:scim:schemas:core:2.0:User"
-	SchemaGroup        = "urn:ietf:params:scim:schemas:core:2.0:Group"
-	SchemaListResponse = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
-	SchemaPatchOp      = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
-	SchemaError        = "urn:ietf:params:scim:api:messages:2.0:Error"
+	SchemaUser  = "urn:ietf:params:scim:schemas:core:2.0:User"
+	SchemaGroup = "urn:ietf:params:scim:schemas:core:2.0:Group"
+	// SchemaEnterpriseUser is accepted in PATCH and ignored; keel keeps none of it.
+	SchemaEnterpriseUser = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+	SchemaSchema         = "urn:ietf:params:scim:schemas:core:2.0:Schema"
+	SchemaResourceType   = "urn:ietf:params:scim:schemas:core:2.0:ResourceType"
+	SchemaServiceConfig  = "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
+	SchemaListResponse   = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+	SchemaPatchOp        = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+	SchemaError          = "urn:ietf:params:scim:api:messages:2.0:Error"
 )
 
 // SCIMBool reads a JSON boolean, or the strings "True" and "False" some
@@ -99,6 +104,16 @@ type SCIMList[T any] struct {
 	StartIndex   int      `json:"startIndex"`
 	ItemsPerPage int      `json:"itemsPerPage"`
 	Resources    []T      `json:"Resources"`
+}
+
+// SCIMListQuery is a list request (RFC 7644 §3.4.2). StartIndex below 1 is
+// 1; a nil Count is default_list_page_size, a negative one 0, and any is
+// capped at max_list_page_size. Count 0 returns only totalResults.
+type SCIMListQuery struct {
+	Filter     string
+	StartIndex int
+	Count      *int
+	Members    bool // group lists carry members
 }
 
 // SCIMPatch is a PatchOp request.

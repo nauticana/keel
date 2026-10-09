@@ -49,8 +49,21 @@ func TestOAuthFactoryWiresPendingClientLimit(t *testing.T) {
 	if _, err := setup.AS.Register(context.Background(), request); !errors.Is(err, authserver.ErrOAuthClientLimit) {
 		t.Fatalf("pending registration err = %v", err)
 	}
-	request.TokenAuthMethod = "client_secret_basic"
-	if _, err := setup.AS.Register(context.Background(), request); !errors.Is(err, authserver.ErrOAuthInvalidRequest) {
+	request.TokenAuthMethod = "client_secret_post"
+	if _, err := setup.AS.Register(context.Background(), request); !errors.Is(err, authserver.ErrOAuthClientLimit) {
 		t.Fatalf("confidential registration err = %v", err)
+	}
+}
+
+func TestLocalIssuerMustBeAnOrigin(t *testing.T) {
+	for _, issuer := range []string{"https://as.example", "https://as.example/", "http://localhost:8080"} {
+		if err := validLocalIssuer(issuer); err != nil {
+			t.Fatalf("%s: %v", issuer, err)
+		}
+	}
+	for _, issuer := range []string{"http://as.example", "https://as.example/tenant", "https://as.example?x=1", "https://as.example#f", "https://u@as.example", "as.example"} {
+		if err := validLocalIssuer(issuer); err == nil {
+			t.Fatalf("%s must be refused", issuer)
+		}
 	}
 }

@@ -23,10 +23,10 @@ const (
 
 var oauthClientQueries = map[string]string{
 	oauthInsertClient: `
-INSERT INTO oauth_client (id, client_id, secret_hash, client_name, redirect_uris, grant_types, scopes, token_auth_method)
-VALUES (nextval('oauth_client_seq'), ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO oauth_client (id, client_id, secret_hash, client_name, redirect_uris, grant_types, scopes, token_auth_method, registered)
+VALUES (nextval('oauth_client_seq'), ?, ?, ?, ?, ?, ?, ?, ?)`,
 	oauthGetClient: `
-SELECT client_id, secret_hash, client_name, redirect_uris, grant_types, scopes, token_auth_method, created_at
+SELECT client_id, secret_hash, client_name, redirect_uris, grant_types, scopes, token_auth_method, created_at, registered
   FROM oauth_client WHERE client_id = ?`,
 	oauthUpdateClient: `
 UPDATE oauth_client SET secret_hash = ?, client_name = ?, redirect_uris = ?, grant_types = ?, scopes = ?, token_auth_method = ?
@@ -35,7 +35,7 @@ UPDATE oauth_client SET secret_hash = ?, client_name = ?, redirect_uris = ?, gra
 	// The clients PurgeUnauthorizedClients would delete.
 	oauthPendingCount: `
 SELECT COUNT(*) FROM oauth_client c
- WHERE c.token_auth_method = 'none'
+ WHERE c.registered = TRUE
    AND c.grant_types LIKE '%refresh_token%'
    AND NOT EXISTS (SELECT 1 FROM oauth_refresh_token t WHERE t.client_id = c.client_id)
    AND NOT EXISTS (SELECT 1 FROM oauth_authorization_code a WHERE a.client_id = c.client_id)`,
@@ -44,16 +44,16 @@ SELECT COUNT(*) FROM oauth_client c
 var oauthClientTxQueries = common.MergeMaps(oauthClientQueries, guard.Queries)
 
 // purgeable reports whether a client is one PurgeUnauthorizedClients covers:
-// public, registered for refresh tokens.
-func purgeable(method string, grants []string) bool {
-	return method == "none" && slices.Contains(grants, "refresh_token")
+// openly registered, for refresh tokens.
+func purgeable(c *port.OAuthClient) bool {
+	return c.Registered && slices.Contains(c.GrantTypes, "refresh_token")
 }
 
-// ClientStoreDB persists DCR clients in the oauth_client table.
+// ClientStoreDB persists clients in the oauth_client table.
 type ClientStoreDB struct {
 	DB port.DatabaseRepository
-	// MaxPending bounds the public refresh-token clients that never completed
-	// an authorization; registering one more is ErrOAuthClientLimit. 0 is
+	// MaxPending bounds the registered clients that never completed an
+	// authorization; registering one more is ErrOAuthClientLimit. 0 is
 	// unbounded.
 	MaxPending int
 	qs         port.QueryService
@@ -68,7 +68,7 @@ func (s *ClientStoreDB) Init(ctx context.Context) {
 }
 
 func (s *ClientStoreDB) CreateClient(ctx context.Context, c *port.OAuthClient) (err error) {
-	if s.MaxPending <= 0 || !purgeable(c.TokenAuthMethod, c.GrantTypes) {
+	if s.MaxPending <= 0 || !purgeable(c) {
 		return insertClient(ctx, s.qs, c)
 	}
 	tx, err := s.DB.BeginTx(ctx, oauthClientTxQueries)
@@ -110,7 +110,7 @@ func (s *ClientStoreDB) CreateClient(ctx context.Context, c *port.OAuthClient) (
 
 func insertClient(ctx context.Context, qs port.QueryService, c *port.OAuthClient) error {
 	_, err := qs.Query(ctx, oauthInsertClient, c.ClientID, c.SecretHash, c.Name,
-		joinSpace(c.RedirectURIs), joinSpace(c.GrantTypes), joinSpace(c.Scopes), c.TokenAuthMethod)
+		joinSpace(c.RedirectURIs), joinSpace(c.GrantTypes), joinSpace(c.Scopes), c.TokenAuthMethod, c.Registered)
 	return err
 }
 
@@ -133,6 +133,7 @@ func (s *ClientStoreDB) GetClient(ctx context.Context, clientID string) (*port.O
 		Scopes:          splitSpace(common.AsString(r[5])),
 		TokenAuthMethod: common.AsString(r[6]),
 		CreatedAt:       created,
+		Registered:      common.AsBool(r[8]),
 	}, nil
 }
 

@@ -1,6 +1,8 @@
 package sso
 
 import (
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nauticana/keel/model"
@@ -62,7 +64,7 @@ func (s *scimStore) query(name string, args []any) (*model.QueryResult, bool) {
 			}
 		}
 		return r(out...)
-	case qLockSCIMTokens:
+	case qLockSCIMPartner:
 		return r([]any{args[0]})
 	case qActiveTokens:
 		n := 0
@@ -99,7 +101,7 @@ func (s *scimStore) query(name string, args []any) (*model.QueryResult, bool) {
 	case qSCIMUsers, qSCIMUserCount:
 		var out [][]any
 		for id, u := range s.users {
-			if u.partner == args[0].(int64) && (str(args[1]) == "" || u.userName == args[1]) && (str(args[3]) == "" || u.externalID == args[3]) {
+			if u.partner == args[0].(int64) && filterMatches(args, int64(id), map[string]string{"username": u.userName, "externalid": u.externalID}) {
 				out = append(out, s.userRow(id, u))
 			}
 		}
@@ -143,7 +145,7 @@ func (s *scimStore) query(name string, args []any) (*model.QueryResult, bool) {
 	case qSCIMGroups, qSCIMGroupCount:
 		var out [][]any
 		for id, g := range s.groups {
-			if g.partner == args[0].(int64) && (str(args[1]) == "" || g.name == args[1]) && (str(args[3]) == "" || g.extern == args[3]) {
+			if g.partner == args[0].(int64) && filterMatches(args, id, map[string]string{"displayname": g.name, "externalid": g.extern}) {
 				out = append(out, []any{id, g.extern, g.name, now, now})
 			}
 		}
@@ -161,7 +163,7 @@ func (s *scimStore) query(name string, args []any) (*model.QueryResult, bool) {
 		return r([]any{int64(len(s.members[args[1].(int64)]))})
 	case qSCIMGroupConflict:
 		for id, g := range s.groups {
-			if g.partner == args[0].(int64) && id != args[1].(int64) && (g.name == args[2] || (str(args[3]) != "" && g.extern == args[3])) {
+			if g.partner == args[0].(int64) && id != args[1].(int64) && (strings.EqualFold(g.name, str(args[2])) || (str(args[3]) != "" && g.extern == args[3])) {
 				return r([]any{id})
 			}
 		}
@@ -198,4 +200,60 @@ func (s *scimStore) query(name string, args []any) (*model.QueryResult, bool) {
 
 func (s *scimStore) userRow(id int, u *scimRow) []any {
 	return []any{int64(id), u.externalID, u.userName, u.active, time.Now(), time.Now(), "Ada", "Lovelace", u.userName}
+}
+
+// filterMatches evaluates the arguments of scimFilter.args as the list
+// queries do: the key attribute and every value compare lower-cased unless
+// caseExact (externalid, id).
+func filterMatches(args []any, id int64, values map[string]string) bool {
+	values["id"] = strconv.FormatInt(id, 10)
+	key, ext := "username", values["externalid"]
+	if _, ok := values["displayname"]; ok {
+		key = "displayname"
+	}
+	if fid := args[1].(int64); fid != 0 && fid != id {
+		return false
+	}
+	if k := args[3].(string); k != "" && k != strings.ToLower(values[key]) {
+		return false
+	}
+	if e := args[5].(string); e != "" && e != ext {
+		return false
+	}
+	if args[7].(int) == 0 {
+		return true
+	}
+	terms, attrs, ops, negs, vals := args[8].([]int64), args[9].([]string), args[10].([]string), args[11].([]bool), args[12].([]string)
+	holds := map[int64]bool{}
+	for i := range terms {
+		if _, seen := holds[terms[i]]; !seen {
+			holds[terms[i]] = true
+		}
+		x := values[attrs[i]]
+		if attrs[i] == key {
+			x = strings.ToLower(x)
+		}
+		var m bool
+		switch ops[i] {
+		case "eq":
+			m = x == vals[i]
+		case "ne":
+			m = x != vals[i]
+		case "co":
+			m = strings.Contains(x, vals[i])
+		case "sw":
+			m = strings.HasPrefix(x, vals[i])
+		case "ew":
+			m = strings.HasSuffix(x, vals[i])
+		case "pr":
+			m = x != ""
+		}
+		holds[terms[i]] = holds[terms[i]] && m != negs[i]
+	}
+	for _, h := range holds {
+		if h {
+			return true
+		}
+	}
+	return false
 }

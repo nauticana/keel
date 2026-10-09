@@ -168,37 +168,34 @@ func (p *Provisioning) GetGroup(ctx context.Context, partnerID int64, id string,
 	}
 	g := scimGroupFromRow(res.Rows[0])
 	if withMembers {
-		members, err := p.query(ctx).Query(ctx, qSCIMGroupMembers, partnerID, groupID, config.Config().SCIMMaxGroupMembers)
-		if err != nil {
+		if err := p.loadMembers(ctx, partnerID, groupID, g); err != nil {
 			return nil, err
-		}
-		for _, row := range members.Rows {
-			g.Members = append(g.Members, SCIMRef{Value: strconv.FormatInt(common.AsInt64(row[0]), 10), Display: common.AsString(row[1])})
 		}
 	}
 	return g, nil
 }
 
-// ListGroups pages through groups, optionally filtered by displayName or
-// externalId. Members are not listed; GET the group for them.
-func (p *Provisioning) ListGroups(ctx context.Context, partnerID int64, filter string, startIndex, count int) (*SCIMList[*SCIMGroup], error) {
-	f, err := ParseSCIMFilter(filter, "displayName", "externalId")
+func (p *Provisioning) loadMembers(ctx context.Context, partnerID, groupID int64, g *SCIMGroup) error {
+	members, err := p.query(ctx).Query(ctx, qSCIMGroupMembers, partnerID, groupID, config.Config().SCIMMaxGroupMembers)
+	if err != nil {
+		return err
+	}
+	for _, row := range members.Rows {
+		g.Members = append(g.Members, SCIMRef{Value: strconv.FormatInt(common.AsInt64(row[0]), 10), Display: common.AsString(row[1])})
+	}
+	return nil
+}
+
+// ListGroups pages through groups, optionally filtered on id, displayName or
+// externalId, with their members when q.Members is set.
+func (p *Provisioning) ListGroups(ctx context.Context, partnerID int64, q SCIMListQuery) (*SCIMList[*SCIMGroup], error) {
+	f, err := parseSCIMFilter(q.Filter, scimGroupFilterSchema)
 	if err != nil {
 		return nil, err
 	}
-	name, ext := "", ""
-	switch f.Attribute {
-	case "displayName":
-		name = f.Value
-	case "externalId":
-		ext = f.Value
-	}
-	startIndex, count = page(startIndex, count)
-	total, err := p.query(ctx).Query(ctx, qSCIMGroupCount, partnerID, name, name, ext, ext)
-	if err != nil {
-		return nil, err
-	}
-	res, err := p.query(ctx).Query(ctx, qSCIMGroups, partnerID, name, name, ext, ext, count, startIndex-1)
+	args := f.args(partnerID, scimGroupFilterSchema)
+	startIndex, count := page(q)
+	total, err := p.query(ctx).Query(ctx, qSCIMGroupCount, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,8 +203,20 @@ func (p *Provisioning) ListGroups(ctx context.Context, partnerID int64, filter s
 	if len(total.Rows) == 1 {
 		out.TotalResults = int(common.AsInt64(total.Rows[0][0]))
 	}
-	for _, row := range res.Rows {
-		out.Resources = append(out.Resources, scimGroupFromRow(row))
+	if count > 0 {
+		res, err := p.query(ctx).Query(ctx, qSCIMGroups, append(args, count, startIndex-1)...)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range res.Rows {
+			g := scimGroupFromRow(row)
+			if q.Members {
+				if err := p.loadMembers(ctx, partnerID, common.AsInt64(row[0]), g); err != nil {
+					return nil, err
+				}
+			}
+			out.Resources = append(out.Resources, g)
+		}
 	}
 	out.ItemsPerPage = len(out.Resources)
 	return out, nil
@@ -275,7 +284,16 @@ func removeAllMembers(ctx context.Context, tx port.QueryService, partnerID, grou
 	return out, nil
 }
 
+// groupConflict locks the partner's provisioning, since the unique index on
+// display_name cannot compare without case, then looks for a taken key.
 func groupConflict(ctx context.Context, tx port.QueryService, partnerID, groupID int64, name, ext string) error {
+	locked, err := tx.Query(ctx, qLockSCIMPartner, partnerID)
+	if err != nil {
+		return err
+	}
+	if len(locked.Rows) != 1 {
+		return ErrSCIMNotFound
+	}
 	res, err := tx.Query(ctx, qSCIMGroupConflict, partnerID, groupID, name, ext, ext)
 	if err != nil {
 		return err

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
@@ -55,6 +57,10 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 		if issuer == "" {
 			return nil, fmt.Errorf("oauth: oauth_as_mode=local requires oauth_issuer (this AS's public base URL)")
 		}
+		if err := validLocalIssuer(issuer); err != nil {
+			return nil, err
+		}
+		issuer = strings.TrimRight(issuer, "/") // the token iss must equal the metadata issuer
 		// An empty scope allowlist would let open DCR register + mint any scope
 		// (e.g. admin). Require an explicit list so the clamp has teeth.
 		if len(common.SplitCSV(config.Config().OAuthScopesSupported)) == 0 {
@@ -68,8 +74,7 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 		if aud == "" {
 			aud = issuer
 		}
-		maxPending := config.Config().OAuthMaxPendingClients
-		clients := &authserver.ClientStoreDB{DB: db, MaxPending: maxPending}
+		clients := &authserver.ClientStoreDB{DB: db, MaxPending: config.Config().OAuthMaxPendingClients}
 		clients.Init(ctx)
 		codes := &authserver.CodeStoreDB{DB: db}
 		codes.Init(ctx)
@@ -83,14 +88,13 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 			resources = append(resources, config.Config().OAuthResource)
 		}
 		cfg := authserver.Config{
-			Issuer:            issuer,
-			DefaultAudience:   aud,
-			Scopes:            common.SplitCSV(config.Config().OAuthScopesSupported),
-			Resources:         resources,
-			AccessTTL:         config.Config().OAuthAccessTokenTTL,
-			RefreshTTL:        config.Config().OAuthRefreshTokenTTL,
-			CodeTTL:           config.Config().OAuthCodeTTL,
-			PublicClientsOnly: maxPending > 0,
+			Issuer:          issuer,
+			DefaultAudience: aud,
+			Scopes:          common.SplitCSV(config.Config().OAuthScopesSupported),
+			Resources:       resources,
+			AccessTTL:       config.Config().OAuthAccessTokenTTL,
+			RefreshTTL:      config.Config().OAuthRefreshTokenTTL,
+			CodeTTL:         config.Config().OAuthCodeTTL,
 		}
 		as := authserver.NewLocal(signer, clients, codes, tokens, cfg)
 		// validator is the single-audience resource-server validator for the
@@ -101,6 +105,20 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 	default:
 		return nil, fmt.Errorf("oauth: unknown oauth_as_mode %q (want local|external|disabled)", mode)
 	}
+}
+
+// validLocalIssuer requires an origin: RFC 8414 forbids a query or fragment,
+// and the metadata is served only at the root well-known path, which matches
+// an issuer without a path.
+func validLocalIssuer(issuer string) error {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
+		return fmt.Errorf("oauth: oauth_issuer %q must be an origin such as https://as.example", issuer)
+	}
+	if u.Scheme != "https" && (u.Scheme != "http" || (u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1")) {
+		return fmt.Errorf("oauth: oauth_issuer %q must use https", issuer)
+	}
+	return nil
 }
 
 func loadOrGenSigner(ctx context.Context, secrets secret.SecretProvider, journal logger.ApplicationLogger) (*authserver.RS256Signer, error) {

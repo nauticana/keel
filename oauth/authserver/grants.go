@@ -121,6 +121,21 @@ func (i *oauthIssuer) issue(ctx context.Context, sub string, userID, partnerID i
 	return resp, nil
 }
 
+// sameResource refuses a token-request resource (RFC 8707 §2.2) other than the
+// one the grant was made for; empty means the default audience.
+func (i *oauthIssuer) sameResource(granted, requested string) error {
+	if requested == "" {
+		return nil
+	}
+	if granted == "" {
+		granted = i.defaultAud
+	}
+	if requested != granted {
+		return ErrOAuthInvalidTarget
+	}
+	return nil
+}
+
 // verifyPKCE checks an RFC 7636 S256 challenge. OAuth 2.1 forbids "plain".
 func verifyPKCE(verifier, challenge, method string) bool {
 	if method != "S256" || verifier == "" || challenge == "" {
@@ -147,8 +162,22 @@ func (g *authorizationCodeGrant) Handle(ctx context.Context, req port.TokenReque
 	if err != nil {
 		return nil, err
 	}
-	if code == nil || code.ClientID != client.ClientID {
+	if code == nil {
 		return nil, ErrOAuthInvalidGrant
+	}
+	// A code is bound to its client. Never let another authenticated client use
+	// a replay to revoke the grant belonging to that client.
+	if code.ClientID != client.ClientID {
+		return nil, ErrOAuthInvalidGrant
+	}
+	if code.Replayed { // RFC 6749 §4.1.2: revoke what the code issued
+		if err := g.issuer.tokens.RevokeGrant(ctx, code.UserID, code.ClientID); err != nil {
+			return nil, err
+		}
+		return nil, ErrOAuthInvalidGrant
+	}
+	if err := g.issuer.sameResource(code.Resource, req.Resource); err != nil {
+		return nil, err
 	}
 	if code.RedirectURI != req.RedirectURI {
 		return nil, ErrOAuthInvalidGrant
@@ -191,6 +220,9 @@ func (g *refreshTokenGrant) Handle(ctx context.Context, req port.TokenRequest, c
 	}
 	if time.Now().After(stored.ExpiresAt) {
 		return nil, ErrOAuthInvalidGrant
+	}
+	if err := g.issuer.sameResource(stored.Resource, req.Resource); err != nil {
+		return nil, err
 	}
 	scopes := stored.Scopes
 	if len(req.Scopes) > 0 { // narrowing only
@@ -277,7 +309,12 @@ func (g *tokenExchangeGrant) Handle(ctx context.Context, req port.TokenRequest, 
 		return nil, ErrOAuthInvalidScope
 	}
 	partnerID := claims.Int64(principal.Claims["partner_id"])
-	return g.issuer.issue(ctx, principal.Subject, 0, partnerID, client.ClientID, requested, req.Resource, "", "", false)
+	resp, err := g.issuer.issue(ctx, principal.Subject, 0, partnerID, client.ClientID, requested, req.Resource, "", "", false)
+	if err != nil {
+		return nil, err
+	}
+	resp.IssuedTokenType = tokenTypeAccessToken
+	return resp, nil
 }
 
 func isSubset(want, have []string) bool {

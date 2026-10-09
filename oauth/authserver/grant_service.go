@@ -47,12 +47,12 @@ UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP
  WHERE user_id = ? AND client_id = ? AND revoked_at IS NULL
 RETURNING id`,
 	oauthGrantActive: `SELECT 1 FROM oauth_refresh_token WHERE user_id = ? AND client_id = ? AND ` + liveRefresh + ` LIMIT 1`,
-	// Public clients that asked for refresh tokens but never completed an
-	// authorization: no refresh token ever issued and no code in flight.
+	// Registered clients that never completed an authorization: no refresh
+	// token ever issued and no code in flight.
 	oauthClientPurge: `
 DELETE FROM oauth_client
  WHERE id IN (SELECT c.id FROM oauth_client c
-               WHERE c.token_auth_method = 'none'
+               WHERE c.registered = TRUE
                  AND c.grant_types LIKE '%refresh_token%'
                  AND c.created_at < CURRENT_TIMESTAMP - (CAST(? AS INTEGER) * INTERVAL '1 second')
                  AND NOT EXISTS (SELECT 1 FROM oauth_refresh_token t WHERE t.client_id = c.client_id)
@@ -160,7 +160,7 @@ func (s *GrantService) Active(ctx context.Context, userID int64, clientID string
 	return len(res.Rows) > 0, nil
 }
 
-// PurgeUnauthorizedClients deletes up to purgeBatch public clients that
+// PurgeUnauthorizedClients deletes up to purgeBatch registered clients that
 // registered more than olderThan ago and never completed an authorization,
 // and returns how many it deleted; a worker calls it until it returns fewer.
 func (s *GrantService) PurgeUnauthorizedClients(ctx context.Context, olderThan time.Duration) (int, error) {

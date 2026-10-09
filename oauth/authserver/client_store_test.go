@@ -15,7 +15,7 @@ func TestClientStoreBoundsPendingClients(t *testing.T) {
 	repo := &grantRepo{rows: map[string][][]any{oauthPendingCount: {{int64(2)}}}}
 	store := &ClientStoreDB{DB: repo, MaxPending: 2}
 	store.Init(ctx)
-	public := &port.OAuthClient{ClientID: "oc_1", TokenAuthMethod: "none", GrantTypes: []string{"authorization_code", "refresh_token"}}
+	public := &port.OAuthClient{ClientID: "oc_1", TokenAuthMethod: "none", GrantTypes: registrationGrants, Registered: true}
 
 	if err := store.CreateClient(ctx, public); !errors.Is(err, ErrOAuthClientLimit) {
 		t.Fatalf("err = %v", err)
@@ -38,10 +38,16 @@ func TestClientStoreBoundsPendingClients(t *testing.T) {
 		t.Fatalf("err %v commits %d", err, repo.commits)
 	}
 
+	repo.rows[oauthPendingCount] = [][]any{{int64(2)}}
+	confidential := &port.OAuthClient{ClientID: "oc_2", TokenAuthMethod: "client_secret_post", GrantTypes: registrationGrants, Registered: true}
+	if err := store.CreateClient(ctx, confidential); !errors.Is(err, ErrOAuthClientLimit) {
+		t.Fatalf("a registered confidential client counts toward the bound: %v", err)
+	}
+
 	repo.calls = nil
-	confidential := &port.OAuthClient{ClientID: "oc_2", TokenAuthMethod: "client_secret_basic", GrantTypes: []string{"client_credentials"}}
-	if err := store.CreateClient(ctx, confidential); err != nil || slices.Contains(repo.calls, oauthPendingCount) {
-		t.Fatalf("a client the purge does not cover is not counted: %v %v", err, repo.calls)
+	provisioned := &port.OAuthClient{ClientID: "oc_3", TokenAuthMethod: "client_secret_basic", GrantTypes: registrationGrants}
+	if err := store.CreateClient(ctx, provisioned); err != nil || slices.Contains(repo.calls, oauthPendingCount) {
+		t.Fatalf("a provisioned client is not counted: %v %v", err, repo.calls)
 	}
 
 	for _, rows := range [][][]any{nil, {{}}, {{"two"}}} {
@@ -52,20 +58,43 @@ func TestClientStoreBoundsPendingClients(t *testing.T) {
 	}
 }
 
-func TestPublicClientsOnly(t *testing.T) {
+func TestRegistrationPolicy(t *testing.T) {
 	as, _ := newTestAS(t)
-	as.cfg.PublicClientsOnly = true
 	ctx := context.Background()
+	cb := []string{"https://app.example/cb"}
 	for _, req := range []port.ClientRegistration{
-		{RedirectURIs: []string{"https://app.example/cb"}, TokenAuthMethod: "client_secret_basic"},
-		{RedirectURIs: []string{"https://app.example/cb"}, GrantTypes: []string{"authorization_code"}},
+		{RedirectURIs: cb, TokenAuthMethod: "client_secret_post", GrantTypes: []string{"authorization_code", "refresh_token"}},
+		{RedirectURIs: cb},
+		{RedirectURIs: cb, GrantTypes: []string{"authorization_code"}},
 	} {
-		if _, err := as.Register(ctx, req); !errors.Is(err, ErrOAuthInvalidRequest) {
-			t.Fatalf("%+v: err = %v", req, err)
+		c, err := as.Register(ctx, req)
+		if err != nil {
+			t.Fatalf("%+v: %v", req, err)
+		}
+		if !c.Registered || !slices.Equal(c.GrantTypes, registrationGrants) || (c.TokenAuthMethod != "none") != (c.Secret != "") {
+			t.Fatalf("%+v registered as %+v", req, c)
 		}
 	}
-	if _, err := as.Register(ctx, port.ClientRegistration{RedirectURIs: []string{"https://app.example/cb"}}); err != nil {
-		t.Fatal(err)
+	for _, gt := range []string{"client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange", "password"} {
+		req := port.ClientRegistration{RedirectURIs: cb, TokenAuthMethod: "client_secret_basic", GrantTypes: []string{"authorization_code", gt}}
+		if _, err := as.Register(ctx, req); !errors.Is(err, ErrOAuthInvalidClientMetadata) || ProtocolErrorDescription(err) == "" {
+			t.Fatalf("%s: err = %v", gt, err)
+		}
+	}
+	if _, err := as.Register(ctx, port.ClientRegistration{}); !errors.Is(err, ErrOAuthInvalidRedirectURI) {
+		t.Fatalf("no redirect_uris: err = %v", err)
+	}
+
+	md := as.Metadata()
+	if !slices.Equal(md.TokenEndpointAuthMethodsSupported, []string{"none", "client_secret_basic", "client_secret_post"}) {
+		t.Fatalf("auth methods = %v", md.TokenEndpointAuthMethodsSupported)
+	}
+	if !slices.IsSorted(md.GrantTypesSupported) || !slices.Contains(md.GrantTypesSupported, "authorization_code") {
+		t.Fatalf("grant types = %v", md.GrantTypesSupported)
+	}
+	if !slices.Equal(md.ResponseModesSupported, []string{"query"}) || !md.AuthorizationResponseIssParameterSupported ||
+		!slices.Contains(md.RevocationEndpointAuthMethodsSupported, "none") || !slices.Contains(md.IntrospectionEndpointAuthMethodsSupported, "none") {
+		t.Fatalf("metadata = %+v", md)
 	}
 }
 

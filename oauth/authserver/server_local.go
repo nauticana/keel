@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"maps"
+	"net"
 	"net/url"
 	"slices"
 	"strconv"
@@ -44,10 +46,32 @@ const (
 	ErrOAuthInvalidScope       = oauthErr("invalid_scope")
 	ErrOAuthInvalidTarget      = oauthErr("invalid_target")
 	ErrOAuthAccessDenied       = oauthErr("access_denied")
+	// RFC 7591 registration errors.
+	ErrOAuthInvalidClientMetadata = oauthErr("invalid_client_metadata")
+	ErrOAuthInvalidRedirectURI    = oauthErr("invalid_redirect_uri")
 	// ErrOAuthClientLimit refuses a registration while ClientStoreDB.MaxPending
 	// unauthorized clients exist.
 	ErrOAuthClientLimit = oauthErr("temporarily_unavailable")
 )
+
+// describedErr is a protocol error with an error_description for the client.
+type describedErr struct {
+	code oauthErr
+	desc string
+}
+
+func (e describedErr) Error() string { return string(e.code) + ": " + e.desc }
+func (e describedErr) Unwrap() error { return e.code }
+
+// ProtocolErrorDescription reports the client-safe error_description of a
+// protocol error, or "" when it has none.
+func ProtocolErrorDescription(err error) string {
+	var de describedErr
+	if errors.As(err, &de) {
+		return de.desc
+	}
+	return ""
+}
 
 // ProtocolErrorCode reports the RFC 6749 error code for a client-facing AS error.
 // Anything else is internal (DB/signer/rand) — the caller logs it and returns a
@@ -82,10 +106,11 @@ type Config struct {
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	CodeTTL         time.Duration
-	// PublicClientsOnly admits through registration only public clients with
-	// the refresh_token grant: the clients GrantService and the purge cover.
-	PublicClientsOnly bool
 }
+
+// registrationGrants are the grants open registration records: the interactive
+// ones, which act only with a user's consent. Other grants need Provision.
+var registrationGrants = []string{"authorization_code", "refresh_token"}
 
 // Local is keel's local OAuth 2.1 authorization server.
 type Local struct {
@@ -140,44 +165,63 @@ func NewLocal(signer *RS256Signer, clients port.OAuthClientStore, codes port.Aut
 
 func (a *Local) Metadata() port.AuthServerMetadata {
 	base := strings.TrimRight(a.cfg.Issuer, "/")
-	grants := make([]string, 0, len(a.grants))
-	for gt := range a.grants {
-		grants = append(grants, gt)
-	}
+	grants := slices.Sorted(maps.Keys(a.grants))
+	authMethods := []string{"none", "client_secret_basic", "client_secret_post"}
 	return port.AuthServerMetadata{
-		Issuer:                            base,
-		AuthorizationEndpoint:             base + OAuthAuthorizePath,
-		TokenEndpoint:                     base + OAuthTokenPath,
-		RegistrationEndpoint:              base + OAuthRegisterPath,
-		RevocationEndpoint:                base + OAuthRevokePath,
-		IntrospectionEndpoint:             base + OAuthIntrospectPath,
-		JWKSURI:                           base + OAuthJWKSPath,
-		ScopesSupported:                   a.cfg.Scopes,
-		ResponseTypesSupported:            []string{"code"},
-		GrantTypesSupported:               grants,
-		CodeChallengeMethodsSupported:     []string{"S256"},
-		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_basic", "client_secret_post"},
+		Issuer:                                     base,
+		AuthorizationEndpoint:                      base + OAuthAuthorizePath,
+		TokenEndpoint:                              base + OAuthTokenPath,
+		RegistrationEndpoint:                       base + OAuthRegisterPath,
+		RevocationEndpoint:                         base + OAuthRevokePath,
+		IntrospectionEndpoint:                      base + OAuthIntrospectPath,
+		JWKSURI:                                    base + OAuthJWKSPath,
+		ScopesSupported:                            a.cfg.Scopes,
+		ResponseTypesSupported:                     []string{"code"},
+		GrantTypesSupported:                        grants,
+		CodeChallengeMethodsSupported:              []string{"S256"},
+		TokenEndpointAuthMethodsSupported:          authMethods,
+		ResponseModesSupported:                     []string{"query"},
+		RevocationEndpointAuthMethodsSupported:     authMethods,
+		IntrospectionEndpointAuthMethodsSupported:  authMethods,
+		AuthorizationResponseIssParameterSupported: true,
 	}
 }
 
 func (a *Local) JWKS() port.JWKS { return a.signer.JWKS() }
 
+// Register admits an open (RFC 7591) registration. Every registered client
+// gets authorization_code and refresh_token, so each one the pending bound and
+// the purge cover; a request for any other grant is refused.
 func (a *Local) Register(ctx context.Context, req port.ClientRegistration) (*port.OAuthClient, error) {
-	if len(req.RedirectURIs) == 0 {
-		return nil, ErrOAuthInvalidRequest
+	for _, gt := range req.GrantTypes {
+		if !slices.Contains(registrationGrants, gt) {
+			return nil, describedErr{ErrOAuthInvalidClientMetadata, "grant_types: registration admits only authorization_code and refresh_token"}
+		}
+	}
+	return a.createClient(ctx, req, registrationGrants, true)
+}
+
+// Provision creates an operator-managed client with any grant this AS serves.
+// It is never exposed over HTTP, and the purge never deletes its clients.
+func (a *Local) Provision(ctx context.Context, req port.ClientRegistration) (*port.OAuthClient, error) {
+	if len(req.GrantTypes) == 0 {
+		return nil, describedErr{ErrOAuthInvalidClientMetadata, "grant_types: required"}
+	}
+	for _, gt := range req.GrantTypes {
+		if _, ok := a.grants[gt]; !ok {
+			return nil, describedErr{ErrOAuthInvalidClientMetadata, "grant_types: unsupported " + gt}
+		}
+	}
+	return a.createClient(ctx, req, req.GrantTypes, false)
+}
+
+func (a *Local) createClient(ctx context.Context, req port.ClientRegistration, grants []string, registered bool) (*port.OAuthClient, error) {
+	if len(req.RedirectURIs) == 0 && slices.Contains(grants, "authorization_code") {
+		return nil, describedErr{ErrOAuthInvalidRedirectURI, "redirect_uris: required"}
 	}
 	for _, u := range req.RedirectURIs {
 		if !validRedirectURI(u) {
-			return nil, ErrOAuthInvalidRequest
-		}
-	}
-	grants := req.GrantTypes
-	if len(grants) == 0 {
-		grants = []string{"authorization_code", "refresh_token"}
-	}
-	for _, gt := range grants {
-		if _, ok := a.grants[gt]; !ok {
-			return nil, ErrOAuthInvalidRequest // don't persist a grant keel can't honor
+			return nil, describedErr{ErrOAuthInvalidRedirectURI, "redirect_uris: must be https, or http on a loopback address, without userinfo or fragment"}
 		}
 	}
 	method := req.TokenAuthMethod
@@ -187,15 +231,12 @@ func (a *Local) Register(ctx context.Context, req port.ClientRegistration) (*por
 	switch method {
 	case "none", "client_secret_basic", "client_secret_post":
 	default:
-		return nil, ErrOAuthInvalidRequest
-	}
-	if a.cfg.PublicClientsOnly && !purgeable(method, grants) {
-		return nil, ErrOAuthInvalidRequest
+		return nil, describedErr{ErrOAuthInvalidClientMetadata, "token_endpoint_auth_method: unsupported " + method}
 	}
 	// Don't persist scopes the AS doesn't support (defense-in-depth with the
 	// issuance-time clamp): a client can't even register `admin`.
 	if len(a.issuer.supportedScopes) > 0 && !isSubset(req.Scopes, a.issuer.supportedScopes) {
-		return nil, ErrOAuthInvalidScope
+		return nil, describedErr{ErrOAuthInvalidClientMetadata, "scope: not supported by this server"}
 	}
 	cid, err := randToken()
 	if err != nil {
@@ -204,10 +245,12 @@ func (a *Local) Register(ctx context.Context, req port.ClientRegistration) (*por
 	c := &port.OAuthClient{
 		ClientID:        "oc_" + cid[:32],
 		RedirectURIs:    req.RedirectURIs,
-		GrantTypes:      grants,
+		GrantTypes:      slices.Clone(grants),
 		Scopes:          req.Scopes,
 		TokenAuthMethod: method,
 		Name:            req.Name,
+		Registered:      registered,
+		CreatedAt:       time.Now(),
 	}
 	if method != "none" {
 		secret, err := randToken()
@@ -235,14 +278,14 @@ func (a *Local) ValidateAuthorizeRequest(ctx context.Context, req port.Authorize
 		return nil, nil, ErrOAuthInvalidRequest
 	}
 	if req.CodeChallenge == "" || req.CodeChallengeMethod != "S256" {
-		return nil, nil, ErrOAuthInvalidRequest
+		return client, nil, ErrOAuthInvalidRequest
 	}
 	if req.Resource != "" && !slices.Contains(a.issuer.resources, req.Resource) {
-		return nil, nil, ErrOAuthInvalidTarget
+		return client, nil, ErrOAuthInvalidTarget
 	}
 	scopes, err := a.issuer.boundScopes(req.Scopes, client.Scopes)
 	if err != nil {
-		return nil, nil, err
+		return client, nil, err
 	}
 	return client, scopes, nil
 }
@@ -293,20 +336,40 @@ func (a *Local) Token(ctx context.Context, req port.TokenRequest) (*port.TokenRe
 
 func (a *Local) Revoke(ctx context.Context, token, hint string, clientAuth port.ClientAuth) error {
 	// RFC 7009: authenticate the client; an unknown or other-client token is a
-	// 200 no-op. Access tokens are stateless and expire via TTL — we revoke the
-	// refresh token's whole rotation family.
+	// 200 no-op.
 	client, err := a.authenticateClient(ctx, clientAuth)
 	if err != nil {
 		return err
+	}
+	if token == "" {
+		return ErrOAuthInvalidRequest
 	}
 	stored, err := a.tokens.GetRefreshToken(ctx, hashToken(token))
 	if err != nil {
 		return err // DB failure — never report success while the token is still valid
 	}
-	if stored == nil || stored.ClientID != client.ClientID {
-		return nil // unknown / other-client token: RFC 7009 200 no-op
+	if stored != nil {
+		if stored.ClientID != client.ClientID {
+			return nil
+		}
+		return a.tokens.RevokeFamily(ctx, stored.FamilyID)
 	}
-	return a.tokens.RevokeFamily(ctx, stored.FamilyID)
+	// An access token is stateless: revoking it ends the grant it came from,
+	// which introspection and GrantService.Active then report.
+	userID, ok := a.ownAccessToken(ctx, token, client.ClientID)
+	if !ok {
+		return nil
+	}
+	return a.tokens.RevokeGrant(ctx, userID, client.ClientID)
+}
+
+// ownAccessToken returns the user of a valid access token issued to clientID.
+func (a *Local) ownAccessToken(ctx context.Context, token, clientID string) (int64, bool) {
+	principal, err := a.validator.Validate(ctx, token)
+	if err != nil || common.AsString(principal.Claims["client_id"]) != clientID {
+		return 0, false
+	}
+	return UserIDFromSubject(principal.Subject)
 }
 
 func (a *Local) Introspect(ctx context.Context, token string, clientAuth port.ClientAuth) (*port.Introspection, error) {
@@ -322,6 +385,17 @@ func (a *Local) Introspect(ctx context.Context, token string, clientAuth port.Cl
 	}
 	if common.AsString(principal.Claims["client_id"]) != client.ClientID {
 		return &port.Introspection{Active: false}, nil
+	}
+	// A client holding refresh tokens has a revocable grant; once it ends,
+	// its access tokens are reported inactive.
+	if userID, ok := UserIDFromSubject(principal.Subject); ok && slices.Contains(client.GrantTypes, "refresh_token") {
+		live, err := a.tokens.GrantActive(ctx, userID, client.ClientID)
+		if err != nil {
+			return nil, err
+		}
+		if !live {
+			return &port.Introspection{Active: false}, nil
+		}
 	}
 	return &port.Introspection{
 		Active:   true,
@@ -363,11 +437,12 @@ func validRedirectURI(raw string) bool {
 	u, err := url.Parse(raw)
 	// Reject userinfo ("user:pass@host"): it lets a registered URI read as one
 	// host while routing to another — an open-redirect / code-leak vector.
-	if err != nil || !u.IsAbs() || u.Fragment != "" || u.User != nil {
+	if err != nil || !u.IsAbs() || u.Host == "" || u.Fragment != "" || u.User != nil {
 		return false
 	}
 	if u.Scheme == "https" {
 		return true
 	}
-	return u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1")
+	ip := net.ParseIP(u.Hostname())
+	return u.Scheme == "http" && (u.Hostname() == "localhost" || ip != nil && ip.IsLoopback())
 }

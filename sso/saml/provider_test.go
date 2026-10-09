@@ -21,6 +21,7 @@ import (
 	crewjam "github.com/crewjam/saml"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
+	dsig "github.com/russellhaering/goxmldsig"
 )
 
 const (
@@ -61,6 +62,9 @@ type fixture struct {
 	idp      *crewjam.IdentityProvider
 	provider *Provider
 	conn     port.IdentityConnection
+	// nameIDFormat and editAssertion shape the assertion before it is signed.
+	nameIDFormat  string
+	editAssertion func(*crewjam.Assertion)
 }
 
 func keyPair(t *testing.T) (*rsa.PrivateKey, *x509.Certificate) {
@@ -81,7 +85,7 @@ func keyPair(t *testing.T) (*rsa.PrivateKey, *x509.Certificate) {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	key, cert := keyPair(t)
-	idp := &crewjam.IdentityProvider{Key: key, Signer: key, Certificate: cert,
+	idp := &crewjam.IdentityProvider{Key: key, Signer: key, Certificate: cert, SignatureMethod: dsig.RSASHA256SignatureMethod,
 		MetadataURL: mustURL(idpEntity), SSOURL: mustURL("https://idp.example/sso"), AssertionMaker: crewjam.DefaultAssertionMaker{}}
 	idpMeta, err := xml.Marshal(idp.Metadata())
 	if err != nil {
@@ -90,7 +94,7 @@ func newFixture(t *testing.T) *fixture {
 	p := &Provider{DB: &metadataDB{qs: &metadataQS{metadata: string(idpMeta)}}, EntityID: spEntityID}
 	spMeta := (&crewjam.ServiceProvider{EntityID: spEntityID, AcsURL: mustURL(callback), MetadataURL: mustURL(callback)}).Metadata()
 	idp.ServiceProviderProvider = spLookup{md: spMeta}
-	return &fixture{idp: idp, provider: p,
+	return &fixture{idp: idp, provider: p, nameIDFormat: string(crewjam.PersistentNameIDFormat),
 		conn: port.IdentityConnection{ID: 7, PartnerID: 42, Protocol: Protocol, Issuer: idpEntity, SubjectClaim: "NameID", EmailClaim: "email"}}
 }
 
@@ -118,7 +122,7 @@ func (f *fixture) signIn(t *testing.T, edit func(doc *etree.Document)) (string, 
 	if err := req.Validate(); err != nil {
 		t.Fatalf("the identity provider refused the request: %v", err)
 	}
-	session := &crewjam.Session{ID: "s", NameID: "user-1", CreateTime: time.Now(), ExpireTime: time.Now().Add(time.Hour), Index: "1",
+	session := &crewjam.Session{ID: "s", NameID: "user-1", NameIDFormat: f.nameIDFormat, CreateTime: time.Now(), ExpireTime: time.Now().Add(time.Hour), Index: "1",
 		CustomAttributes: []crewjam.Attribute{
 			{Name: "email", Values: []crewjam.AttributeValue{{Type: "xs:string", Value: "ada@acme.example"}}},
 			{Name: "groups", Values: []crewjam.AttributeValue{{Type: "xs:string", Value: "admins"}, {Type: "xs:string", Value: "staff"}}},
@@ -126,6 +130,9 @@ func (f *fixture) signIn(t *testing.T, edit func(doc *etree.Document)) (string, 
 		}}
 	if err := f.idp.AssertionMaker.MakeAssertion(req, session); err != nil {
 		t.Fatal(err)
+	}
+	if f.editAssertion != nil {
+		f.editAssertion(req.Assertion)
 	}
 	if err := req.MakeAssertionEl(); err != nil {
 		t.Fatal(err)
@@ -302,5 +309,103 @@ func TestOverageAndAttributeFallbacks(t *testing.T) {
 	}
 	if _, err := assertionFor(port.IdentityConnection{Issuer: idpEntity, SubjectClaim: "objectid"}, as); !errors.Is(err, ErrInvalidResponse) {
 		t.Fatalf("missing subject attribute = %v", err)
+	}
+}
+
+func TestAuthnRequestAsksForUnspecifiedNameID(t *testing.T) {
+	f := newFixture(t)
+	r, err := f.provider.Begin(context.Background(), f.conn, port.IdentityBegin{State: "st-1", RedirectURI: callback})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := crewjam.NewIdpAuthnRequest(f.idp, httptest.NewRequest(http.MethodGet, r.URL, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if policy := req.Request.NameIDPolicy; policy == nil || (policy.Format != nil && *policy.Format != "") {
+		t.Fatalf("NameIDPolicy = %+v, want no Format (unspecified)", policy)
+	}
+	md, err := f.provider.Metadata(callback)
+	if err != nil || strings.Contains(string(md), string(crewjam.TransientNameIDFormat)) {
+		t.Fatalf("metadata must not advertise transient: %s, %v", md, err)
+	}
+}
+
+func TestTransientNameIDIsNotASubject(t *testing.T) {
+	f := newFixture(t)
+	f.nameIDFormat = string(crewjam.TransientNameIDFormat)
+	for _, subjectClaim := range []string{"", "NameID"} {
+		f.conn.SubjectClaim = subjectClaim
+		pending, params := f.signIn(t, nil)
+		if _, err := f.complete(pending, params); !errors.Is(err, ErrInvalidResponse) {
+			t.Fatalf("subject claim %q from a transient NameID = %v", subjectClaim, err)
+		}
+	}
+	f.conn.SubjectClaim = "email"
+	pending, params := f.signIn(t, nil)
+	if a, err := f.complete(pending, params); err != nil || a.Subject != "ada@acme.example" {
+		t.Fatalf("subject attribute beside a transient NameID = %+v, %v", a, err)
+	}
+}
+
+func TestSignedAssertionShapeRefusals(t *testing.T) {
+	cases := map[string]func(*crewjam.Assertion){
+		"no subject":              func(a *crewjam.Assertion) { a.Subject = nil },
+		"no conditions":           func(a *crewjam.Assertion) { a.Conditions = nil },
+		"no confirmation data":    func(a *crewjam.Assertion) { a.Subject.SubjectConfirmations[0].SubjectConfirmationData = nil },
+		"no subject confirmation": func(a *crewjam.Assertion) { a.Subject.SubjectConfirmations = nil },
+		"holder-of-key only": func(a *crewjam.Assertion) {
+			a.Subject.SubjectConfirmations[0].Method = "urn:oasis:names:tc:SAML:2.0:cm:holder-of-key"
+		},
+		"no audience restriction": func(a *crewjam.Assertion) { a.Conditions.AudienceRestrictions = nil },
+		"restriction excluding keel": func(a *crewjam.Assertion) {
+			a.Conditions.AudienceRestrictions = append(a.Conditions.AudienceRestrictions, crewjam.AudienceRestriction{Audience: crewjam.Audience{Value: "https://other.example"}})
+		},
+	}
+	for name, edit := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.editAssertion = edit
+			pending, params := f.signIn(t, nil)
+			if a, err := f.complete(pending, params); !errors.Is(err, ErrInvalidResponse) {
+				t.Fatalf("Complete = %+v, %v", a, err)
+			}
+		})
+	}
+}
+
+func TestSHA1SignatureIsRefused(t *testing.T) {
+	f := newFixture(t)
+	f.idp.SignatureMethod = dsig.RSASHA1SignatureMethod
+	pending, params := f.signIn(t, nil)
+	if a, err := f.complete(pending, params); !errors.Is(err, ErrInvalidResponse) || !strings.Contains(err.Error(), "not accepted") {
+		t.Fatalf("SHA-1 signed response = %+v, %v", a, err)
+	}
+}
+
+func TestCheckAssertionExpiredConfirmation(t *testing.T) {
+	now := time.Now()
+	as := &crewjam.Assertion{
+		Subject: &crewjam.Subject{SubjectConfirmations: []crewjam.SubjectConfirmation{{Method: bearerMethod,
+			SubjectConfirmationData: &crewjam.SubjectConfirmationData{Recipient: callback, NotOnOrAfter: now.Add(-time.Hour)}}}},
+		Conditions: &crewjam.Conditions{AudienceRestrictions: []crewjam.AudienceRestriction{{Audience: crewjam.Audience{Value: spEntityID}}}},
+	}
+	if err := checkAssertion(as, spEntityID, callback, now); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("expired confirmation = %v", err)
+	}
+	as.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotOnOrAfter = now.Add(time.Minute)
+	if err := checkAssertion(as, spEntityID, callback, now); err != nil {
+		t.Fatalf("valid confirmation = %v", err)
+	}
+	as.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotBefore = now.Add(time.Hour)
+	if err := checkAssertion(as, spEntityID, callback, now); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("future confirmation = %v", err)
+	}
+	as.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotBefore = time.Time{}
+	if err := checkAssertion(as, spEntityID, "https://api.example/other", now); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("other recipient = %v", err)
 	}
 }

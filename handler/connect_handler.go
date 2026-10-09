@@ -3,12 +3,14 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/oauth/client"
 	"github.com/nauticana/keel/oauth/connect"
 )
@@ -39,12 +41,15 @@ type callbackValidator interface {
 type OAuthConnectHandler struct {
 	AbstractHandler
 	Providers map[string]client.Provider
-	// FrontendReturnURL is where the callback redirects the browser after a
-	// connection completes; the result is appended as "?<provider>=success".
+	// FrontendReturnURL receives the browser from the provider callback with
+	// "?connect=<provider>&ticket=<ticket>"; the signed-in app posts the ticket
+	// to /api/oauth/<provider>/complete to finish the connection.
 	FrontendReturnURL string
 	// Store, when set, enables POST /api/oauth/apikey for non-OAuth providers,
 	// sealing the supplied key at rest. Leave nil for OAuth-only apps.
 	Store connect.Store
+	// Nonce holds callback tickets; without it every callback fails closed.
+	Nonce *connect.NonceService
 	// Authz gates the connection-mutating routes (authorize / test / apikey) —
 	// e.g. WrapTableAction(db, userSvc, "PARTNER_CREDENTIAL", "MANAGE", scope,
 	// inner). The provider callback is left ungated (reached by a provider redirect,
@@ -64,6 +69,7 @@ func (h *OAuthConnectHandler) Routes() map[string]http.HandlerFunc {
 		name, p := name, p
 		routes["/api/oauth/"+name+"/authorize"] = h.gate(h.authorize(name, p))
 		routes["/api/oauth/"+name+"/callback"] = h.callback(name, p)
+		routes["/api/oauth/"+name+"/complete"] = h.gate(h.complete(name, p))
 		routes["/api/oauth/"+name+"/test"] = h.gate(h.test(name, p))
 	}
 	if h.Store != nil {
@@ -141,6 +147,10 @@ func (h *OAuthConnectHandler) authorize(_ string, p client.Provider) http.Handle
 		if !ok {
 			return
 		}
+		userID, ok := h.RequireUser(w, r)
+		if !ok {
+			return
+		}
 		params := make(map[string]string)
 		for k, v := range r.URL.Query() {
 			if len(v) > 0 {
@@ -153,7 +163,8 @@ func (h *OAuthConnectHandler) authorize(_ string, p client.Provider) http.Handle
 			return
 		}
 		params[client.StateEntityKey] = strconv.FormatInt(entityID, 10)
-		u, err := p.AuthURL(r.Context(), partnerID, params)
+		ctx := client.WithInitiator(r.Context(), client.Initiator{UserID: int64(userID), PartnerID: partnerID})
+		u, err := p.AuthURL(ctx, partnerID, params)
 		if err != nil {
 			h.WriteError(w, http.StatusInternalServerError, "OAuth URL Generation Failed", err.Error())
 			return
@@ -162,38 +173,118 @@ func (h *OAuthConnectHandler) authorize(_ string, p client.Provider) http.Handle
 	}
 }
 
-// callback finishes the flow. Browser-redirect: failures redirect/return an error
-// rather than a JSON envelope. The entity scope is recovered from the state by
-// the provider, not the handler.
+// connectTicket is what the provider callback hands the signed-in app.
+type connectTicket struct {
+	Provider string `json:"provider"`
+	Query    string `json:"query"`
+}
+
+const connectTicketPurpose = "oauth_callback"
+
+// callback is reached by the provider's redirect, without a keel session. It
+// checks the callback and parks it under a single-use ticket for complete, so
+// the connection is only made for the user who started the flow.
 func (h *OAuthConnectHandler) callback(name string, p client.Provider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
-		code := r.URL.Query().Get("code")
-		state := r.URL.Query().Get("state")
-		if code == "" || state == "" {
+		query := r.URL.Query()
+		if query.Get("code") == "" || query.Get("state") == "" {
 			h.WriteError(w, http.StatusBadRequest, "Bad Request", "missing code or state")
 			return
 		}
 		if v, ok := p.(callbackValidator); ok {
-			if err := v.ValidateCallback(r.Context(), r.URL.Query()); err != nil {
+			if err := v.ValidateCallback(r.Context(), query); err != nil {
 				h.WriteError(w, http.StatusForbidden, "Forbidden", err.Error())
 				return
 			}
 		}
-		// Carry the callback query into the persist flow so a provider's
-		// DeriveAPIEndpoint can read redirect-only params (e.g. Clover's merchant_id).
-		ctx := client.WithCallbackQuery(r.Context(), r.URL.Query())
-		if err := p.Callback(ctx, code, state); err != nil {
-			if h.Journal != nil {
-				h.Journal.Error("oauth callback failed for " + name + ": " + err.Error())
-			}
-			h.WriteError(w, http.StatusInternalServerError, "OAuth Callback Failed", "callback processing failed")
+		if h.Nonce == nil {
+			h.WriteError(w, http.StatusInternalServerError, "OAuth Callback Failed", "connection tickets not configured")
 			return
 		}
-		http.Redirect(w, r, h.FrontendReturnURL+"?"+name+"=success", http.StatusFound)
+		payload, err := json.Marshal(connectTicket{Provider: name, Query: r.URL.RawQuery})
+		if err == nil {
+			var ticket string
+			if ticket, err = h.Nonce.Create(r.Context(), connectTicketPurpose, string(payload)); err == nil {
+				http.Redirect(w, r, h.FrontendReturnURL+"?"+url.Values{"connect": {name}, "ticket": {ticket}}.Encode(), http.StatusFound)
+				return
+			}
+		}
+		if h.Journal != nil {
+			h.Journal.Error("oauth callback ticket for " + name + ": " + err.Error())
+		}
+		h.WriteError(w, http.StatusInternalServerError, "OAuth Callback Failed", "callback processing failed")
 	}
+}
+
+// complete redeems a callback ticket for the signed-in user, who must be the
+// one who started the flow.
+func (h *OAuthConnectHandler) complete(name string, p client.Provider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !h.RequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		partnerID, ok := h.RequirePartner(w, r)
+		if !ok {
+			return
+		}
+		userID, ok := h.RequireUser(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			Ticket string `json:"ticket"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12))
+		if err := dec.Decode(&body); err != nil || requireJSONEOF(dec) != nil || body.Ticket == "" {
+			h.WriteError(w, http.StatusBadRequest, "Bad Request", "ticket is required")
+			return
+		}
+		if h.Nonce == nil {
+			h.WriteError(w, http.StatusInternalServerError, "OAuth Callback Failed", "connection tickets not configured")
+			return
+		}
+		ttl := config.Config().OAuthStateTTLSeconds
+		raw, found, err := h.Nonce.Peek(r.Context(), body.Ticket, connectTicketPurpose, ttl)
+		if err != nil {
+			h.completeFailed(w, name, err)
+			return
+		}
+		var ticket connectTicket
+		if !found || json.Unmarshal([]byte(raw), &ticket) != nil || ticket.Provider != name {
+			h.WriteError(w, http.StatusBadRequest, "Bad Request", "invalid or expired ticket")
+			return
+		}
+		query, err := url.ParseQuery(ticket.Query)
+		if err != nil {
+			h.WriteError(w, http.StatusBadRequest, "Bad Request", "invalid or expired ticket")
+			return
+		}
+		ctx := client.WithInitiator(r.Context(), client.Initiator{UserID: int64(userID), PartnerID: partnerID})
+		// DeriveAPIEndpoint may read redirect-only params (e.g. Clover's merchant_id).
+		ctx = client.WithCallbackQuery(ctx, query)
+		if err := p.Callback(ctx, query.Get("code"), query.Get("state")); err != nil {
+			if errors.Is(err, connect.ErrStateNotBound) {
+				h.WriteError(w, http.StatusForbidden, "Forbidden", "the connection was started by another user")
+				return
+			}
+			h.completeFailed(w, name, err)
+			return
+		}
+		if _, _, err := h.Nonce.Consume(r.Context(), body.Ticket, connectTicketPurpose, ttl); err != nil && h.Journal != nil {
+			h.Journal.Warning("oauth callback ticket cleanup for " + name + ": " + err.Error())
+		}
+		common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "provider": name})
+	}
+}
+
+func (h *OAuthConnectHandler) completeFailed(w http.ResponseWriter, name string, err error) {
+	if h.Journal != nil {
+		h.Journal.Error("oauth callback failed for " + name + ": " + err.Error())
+	}
+	h.WriteError(w, http.StatusInternalServerError, "OAuth Callback Failed", "callback processing failed")
 }
 
 // test re-validates a stored connection (POST: it makes an outbound call and

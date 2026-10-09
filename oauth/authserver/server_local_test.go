@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -39,13 +40,14 @@ func (s *memCodes) SaveCode(_ context.Context, c *port.AuthCode, ttl time.Durati
 func (s *memCodes) ConsumeCode(_ context.Context, code string) (*port.AuthCode, error) {
 	c, ok := s.m[code]
 	if !ok {
-		return nil, nil // single-use: already consumed
-	}
-	delete(s.m, code)
-	if time.Now().After(c.ExpiresAt) {
 		return nil, nil
 	}
-	return c, nil
+	out := *c
+	c.Replayed = true
+	if !out.Replayed && time.Now().After(out.ExpiresAt) {
+		return nil, nil
+	}
+	return &out, nil
 }
 
 type memTokens struct{ m map[string]*port.RefreshToken }
@@ -82,6 +84,23 @@ func (s *memTokens) RevokeForUser(_ context.Context, uid int64) error {
 		}
 	}
 	return nil
+}
+func (s *memTokens) RevokeGrant(_ context.Context, userID int64, clientID string) error {
+	now := time.Now()
+	for _, t := range s.m {
+		if t.UserID == userID && t.ClientID == clientID && t.RevokedAt == nil {
+			t.RevokedAt = &now
+		}
+	}
+	return nil
+}
+func (s *memTokens) GrantActive(_ context.Context, userID int64, clientID string) (bool, error) {
+	for _, t := range s.m {
+		if t.UserID == userID && t.ClientID == clientID && t.RevokedAt == nil && time.Now().Before(t.ExpiresAt) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func (s *memTokens) Rotate(_ context.Context, oldHash string, t *port.RefreshToken) error {
 	old := s.m[oldHash]
@@ -284,7 +303,7 @@ func TestRevokeRequiresClientAuth(t *testing.T) {
 
 func TestTokenEnforcesClientGrantTypes(t *testing.T) {
 	as, _ := newTestAS(t)
-	client, _ := as.Register(context.Background(), port.ClientRegistration{
+	client, _ := as.Provision(context.Background(), port.ClientRegistration{
 		RedirectURIs:    []string{"https://app.example/cb"},
 		GrantTypes:      []string{"authorization_code"}, // NOT client_credentials
 		TokenAuthMethod: "client_secret_basic",
@@ -347,27 +366,32 @@ func TestRegisterRejectsUnsupportedScopeAndAuthMethod(t *testing.T) {
 	as, _ := newTestAS(t) // supports read, write
 	if _, err := as.Register(context.Background(), port.ClientRegistration{
 		RedirectURIs: []string{"https://app.example/cb"}, Scopes: []string{"admin"},
-	}); err != ErrOAuthInvalidScope {
-		t.Fatalf("admin registration: want invalid_scope, got %v", err)
+	}); !errors.Is(err, ErrOAuthInvalidClientMetadata) {
+		t.Fatalf("admin registration: want invalid_client_metadata, got %v", err)
 	}
 	if _, err := as.Register(context.Background(), port.ClientRegistration{
 		RedirectURIs: []string{"https://app.example/cb"}, TokenAuthMethod: "magic",
-	}); err != ErrOAuthInvalidRequest {
-		t.Fatalf("bad auth method: want invalid_request, got %v", err)
+	}); !errors.Is(err, ErrOAuthInvalidClientMetadata) {
+		t.Fatalf("bad auth method: want invalid_client_metadata, got %v", err)
 	}
 }
 
-func TestRegisterRejectsUserinfoRedirect(t *testing.T) {
+func TestRegisterValidatesRedirectURI(t *testing.T) {
 	as, _ := newTestAS(t)
 	for _, uri := range []string{
 		"https://app.example@evil.example/cb", // host is evil.example, reads as app.example
 		"https://user:pass@app.example/cb",
+		"https:opaque",
+		"https:/missing-host",
 	} {
 		if _, err := as.Register(context.Background(), port.ClientRegistration{
 			RedirectURIs: []string{uri},
-		}); err != ErrOAuthInvalidRequest {
-			t.Fatalf("userinfo redirect %q: want invalid_request, got %v", uri, err)
+		}); !errors.Is(err, ErrOAuthInvalidRedirectURI) {
+			t.Fatalf("userinfo redirect %q: want invalid_redirect_uri, got %v", uri, err)
 		}
+	}
+	if _, err := as.Register(context.Background(), port.ClientRegistration{RedirectURIs: []string{"http://[::1]:8080/cb"}}); err != nil {
+		t.Fatalf("IPv6 loopback redirect: %v", err)
 	}
 }
 
@@ -386,7 +410,7 @@ func TestBoundScopesClampsToSupported(t *testing.T) {
 
 func TestAuthCodeNoRefreshWhenGrantNotRegistered(t *testing.T) {
 	as, _ := newTestAS(t)
-	client, _ := as.Register(context.Background(), port.ClientRegistration{
+	client, _ := as.Provision(context.Background(), port.ClientRegistration{
 		RedirectURIs: []string{"https://app.example/cb"}, Scopes: []string{"read"},
 		GrantTypes: []string{"authorization_code"}, // no refresh_token
 	})
@@ -413,8 +437,7 @@ func TestTokenExchangeBoundedByClientScopes(t *testing.T) {
 	// Subject token carries read+write.
 	subject, _ := mintToken(t, as, []string{"read", "write"}, "https://rs.example")
 	// Exchanger client is only allowed read.
-	ex, _ := as.Register(context.Background(), port.ClientRegistration{
-		RedirectURIs:    []string{"https://app.example/cb"},
+	ex, _ := as.Provision(context.Background(), port.ClientRegistration{
 		Scopes:          []string{"read"},
 		GrantTypes:      []string{"urn:ietf:params:oauth:grant-type:token-exchange"},
 		TokenAuthMethod: "client_secret_basic",
@@ -472,18 +495,20 @@ func TestResourceMustBeKnown(t *testing.T) {
 	}
 }
 
-func TestRegisterRejectsUnsupportedGrant(t *testing.T) {
+func TestProvisionRejectsUnsupportedGrant(t *testing.T) {
 	as, _ := newTestAS(t)
-	if _, err := as.Register(context.Background(), port.ClientRegistration{
-		RedirectURIs: []string{"https://app.example/cb"}, GrantTypes: []string{"password"},
-	}); err != ErrOAuthInvalidRequest {
-		t.Fatalf("unsupported grant: want invalid_request, got %v", err)
+	for _, grants := range [][]string{nil, {"password"}} {
+		if _, err := as.Provision(context.Background(), port.ClientRegistration{
+			RedirectURIs: []string{"https://app.example/cb"}, GrantTypes: grants,
+		}); !errors.Is(err, ErrOAuthInvalidClientMetadata) {
+			t.Fatalf("grants %v: want invalid_client_metadata, got %v", grants, err)
+		}
 	}
 }
 
 func TestClientAuthMethodEnforced(t *testing.T) {
 	as, _ := newTestAS(t)
-	client, _ := as.Register(context.Background(), port.ClientRegistration{
+	client, _ := as.Provision(context.Background(), port.ClientRegistration{
 		RedirectURIs: []string{"https://app.example/cb"}, Scopes: []string{"read"},
 		GrantTypes: []string{"client_credentials"}, TokenAuthMethod: "client_secret_basic",
 	})
@@ -523,8 +548,8 @@ func TestValidateAuthorizeReturnsGrantedScopesForOmittedRequest(t *testing.T) {
 func TestTokenExchangeRequiresAccessTokenType(t *testing.T) {
 	as, _ := newTestAS(t)
 	subject, _ := mintToken(t, as, []string{"read"}, "https://rs.example")
-	ex, _ := as.Register(context.Background(), port.ClientRegistration{
-		RedirectURIs: []string{"https://app.example/cb"}, Scopes: []string{"read"},
+	ex, _ := as.Provision(context.Background(), port.ClientRegistration{
+		Scopes:     []string{"read"},
 		GrantTypes: []string{"urn:ietf:params:oauth:grant-type:token-exchange"}, TokenAuthMethod: "client_secret_basic",
 	})
 	tx := func(typ string) error {

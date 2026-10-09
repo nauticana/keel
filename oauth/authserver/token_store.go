@@ -50,8 +50,9 @@ func grantLockKey(userID int64, clientID string) string {
 // TokenStoreDB persists refresh tokens (token_hash, never the raw token).
 // The caller hashes before storing/looking up.
 type TokenStoreDB struct {
-	DB port.DatabaseRepository
-	qs port.QueryService
+	DB     port.DatabaseRepository
+	qs     port.QueryService
+	grants *GrantService
 }
 
 var _ port.OAuthTokenStore = (*TokenStoreDB)(nil)
@@ -59,6 +60,7 @@ var _ port.OAuthTokenStore = (*TokenStoreDB)(nil)
 func (s *TokenStoreDB) Init(ctx context.Context) {
 	if s.qs == nil {
 		s.qs = s.DB.GetQueryService(ctx, oauthTokenQueries)
+		s.grants = &GrantService{DB: s.DB}
 	}
 }
 
@@ -143,4 +145,15 @@ func (s *TokenStoreDB) RevokeFamily(ctx context.Context, familyID string) error 
 func (s *TokenStoreDB) RevokeForUser(ctx context.Context, userID int64) error {
 	_, err := s.qs.Query(ctx, oauthRevokeUser, userID)
 	return err
+}
+
+func (s *TokenStoreDB) RevokeGrant(ctx context.Context, userID int64, clientID string) error {
+	if err := s.grants.Revoke(ctx, userID, clientID); err != nil && !errors.Is(err, ErrGrantNotFound) {
+		return err
+	}
+	return nil
+}
+
+func (s *TokenStoreDB) GrantActive(ctx context.Context, userID int64, clientID string) (bool, error) {
+	return s.grants.Active(ctx, userID, clientID)
 }

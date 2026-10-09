@@ -41,6 +41,8 @@ type SocialVerifier struct {
 
 // Verify returns the identity, with the canonical issuer, and the token's
 // nonce for the caller's replay check. Both providers sign with RS256 only.
+// A Google azp is not checked: a mobile client's token names the server
+// client as aud and its own platform client of the same project as azp.
 func (v *SocialVerifier) Verify(ctx context.Context, provider, token string) (*port.IdentityAssertion, string, error) {
 	googleKeys, appleKeys := v.keys()
 	var (
@@ -60,6 +62,9 @@ func (v *SocialVerifier) Verify(ctx context.Context, provider, token string) (*p
 		if iss, _ := claims["iss"].(string); iss != GoogleIssuer && iss != googleBareIssuer {
 			return nil, "", fmt.Errorf("%w: google issuer %q", ErrInvalidResponse, iss)
 		}
+		if err := checkSoleAudience(claims, aud); err != nil {
+			return nil, "", err
+		}
 		issuer = GoogleIssuer
 	case ProviderApple:
 		aud := config.Config().AppleClientID
@@ -67,6 +72,9 @@ func (v *SocialVerifier) Verify(ctx context.Context, provider, token string) (*p
 			return nil, "", ErrProviderDisabled
 		}
 		if claims, err = crypto.VerifyRS256(ctx, appleKeys, token, aud, AppleIssuer); err != nil {
+			return nil, "", err
+		}
+		if err := checkAudience(claims, aud); err != nil {
 			return nil, "", err
 		}
 		issuer = AppleIssuer

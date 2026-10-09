@@ -24,18 +24,27 @@ import (
 // keys the issuer may have rotated days ago (outage / DNS-hijack guard).
 const jwksHardCap = 24 * time.Hour
 
+// jwksMissRefreshInterval spaces refreshes forced by an unknown kid, so
+// attacker-chosen kids cannot hammer the issuer's JWKS endpoint.
+const jwksMissRefreshInterval = 30 * time.Second
+
+// jwtLeeway tolerates clock skew between keel and the token issuer.
+const jwtLeeway = 60 * time.Second
+
 // JWKSProvider caches a remote JWKS in memory, refreshing on the soft TTL
 // or on an unknown `kid`. Shared by social ID-token verification and the
 // OAuth 2.1 resource-server validator. Concurrent refreshes collapse to a
 // single fetch via singleflight.
 type JWKSProvider struct {
-	url       string
-	ttl       time.Duration
-	httpc     *http.Client
-	mu        sync.RWMutex
-	keys      map[string]jwk
-	fetchedAt time.Time
-	sf        singleflight.Group
+	url         string
+	ttl         time.Duration
+	httpc       *http.Client
+	now         func() time.Time
+	mu          sync.RWMutex
+	keys        map[string]jwk
+	fetchedAt   time.Time
+	attemptedAt time.Time
+	sf          singleflight.Group
 }
 
 // NewJWKSProvider returns a provider for url. ttl is the soft cache
@@ -44,7 +53,7 @@ func NewJWKSProvider(url string, ttl time.Duration, httpc *http.Client) *JWKSPro
 	if httpc == nil {
 		httpc = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &JWKSProvider{url: url, ttl: ttl, httpc: httpc, keys: map[string]jwk{}}
+	return &JWKSProvider{url: url, ttl: ttl, httpc: httpc, now: time.Now, keys: map[string]jwk{}}
 }
 
 // jwk is one parsed key: an *rsa.PublicKey or *ecdsa.PublicKey, and the
@@ -54,10 +63,11 @@ type jwk struct {
 	alg string
 }
 
-// KeyForKid returns the RSA public key for kid, refreshing on unknown kid
-// or elapsed TTL. Concurrent misses dedup through a singleflight keyed on
-// the URL. On refresh failure within jwksHardCap, the last good key is
-// served; past the cap the error propagates.
+// KeyForKid returns the RSA public key for kid, refreshing on elapsed TTL
+// or on an unknown kid (at most once per jwksMissRefreshInterval).
+// Concurrent misses dedup through a singleflight keyed on the URL. On
+// refresh failure within jwksHardCap, the last good key is served; past the
+// cap the error propagates.
 func (p *JWKSProvider) KeyForKid(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	k, err := p.keyForKid(ctx, kid)
 	if err != nil {
@@ -73,22 +83,25 @@ func (p *JWKSProvider) KeyForKid(ctx context.Context, kid string) (*rsa.PublicKe
 func (p *JWKSProvider) keyForKid(ctx context.Context, kid string) (jwk, error) {
 	p.mu.RLock()
 	key, ok := p.keys[kid]
-	stale := time.Since(p.fetchedAt) > p.ttl
+	stale := p.now().Sub(p.fetchedAt) > p.ttl
 	p.mu.RUnlock()
 	if ok && !stale {
 		return key, nil
 	}
 	if _, err, _ := p.sf.Do(p.url, func() (any, error) {
+		now := p.now()
 		p.mu.RLock()
-		fresh := time.Since(p.fetchedAt) <= p.ttl
+		_, known := p.keys[kid]
+		fresh := now.Sub(p.fetchedAt) <= p.ttl
+		throttled := now.Sub(p.attemptedAt) < jwksMissRefreshInterval
 		p.mu.RUnlock()
-		if fresh {
+		if fresh && (known || throttled) {
 			return nil, nil
 		}
 		return nil, p.refresh(ctx)
 	}); err != nil {
 		p.mu.RLock()
-		within := !p.fetchedAt.IsZero() && time.Since(p.fetchedAt) < jwksHardCap
+		within := !p.fetchedAt.IsZero() && p.now().Sub(p.fetchedAt) < jwksHardCap
 		p.mu.RUnlock()
 		if ok && within {
 			return key, nil
@@ -106,6 +119,9 @@ func (p *JWKSProvider) keyForKid(ctx context.Context, kid string) (jwk, error) {
 
 // refresh fetches the JWKS URL and atomically swaps the key map.
 func (p *JWKSProvider) refresh(ctx context.Context) error {
+	p.mu.Lock()
+	p.attemptedAt = p.now()
+	p.mu.Unlock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
 	if err != nil {
 		return fmt.Errorf("jwks: build request: %w", err)
@@ -128,6 +144,7 @@ func (p *JWKSProvider) refresh(ctx context.Context) error {
 			Kid string `json:"kid"`
 			Kty string `json:"kty"`
 			Alg string `json:"alg"`
+			Use string `json:"use"`
 			N   string `json:"n"`
 			E   string `json:"e"`
 			Crv string `json:"crv"`
@@ -140,6 +157,9 @@ func (p *JWKSProvider) refresh(ctx context.Context) error {
 	}
 	keys := make(map[string]jwk, len(doc.Keys))
 	for _, k := range doc.Keys {
+		if k.Use != "" && k.Use != "sig" {
+			continue
+		}
 		if k.Kty == "EC" {
 			if key := ecKey(k.Crv, k.X, k.Y); key != nil {
 				keys[k.Kid] = jwk{key: key, alg: k.Alg}
@@ -168,16 +188,16 @@ func (p *JWKSProvider) refresh(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	p.keys = keys
-	p.fetchedAt = time.Now()
+	p.fetchedAt = p.now()
 	p.mu.Unlock()
 	return nil
 }
 
 // VerifyRS256 parses and validates an RS256 JWT against p, asserting
-// expiry, audience, and (when non-empty) issuer. expectedAud is required.
-// Returns the validated claims.
+// expiry, audience, and (when non-empty) issuer, with an RSA key of at least
+// 2048 bits. expectedAud is required. Returns the validated claims.
 func VerifyRS256(ctx context.Context, p *JWKSProvider, tokenStr, expectedAud, expectedIss string) (jwt.MapClaims, error) {
-	return verify(ctx, p, tokenStr, expectedAud, expectedIss, []string{"RS256"}, 0)
+	return verify(ctx, p, tokenStr, expectedAud, expectedIss, []string{"RS256"})
 }
 
 // asymmetricAlgorithms are the signature algorithms VerifyAsymmetric accepts.
@@ -202,22 +222,28 @@ func VerifyAsymmetric(ctx context.Context, p *JWKSProvider, tokenStr, expectedAu
 	if len(algorithms) == 0 {
 		return nil, fmt.Errorf("jwks: the issuer advertises no accepted signing algorithm")
 	}
-	return verify(ctx, p, tokenStr, expectedAud, expectedIss, algorithms, minRSABits)
+	return verify(ctx, p, tokenStr, expectedAud, expectedIss, algorithms)
 }
 
-func verify(ctx context.Context, p *JWKSProvider, tokenStr, expectedAud, expectedIss string, algorithms []string, rsaBits int) (jwt.MapClaims, error) {
+// verify refuses a `crit` header: keel understands no JWS extension
+// (RFC 7515 §4.1.11).
+func verify(ctx context.Context, p *JWKSProvider, tokenStr, expectedAud, expectedIss string, algorithms []string) (jwt.MapClaims, error) {
 	if expectedAud == "" {
 		return nil, fmt.Errorf("jwks: expectedAud is required")
 	}
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods(algorithms),
 		jwt.WithExpirationRequired(),
+		jwt.WithLeeway(jwtLeeway),
 		jwt.WithAudience(expectedAud),
 	}
 	if expectedIss != "" {
 		opts = append(opts, jwt.WithIssuer(expectedIss))
 	}
 	tok, err := jwt.NewParser(opts...).ParseWithClaims(tokenStr, jwt.MapClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Header["crit"]; ok {
+			return nil, fmt.Errorf("jwks: unsupported critical header parameters")
+		}
 		kid, _ := t.Header["kid"].(string)
 		if kid == "" {
 			return nil, fmt.Errorf("jwks: missing kid header")
@@ -232,8 +258,8 @@ func verify(ctx context.Context, p *JWKSProvider, tokenStr, expectedAud, expecte
 		}
 		switch key := k.key.(type) {
 		case *rsa.PublicKey:
-			if key.N.BitLen() < rsaBits {
-				return nil, fmt.Errorf("jwks: kid %q RSA key is shorter than %d bits", kid, rsaBits)
+			if key.N.BitLen() < minRSABits {
+				return nil, fmt.Errorf("jwks: kid %q RSA key is shorter than %d bits", kid, minRSABits)
 			}
 		case *ecdsa.PublicKey:
 			if want := map[string]string{"ES256": "P-256", "ES384": "P-384"}[alg]; key.Curve.Params().Name != want {

@@ -35,6 +35,10 @@ func (d *nonceDB) Query(_ context.Context, name string, args ...any) (*model.Que
 			delete(d.rows, args[0].(string))
 			out.Rows = [][]any{{row[1]}}
 		}
+	case "nonce_peek":
+		if row, ok := d.rows[args[0].(string)]; ok && row[0] == args[1].(string) {
+			out.Rows = [][]any{{row[1]}}
+		}
 	}
 	return out, nil
 }

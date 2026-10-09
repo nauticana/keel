@@ -806,7 +806,7 @@ Downstream handlers read identity with the same accessors as the X-API-Key path 
 | `oauth_audience` | Expected token audience = this resource's id (RFC 8707). |
 | `oauth_resource` | Canonical resource URL in the metadata doc. Empty → `oauth_audience`. |
 | `oauth_scopes_supported` | CSV scopes advertised in metadata. Optional. |
-| `oauth_max_pending_clients` | Maximum pending open registrations. `0` is unbounded; a positive value admits only public refresh-token clients. |
+| `oauth_max_pending_clients` | Maximum pending open registrations. `0` is unbounded. |
 
 All non-secret. For multiple issuers, construct one `resource.JWTValidator` per issuer and dispatch on the token's `iss`.
 
@@ -831,11 +831,79 @@ When the login page receives `?return=`, the SPA posts `{"return": <value>}` wit
 - `List(ctx, userID)` returns each client with its name, scopes, first authorization and newest token.
 - `Revoke(ctx, userID, clientID)` revokes every refresh token of the pair, or returns `ErrGrantNotFound`; it is serialized with refresh rotation, so a concurrent refresh cannot keep the grant alive.
 - `Active(ctx, userID, clientID)` lets a resource server honor a revocation before the access token expires.
-- `PurgeUnauthorizedClients(ctx, olderThan)` deletes, in batches, public clients that registered for refresh tokens and never completed an authorization.
+- `PurgeUnauthorizedClients(ctx, olderThan)` deletes, in batches, openly registered clients that never completed an authorization.
 
-`oauth_max_pending_clients` bounds that pending set atomically; a positive value also admits only public refresh-token clients. One more registration returns `ErrOAuthClientLimit` (`temporarily_unavailable`, 503). Direct composition uses `ClientStoreDB.MaxPending` with `Config.PublicClientsOnly`. `authserver.UserIDFromSubject` parses the `user:<id>` token subject.
+`oauth_max_pending_clients` bounds that pending set atomically. One more registration returns `ErrOAuthClientLimit` (`temporarily_unavailable`, 503). Direct composition uses `ClientStoreDB.MaxPending`. `authserver.UserIDFromSubject` parses the `user:<id>` token subject.
+
+Open registration (`POST /oauth/register`, RFC 7591) admits public (`none`, PKCE) and confidential (`client_secret_basic`, `client_secret_post`) clients and always records `authorization_code` and `refresh_token`. A request for any other grant is refused, so `client_credentials` and token-exchange clients are created by the operator with `AuthorizationServer.Provision`, which the purge never deletes. Refusals return `invalid_client_metadata` or `invalid_redirect_uri` with an `error_description` naming the field, and are logged at warning level.
 
 An unauthenticated `/authorize` redirects to `LoginURL` with `return` set to the absolute authorize URL built from the configured issuer, so a login page on another origin knows where to send the user back.
+
+## Adopting a release
+
+Upgrade from one tagged release to the next, reading its entry in `migration_guide.json`; the README describes only the current state.
+
+- **Apply every breaking item.** Each names the old and new API; change every caller in the same upgrade, and do not keep the old behavior behind a local wrapper.
+- **Schema.** Regenerate from `schema/basis_pgsql.sql` on a disposable database, and apply the listed column and seed changes to stored data in the order the entry gives. Never alter a keel table beyond what the entry states.
+- **Mount routes through keel.** Mount handler routes with `HttpBackend.Handle`, so the security headers, CORS and access log apply; a page keel renders, such as the OAuth consent page, sets the headers it needs itself. A custom consent page sets its own `Content-Security-Policy` with a `form-action` that allows the post and the client's redirect.
+- **Use keel's stores.** keel's stores enforce bindings (connect state, pending client counts, code replay). An application that substitutes its own implementation of a `port` or `client` interface takes on those rules; the interface comment states them.
+- **Configuration.** Check the entry for new or stricter flags, for example `oauth_issuer` must be an `https` origin in local mode, and set them per environment before deploying.
+- **Frontends.** A changed route contract names the frontend change; ship the matching sail release with the backend upgrade.
+- **Verify** with `go test ./...`, and run the packages with `-sqlsmoke` tests against a disposable database, before deploying.
+
+## Standards Compliance
+
+Each row records what keel implements of an IETF or OASIS specification, what it leaves out, and why. keel does not knowingly contradict a MUST: a contradiction found is fixed, not documented. A change to a protocol surface updates these tables.
+
+### Authorization server and resource server
+
+| Specification | Status |
+|---|---|
+| RFC 6749 OAuth 2.0 | Authorization code, refresh token and client credentials grants. After the client and `redirect_uri` are known, every authorization error, `unsupported_response_type` included, returns to the `redirect_uri` with `state` and `iss`. A repeated parameter is `invalid_request`. A replayed code is refused and revokes the grant it issued. A 401 `invalid_client` carries `WWW-Authenticate`; token responses carry `Cache-Control: no-store` and `Pragma: no-cache`. |
+| RFC 6750 Bearer tokens | Header only. `resource.Middleware` answers 401 with a `Bearer` challenge, adding `error="invalid_token"` only when a token was sent; `resource.RequireScopes` answers 403 `insufficient_scope` with the missing `scope`. |
+| RFC 7636 PKCE | `S256` is required on every authorization request. |
+| RFC 7591 Dynamic client registration | Open registration of public and confidential clients for the interactive grants; refusals use `invalid_client_metadata` or `invalid_redirect_uri`. The response carries `client_id_issued_at` and, with a secret, `client_secret_expires_at` (`0`). Software statements are ignored, as §2.3 allows. |
+| RFC 7592 Registration management | Not implemented: a registered client cannot read, update or delete its registration. Operators use `Provision`. |
+| RFC 7009 Revocation | Refresh tokens revoke their rotation family. An access token revokes the grant it came from, so introspection and `GrantService.Active` report it ended; a resource server that validates only the signature honors it at expiry. |
+| RFC 7662 Introspection | A client sees only its own tokens. A token whose grant is revoked is inactive. |
+| RFC 8414 Server metadata | Served at `/.well-known/oauth-authorization-server`; `oauth_issuer` must therefore be an `https` origin without a path. The auth methods of the token, revocation and introspection endpoints and `response_modes_supported` are stated, not left to defaults. |
+| RFC 8693 Token exchange | Access token for access token, bounded by the subject token and the client's scopes, with `issued_token_type`; operator-provisioned clients only. |
+| RFC 8707 Resource indicators | `resource` must be the audience, `oauth_resource` or one of `oauth_resources`. At the token endpoint it must name the resource the grant was made for. One resource per request. |
+| RFC 9207 Issuer identification | Every authorization response, including an error, carries `iss`. |
+| RFC 9728 Protected resource metadata | Served by the resource server (`/.well-known/oauth-protected-resource`). |
+| RFC 9068 JWT access tokens | Not claimed: access tokens are RS256 JWTs without the `at+jwt` type. |
+| RFC 8252 Native apps | Loopback redirects match exactly, port included; a native client registers the port it listens on. Private-use URI schemes are refused. |
+| RFC 7522 SAML 2.0 bearer assertions | Not implemented: neither the `saml2-bearer` grant nor SAML client authentication. Partner SAML sign-in is browser Web SSO, which ends in a keel session, not a token exchange. |
+| RFC 8705 Mutual-TLS client authentication | Not implemented. |
+| RFC 9126 Pushed authorization requests | Not implemented. |
+| OpenID Connect Dynamic Registration | Not applicable: the server issues no ID tokens. |
+
+### Sign-in and token verification
+
+| Specification | Status |
+|---|---|
+| RFC 7515 / 7517 / 7518 / 7519 JOSE and JWT | Algorithms are allowlisted per issuer; `none` and HMAC with public keys are refused. A token with a `crit` header is refused. RSA keys are at least 2048 bits. A JWK whose `use` is not `sig` is ignored. An unknown `kid` refreshes the key set at most every 30 s. `exp`, `nbf` and `iat` allow 60 s of clock skew. |
+| OpenID Connect Core 1.0 | `state`, `nonce` and S256 PKCE on every request. An ID token's `iss` must match exactly and its `aud` must be only the client id, since keel trusts no other audience (§3.1.3.7); `azp`, when present, must be the client id, except for Google, whose mobile sign-in names the app's own client. |
+| OpenID Connect Discovery 1.0 | The discovered issuer must equal the configured one, and every endpoint must be `https`. |
+| RFC 7523 JWT client authentication | `private_key_jwt`: `iss` and `sub` are the client id, `aud` the token endpoint, a random `jti`, one-minute lifetime. |
+| SAML 2.0 Web SSO (OASIS) | Signed responses or assertions, SHA-256 or stronger only. `InResponseTo` binds to the stored request; IdP-initiated sign-in is refused. Every audience restriction must name the SP entity id; a bearer confirmation must name the callback URL and be valid now; `Destination` and `Recipient` are checked. NameID is requested `unspecified`, and a transient NameID is never a subject. |
+| RFC 6595 SAML SASL mechanism | Not applicable: keel serves HTTP. |
+
+### Outbound connections
+
+| Specification | Status |
+|---|---|
+| RFC 6749 OAuth 2.0 client | `state` is single-use and bound to the user and partner who started the flow (§10.12); the callback completes only through `/api/oauth/{provider}/complete` by that user. `client_secret_basic` form-encodes its values. A token response must carry an `access_token`, and a `token_type`, when present, must be `bearer`. |
+| RFC 7636 PKCE | S256 for Google and any provider with `BaseProvider.UsePKCE`; the others rely on the bound `state` and the client secret. |
+
+### Directory provisioning (SCIM)
+
+| Specification | Status |
+|---|---|
+| RFC 7643 SCIM core schema | Users and Groups in the core schema, with the enterprise user extension accepted. `/Schemas` describes exactly the attributes keel keeps, with their mutability, uniqueness and case rules. |
+| RFC 7644 SCIM protocol | Create, read, replace, PATCH and delete for Users and Groups; filters with `eq`, `ne`, `co`, `sw`, `ew`, `pr`, `and`, `or`, `not`; `attributes` and `excludedAttributes`; paging per §3.4.2.4. Errors use the SCIM error schema and the RFC's `scimType` values. Not implemented, as the RFC allows: sorting, ETags, `/Bulk` and `/.search`; `/Me` answers 501. |
+| RFC 7642 SCIM concepts | Informational; keel is the service provider, and the partner's directory is the client. |
+| SCIM authentication | Bearer tokens issued per partner (RFC 6750), stored as SHA-256. Mutual TLS (RFC 8705) is not implemented. |
 
 ## MCP Server Layer
 
@@ -964,6 +1032,16 @@ conn, _ := pgx.Connect(ctx, dsn)
 if err := sqlsmoke.LoadSchema(ctx, conn, "sql/basis.sql", "sql/app.sql"); err != nil { t.Fatal(err) }
 sqlsmoke.Run(t, conn, map[string]map[string]string{"orders": orderQueries}) // one subtest per query
 ```
+
+### Connecting a partner to a provider
+
+`handler.OAuthConnectHandler` mounts, per provider, `authorize`, `callback`, `complete` and `test` under `/api/oauth/{provider}/`. The flow is bound to the signed-in user and partner who start it:
+
+1. The app calls `GET authorize` with the user's session and sends the browser to the returned consent URL.
+2. The provider redirects to `callback`, which checks it and returns the browser to `FrontendReturnURL?connect={provider}&ticket={ticket}`. It creates nothing.
+3. The signed-in app posts `{"ticket": "..."}` to `complete`. keel connects only for the user and partner who started the flow: 403 for anyone else, 400 for a spent or expired ticket (`oauth_state_ttl_seconds`).
+
+`Nonce` (the `connect.NonceService`) holds the tickets; without it callbacks fail closed. `connect.CredentialStoreDB` enforces the binding through `client.WithInitiator`; an application's own `client.CredentialStore` must record the initiator at `CreateOAuthState` and compare it at `ConsumeOAuthState` the same way.
 
 ### OAuth connections record the scopes they were granted
 
@@ -1917,11 +1995,15 @@ The directory sends the token as `Authorization: Bearer scim_...`, and it select
 
 - `/Users` and `/Users/{id}`: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`.
 - `/Groups` and `/Groups/{id}`: the same methods.
-- `/ServiceProviderConfig`, `/ResourceTypes` and `/Schemas`: public.
+- `/ServiceProviderConfig`, `/ResourceTypes`, `/ResourceTypes/{id}`, `/Schemas` and `/Schemas/{id}`: public.
+- `/Me`: 501.
+
+A 201 carries `Location`; a 401 carries `WWW-Authenticate: Bearer`.
 
 Request limits:
-- Lists take `startIndex` and `count`; `count` defaults to `default_list_page_size` and is capped at `max_list_page_size`.
-- Filters are `userName eq "..."` or `externalId eq "..."` for users, and `displayName eq "..."` or `externalId eq "..."` for groups; anything else is `invalidFilter`.
+- Lists take `startIndex` and `count`. A `startIndex` below 1 is 1, a negative `count` is 0, and `count=0` returns only `totalResults`. An omitted `count` is `default_list_page_size`; any count is capped at `max_list_page_size`.
+- Filters compare `id`, `userName` and `externalId` for users, and `id`, `displayName` and `externalId` for groups, with `eq`, `ne`, `co`, `sw`, `ew` and `pr`, joined by `and`, `or`, `not (...)` and parentheses. Attribute names may carry the schema URN. `userName` and `displayName` compare without case. Anything else, including filters on members, is `invalidFilter`.
+- `attributes` and `excludedAttributes` shape every returned resource; `id` and `schemas` are always returned. Groups, listed or read, carry their members unless `excludedAttributes=members` or an `attributes` list without `members` leaves them out.
 - Bodies are capped at `max_request_size`, a PATCH at `scim_max_patch_operations` operations (default 1,000), and a group at `scim_max_group_members` members (default 10,000).
 
 Errors use the SCIM error schema:
@@ -1932,14 +2014,16 @@ Errors use the SCIM error schema:
 | 404 | | Resource not found in the token's partner |
 | 409 | `uniqueness` | Taken key or email, or an account of another partner |
 | 400 | `invalidFilter` | Unsupported filter |
-| 400 | `invalidPath` | Unsupported patch path |
-| 400 | `invalidValue` | Missing or malformed attribute, or an email outside the partner's verified domains |
-| 413 | `tooMany` | A request limit was exceeded |
+| 400 | `invalidPath` | A patch path the User or Group schema does not define |
+| 400 | `noTarget` | A remove without a path |
+| 400 | `mutability` | Add or replace on `members[value eq "..."]` |
+| 400 | `invalidValue` | Missing or malformed attribute, an email outside the partner's verified domains, or too many operations or members |
+| 413 | | Body over `max_request_size` |
 | 500 | | Anything else; the cause goes only to the journal |
 
 ### Users
 
-- **What keel keeps.** `userName` (compared without case), `externalId`, `name.givenName`, `name.familyName`, the primary email (else the first, else a `userName` that is an address) and `active`. Other attributes, such as the enterprise extension, phone numbers and addresses, are accepted and ignored.
+- **What keel keeps.** `userName` (compared without case), `externalId`, `name.givenName`, `name.familyName`, the primary email (else the first, else a `userName` that is an address) and `active`. Other attributes the User schema or the enterprise extension defines, such as phone numbers and addresses, are accepted and ignored.
 - **Email domain.** The email must lie in a domain the partner holds by identity-grade evidence.
 - **Creating.** A new email creates an account verified by the tenant (`email_verification_method` `T`) and, when active, a membership. An existing account with that email is adopted when it belongs to this partner or to none; an account of another partner is a conflict.
 - **Deactivating and reactivating.** `active` false ends the membership, its roles and its sessions at once (`UserService.EndMembership`). True again makes the account a member again.
@@ -1949,11 +2033,11 @@ Errors use the SCIM error schema:
   - booleans as JSON or as the strings `"True"` and `"False"`;
   - path-less value objects;
   - dotted paths (`name.givenName`);
-  - `emails[type eq "work"].value`.
+  - `emails[type eq "work"]` and `emails[type eq "work"].value`, which touch only that type; a new type is a secondary address and leaves the stored email alone.
 
 ### Groups and roles
 
-- **Group keys.** A group keeps `displayName`, `externalId` and members. PATCH accepts member add, replace and remove by value list, `members[value eq "id"]`, and path-less value objects.
+- **Group keys.** A group keeps `displayName`, unique per partner without case, `externalId` and members. PATCH accepts member add, replace and remove by value list, remove by `members[value eq "id"]`, and path-less value objects.
 - **Role mapping.** Group membership feeds the role mapping of the partner's active identity provider connection: a mapping matches when its `claim_value` equals a group's display name or external id, whatever its `claim_name`.
 - **Role changes.** A provisioned user's mapped roles change whenever its groups change, and sign-in leaves them alone, so a token without the groups claim never removes a directory role.
 - **No active connection.** Without one, the directory assigns no roles.

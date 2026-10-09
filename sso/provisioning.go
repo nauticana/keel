@@ -51,7 +51,7 @@ func (p *Provisioning) IssueToken(ctx context.Context, partnerID int64, userID i
 	token := scimTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	var id int64
 	err := p.inTx(ctx, func(tx port.TxQueryService) error {
-		locked, err := tx.Query(ctx, qLockSCIMTokens, partnerID)
+		locked, err := tx.Query(ctx, qLockSCIMPartner, partnerID)
 		if err != nil {
 			return err
 		}
@@ -182,15 +182,13 @@ func (p *Provisioning) query(ctx context.Context) port.QueryService {
 	return p.qs
 }
 
-// page bounds startIndex (1-based) and count by the list page-size flags.
-func page(startIndex, count int) (int, int) {
-	if startIndex < 1 {
-		startIndex = 1
+// page bounds a list request by the list page-size flags.
+func page(q SCIMListQuery) (int, int) {
+	start, count := max(q.StartIndex, 1), config.Config().DefaultListPageSize
+	if q.Count != nil {
+		count = max(*q.Count, 0)
 	}
-	if count <= 0 {
-		count = config.Config().DefaultListPageSize
-	}
-	return startIndex, min(count, config.Config().MaxListPageSize)
+	return start, min(count, config.Config().MaxListPageSize)
 }
 
 func resourceID(id string) (int64, error) {

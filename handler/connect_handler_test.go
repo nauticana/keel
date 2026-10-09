@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/client"
+	"github.com/nauticana/keel/oauth/connect"
 )
 
 func TestParseEntity(t *testing.T) {
@@ -85,5 +88,61 @@ func TestSaveAPIKeyRejectsOAuthProvider(t *testing.T) {
 	h.saveAPIKey(rec, r)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("posting an OAuth provider to /apikey must be rejected, got %d", rec.Code)
+	}
+}
+
+type boundProvider struct{ completed []client.Initiator }
+
+func (p *boundProvider) AuthURL(context.Context, int64, map[string]string) (string, error) {
+	return "", nil
+}
+func (p *boundProvider) Test(context.Context, int64) error { return nil }
+func (p *boundProvider) Callback(ctx context.Context, code, state string) error {
+	i, _ := client.InitiatorFrom(ctx)
+	if code != "c1" || state != "s1" || i != (client.Initiator{UserID: 3, PartnerID: 42}) {
+		return connect.ErrStateNotBound
+	}
+	p.completed = append(p.completed, i)
+	return nil
+}
+
+func TestConnectCallbackCompletesOnlyForTheInitiator(t *testing.T) {
+	nonce := &connect.NonceService{DB: &nonceDB{rows: map[string][2]string{}}}
+	nonce.Init(context.Background())
+	provider := &boundProvider{}
+	h := &OAuthConnectHandler{Nonce: nonce, FrontendReturnURL: "https://app.example/connections"}
+
+	callback := func() string {
+		rec := httptest.NewRecorder()
+		h.callback("gsc", provider)(rec, httptest.NewRequest(http.MethodGet, "/api/oauth/gsc/callback?code=c1&state=s1", nil))
+		loc, _ := url.Parse(rec.Header().Get("Location"))
+		if rec.Code != http.StatusFound || loc.Query().Get("connect") != "gsc" || loc.Query().Get("ticket") == "" {
+			t.Fatalf("callback: %d %q", rec.Code, rec.Header().Get("Location"))
+		}
+		if len(provider.completed) != 0 {
+			t.Fatal("the callback must not connect without the signed-in user")
+		}
+		return loc.Query().Get("ticket")
+	}
+	complete := func(ticket string, session *model.UserSession) int {
+		r := httptest.NewRequest(http.MethodPost, "/api/oauth/gsc/complete", strings.NewReader(`{"ticket":"`+ticket+`"}`))
+		stashSession(r, session)
+		rec := httptest.NewRecorder()
+		h.complete("gsc", provider)(rec, r)
+		return rec.Code
+	}
+
+	ticket := callback()
+	if code := complete(ticket, &model.UserSession{Id: 9, PartnerId: 42}); code != http.StatusForbidden {
+		t.Fatalf("another user: %d", code)
+	}
+	if code := complete(ticket, &model.UserSession{Id: 3, PartnerId: 42}); code != http.StatusOK || len(provider.completed) != 1 {
+		t.Fatalf("initiator: %d", code)
+	}
+	if code := complete(ticket, &model.UserSession{Id: 3, PartnerId: 42}); code != http.StatusBadRequest {
+		t.Fatalf("a ticket is single-use: %d", code)
+	}
+	if code := complete(`x"}{"ticket":"y`, &model.UserSession{Id: 3, PartnerId: 42}); code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON: %d", code)
 	}
 }

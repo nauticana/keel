@@ -14,17 +14,29 @@ var standardClaims = map[string]bool{
 	"nonce": true, "azp": true, "at_hash": true, "c_hash": true, "jti": true, "sid": true,
 }
 
-// checkAudience applies the OIDC rule for several audiences: azp must then
-// name this client. A single audience was already matched by the parser.
+// checkAudience applies OIDC Core §3.1.3.7 steps 3-5. keel trusts no
+// audience but the client, so any other audience is refused (step 3), and an
+// azp, when present, must name the client.
 func checkAudience(claims jwt.MapClaims, clientID string) error {
+	if err := checkSoleAudience(claims, clientID); err != nil {
+		return err
+	}
+	if azp, present := claims["azp"]; present {
+		if s, _ := azp.(string); s != clientID {
+			return fmt.Errorf("%w: azp does not name the client", ErrInvalidResponse)
+		}
+	}
+	return nil
+}
+
+// checkSoleAudience refuses a token whose aud is anything but clientID.
+func checkSoleAudience(claims jwt.MapClaims, clientID string) error {
 	aud, err := claims.GetAudience()
 	if err != nil {
 		return fmt.Errorf("%w: aud: %v", ErrInvalidResponse, err)
 	}
-	if len(aud) > 1 {
-		if azp, _ := claims["azp"].(string); azp != clientID {
-			return fmt.Errorf("%w: azp does not name the client", ErrInvalidResponse)
-		}
+	if len(aud) != 1 || aud[0] != clientID {
+		return fmt.Errorf("%w: aud names a party other than the client", ErrInvalidResponse)
 	}
 	return nil
 }

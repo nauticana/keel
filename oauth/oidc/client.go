@@ -94,7 +94,7 @@ func (c *Client) Begin(ctx context.Context, req port.IdentityBegin) (*port.Ident
 }
 
 // Complete redeems the callback's code and verifies the ID token: issuer,
-// audience (and azp when there are several), expiry, nonce, and a signature
+// sole audience and azp, expiry, nonce, and a signature
 // by an algorithm both keel and the issuer accept.
 func (c *Client) Complete(ctx context.Context, cb port.IdentityCallback) (*port.IdentityAssertion, error) {
 	var p pending

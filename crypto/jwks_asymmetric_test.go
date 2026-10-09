@@ -99,8 +99,8 @@ func TestVerifyAsymmetric(t *testing.T) {
 	if _, err := VerifyRS256(ctx, jwks, sign(jwt.SigningMethodES256, "p256", p256), "client", ""); err == nil {
 		t.Error("VerifyRS256 must stay pinned to RS256")
 	}
-	if _, err := VerifyRS256(ctx, jwks, sign(jwt.SigningMethodRS256, "weak", weak), "client", ""); err != nil {
-		t.Errorf("VerifyRS256 keeps its existing key rules: %v", err)
+	if _, err := VerifyRS256(ctx, jwks, sign(jwt.SigningMethodRS256, "weak", weak), "client", ""); err == nil {
+		t.Error("VerifyRS256 must refuse an RSA key shorter than 2048 bits")
 	}
 	if _, err := jwks.KeyForKid(ctx, "p256"); err == nil {
 		t.Error("KeyForKid returns RSA keys only")

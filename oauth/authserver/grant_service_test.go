@@ -103,7 +103,7 @@ func TestGrantQueriesStayScoped(t *testing.T) {
 	for name, wants := range map[string][]string{
 		oauthGrantRevoke: {"user_id = ?", "client_id = ?"},
 		oauthGrantActive: {"user_id = ?", "client_id = ?", "revoked_at IS NULL", "expires_at > CURRENT_TIMESTAMP"},
-		oauthClientPurge: {"token_auth_method = 'none'", "refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_authorization_code", "LIMIT ?"},
+		oauthClientPurge: {"registered = TRUE", "refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_authorization_code", "LIMIT ?"},
 	} {
 		for _, want := range wants {
 			if !strings.Contains(oauthGrantQueries[name], want) {

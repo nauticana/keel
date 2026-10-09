@@ -5,7 +5,7 @@ import "github.com/nauticana/keel/common"
 const (
 	qSCIMManaged          = "scim_managed"
 	qActiveSCIMUsers      = "scim_active_users"
-	qLockSCIMTokens       = "scim_lock_tokens"
+	qLockSCIMPartner      = "scim_lock_partner"
 	qTokenByHash          = "scim_token_by_hash"
 	qTouchToken           = "scim_touch_token"
 	qActiveTokens         = "scim_active_tokens"
@@ -39,20 +39,53 @@ SELECT su.user_id, COALESCE(su.external_id, ''), su.user_name, su.active, su.cre
   FROM partner_scim_user su
   JOIN user_account ua ON ua.id = su.user_id`
 
-// An empty filter value matches every row.
+// scimFilterMatch holds when comparison f matches the attribute value v.x.
+const scimFilterMatch = `(CASE f.op
+           WHEN 'eq' THEN v.x = f.val
+           WHEN 'ne' THEN v.x <> f.val
+           WHEN 'co' THEN strpos(v.x, f.val) > 0
+           WHEN 'sw' THEN left(v.x, length(f.val)) = f.val
+           WHEN 'ew' THEN right(v.x, length(f.val)) = f.val
+           WHEN 'pr' THEN v.x <> ''
+           ELSE FALSE END) <> f.neg`
+
+// scimFilterTermsOpen and scimFilterTermsClose enclose the attribute CASE of
+// a filter that holds when every comparison of some term matches; see
+// scimFilter.args. Attribute values are lower-cased unless caseExact.
+const scimFilterTermsOpen = `
+   AND (CAST(? AS INTEGER) = 0 OR EXISTS (
+       SELECT 1
+         FROM unnest(CAST(? AS BIGINT[]), CAST(? AS TEXT[]), CAST(? AS TEXT[]), CAST(? AS BOOLEAN[]), CAST(? AS TEXT[]))
+              AS f(term, attr, op, neg, val)
+        CROSS JOIN LATERAL (SELECT CASE f.attr`
+
+const scimFilterTermsClose = `
+              ELSE '' END AS x) v
+        GROUP BY f.term
+       HAVING bool_and(` + scimFilterMatch + `)))`
+
+// An empty or zero parameter matches every row.
 const scimUserFilter = ` WHERE su.partner_id = ?
+   AND (CAST(? AS BIGINT) = 0 OR su.user_id = ?)
    AND (CAST(? AS TEXT) = '' OR su.user_name = ?)
-   AND (CAST(? AS TEXT) = '' OR su.external_id = ?)`
+   AND (CAST(? AS TEXT) = '' OR su.external_id = ?)` + scimFilterTermsOpen + `
+              WHEN 'id' THEN CAST(su.user_id AS TEXT)
+              WHEN 'username' THEN lower(su.user_name)
+              WHEN 'externalid' THEN COALESCE(su.external_id, '')` + scimFilterTermsClose
 
-const scimGroupColumns = `SELECT id, COALESCE(external_id, ''), display_name, created_at, updated_at FROM partner_scim_group`
+const scimGroupColumns = `SELECT g.id, COALESCE(g.external_id, ''), g.display_name, g.created_at, g.updated_at FROM partner_scim_group g`
 
-const scimGroupFilter = ` WHERE partner_id = ?
-   AND (CAST(? AS TEXT) = '' OR display_name = ?)
-   AND (CAST(? AS TEXT) = '' OR external_id = ?)`
+const scimGroupFilter = ` WHERE g.partner_id = ?
+   AND (CAST(? AS BIGINT) = 0 OR g.id = ?)
+   AND (CAST(? AS TEXT) = '' OR lower(g.display_name) = ?)
+   AND (CAST(? AS TEXT) = '' OR g.external_id = ?)` + scimFilterTermsOpen + `
+              WHEN 'id' THEN CAST(g.id AS TEXT)
+              WHEN 'displayname' THEN lower(g.display_name)
+              WHEN 'externalid' THEN COALESCE(g.external_id, '')` + scimFilterTermsClose
 
 var scimQueries = map[string]string{
 	qSCIMManaged:     `SELECT 1 FROM partner_scim_user WHERE partner_id = ? AND user_id = ? AND active`,
-	qLockSCIMTokens:  `SELECT id FROM business_partner WHERE id = ? FOR NO KEY UPDATE`,
+	qLockSCIMPartner: `SELECT id FROM business_partner WHERE id = ? FOR NO KEY UPDATE`,
 	qActiveSCIMUsers: `SELECT user_id FROM partner_scim_user WHERE partner_id = ? AND active ORDER BY user_id`,
 	qTokenByHash: `
 SELECT id, partner_id FROM partner_scim_token
@@ -90,9 +123,9 @@ SELECT user_id FROM partner_scim_user
 UPDATE partner_scim_user SET user_name = ?, external_id = ?, active = ?, updated_at = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND user_id = ?`,
 	qDeleteSCIMUser: `DELETE FROM partner_scim_user WHERE partner_id = ? AND user_id = ?`,
-	qSCIMGroup:      scimGroupColumns + ` WHERE partner_id = ? AND id = ?`,
-	qSCIMGroups:     scimGroupColumns + scimGroupFilter + ` ORDER BY id LIMIT ? OFFSET ?`,
-	qSCIMGroupCount: `SELECT COUNT(*) FROM partner_scim_group` + scimGroupFilter,
+	qSCIMGroup:      scimGroupColumns + ` WHERE g.partner_id = ? AND g.id = ?`,
+	qSCIMGroups:     scimGroupColumns + scimGroupFilter + ` ORDER BY g.id LIMIT ? OFFSET ?`,
+	qSCIMGroupCount: `SELECT COUNT(*) FROM partner_scim_group g` + scimGroupFilter,
 	qSCIMGroupMembers: `
 SELECT m.user_id, su.user_name
   FROM partner_scim_group_member m
@@ -103,7 +136,7 @@ SELECT m.user_id, su.user_name
 	qSCIMGroupMemberCount: `SELECT COUNT(*) FROM partner_scim_group_member WHERE partner_id = ? AND group_id = ?`,
 	qSCIMGroupConflict: `
 SELECT id FROM partner_scim_group
- WHERE partner_id = ? AND id <> ? AND (display_name = ? OR (CAST(? AS TEXT) <> '' AND external_id = ?))`,
+ WHERE partner_id = ? AND id <> ? AND (lower(display_name) = lower(?) OR (CAST(? AS TEXT) <> '' AND external_id = ?))`,
 	qInsertSCIMGroup: `
 INSERT INTO partner_scim_group (id, partner_id, display_name, external_id)
 VALUES (nextval('partner_scim_group_seq'), ?, ?, ?)

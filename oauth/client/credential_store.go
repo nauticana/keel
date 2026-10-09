@@ -18,7 +18,9 @@ type Connection struct {
 // CredentialStore is the persistence the providers depend on; the app implements
 // it (e.g. over a partner_credential table), which keeps this package free of any
 // schema coupling. extra on the state methods carries provider-specific values
-// (e.g. a shop domain) across the consent redirect.
+// (e.g. a shop domain) across the consent redirect. The state binds to the
+// context's Initiator: CreateOAuthState records it and ConsumeOAuthState refuses
+// any other one.
 type CredentialStore interface {
 	CreateOAuthState(ctx context.Context, partnerID int64, provider string, extra map[string]string) (string, error)
 	ConsumeOAuthState(ctx context.Context, state, provider string) (partnerID int64, extra map[string]string, err error)

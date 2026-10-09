@@ -14,10 +14,16 @@ var (
 	// ErrSCIMInvalidValue: a required attribute is missing or malformed, or an
 	// email lies outside the partner's verified domains.
 	ErrSCIMInvalidValue = errors.New("scim: invalid attribute value")
-	// ErrSCIMInvalidFilter: only `attribute eq "value"` on a key attribute is supported.
+	// ErrSCIMInvalidFilter: a filter uses an attribute, operator or syntax keel
+	// does not support.
 	ErrSCIMInvalidFilter = errors.New("scim: unsupported filter")
-	// ErrSCIMInvalidPath: a PATCH path the resource does not support.
+	// ErrSCIMInvalidPath: a PATCH path the resource schema does not define or
+	// keel does not support.
 	ErrSCIMInvalidPath = errors.New("scim: unsupported patch path")
+	// ErrSCIMNoTarget: a PATCH remove names no path.
+	ErrSCIMNoTarget = errors.New("scim: patch operation has no target")
+	// ErrSCIMMutability: a PATCH changes an immutable attribute.
+	ErrSCIMMutability = errors.New("scim: attribute cannot be modified")
 	// ErrSCIMTooMany: a request exceeds an operation, member or token limit.
 	ErrSCIMTooMany = errors.New("scim: request exceeds a limit")
 )

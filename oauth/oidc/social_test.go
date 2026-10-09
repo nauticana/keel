@@ -39,6 +39,35 @@ func TestSocialVerifierAcceptsBothGoogleIssuerForms(t *testing.T) {
 	}
 }
 
+func TestSocialVerifierAudience(t *testing.T) {
+	withConfig(t, "google-client", "apple-client")
+	idp := newFakeIdP(t)
+	v := socialVerifier(idp)
+	ctx := context.Background()
+	claims := func(iss string, aud any, azp string) jwt.MapClaims {
+		c := jwt.MapClaims{"iss": iss, "aud": aud, "sub": "s-1", "exp": time.Now().Add(time.Hour).Unix()}
+		if azp != "" {
+			c["azp"] = azp
+		}
+		return c
+	}
+	if _, _, err := v.Verify(ctx, ProviderGoogle, idp.signRSA(claims(GoogleIssuer, "google-client", "android-client"))); err != nil {
+		t.Errorf("google azp of a platform client: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		provider string
+		claims   jwt.MapClaims
+	}{
+		"google extra audience": {ProviderGoogle, claims(GoogleIssuer, []any{"google-client", "other"}, "google-client")},
+		"apple extra audience":  {ProviderApple, claims(AppleIssuer, []any{"apple-client", "other"}, "apple-client")},
+		"apple azp another":     {ProviderApple, claims(AppleIssuer, "apple-client", "other")},
+	} {
+		if _, _, err := v.Verify(ctx, tc.provider, idp.signRSA(tc.claims)); !errors.Is(err, ErrInvalidResponse) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestSocialVerifierRefusals(t *testing.T) {
 	withConfig(t, "google-client", "apple-client")
 	idp := newFakeIdP(t)

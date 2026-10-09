@@ -8,9 +8,26 @@ import (
 	"github.com/nauticana/keel/config"
 )
 
-// applyUserPatch applies PATCH operations to a user resource. Attributes keel
-// does not keep (enterprise extension, phone numbers, addresses, title) are
-// ignored, since directories send them routinely.
+// scimUserAttributes are the RFC 7643 User and common attributes; a PATCH of
+// one keel does not keep is ignored, since directories send them routinely.
+var (
+	scimUserAttributes = scimSet("id", "externalid", "meta", "schemas", "username", "name", "displayname", "nickname",
+		"profileurl", "title", "usertype", "preferredlanguage", "locale", "timezone", "active", "password", "emails",
+		"phonenumbers", "ims", "photos", "addresses", "groups", "entitlements", "roles", "x509certificates")
+	scimNameAttributes       = scimSet("formatted", "familyname", "givenname", "middlename", "honorificprefix", "honorificsuffix")
+	scimEnterpriseAttributes = scimSet("employeenumber", "costcenter", "organization", "division", "department", "manager")
+	scimEmailPath            = scimValuePath("emails", "type")
+)
+
+func scimSet(names ...string) map[string]bool {
+	out := make(map[string]bool, len(names))
+	for _, n := range names {
+		out[n] = true
+	}
+	return out
+}
+
+// applyUserPatch applies PATCH operations to a user resource.
 func applyUserPatch(u *SCIMUser, ops []SCIMPatchOp) error {
 	if len(ops) > config.Config().SCIMMaxPatchOperations {
 		return ErrSCIMTooMany
@@ -20,9 +37,9 @@ func applyUserPatch(u *SCIMUser, ops []SCIMPatchOp) error {
 		if kind != "add" && kind != "replace" && kind != "remove" {
 			return fmt.Errorf("%w: op %q", ErrSCIMInvalidValue, op.Op)
 		}
-		if op.Path == "" {
+		if strings.TrimSpace(op.Path) == "" {
 			if kind == "remove" {
-				return fmt.Errorf("%w: remove needs a path", ErrSCIMInvalidPath)
+				return fmt.Errorf("%w: remove needs a path", ErrSCIMNoTarget)
 			}
 			var values map[string]json.RawMessage
 			if err := json.Unmarshal(op.Value, &values); err != nil {
@@ -59,7 +76,15 @@ func setUserAttribute(u *SCIMUser, path string, raw json.RawMessage, remove bool
 		}
 		return u.Name
 	}
-	switch strings.ToLower(path) {
+	attr := strings.ToLower(strings.TrimSpace(path))
+	if enterprise := strings.ToLower(SchemaEnterpriseUser); attr == enterprise || strings.HasPrefix(attr, enterprise+":") {
+		if attr != enterprise && !scimEnterpriseAttributes[scimBaseAttribute(attr[len(enterprise)+1:])] {
+			return fmt.Errorf("%w: %s", ErrSCIMInvalidPath, path)
+		}
+		return nil
+	}
+	attr = strings.TrimPrefix(attr, strings.ToLower(SchemaUser)+":")
+	switch attr {
 	case "active":
 		if remove {
 			return fmt.Errorf("%w: active cannot be removed", ErrSCIMInvalidPath)
@@ -105,28 +130,78 @@ func setUserAttribute(u *SCIMUser, path string, raw json.RawMessage, remove bool
 		}
 		u.Emails = emails
 	default:
-		if value, ok := emailValuePath(path); ok {
-			if remove {
-				u.Emails = nil
-				return nil
+		base := scimBaseAttribute(attr)
+		switch {
+		case base == "emails":
+			return patchEmail(u, attr, raw, remove)
+		case base == "name":
+			if !strings.HasPrefix(attr, "name.") || !scimNameAttributes[attr[len("name."):]] {
+				return fmt.Errorf("%w: %s", ErrSCIMInvalidPath, path)
 			}
-			var v string
-			if err := json.Unmarshal(raw, &v); err != nil {
-				return fmt.Errorf("%w: %s: %v", ErrSCIMInvalidValue, path, err)
-			}
-			u.Emails = []SCIMEmail{{Value: v, Type: value, Primary: true}}
+		case !scimUserAttributes[base]:
+			return fmt.Errorf("%w: %s", ErrSCIMInvalidPath, path)
 		}
 	}
 	return nil
 }
 
-// emailValuePath matches `emails[type eq "work"].value`, returning the type.
-func emailValuePath(path string) (string, bool) {
-	lower := strings.ToLower(strings.ReplaceAll(path, " ", ""))
-	if !strings.HasPrefix(lower, `emails[typeeq"`) || !strings.HasSuffix(lower, `"].value`) {
-		return "", false
+// scimBaseAttribute is the attribute name before a sub-attribute or filter.
+func scimBaseAttribute(path string) string {
+	if i := strings.IndexAny(path, ".["); i >= 0 {
+		return strings.TrimSpace(path[:i])
 	}
-	return strings.TrimSuffix(strings.TrimPrefix(lower, `emails[typeeq"`), `"].value`), true
+	return path
+}
+
+// patchEmail applies `emails[type eq "x"]` and `emails[type eq "x"].value`
+// to the emails of that type only. A new type is added as a further,
+// non-primary address.
+func patchEmail(u *SCIMUser, path string, raw json.RawMessage, remove bool) error {
+	typ, sub, ok := scimEmailPath.match(path)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrSCIMInvalidPath, path)
+	}
+	switch sub {
+	case "", "value":
+	case "primary", "type", "display":
+		return nil
+	default:
+		return fmt.Errorf("%w: %s", ErrSCIMInvalidPath, path)
+	}
+	if remove {
+		kept := u.Emails[:0]
+		for _, e := range u.Emails {
+			if !strings.EqualFold(e.Type, typ) {
+				kept = append(kept, e)
+			}
+		}
+		u.Emails = kept
+		return nil
+	}
+	var email SCIMEmail
+	var err error
+	if sub == "value" {
+		err = json.Unmarshal(raw, &email.Value)
+	} else {
+		err = json.Unmarshal(raw, &email)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrSCIMInvalidValue, path, err)
+	}
+	matched := false
+	for i := range u.Emails {
+		if strings.EqualFold(u.Emails[i].Type, typ) {
+			u.Emails[i].Value = email.Value
+			if sub == "" {
+				u.Emails[i].Primary = email.Primary
+			}
+			matched = true
+		}
+	}
+	if !matched {
+		u.Emails = append(u.Emails, SCIMEmail{Value: email.Value, Type: typ, Primary: email.Primary || len(u.Emails) == 0})
+	}
+	return nil
 }
 
 // groupPatch is a group PATCH reduced to what changes.
@@ -146,15 +221,22 @@ func parseGroupPatch(ops []SCIMPatchOp) (*groupPatch, error) {
 	p := &groupPatch{}
 	for _, op := range ops {
 		kind := strings.ToLower(op.Op)
-		path := strings.ToLower(strings.TrimSpace(op.Path))
-		if id, ok := memberPathValue(op.Path); ok {
+		raw := strings.TrimSpace(op.Path)
+		if prefix := SchemaGroup + ":"; len(raw) > len(prefix) && strings.EqualFold(raw[:len(prefix)], prefix) {
+			raw = raw[len(prefix):]
+		}
+		path := strings.ToLower(raw)
+		if id, ok := memberPathValue(raw); ok {
 			if kind != "remove" {
-				return nil, fmt.Errorf("%w: %s on a member filter", ErrSCIMInvalidPath, op.Op)
+				// The filter selects a member whose only writable sub-attribute, value, is immutable.
+				return nil, fmt.Errorf("%w: %s on a member filter; add or replace members instead", ErrSCIMMutability, op.Op)
 			}
 			p.remove = append(p.remove, id)
 			continue
 		}
 		switch {
+		case kind == "remove" && path == "":
+			return nil, fmt.Errorf("%w: remove needs a path", ErrSCIMNoTarget)
 		case kind == "remove" && path == "members":
 			ids, err := memberValues(op.Value)
 			if err != nil {

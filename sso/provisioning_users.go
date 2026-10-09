@@ -213,26 +213,16 @@ func (p *Provisioning) GetUser(ctx context.Context, partnerID int64, id string) 
 	return u, nil
 }
 
-// ListUsers pages through provisioned users, optionally filtered by
+// ListUsers pages through provisioned users, optionally filtered on id,
 // userName or externalId.
-func (p *Provisioning) ListUsers(ctx context.Context, partnerID int64, filter string, startIndex, count int) (*SCIMList[*SCIMUser], error) {
-	f, err := ParseSCIMFilter(filter, "userName", "externalId")
+func (p *Provisioning) ListUsers(ctx context.Context, partnerID int64, q SCIMListQuery) (*SCIMList[*SCIMUser], error) {
+	f, err := parseSCIMFilter(q.Filter, scimUserFilterSchema)
 	if err != nil {
 		return nil, err
 	}
-	name, ext := "", ""
-	switch f.Attribute {
-	case "userName":
-		name = strings.ToLower(f.Value)
-	case "externalId":
-		ext = f.Value
-	}
-	startIndex, count = page(startIndex, count)
-	total, err := p.query(ctx).Query(ctx, qSCIMUserCount, partnerID, name, name, ext, ext)
-	if err != nil {
-		return nil, err
-	}
-	res, err := p.query(ctx).Query(ctx, qSCIMUsers, partnerID, name, name, ext, ext, count, startIndex-1)
+	args := f.args(partnerID, scimUserFilterSchema)
+	startIndex, count := page(q)
+	total, err := p.query(ctx).Query(ctx, qSCIMUserCount, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -240,8 +230,14 @@ func (p *Provisioning) ListUsers(ctx context.Context, partnerID int64, filter st
 	if len(total.Rows) == 1 {
 		out.TotalResults = int(common.AsInt64(total.Rows[0][0]))
 	}
-	for _, row := range res.Rows {
-		out.Resources = append(out.Resources, scimUserFromRow(row))
+	if count > 0 {
+		res, err := p.query(ctx).Query(ctx, qSCIMUsers, append(args, count, startIndex-1)...)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range res.Rows {
+			out.Resources = append(out.Resources, scimUserFromRow(row))
+		}
 	}
 	out.ItemsPerPage = len(out.Resources)
 	return out, nil

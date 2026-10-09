@@ -22,7 +22,8 @@ var googleAuthCodeOptions = []oauth2.AuthCodeOption{oauth2.AccessTypeOffline, oa
 // Google API (Search Console, Analytics, YouTube, Business Profile, …). The
 // mechanism is identical across Google products; the caller supplies the scopes,
 // OAuth client (clientID + secretName), and apiEndpoint for its own use case.
-// Returns the concrete *BaseProvider so callers can attach hooks if needed.
+// PKCE S256 is always on (RFC 9700 §2.1.1). Returns the concrete *BaseProvider
+// so callers can attach hooks if needed.
 func NewGoogleProvider(svc CredentialStore, name, callbackURL, clientID, secretName string, scopes []string, apiEndpoint string) *BaseProvider {
 	return &BaseProvider{
 		Service:         svc,
@@ -34,6 +35,7 @@ func NewGoogleProvider(svc CredentialStore, name, callbackURL, clientID, secretN
 		Scopes:          scopes,
 		AuthCodeOptions: googleAuthCodeOptions,
 		RequireRefresh:  true,
+		UsePKCE:         true,
 		APIEndpoint:     apiEndpoint,
 	}
 }
