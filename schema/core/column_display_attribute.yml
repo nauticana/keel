@@ -6,7 +6,7 @@ columns:
   - name: column_name
     type: VARCHAR(63)
   # display_mode: R=read-only, H=hidden, D=default-seeded editable, I=insert-only.
-  # NULL/empty = editable default. See model.Display* and README.
+  # NULL/empty = editable default. See model.Display*.
   - name: display_mode
     type: CHAR(1)
     nullable: true

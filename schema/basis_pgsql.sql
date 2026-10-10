@@ -260,11 +260,16 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
     session_started_at                   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     session_max_seconds                  BIGINT       ,
     sign_in_method                       CHAR(1)      ,
+    session_id                           BIGINT        NOT NULL,
+    user_agent                           VARCHAR(400) ,
+    client_ip                            VARCHAR(45)  ,
+    device_hash                          CHAR(64)     ,
     revoked_at                           TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT user_refresh_token_pk PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_token_hash ON user_refresh_token(token_hash);
+CREATE INDEX IF NOT EXISTS idx_refresh_token_session ON user_refresh_token(user_id, session_id);
 
 CREATE SEQUENCE IF NOT EXISTS user_refresh_token_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_refresh_token', 'id', 'user_refresh_token_seq') ON CONFLICT DO NOTHING;
@@ -562,6 +567,14 @@ CREATE TABLE IF NOT EXISTS partner_domain_challenge (
     CONSTRAINT partner_domain_challenge_pk PRIMARY KEY (partner_id, domain_url, method)
 );
 
+-- Networks a partner's users may sign in from; no rows allows any address
+CREATE TABLE IF NOT EXISTS partner_signin_network (
+    partner_id                           BIGINT        NOT NULL,
+    cidr                                 VARCHAR(50)   NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT partner_signin_network_pk PRIMARY KEY (partner_id, cidr)
+);
+
 -- Background worker registration and heartbeat
 CREATE TABLE IF NOT EXISTS service_registry (
     service_name                         VARCHAR(16)   NOT NULL,
@@ -693,6 +706,7 @@ CREATE TABLE IF NOT EXISTS api_key (
     user_id                              BIGINT       ,
     rotated_at                           TIMESTAMP    ,
     grace_expires_at                     TIMESTAMP    ,
+    allowed_cidrs                        VARCHAR(2000),
     CONSTRAINT api_key_pk PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_api_key_hash ON api_key(key_hash);
@@ -2352,6 +2366,15 @@ BEGIN
      WHERE constraint_name = 'partner_domain_challenge_issuer' AND table_name = 'partner_domain_challenge'
   ) THEN
     ALTER TABLE partner_domain_challenge ADD CONSTRAINT partner_domain_challenge_issuer FOREIGN KEY (issued_by) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_signin_networks' AND table_name = 'partner_signin_network'
+  ) THEN
+    ALTER TABLE partner_signin_network ADD CONSTRAINT partner_signin_networks FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE CASCADE;
   END IF;
 END $$;
 DO $$

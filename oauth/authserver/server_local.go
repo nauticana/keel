@@ -106,6 +106,10 @@ type Config struct {
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	CodeTTL         time.Duration
+	// ReplaceSameAppGrant revokes the user's grants to other clients of the
+	// same app (a shared non-loopback redirect host) when a new one is issued.
+	ReplaceSameAppGrant bool
+	MaxGrantsPerUser    int // live grants a user may hold; 0 is unbounded
 }
 
 // registrationGrants are the grants open registration records: the interactive
@@ -120,6 +124,7 @@ type Local struct {
 	signer    port.TokenSigner
 	validator port.TokenValidator
 	issuer    *oauthIssuer
+	policy    *grantPolicy
 	grants    map[string]port.GrantHandler
 	cfg       Config
 }
@@ -147,13 +152,14 @@ func NewLocal(signer *RS256Signer, clients port.OAuthClientStore, codes port.Aut
 	// so introspection and token-exchange work across all of them (not just the
 	// default audience).
 	internal := NewLocalValidatorMulti(signer, cfg.Issuer, resources)
+	policy := &grantPolicy{clients: clients, tokens: tokens, replaceSameApp: cfg.ReplaceSameAppGrant, maxPerUser: cfg.MaxGrantsPerUser}
 	as := &Local{
 		clients: clients, codes: codes, tokens: tokens, signer: signer,
-		validator: internal, issuer: iss, cfg: cfg,
+		validator: internal, issuer: iss, policy: policy, cfg: cfg,
 		grants: map[string]port.GrantHandler{},
 	}
 	for _, g := range []port.GrantHandler{
-		&authorizationCodeGrant{clients: clients, codes: codes, issuer: iss},
+		&authorizationCodeGrant{clients: clients, codes: codes, issuer: iss, policy: policy},
 		&refreshTokenGrant{tokens: tokens, issuer: iss},
 		&clientCredentialsGrant{issuer: iss},
 		&tokenExchangeGrant{validator: internal, issuer: iss},
@@ -296,6 +302,9 @@ func (a *Local) Authorize(ctx context.Context, req port.AuthorizeRequest) (*port
 	}
 	client, scopes, err := a.ValidateAuthorizeRequest(ctx, req)
 	if err != nil {
+		return nil, err
+	}
+	if err := a.policy.admit(ctx, req.User.UserID, client); err != nil {
 		return nil, err
 	}
 	code, err := randToken()

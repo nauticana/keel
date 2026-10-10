@@ -95,6 +95,9 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 			AccessTTL:       config.Config().OAuthAccessTokenTTL,
 			RefreshTTL:      config.Config().OAuthRefreshTokenTTL,
 			CodeTTL:         config.Config().OAuthCodeTTL,
+
+			ReplaceSameAppGrant: config.Config().OAuthReplaceSameAppGrant,
+			MaxGrantsPerUser:    config.Config().OAuthMaxGrantsPerUser,
 		}
 		as := authserver.NewLocal(signer, clients, codes, tokens, cfg)
 		// validator is the single-audience resource-server validator for the

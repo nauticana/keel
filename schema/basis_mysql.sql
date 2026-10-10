@@ -272,12 +272,17 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
     session_started_at                   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     session_max_seconds                  BIGINT       ,
     sign_in_method                       CHAR(1)      ,
+    session_id                           BIGINT        NOT NULL,
+    user_agent                           VARCHAR(400) ,
+    client_ip                            VARCHAR(45)  ,
+    device_hash                          CHAR(64)     ,
     revoked_at                           DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT user_refresh_tokens FOREIGN KEY (user_id) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_refresh_token_hash ON user_refresh_token(token_hash);
+CREATE INDEX idx_refresh_token_session ON user_refresh_token(user_id, session_id);
 
 -- Trusted devices for 2FA bypass; device_fingerprint holds hex SHA256 of a server-minted secret kept in an HttpOnly cookie (never the raw secret).
 CREATE TABLE IF NOT EXISTS user_trusted_device (
@@ -575,6 +580,15 @@ CREATE TABLE IF NOT EXISTS partner_domain_challenge (
     CONSTRAINT partner_domain_challenge_issuer FOREIGN KEY (issued_by) REFERENCES user_account(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Networks a partner's users may sign in from; no rows allows any address
+CREATE TABLE IF NOT EXISTS partner_signin_network (
+    partner_id                           BIGINT        NOT NULL,
+    cidr                                 VARCHAR(50)   NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (partner_id, cidr),
+    CONSTRAINT partner_signin_networks FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Background worker registration and heartbeat
 CREATE TABLE IF NOT EXISTS service_registry (
     service_name                         VARCHAR(16)   NOT NULL,
@@ -700,6 +714,7 @@ CREATE TABLE IF NOT EXISTS api_key (
     user_id                              BIGINT       ,
     rotated_at                           DATETIME     ,
     grace_expires_at                     DATETIME     ,
+    allowed_cidrs                        VARCHAR(2000),
     PRIMARY KEY (id),
     CONSTRAINT api_key_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT api_key_users FOREIGN KEY (user_id) REFERENCES user_account(id)

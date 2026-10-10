@@ -72,12 +72,8 @@ func (s *AbstractTableService) CheckPermission(ctx context.Context, principal mo
 	for _, rec := range res.Rows {
 		lowLimit := common.AsString(rec[0])
 		rowBypass := common.AsBool(rec[2])
-		// The generated grant query filters low_limit to the exact table
-		// name or '*', so those are the only two grant shapes that reach
-		// here. Glob/range low_limit values are NOT surfaced by the query
-		// and so are deliberately unsupported — see KR-003 / the README
-		// permission notes. The explicit check also fails safe if the query
-		// is ever widened: a stray non-matching row can never grant access.
+		// Only an exact table name or '*' grants (KR-003); the check fails
+		// safe if the grant query is ever widened.
 		if lowLimit == s.Table.TableName || lowLimit == "*" {
 			allowed = true
 			if rowBypass {

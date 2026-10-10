@@ -108,9 +108,9 @@ func (h *SocialLoginHandler) LoginSocial(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	session.SessionMaxAge = maxAge
-	resp, err := h.SessionTokens(session)
+	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create token")
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	resp["isNewUser"] = isNewUser

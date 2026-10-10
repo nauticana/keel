@@ -47,7 +47,7 @@ func (u *contractUsers) CheckSignInMethod(_ int, method string) error {
 	return nil
 }
 func (u *contractUsers) CreateJWT(*model.UserSession) (string, error) { return "jwt", nil }
-func (u *contractUsers) CreateRefreshToken(int, string, time.Duration) (string, error) {
+func (u *contractUsers) CreateRefreshToken(*model.UserSession, user.SessionDevice) (string, error) {
 	return "refresh", nil
 }
 func (u *contractUsers) GetUserMenu(int) ([]model.UserMenu, error) { return nil, nil }

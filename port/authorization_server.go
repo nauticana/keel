@@ -66,6 +66,8 @@ type OAuthTokenStore interface {
 	// none is not an error. GrantActive reports whether one is still live.
 	RevokeGrant(ctx context.Context, userID int64, clientID string) error
 	GrantActive(ctx context.Context, userID int64, clientID string) (bool, error)
+	// GrantClients lists the clients holding a live grant from the user.
+	GrantClients(ctx context.Context, userID int64) ([]string, error)
 	// Rotate atomically revokes oldHash and inserts t, so a crash can't leave a
 	// gap where both the old and new refresh token are usable (or neither).
 	Rotate(ctx context.Context, oldHash string, t *RefreshToken) error

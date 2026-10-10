@@ -608,9 +608,9 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	session.SignInMethod = user.SignInOTP
 	session.SessionMaxAge = maxAge
 
-	resp, err := h.SessionTokens(session)
+	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create token")
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, resp)

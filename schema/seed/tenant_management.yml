@@ -45,6 +45,7 @@ seeds:
       - [80, false, setup, partner_domains, partner_domain, Domains]
       - [240, false, setup, partner_addresses, partner_address, Addresses]
       - [250, false, setup, partner_users, partner_user, Partner Users]
+      - [260, false, setup, partner_signin_networks, partner_signin_network, Sign-in Networks]
   - table: column_display_attribute
     columns: [table_name, column_name, display_mode]
     rows:
@@ -142,3 +143,36 @@ seeds:
       - [PARTNER_ADMIN, PARTNER_DOMAIN, VERIFY, partner_domain]
       - [PARTNER_ADMIN, PARTNER_DOMAIN, CANCEL, partner_domain]
       - [PARTNER_ADMIN, PARTNER_USER, END, partner_user]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [partner_signin_network, partner_signin_network]
+  - table: column_display_attribute
+    columns: [table_name, column_name, display_mode]
+    rows:
+      - [partner_signin_network, created_at, R]
+  - table: table_action
+    columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
+    rows:
+      - [partner_signin_network, replace, Replace networks, lock, P, false, 10]
+  - table: table_action_parameter
+    columns: [table_name, action_name, seq, param_name, caption, data_type, required]
+    rows:
+      - [partner_signin_network, replace, 1, cidrs, Networks (CSV of CIDRs; empty allows any), string, false]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [PARTNER_SIGNIN_NETWORK, Sign-in Network Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [PARTNER_SIGNIN_NETWORK, REPLACE, Replace the sign-in networks]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [SECURITY_ADMIN, PAGE, ACCESS, partner_signin_networks]
+      - [SECURITY_ADMIN, TABLE, SELECT, partner_signin_network]
+      - [SECURITY_ADMIN, PARTNER_SIGNIN_NETWORK, REPLACE, partner_signin_network]
+      - [PARTNER_ADMIN, PAGE, ACCESS, partner_signin_networks]
+      - [PARTNER_ADMIN, TABLE, SELECT, partner_signin_network]
+      - [PARTNER_ADMIN, PARTNER_SIGNIN_NETWORK, REPLACE, partner_signin_network]

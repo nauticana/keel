@@ -35,6 +35,10 @@ columns:
   - name: grace_expires_at
     type: TIMESTAMP
     nullable: true
+  - name: allowed_cidrs
+    type: VARCHAR(2000)
+    nullable: true
+    comment: CSV of networks the key may be used from; NULL allows any address
 primary_key: [id]
 sequence:
   name: api_key_seq

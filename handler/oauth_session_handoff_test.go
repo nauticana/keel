@@ -29,6 +29,10 @@ func (handoffUsers) ParseJWT(token string) (*model.UserSession, error) {
 	return &model.UserSession{Id: 7, PartnerId: 3}, nil
 }
 
+func (handoffUsers) GetUserById(id int) (*model.UserSession, error) {
+	return &model.UserSession{Id: id, FirstName: "Ada", LastName: "Lovelace", Email: "ada@example.com"}, nil
+}
+
 var _ user.UserService = handoffUsers{}
 
 type handoffRow struct {
@@ -82,6 +86,17 @@ func (s *handoffStore) ResolveHandoffSession(_ context.Context, sessionHash stri
 		}
 	}
 	return nil, nil
+}
+
+func (s *handoffStore) EndHandoffSession(_ context.Context, sessionHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.rows {
+		if r.sessionHash == sessionHash && r.sessionExpires.After(s.now) {
+			r.sessionExpires = s.now
+		}
+	}
+	return s.err
 }
 
 var _ port.SessionHandoffStore = (*handoffStore)(nil)

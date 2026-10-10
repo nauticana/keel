@@ -1,0 +1,18 @@
+table: partner_signin_network
+comment: Networks a partner's users may sign in from; no rows allows any address
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: cidr
+    type: VARCHAR(50)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, cidr]
+foreign_keys:
+  - name: partner_signin_networks
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: CASCADE

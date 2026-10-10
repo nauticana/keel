@@ -81,6 +81,14 @@ func TestGrantService(t *testing.T) {
 		t.Fatalf("revoke is scoped to the user and client: %v", got)
 	}
 
+	repo.rows[oauthGrantClients] = [][]any{{"client-a"}, {"client-b"}}
+	if ids, err := svc.Clients(ctx, 7); err != nil || strings.Join(ids, ",") != "client-a,client-b" || repo.args[oauthGrantClients][0] != int64(7) {
+		t.Fatalf("Clients = %v, %v", ids, err)
+	}
+	if ids, err := svc.Clients(ctx, 0); err != nil || ids != nil {
+		t.Fatalf("no user = %v, %v", ids, err)
+	}
+
 	repo.rows[oauthClientPurge] = [][]any{{"stale-1"}, {"stale-2"}}
 	if n, err := svc.PurgeUnauthorizedClients(ctx, 24*time.Hour); err != nil || n != 2 {
 		t.Fatalf("purge = %d, %v", n, err)
@@ -101,9 +109,10 @@ func TestGrantService(t *testing.T) {
 // The statements must keep their safety predicates.
 func TestGrantQueriesStayScoped(t *testing.T) {
 	for name, wants := range map[string][]string{
-		oauthGrantRevoke: {"user_id = ?", "client_id = ?"},
-		oauthGrantActive: {"user_id = ?", "client_id = ?", "revoked_at IS NULL", "expires_at > CURRENT_TIMESTAMP"},
-		oauthClientPurge: {"registered = TRUE", "refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_authorization_code", "LIMIT ?"},
+		oauthGrantRevoke:  {"user_id = ?", "client_id = ?"},
+		oauthGrantActive:  {"user_id = ?", "client_id = ?", "revoked_at IS NULL", "expires_at > CURRENT_TIMESTAMP"},
+		oauthGrantClients: {"user_id = ?", "revoked_at IS NULL", "expires_at > CURRENT_TIMESTAMP"},
+		oauthClientPurge:  {"registered = TRUE", "refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_refresh_token", "NOT EXISTS (SELECT 1 FROM oauth_authorization_code", "LIMIT ?"},
 	} {
 		for _, want := range wants {
 			if !strings.Contains(oauthGrantQueries[name], want) {

@@ -150,6 +150,7 @@ type authorizationCodeGrant struct {
 	clients port.OAuthClientStore
 	codes   port.AuthCodeStore
 	issuer  *oauthIssuer
+	policy  *grantPolicy
 }
 
 func (g *authorizationCodeGrant) GrantType() string { return "authorization_code" }
@@ -188,6 +189,11 @@ func (g *authorizationCodeGrant) Handle(ctx context.Context, req port.TokenReque
 	sub := subjectForUser(code.UserID)
 	// Only mint a refresh token if the client registered the refresh_token grant.
 	withRefresh := slices.Contains(client.GrantTypes, "refresh_token")
+	if withRefresh {
+		if err := g.policy.redeem(ctx, code.UserID, client); err != nil {
+			return nil, err
+		}
+	}
 	return g.issuer.issue(ctx, sub, code.UserID, code.PartnerID, client.ClientID, code.Scopes, code.Resource, "", "", withRefresh)
 }
 

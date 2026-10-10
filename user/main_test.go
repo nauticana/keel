@@ -1,9 +1,11 @@
 package user
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +37,7 @@ type memStore struct {
 	loginRow   []any                    // qUserByLogin row
 	endedRoles []int                    // users whose open role assignments were ended
 	policies   map[int64]map[string]int // user_account_policy by partner; 0 = global
+	networks   map[int64][]string       // partner_signin_network
 	clock      time.Duration            // offset added to the wall clock
 	calls      []string
 	failQuery  map[string]error
@@ -45,7 +48,7 @@ type memStore struct {
 
 func newMemStore(userIDs ...int) *memStore {
 	m := &memStore{users: map[int]bool{}, cutoffs: map[int]time.Time{}, holds: map[int]bool{}, deleted: map[int]bool{}, failQuery: map[string]error{},
-		accounts: map[int]*account{}, links: map[string]int{}, grants: map[string]string{}, members: map[[2]int64]bool{}, tokens: map[string]*refreshRow{}, policies: map[int64]map[string]int{}}
+		accounts: map[int]*account{}, links: map[string]int{}, grants: map[string]string{}, members: map[[2]int64]bool{}, tokens: map[string]*refreshRow{}, policies: map[int64]map[string]int{}, networks: map[int64][]string{}}
 	for _, id := range userIDs {
 		m.users[id] = true
 	}
@@ -56,8 +59,13 @@ type refreshRow struct {
 	user    int
 	revoked bool
 	started time.Time
+	created time.Time
 	method  string
 	maxAge  any
+	session int64
+	agent   any
+	ip      any
+	device  any
 }
 
 // now is the store clock; tests move it with clock.
@@ -131,13 +139,62 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	case qListPartners:
 		out.Rows = m.partners[args[0].(int)]
 	case qInsertRefreshToken:
-		row := &refreshRow{user: args[0].(int), started: m.now()}
+		row := &refreshRow{user: args[0].(int), started: m.now(), created: m.now(), session: args[6].(int64), agent: args[7], ip: args[8], device: args[9]}
 		if started, ok := args[3].(time.Time); ok {
 			row.started = started
 		}
 		row.method, _ = args[4].(string)
 		row.maxAge = args[5]
 		m.tokens[args[1].(string)] = row
+	case qDeviceSeen:
+		prior, known := false, false
+		for _, t := range m.tokens {
+			if t.user == args[0].(int) {
+				prior = true
+				known = known || t.device == args[2]
+			}
+		}
+		out.Rows = [][]any{{prior, known}}
+	case qLiveSessions:
+		for _, t := range m.tokens {
+			if t.user == args[0].(int) && !t.revoked {
+				var method any
+				if t.method != "" {
+					method = t.method
+				}
+				out.Rows = append(out.Rows, []any{t.session, t.agent, t.ip, method, t.started, t.created})
+			}
+		}
+	case qRevokeSession:
+		for _, t := range m.tokens {
+			if t.user == args[0].(int) && t.session == args[1].(int64) && !t.revoked {
+				t.revoked = true
+				out.Rows = append(out.Rows, []any{t.session})
+			}
+		}
+	case qRevokeSessionsOverCap:
+		var live []*refreshRow
+		for _, t := range m.tokens {
+			if t.user == args[0].(int) && !t.revoked {
+				live = append(live, t)
+			}
+		}
+		slices.SortFunc(live, func(a, b *refreshRow) int { return cmp.Compare(b.session, a.session) })
+		for i, t := range live {
+			if i >= args[2].(int) {
+				t.revoked = true
+			}
+		}
+	case qSignInNetworks:
+		var partner int64
+		for k := range m.members {
+			if k[0] == int64(args[0].(int)) {
+				partner = k[1]
+			}
+		}
+		for _, c := range m.networks[partner] {
+			out.Rows = append(out.Rows, []any{c})
+		}
 	case qRevokeRefreshToken:
 		if t := m.tokens[args[0].(string)]; t != nil {
 			t.revoked = true
@@ -165,7 +222,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 				method = t.method
 			}
 			age := int64(m.now().Sub(t.started) / time.Second)
-			out.Rows = [][]any{{int64(t.user), "F", "L", "", status, false, partner, nil, nil, t.started, method, age, t.maxAge}}
+			out.Rows = [][]any{{int64(t.user), "F", "L", "", status, false, partner, nil, nil, t.started, method, age, t.maxAge, t.session, t.device}}
 		}
 	case qEndMembership:
 		k := [2]int64{int64(args[0].(int)), args[1].(int64)}
@@ -201,7 +258,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		m.endedRoles = append(m.endedRoles, args[0].(int))
 	case qUserById:
 		if m.users[args[0].(int)] {
-			out.Rows = [][]any{{int64(args[0].(int)), "u", "F", "L", "", UserStatusActive, nil, nil, int16(0), nil, int64(0), nil}}
+			out.Rows = [][]any{{int64(args[0].(int)), "u", "F", "L", "", UserStatusActive, nil, nil, int16(0), nil, int64(0), nil, false}}
 		}
 	case qUserByExternalIdentity:
 		if id, ok := m.links[fmt.Sprint(args[0], "|", args[1])]; ok {

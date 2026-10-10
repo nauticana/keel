@@ -15,7 +15,8 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// APIKeyAuthMiddleware validates the X-API-Key header, enforces expiry, touches
+// APIKeyAuthMiddleware validates the X-API-Key header, enforces expiry and the
+// key's network allow-list against the trusted client IP, touches
 // last_used async, and injects partner_id / api_key_id / scopes into context.
 // Quota is enforced separately by QuotaMiddleware composed after auth, so the
 // same gate covers X-API-Key and OAuth callers. No path-prefix gating — the
@@ -43,6 +44,10 @@ func APIKeyAuthMiddleware(apiKeys *APIKeyService, journal logger.ApplicationLogg
 			}
 			if entry.ExpiresAt.Year() > 1 && time.Now().After(entry.ExpiresAt) {
 				common.WriteJSONError(w, http.StatusUnauthorized, "API key expired")
+				return
+			}
+			if !common.CIDRListAllows(entry.AllowedNets, common.TrustedClientIP(r)) {
+				common.WriteJSONError(w, http.StatusForbidden, "API key not allowed from this address")
 				return
 			}
 			go func() {

@@ -102,6 +102,16 @@ func (s *memTokens) GrantActive(_ context.Context, userID int64, clientID string
 	}
 	return false, nil
 }
+func (s *memTokens) GrantClients(_ context.Context, userID int64) ([]string, error) {
+	var out []string
+	for _, t := range s.m {
+		if t.UserID == userID && t.RevokedAt == nil && time.Now().Before(t.ExpiresAt) && !slices.Contains(out, t.ClientID) {
+			out = append(out, t.ClientID)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
 func (s *memTokens) Rotate(_ context.Context, oldHash string, t *port.RefreshToken) error {
 	old := s.m[oldHash]
 	if old == nil || old.RevokedAt != nil {

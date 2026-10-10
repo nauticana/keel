@@ -16,6 +16,8 @@ type SessionHandoffStore interface {
 	RedeemHandoff(ctx context.Context, codeHash, returnURL, sessionHash string, sessionTTL time.Duration) (*UserRef, error)
 	// ResolveHandoffSession returns the user of an unexpired session, else nil.
 	ResolveHandoffSession(ctx context.Context, sessionHash string) (*UserRef, error)
+	// EndHandoffSession expires a session; an unknown one is not an error.
+	EndHandoffSession(ctx context.Context, sessionHash string) error
 }
 
 // SessionHandoffCode is a minted hand-off code awaiting redemption.

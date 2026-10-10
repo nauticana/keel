@@ -142,6 +142,18 @@ func (s *SessionHandoff) Resolve(ctx context.Context, token string) (*port.UserR
 	return user, nil
 }
 
+// End expires the hand-off session of token, so the account behind it is no
+// longer used at the authorization endpoint.
+func (s *SessionHandoff) End(ctx context.Context, token string) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if !isToken(token) {
+		return nil
+	}
+	return s.store.EndHandoffSession(ctx, hashToken(token))
+}
+
 // canonicalReturn accepts the authorize URL in absolute or path-absolute form
 // and returns it absolute; anything else is ErrHandoffReturn.
 func (s *SessionHandoff) canonicalReturn(raw string) (string, error) {

@@ -22,8 +22,7 @@ type JobWorker interface {
 }
 
 // QueueWorker delegates the drain to the framework: it supplies the queue
-// identity and one-job logic, and JobExecutor drives a JobLoop. See the README
-// "Background job scheduler" section.
+// identity and one-job logic, and JobExecutor drives a JobLoop.
 type QueueWorker interface {
 	Worker
 	// QueueQueries names the pending/claim/reclaim queries (keys into

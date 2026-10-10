@@ -45,10 +45,16 @@ const (
 	oauth_code_ttl                = "oauth_code_ttl"
 	oauth_max_pending_clients     = "oauth_max_pending_clients"
 	oauth_max_auth_redirects      = "oauth_max_auth_redirects"
+	oauth_replace_same_app_grant  = "oauth_replace_same_app_grant"
+	oauth_max_grants_per_user     = "oauth_max_grants_per_user"
 	outbound_max_redirects        = "outbound_max_redirects"
 	outbound_max_rps              = "outbound_max_rps"
 	outbound_max_response_size    = "outbound_max_response_size"
 	trusted_proxy_cidr            = "trusted_proxy_cidr"
+	api_key_max_per_partner       = "api_key_max_per_partner"
+	notify_new_device_signin      = "notify_new_device_signin"
+	stepup_new_device             = "stepup_new_device"
+	max_sessions_per_user         = "max_sessions_per_user"
 	request_id_header             = "request_id_header"
 	nats_url                      = "nats_url"
 	nats_name                     = "nats_name"
@@ -187,8 +193,14 @@ type KeelConfig struct {
 	OAuthCodeTTL                time.Duration // oauth_code_ttl                60                 Authorization-code lifetime (seconds)
 	OAuthMaxPendingClients      int           // oauth_max_pending_clients     0                  Maximum pending open registrations; 0 is unbounded
 	OAuthMaxAuthRedirects       int           // oauth_max_auth_redirects      2                  Max /authorize→login bounces before 508
+	OAuthReplaceSameAppGrant    bool          // oauth_replace_same_app_grant  true               A new grant revokes the user's grants to other clients sharing its redirect host
+	OAuthMaxGrantsPerUser       int           // oauth_max_grants_per_user     10                 Live OAuth grants a user may hold; 0 is unbounded
 	OutboundMaxRedirects        int           // outbound_max_redirects        10                 Max redirects the shared outbound HTTP client follows
 	OutboundMaxRPS              float64       // outbound_max_rps              0                  Global rate cap on the shared outbound HTTP client (0 = unlimited)
+	APIKeyMaxPerPartner         int           // api_key_max_per_partner       20                 Usable API keys a partner may hold; 0 is unbounded
+	NotifyNewDeviceSignin       bool          // notify_new_device_signin      true               Notify the user of a sign-in from a device not seen before
+	StepUpNewDevice             bool          // stepup_new_device             false              A user without 2FA confirms a new-device sign-in with an emailed code
+	MaxSessionsPerUser          int           // max_sessions_per_user         0                  Live sign-in sessions a user may hold, the oldest ending first; 0 is unbounded
 	TrustedProxyCIDR            string        // trusted_proxy_cidr            ""                 CSV of CIDRs whose forwarded-for headers are honored
 	RequestIDHeader             string        // request_id_header             X-Request-Id       Correlation-id header, adopted from trusted proxies and set on every response; empty disables it
 	NatsURL                     string        // nats_url                      ""                 NATS server URL
@@ -325,10 +337,16 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OAuthCodeTTL = c.Duration(m, oauth_code_ttl)
 	c.OAuthMaxPendingClients = c.Int(m, oauth_max_pending_clients)
 	c.OAuthMaxAuthRedirects = c.Int(m, oauth_max_auth_redirects)
+	c.OAuthReplaceSameAppGrant = c.Bool(m, oauth_replace_same_app_grant)
+	c.OAuthMaxGrantsPerUser = c.Int(m, oauth_max_grants_per_user)
 	c.OutboundMaxRedirects = c.Int(m, outbound_max_redirects)
 	c.OutboundMaxRPS = c.Float(m, outbound_max_rps)
 	c.OutboundMaxResponseSize = c.Int64(m, outbound_max_response_size)
 	c.TrustedProxyCIDR = c.String(m, trusted_proxy_cidr)
+	c.APIKeyMaxPerPartner = c.Int(m, api_key_max_per_partner)
+	c.NotifyNewDeviceSignin = c.Bool(m, notify_new_device_signin)
+	c.StepUpNewDevice = c.Bool(m, stepup_new_device)
+	c.MaxSessionsPerUser = c.Int(m, max_sessions_per_user)
 	c.RequestIDHeader = c.String(m, request_id_header)
 	c.NatsURL = c.String(m, nats_url)
 	c.NatsName = c.String(m, nats_name)
@@ -435,8 +453,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	if c.OAuthAccessTokenCacheTTL < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_access_token_cache_ttl))
 	}
-	if c.OAuthMaxPendingClients < 0 {
-		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_max_pending_clients))
+	for flag, n := range map[string]int{oauth_max_pending_clients: c.OAuthMaxPendingClients, oauth_max_grants_per_user: c.OAuthMaxGrantsPerUser,
+		api_key_max_per_partner: c.APIKeyMaxPerPartner, max_sessions_per_user: c.MaxSessionsPerUser} {
+		if n < 0 {
+			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", flag))
+		}
 	}
 	if c.OutboundMaxResponseSize <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", outbound_max_response_size))

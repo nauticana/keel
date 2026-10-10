@@ -1,8 +1,6 @@
 package user
 
 import (
-	"time"
-
 	"github.com/nauticana/keel/model"
 )
 
@@ -55,9 +53,11 @@ type UserService interface {
 	VerifyPasswordByID(userID int, password string) (bool, error)
 
 	// Refresh tokens
-	// CreateRefreshToken starts a session; a positive maxAge ends it that long
-	// after sign-in however often it is refreshed, zero renews without limit.
-	CreateRefreshToken(userID int, signInMethod string, maxAge time.Duration) (string, error)
+	// CreateRefreshToken starts the session's sign-in session from device and
+	// sets session.SessionID. A positive session.SessionMaxAge ends it that
+	// long after sign-in however often it is refreshed; zero renews without
+	// limit. ErrSignInNetwork refuses an address the partner does not admit.
+	CreateRefreshToken(session *model.UserSession, device SessionDevice) (string, error)
 	// EffectivePolicies returns each policy type's value for a partner: its own
 	// row when it has one, else the global row.
 	EffectivePolicies(partnerID int64) (map[string]int, error)
@@ -70,7 +70,16 @@ type UserService interface {
 	// EndMembership ends the user's membership of the partner, ends their role
 	// assignments and revokes their tokens.
 	EndMembership(partnerID int64, userID int, reason string) error
-	ValidateRefreshToken(token string) (*model.UserSession, error)
+	ValidateRefreshToken(token string, device SessionDevice) (*model.UserSession, error)
+	// Sessions lists the user's live sign-in sessions; RevokeSession ends one
+	// (ErrSessionNotFound when it is not the user's or already ended).
+	Sessions(userID int) ([]ActiveSession, error)
+	RevokeSession(userID int, sessionID int64) error
+	// IsKnownDevice reports a prior sign-in from the device cookie's device.
+	IsKnownDevice(userID int, deviceSecret string) (bool, error)
+	// SendStepUpCode delivers the OTPPurposeStepUp code a new-device sign-in
+	// presents; ErrStepUpUnavailable when no SignInNotifier is set.
+	SendStepUpCode(userID int) error
 	RevokeRefreshToken(token string) error
 	// LogoutEverywhere revokes every active refresh token for a user — the
 	// "log out of all devices" button. Also invoked automatically by

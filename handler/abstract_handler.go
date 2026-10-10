@@ -50,14 +50,19 @@ type AbstractHandler struct {
 // The cache is per-request (not process-wide) so a session refresh on
 // the next request still parses freshly. Callers that want the canonical
 // 401-on-miss behaviour should use RequireSession instead.
-// SessionTokens mints the access JWT and a refresh token for a completed
-// login; callers add their extra response fields to the returned map.
-func (h *AbstractHandler) SessionTokens(session *model.UserSession) (map[string]any, error) {
-	token, err := h.UserService.CreateJWT(session)
+// SessionTokens starts a session from r's device and mints the access JWT and
+// refresh token for a completed login; callers add their extra response
+// fields to the returned map and pass an error to WriteServiceError.
+func (h *AbstractHandler) SessionTokens(w http.ResponseWriter, r *http.Request, session *model.UserSession) (map[string]any, error) {
+	device, err := sessionDevice(w, r, true)
 	if err != nil {
 		return nil, err
 	}
-	refresh, err := h.UserService.CreateRefreshToken(session.Id, session.SignInMethod, session.SessionMaxAge)
+	refresh, err := h.UserService.CreateRefreshToken(session, device)
+	if err != nil {
+		return nil, err
+	}
+	token, err := h.UserService.CreateJWT(session)
 	if err != nil {
 		return nil, err
 	}

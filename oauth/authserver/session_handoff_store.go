@@ -14,6 +14,7 @@ const (
 	oauthInsertHandoff  = "oauth_insert_handoff"
 	oauthRedeemHandoff  = "oauth_redeem_handoff"
 	oauthResolveHandoff = "oauth_resolve_handoff"
+	oauthEndHandoff     = "oauth_end_handoff"
 )
 
 var oauthHandoffQueries = map[string]string{
@@ -33,6 +34,9 @@ RETURNING user_id, partner_id`,
 	oauthResolveHandoff: `
 SELECT h.user_id, h.partner_id FROM oauth_session_handoff h
  WHERE h.session_hash = ? AND h.session_expires_at > CURRENT_TIMESTAMP` + handoffNotRevoked,
+	oauthEndHandoff: `
+UPDATE oauth_session_handoff SET session_expires_at = CURRENT_TIMESTAMP
+ WHERE session_hash = ? AND session_expires_at > CURRENT_TIMESTAMP`,
 }
 
 // handoffNotRevoked ends a hand-off with the access tokens it was minted from:
@@ -76,6 +80,11 @@ func (s *SessionHandoffStoreDB) RedeemHandoff(ctx context.Context, codeHash, ret
 func (s *SessionHandoffStoreDB) ResolveHandoffSession(ctx context.Context, sessionHash string) (*port.UserRef, error) {
 	res, err := s.qs.Query(ctx, oauthResolveHandoff, sessionHash)
 	return firstUserRef(res, err)
+}
+
+func (s *SessionHandoffStoreDB) EndHandoffSession(ctx context.Context, sessionHash string) error {
+	_, err := s.qs.Query(ctx, oauthEndHandoff, sessionHash)
+	return err
 }
 
 func firstUserRef(res *model.QueryResult, err error) (*port.UserRef, error) {

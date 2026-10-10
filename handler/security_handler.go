@@ -64,6 +64,8 @@ func (h *SecurityHandler) GetAuthRoutes() map[string]func(w http.ResponseWriter,
 		common.RestPrefix + "/user/2fa/disable":           h.Disable2FA,
 		common.RestPrefix + "/user/trusted-device/list":   h.ListTrustedDevices,
 		common.RestPrefix + "/user/trusted-device/revoke": h.RevokeTrustedDevice,
+		common.RestPrefix + "/user/sessions":              h.ListSessions,
+		common.RestPrefix + "/user/sessions/revoke":       h.RevokeSession,
 		common.RestPrefix + "/user/logout-everywhere":     h.LogoutEverywhere,
 		common.RestPrefix + "/user/account":               h.DeleteAccount,
 	}
@@ -152,22 +154,28 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		valid, err := h.UserService.Verify2FA(userID, req.Code)
+		session, err := h.UserService.GetUserById(userID)
+		if err != nil {
+			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to load session")
+			return
+		}
+		// Without 2FA the login token came from a new-device step-up.
+		valid := false
+		if session.TwoFactorEnabled {
+			valid, err = h.UserService.Verify2FA(userID, req.Code)
+		} else {
+			err = h.UserService.VerifyOTP(userID, user.OTPPurposeStepUp, req.Code)
+			valid = err == nil
+		}
 		if err != nil || !valid {
 			h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid 2FA code")
 			return
 		}
 
-		if req.TrustDevice {
+		if req.TrustDevice && session.TwoFactorEnabled {
 			if secret, err := h.UserService.RegisterTrustedDevice(userID, req.DeviceName); err == nil {
 				DefaultTrustedDeviceCookie.Set(w, secret)
 			}
-		}
-
-		session, err := h.UserService.GetUserById(userID)
-		if err != nil {
-			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to load session")
-			return
 		}
 		session.SignInMethod = method
 		session.SessionMaxAge = maxAge
@@ -178,9 +186,9 @@ func (h *SecurityHandler) Verify2FA(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		resp, err := h.SessionTokens(session)
+		resp, err := h.SessionTokens(w, r, session)
 		if err != nil {
-			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue token")
+			h.WriteServiceError(w, r, err)
 			return
 		}
 		resp["valid"] = true
@@ -259,9 +267,9 @@ func (h *SecurityHandler) VerifyBackupCode(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp, err := h.SessionTokens(session)
+	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue token")
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	resp["valid"] = true

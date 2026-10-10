@@ -19,10 +19,11 @@ import (
 var ErrGrantNotFound = errors.New("oauth: no active grant for this client")
 
 const (
-	oauthGrantList   = "oauth_grant_list"
-	oauthGrantRevoke = "oauth_grant_revoke"
-	oauthGrantActive = "oauth_grant_active"
-	oauthClientPurge = "oauth_client_purge"
+	oauthGrantList    = "oauth_grant_list"
+	oauthGrantRevoke  = "oauth_grant_revoke"
+	oauthGrantActive  = "oauth_grant_active"
+	oauthGrantClients = "oauth_grant_clients"
+	oauthClientPurge  = "oauth_client_purge"
 
 	purgeBatch = 500
 )
@@ -46,7 +47,8 @@ SELECT a.client_id, c.client_name, a.scopes, h.first_at, a.last_at
 UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP
  WHERE user_id = ? AND client_id = ? AND revoked_at IS NULL
 RETURNING id`,
-	oauthGrantActive: `SELECT 1 FROM oauth_refresh_token WHERE user_id = ? AND client_id = ? AND ` + liveRefresh + ` LIMIT 1`,
+	oauthGrantActive:  `SELECT 1 FROM oauth_refresh_token WHERE user_id = ? AND client_id = ? AND ` + liveRefresh + ` LIMIT 1`,
+	oauthGrantClients: `SELECT DISTINCT client_id FROM oauth_refresh_token WHERE user_id = ? AND ` + liveRefresh + ` ORDER BY client_id`,
 	// Registered clients that never completed an authorization: no refresh
 	// token ever issued and no code in flight.
 	oauthClientPurge: `
@@ -158,6 +160,22 @@ func (s *GrantService) Active(ctx context.Context, userID int64, clientID string
 		return false, err
 	}
 	return len(res.Rows) > 0, nil
+}
+
+// Clients returns the ids of the clients holding a live grant from the user.
+func (s *GrantService) Clients(ctx context.Context, userID int64) ([]string, error) {
+	if userID <= 0 {
+		return nil, nil
+	}
+	res, err := s.query(ctx).Query(ctx, oauthGrantClients, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		out = append(out, common.AsString(r[0]))
+	}
+	return out, nil
 }
 
 // PurgeUnauthorizedClients deletes up to purgeBatch registered clients that

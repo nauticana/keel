@@ -39,8 +39,10 @@ type UserSession struct {
 	SignInMethod string `json:"-"`
 	// SessionMaxAge, when positive, ends the session that long after sign-in.
 	SessionMaxAge time.Duration `json:"-"`
-	ExpiresAt     int64         `json:"-"`
-	IssuedAt      int64         `json:"-"`
+	// SessionID names the sign-in session the token belongs to.
+	SessionID int64 `json:"sid,omitempty"`
+	ExpiresAt int64 `json:"-"`
+	IssuedAt  int64 `json:"-"`
 	// NewRefreshToken is populated by ValidateRefreshToken when it
 	// rotates the presented token. Clients must overwrite their
 	// stored refresh-token value with this on every refresh response;

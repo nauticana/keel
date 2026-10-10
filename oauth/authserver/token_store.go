@@ -157,3 +157,7 @@ func (s *TokenStoreDB) RevokeGrant(ctx context.Context, userID int64, clientID s
 func (s *TokenStoreDB) GrantActive(ctx context.Context, userID int64, clientID string) (bool, error) {
 	return s.grants.Active(ctx, userID, clientID)
 }
+
+func (s *TokenStoreDB) GrantClients(ctx context.Context, userID int64) ([]string, error) {
+	return s.grants.Clients(ctx, userID)
+}

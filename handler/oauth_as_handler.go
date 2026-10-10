@@ -3,10 +3,12 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,10 +34,12 @@ type OAuthASHandler struct {
 	ResolveUser func(r *http.Request) *port.UserRef
 	// Handoff and UserService together mount the session hand-off routes,
 	// which let a bearer-JWT SPA establish a cookie session on the AS host.
+	// UserService also names the signed-in account on the consent page.
 	Handoff     *authserver.SessionHandoff
 	UserService user.UserService
 	// LoginURL receives unauthenticated /authorize users with a ?return= back
-	// to the authorize URL. Empty → 401 instead of redirecting.
+	// to the authorize URL, plus prompt=login or prompt=select_account when
+	// the person must sign in again. Empty → 401 instead of redirecting.
 	LoginURL string
 	// Consent optionally overrides the built-in consent page.
 	Consent func(w http.ResponseWriter, r *http.Request, c ConsentView)
@@ -74,12 +78,22 @@ func isLocalhostPlainHTTP(r *http.Request) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
-// ConsentView is the data passed to the consent renderer.
+// ConsentView is the data passed to the consent renderer. A page offering
+// SwitchAccount posts switch_account=true with Fields to sign in as another
+// account.
 type ConsentView struct {
-	ClientName string
-	Scopes     []string
-	Action     string
-	Fields     map[string]string
+	ClientName    string
+	Scopes        []string
+	Action        string
+	Fields        map[string]string
+	Account       *ConsentAccount // nil without UserService
+	SwitchAccount bool
+}
+
+// ConsentAccount is the signed-in account the client is about to receive.
+type ConsentAccount struct {
+	Name  string
+	Email string
 }
 
 func (h *OAuthASHandler) Routes() map[string]func(http.ResponseWriter, *http.Request) {
@@ -185,7 +199,7 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if code, ok := authserver.ProtocolErrorCode(err); ok {
 			if client != nil {
-				h.redirectErr(w, r, req.RedirectURI, code, req.State)
+				h.redirectErr(w, r, req.RedirectURI, code, authserver.ProtocolErrorDescription(err), req.State)
 				return
 			}
 			http.Error(w, code, http.StatusBadRequest)
@@ -198,24 +212,50 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if get("response_type") != "code" {
-		h.redirectErr(w, r, req.RedirectURI, "unsupported_response_type", req.State)
+		h.redirectErr(w, r, req.RedirectURI, "unsupported_response_type", "", req.State)
 		return
 	}
 	user := h.resolveUser(r)
-	if user == nil {
-		h.redirectToLogin(w, r)
+	prompt := strings.Fields(get("prompt"))
+	switch {
+	case slices.Contains(prompt, "none") && len(prompt) > 1:
+		h.redirectErr(w, r, req.RedirectURI, "invalid_request", "prompt=none cannot be combined", req.State)
+		return
+	case slices.Contains(prompt, "none") && user == nil:
+		h.redirectErr(w, r, req.RedirectURI, "login_required", "", req.State)
+		return
+	case slices.Contains(prompt, "none"):
+		h.redirectErr(w, r, req.RedirectURI, "consent_required", "", req.State)
+		return
+	case slices.Contains(prompt, "login"):
+		h.signInAgain(w, r, consentFields(req, scopes), "login")
+		return
+	case slices.Contains(prompt, "select_account"):
+		h.signInAgain(w, r, consentFields(req, scopes), "select_account")
 		return
 	}
 	if r.Method != http.MethodPost {
-		h.renderConsent(w, r, client, req, scopes)
+		if user == nil {
+			h.redirectToLogin(w, r)
+		} else {
+			h.renderConsent(w, r, client, req, scopes, user)
+		}
+		return
+	}
+	if user == nil {
+		h.redirectToLogin(w, r)
 		return
 	}
 	if h.Consent == nil && !h.csrfGuard(r).Validate(r, "csrf") {
 		http.Error(w, `{"error":"invalid_csrf"}`, http.StatusForbidden)
 		return
 	}
+	if get("switch_account") == "true" && h.LoginURL != "" {
+		h.signInAgain(w, r, consentFields(req, scopes), "login")
+		return
+	}
 	if get("approve") != "true" {
-		h.redirectErr(w, r, req.RedirectURI, "access_denied", req.State)
+		h.redirectErr(w, r, req.RedirectURI, "access_denied", "", req.State)
 		return
 	}
 	req.User = user
@@ -229,7 +269,7 @@ func (h *OAuthASHandler) authorize(w http.ResponseWriter, r *http.Request) {
 			}
 			code = "server_error"
 		}
-		h.redirectErr(w, r, req.RedirectURI, code, req.State)
+		h.redirectErr(w, r, req.RedirectURI, code, authserver.ProtocolErrorDescription(err), req.State)
 		return
 	}
 	u, _ := url.Parse(req.RedirectURI)
@@ -337,6 +377,28 @@ func (h *OAuthASHandler) redirectToLogin(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, h.LoginURL+"?return="+url.QueryEscape(h.authorizeURL(r, q)), http.StatusFound)
 }
 
+// signInAgain ends the hand-off session and sends the person to LoginURL with
+// a prompt hint. The return carries only the authorize parameters, so the next
+// authorize shows consent for whichever account signed in.
+func (h *OAuthASHandler) signInAgain(w http.ResponseWriter, r *http.Request, q url.Values, prompt string) {
+	if h.LoginURL == "" {
+		http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
+		return
+	}
+	if c, err := r.Cookie(OAuthSessionCookie); err == nil && h.Handoff != nil {
+		if err := h.Handoff.End(r.Context(), c.Value); err != nil {
+			if h.Journal != nil {
+				h.Journal.Error("oauth/as: end hand-off session: " + err.Error())
+			}
+			http.Error(w, "server_error", http.StatusInternalServerError)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: OAuthSessionCookie, Path: authserver.OAuthPathPrefix, MaxAge: -1,
+			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	}
+	http.Redirect(w, r, h.LoginURL+"?return="+url.QueryEscape(h.authorizeURL(r, q))+"&prompt="+prompt, http.StatusFound)
+}
+
 // authorizeURL is the absolute authorize URL with query q, built from the
 // configured issuer and never from request headers, so a login page on another
 // origin knows where to return. It falls back to the request path when the
@@ -378,7 +440,7 @@ func consentPolicy(redirectURI string) string {
 	return "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action " + target
 }
 
-func (h *OAuthASHandler) redirectErr(w http.ResponseWriter, r *http.Request, redirectURI, code, state string) {
+func (h *OAuthASHandler) redirectErr(w http.ResponseWriter, r *http.Request, redirectURI, code, desc, state string) {
 	u, err := url.Parse(redirectURI)
 	if err != nil {
 		http.Error(w, code, http.StatusBadRequest)
@@ -386,6 +448,9 @@ func (h *OAuthASHandler) redirectErr(w http.ResponseWriter, r *http.Request, red
 	}
 	q := u.Query()
 	q.Set("error", code)
+	if desc != "" {
+		q.Set("error_description", desc)
+	}
 	if state != "" {
 		q.Set("state", state)
 	}
@@ -396,21 +461,27 @@ func (h *OAuthASHandler) redirectErr(w http.ResponseWriter, r *http.Request, red
 
 // renderConsent shows (and binds into the form) the effective granted scopes —
 // not the raw request — so what the user approves is exactly what the code stores.
-func (h *OAuthASHandler) renderConsent(w http.ResponseWriter, r *http.Request, client *port.OAuthClient, req port.AuthorizeRequest, scopes []string) {
+func (h *OAuthASHandler) renderConsent(w http.ResponseWriter, r *http.Request, client *port.OAuthClient, req port.AuthorizeRequest, scopes []string, user *port.UserRef) {
 	view := ConsentView{
-		ClientName: clientLabel(client),
-		Scopes:     scopes,
-		Action:     authserver.OAuthAuthorizePath,
-		Fields: map[string]string{
-			"response_type":         "code",
-			"client_id":             req.ClientID,
-			"redirect_uri":          req.RedirectURI,
-			"scope":                 strings.Join(scopes, " "),
-			"state":                 req.State,
-			"code_challenge":        req.CodeChallenge,
-			"code_challenge_method": req.CodeChallengeMethod,
-			"resource":              req.Resource,
-		},
+		ClientName:    clientLabel(client),
+		Scopes:        scopes,
+		Action:        authserver.OAuthAuthorizePath,
+		Fields:        map[string]string{},
+		SwitchAccount: h.LoginURL != "",
+	}
+	for k, v := range consentFields(req, scopes) {
+		view.Fields[k] = v[0]
+	}
+	if h.UserService != nil {
+		u, err := h.UserService.GetUserById(int(user.UserID))
+		if err != nil || u == nil {
+			if h.Journal != nil {
+				h.Journal.Error(fmt.Sprintf("oauth/as: consent account %d: %v", user.UserID, err))
+			}
+			http.Error(w, "server_error", http.StatusInternalServerError)
+			return
+		}
+		view.Account = &ConsentAccount{Name: strings.TrimSpace(u.FirstName + " " + u.LastName), Email: u.Email}
 	}
 	if h.Consent != nil {
 		h.Consent(w, r, view)
@@ -423,6 +494,20 @@ func (h *OAuthASHandler) renderConsent(w http.ResponseWriter, r *http.Request, c
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", consentPolicy(req.RedirectURI))
 	_ = consentTemplate.Execute(w, view)
+}
+
+// consentFields are the authorize parameters the consent form posts back.
+func consentFields(req port.AuthorizeRequest, scopes []string) url.Values {
+	return url.Values{
+		"response_type":         {"code"},
+		"client_id":             {req.ClientID},
+		"redirect_uri":          {req.RedirectURI},
+		"scope":                 {strings.Join(scopes, " ")},
+		"state":                 {req.State},
+		"code_challenge":        {req.CodeChallenge},
+		"code_challenge_method": {req.CodeChallengeMethod},
+		"resource":              {req.Resource},
+	}
 }
 
 func clientLabel(c *port.OAuthClient) string {
@@ -487,9 +572,11 @@ var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype htm
 <html><head><meta charset="utf-8"><title>Authorize</title></head><body>
 <h1>Authorize {{.ClientName}}</h1>
 <p>{{.ClientName}} is requesting access to your account.</p>
+{{with .Account}}<p>Signed in as <strong>{{if .Name}}{{.Name}}{{else}}{{.Email}}{{end}}</strong>{{if and .Name .Email}} ({{.Email}}){{end}}</p>{{end}}
 {{if .Scopes}}<ul>{{range .Scopes}}<li>{{.}}</li>{{end}}</ul>{{end}}
 <form method="post" action="{{.Action}}">
 {{range $k, $v := .Fields}}<input type="hidden" name="{{$k}}" value="{{$v}}">
 {{end}}<button type="submit" name="approve" value="true">Approve</button>
 <button type="submit" name="approve" value="false">Deny</button>
+{{if .SwitchAccount}}<button type="submit" name="switch_account" value="true">Use a different account</button>{{end}}
 </form></body></html>`))

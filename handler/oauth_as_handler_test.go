@@ -79,8 +79,8 @@ func TestAuthorizeRedirectCarriesIssuer(t *testing.T) {
 	}
 	h := &OAuthASHandler{AS: authserver.NewLocal(signer, registerClients{}, nil, nil, authserver.Config{Issuer: "https://as.example"})}
 	rec := httptest.NewRecorder()
-	h.redirectErr(rec, httptest.NewRequest(http.MethodGet, authserver.OAuthAuthorizePath, nil), "https://app.example/cb", "access_denied", "s")
-	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "iss=https%3A%2F%2Fas.example") {
+	h.redirectErr(rec, httptest.NewRequest(http.MethodGet, authserver.OAuthAuthorizePath, nil), "https://app.example/cb", "access_denied", "too many apps", "s")
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "iss=https%3A%2F%2Fas.example") || !strings.Contains(loc, "error_description=too+many+apps") {
 		t.Fatalf("location = %q", loc)
 	}
 }

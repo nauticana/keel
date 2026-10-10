@@ -67,7 +67,8 @@ func (h *PublicHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	if !h.ReadRequest(w, r, &req) || !h.RequireFields(w, map[string]string{"refreshToken": req.RefreshToken}) {
 		return
 	}
-	session, err := h.UserService.ValidateRefreshToken(req.RefreshToken)
+	device, _ := sessionDevice(w, r, false)
+	session, err := h.UserService.ValidateRefreshToken(req.RefreshToken, device)
 	if err != nil {
 		if errors.Is(err, user.ErrInvalidRefreshToken) {
 			h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired refresh token")
@@ -127,10 +128,11 @@ func (h *PublicHandler) GetPasswordPolicy(w http.ResponseWriter, r *http.Request
 
 // secondFactorPending reports whether the sign-in stops here: an account with
 // 2FA on a device that is not trusted gets a login token for the 2FA step in
-// place of session tokens. It has written the response when it returns true.
+// place of session tokens, and so does an account without 2FA on a new device
+// under stepup_new_device. It has written the response when it returns true.
 func (h *PublicHandler) secondFactorPending(w http.ResponseWriter, r *http.Request, session *model.UserSession) bool {
 	if !session.TwoFactorEnabled {
-		return false
+		return h.stepUpPending(w, r, session)
 	}
 	if secret := DefaultTrustedDeviceCookie.Get(r); secret != "" {
 		if trusted, _ := h.UserService.IsTrustedDevice(session.Id, secret); trusted {
@@ -144,6 +146,36 @@ func (h *PublicHandler) secondFactorPending(w http.ResponseWriter, r *http.Reque
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]any{
 		"twoFactorRequired": true,
+		"loginToken":        loginToken,
+	})
+	return true
+}
+
+// stepUpPending sends a code to a user without 2FA signing in from a device
+// not seen before; the code is verified at the 2FA step.
+func (h *PublicHandler) stepUpPending(w http.ResponseWriter, r *http.Request, session *model.UserSession) bool {
+	if !config.Config().StepUpNewDevice {
+		return false
+	}
+	device, _ := sessionDevice(w, r, false)
+	known, err := h.UserService.IsKnownDevice(session.Id, device.DeviceSecret)
+	if err == nil && known {
+		return false
+	}
+	var loginToken string
+	if err == nil {
+		loginToken, err = h.UserService.CreateLoginToken(session.Id, session.SignInMethod)
+	}
+	if err == nil {
+		err = h.UserService.SendStepUpCode(session.Id)
+	}
+	if err != nil {
+		h.WriteServiceError(w, r, err)
+		return true
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]any{
+		"twoFactorRequired": true,
+		"twoFactorMethod":   "email",
 		"loginToken":        loginToken,
 	})
 	return true
@@ -198,9 +230,9 @@ func (h *PublicHandler) LoginLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.SessionTokens(session)
+	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	resp["menu"] = menu
@@ -288,9 +320,9 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.SessionTokens(session)
+	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	resp["menu"] = menu
@@ -445,7 +477,7 @@ func (h *PublicHandler) ConfirmRegistration(w http.ResponseWriter, r *http.Reque
 	if !h.checkoutTolerated(w, r, err) {
 		return
 	}
-	resp, err := h.SessionTokens(session)
+	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return

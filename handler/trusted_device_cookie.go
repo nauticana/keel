@@ -5,9 +5,8 @@ import (
 	"time"
 )
 
-// DefaultTrustedDeviceCookie is the cookie used by keel's built-in 2FA
-// flow. Downstream apps that mount their own login handlers may keep the
-// default or instantiate a TrustedDeviceCookie with a different name/path.
+// DefaultTrustedDeviceCookie is the cookie keel's built-in 2FA handlers use;
+// assign another at composition time to change its attributes.
 var DefaultTrustedDeviceCookie = &TrustedDeviceCookie{
 	Name: "keel_td",
 	Path: "/",

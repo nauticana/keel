@@ -21,6 +21,19 @@ columns:
     type: CHAR(1)
     nullable: true
     comment: How the session signed in; NULL is unknown
+  - name: session_id
+    type: BIGINT
+    comment: Sign-in session of the token, carried through rotation
+  - name: user_agent
+    type: VARCHAR(400)
+    nullable: true
+  - name: client_ip
+    type: VARCHAR(45)
+    nullable: true
+  - name: device_hash
+    type: CHAR(64)
+    nullable: true
+    comment: SHA-256 of the device cookie the session signed in from
   - name: revoked_at
     type: TIMESTAMP
     nullable: true
@@ -40,3 +53,5 @@ foreign_keys:
 indexes:
   - name: idx_refresh_token_hash
     columns: [token_hash]
+  - name: idx_refresh_token_session
+    columns: [user_id, session_id]

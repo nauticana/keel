@@ -61,9 +61,9 @@ func (u *handoffSignIn) CheckSignInMethod(int, string) error {
 	return nil
 }
 func (u *handoffSignIn) CreateJWT(*model.UserSession) (string, error) { return "jwt", nil }
-func (u *handoffSignIn) CreateRefreshToken(_ int, method string, maxAge time.Duration) (string, error) {
-	u.refreshed = append(u.refreshed, method)
-	u.maxAge = maxAge
+func (u *handoffSignIn) CreateRefreshToken(s *model.UserSession, _ user.SessionDevice) (string, error) {
+	u.refreshed = append(u.refreshed, s.SignInMethod)
+	u.maxAge = s.SessionMaxAge
 	return "refresh", nil
 }
 func (u *handoffSignIn) CreateLoginToken(int, string) (string, error) { return "login-token", nil }

@@ -892,7 +892,7 @@ func (s *TableServicePgsql) Delete(ctx context.Context, partnerID int64, userID 
 	}
 	// UserSpecific DELETE is owner-locked unconditionally: even an admin's
 	// explicit grant cannot remove another user's row via generic CRUD
-	// (README behaviour matrix, Delete). Force `user_id = caller` so a
+	// (owner-locking rule). Force `user_id = caller` so a
 	// caller-supplied ?user_id=<victim> cannot widen the delete to another
 	// owner's row. Cross-user deletes belong in custom handlers.
 	if s.Table.UserSpecific && userID > 0 {

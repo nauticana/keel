@@ -314,7 +314,7 @@ func (r *SQLWebhookRepository) VerifySchema(ctx context.Context) error {
 	}
 	for _, column := range []string{"request_id", "replay_attempts", "last_claimed_at"} {
 		if !found[column] {
-			return fmt.Errorf("payment_webhook_log: missing %s column — apply the migration in migration_guide.json", column)
+			return fmt.Errorf("payment_webhook_log: missing %s column", column)
 		}
 	}
 	return nil

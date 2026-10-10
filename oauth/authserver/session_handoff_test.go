@@ -62,6 +62,17 @@ func (m *memHandoffs) ResolveHandoffSession(_ context.Context, sessionHash strin
 	return nil, nil
 }
 
+func (m *memHandoffs) EndHandoffSession(_ context.Context, sessionHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.rows {
+		if r.sessionHash == sessionHash && r.sessionExpires.After(m.now) {
+			r.sessionExpires = m.now
+		}
+	}
+	return nil
+}
+
 var _ port.SessionHandoffStore = (*memHandoffs)(nil)
 
 const testAuthorize = "https://as.example.com/oauth/authorize"
@@ -222,5 +233,30 @@ func TestHandoffRejectsAnonymousAndMalformed(t *testing.T) {
 		if u, err := hs.Resolve(ctx, code); u != nil || err != nil {
 			t.Errorf("resolve %q = %+v, %v", code, u, err)
 		}
+	}
+}
+
+func TestHandoffEndExpiresSession(t *testing.T) {
+	ctx := context.Background()
+	hs, _ := newTestHandoff(t)
+	g, err := hs.Mint(ctx, alice, testAuthorize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := hs.Redeem(ctx, g.Code, g.ReturnURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hs.End(ctx, sess.Token); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := hs.Resolve(ctx, sess.Token); u != nil || err != nil {
+		t.Fatalf("ended session resolves to %+v, %v", u, err)
+	}
+	if err := hs.End(ctx, "not-a-token"); err != nil {
+		t.Fatalf("malformed token: %v", err)
+	}
+	if err := (&SessionHandoff{}).End(ctx, sess.Token); err == nil {
+		t.Fatal("an unconfigured hand-off must fail")
 	}
 }

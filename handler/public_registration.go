@@ -143,7 +143,7 @@ func (h *PublicHandler) ExchangeHandoff(w http.ResponseWriter, r *http.Request) 
 	if !grant.IdentityProvider && h.secondFactorPending(w, r, session) {
 		return
 	}
-	resp, err := h.SessionTokens(session)
+	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return

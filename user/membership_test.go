@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -32,8 +33,8 @@ func TestEndMembershipEndsRolesAndRevokesSessions(t *testing.T) {
 	svc := newLocalUserService(t, store)
 	oauth := &revokedOAuth{}
 	svc.OAuthTokens = oauth
-	token, _ := svc.CreateRefreshToken(7, SignInPassword, 0)
-	if session, err := svc.ValidateRefreshToken(token); err != nil || session.PartnerId != 11 {
+	token, _ := svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword}, SessionDevice{})
+	if session, err := svc.ValidateRefreshToken(token, SessionDevice{}); err != nil || session.PartnerId != 11 {
 		t.Fatalf("refresh before = %+v, %v", session, err)
 	} else {
 		token = session.NewRefreshToken
@@ -45,7 +46,7 @@ func TestEndMembershipEndsRolesAndRevokesSessions(t *testing.T) {
 	if len(store.endedRoles) != 1 || store.endedRoles[0] != 7 {
 		t.Fatalf("role assignments ended for %v", store.endedRoles)
 	}
-	if _, err := svc.ValidateRefreshToken(token); !errors.Is(err, ErrInvalidRefreshToken) {
+	if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Fatalf("refresh after the membership ended: %v", err)
 	}
 	if _, ok := store.cutoffs[7]; !ok {
@@ -90,16 +91,16 @@ func TestRefreshRefusesUnavailableAccount(t *testing.T) {
 		store := memberStore()
 		store.addAccount(7, "a@acme.com", UserStatusActive)
 		svc := newLocalUserService(t, store)
-		token, _ := svc.CreateRefreshToken(7, SignInPassword, 0)
+		token, _ := svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword}, SessionDevice{})
 		store.accounts[7].status = status
-		if _, err := svc.ValidateRefreshToken(token); !errors.Is(err, ErrInvalidRefreshToken) || !errors.Is(err, ErrAccountUnavailable) {
+		if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); !errors.Is(err, ErrInvalidRefreshToken) || !errors.Is(err, ErrAccountUnavailable) {
 			t.Errorf("status %s: %v", status, err)
 		}
 		if store.tokens[sha256Hex(token)].revoked || len(store.tokens) != 1 {
 			t.Errorf("status %s: a refused refresh must not rotate the token", status)
 		}
 		store.accounts[7].status = UserStatusActive
-		if _, err := svc.ValidateRefreshToken(token); err != nil {
+		if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); err != nil {
 			t.Errorf("status %s: refresh after unlock: %v", status, err)
 		}
 	}
@@ -192,11 +193,11 @@ func TestSSORequiredLevels(t *testing.T) {
 func TestSignInLifetimeSurvivesRotation(t *testing.T) {
 	store := memberStore()
 	svc := newLocalUserService(t, store)
-	if _, err := svc.CreateRefreshToken(7, SignInPassword, -time.Hour); err == nil {
+	if _, err := svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword, SessionMaxAge: -time.Hour}, SessionDevice{}); err == nil {
 		t.Fatal("a negative lifetime must be refused")
 	}
 	maxDuration := time.Duration(1<<63 - 1)
-	if _, err := svc.CreateRefreshToken(7, SignInPassword, maxDuration); err != nil {
+	if _, err := svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword, SessionMaxAge: maxDuration}, SessionDevice{}); err != nil {
 		t.Fatalf("a large positive lifetime must not overflow: %v", err)
 	}
 	for _, row := range store.tokens {
@@ -204,26 +205,26 @@ func TestSignInLifetimeSurvivesRotation(t *testing.T) {
 			t.Fatalf("rounded lifetime = %v", row.maxAge)
 		}
 	}
-	token, err := svc.CreateRefreshToken(7, SignInPassword, 10*time.Hour)
+	token, err := svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword, SessionMaxAge: 10 * time.Hour}, SessionDevice{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 3 {
 		store.clock += 3 * time.Hour
-		session, err := svc.ValidateRefreshToken(token)
+		session, err := svc.ValidateRefreshToken(token, SessionDevice{})
 		if err != nil {
 			t.Fatalf("refresh inside the sign-in lifetime: %v", err)
 		}
 		token = session.NewRefreshToken
 	}
 	store.clock += 3 * time.Hour
-	if _, err := svc.ValidateRefreshToken(token); !errors.Is(err, ErrInvalidRefreshToken) {
+	if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Fatalf("refresh after the sign-in lifetime: %v", err)
 	}
 
-	token, _ = svc.CreateRefreshToken(7, SignInPassword, 0)
+	token, _ = svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword}, SessionDevice{})
 	store.clock += 1000 * time.Hour
-	if _, err := svc.ValidateRefreshToken(token); err != nil {
+	if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); err != nil {
 		t.Fatalf("no lifetime renews without limit: %v", err)
 	}
 }
@@ -233,33 +234,33 @@ func TestSessionMaxHoursEndsARenewedSession(t *testing.T) {
 	store.policies[0] = map[string]int{PolicySessionMaxHours: 100}
 	store.policies[11] = map[string]int{PolicySessionMaxHours: 10}
 	svc := newLocalUserService(t, store)
-	token, _ := svc.CreateRefreshToken(7, SignInPassword, 0)
+	token, _ := svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword}, SessionDevice{})
 	for range 3 {
 		store.clock += 3 * time.Hour
-		session, err := svc.ValidateRefreshToken(token)
+		session, err := svc.ValidateRefreshToken(token, SessionDevice{})
 		if err != nil {
 			t.Fatalf("refresh inside the partner's lifetime: %v", err)
 		}
 		token = session.NewRefreshToken
 	}
 	store.clock += 3 * time.Hour
-	if _, err := svc.ValidateRefreshToken(token); !errors.Is(err, ErrInvalidRefreshToken) {
+	if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Fatalf("refresh after the partner's SESSION_MAX_HOURS: %v", err)
 	}
 	delete(store.policies, 11)
-	session, err := svc.ValidateRefreshToken(token)
+	session, err := svc.ValidateRefreshToken(token, SessionDevice{})
 	if err != nil {
 		t.Fatalf("the global limit applies without a partner row: %v", err)
 	}
 	token = session.NewRefreshToken
 	store.policies[0][PolicySessionMaxHours] = 0
 	store.clock += 1000 * time.Hour
-	if session, err = svc.ValidateRefreshToken(token); err != nil {
+	if session, err = svc.ValidateRefreshToken(token, SessionDevice{}); err != nil {
 		t.Fatalf("0 is unlimited: %v", err)
 	}
 	token = session.NewRefreshToken
 	store.failQuery[qEffectivePolicies] = errDatabaseDown
-	if _, err := svc.ValidateRefreshToken(token); !errors.Is(err, errDatabaseDown) {
+	if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); !errors.Is(err, errDatabaseDown) {
 		t.Fatalf("a policy lookup failure must refuse the refresh: %v", err)
 	}
 }
@@ -330,7 +331,7 @@ func TestRequiredSSOEndsOtherSessionsAtRefresh(t *testing.T) {
 	issue := func() map[string]string {
 		tokens := map[string]string{}
 		for name, method := range map[string]string{"password": SignInPassword, "otp": SignInOTP, "unknown": "", "external": SignInExternal, "tenant": SignInTenant} {
-			tokens[name], _ = svc.CreateRefreshToken(7, method, 0)
+			tokens[name], _ = svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: method}, SessionDevice{})
 		}
 		return tokens
 	}
@@ -339,7 +340,7 @@ func TestRequiredSSOEndsOtherSessionsAtRefresh(t *testing.T) {
 		tokens := issue()
 		store.policies[11] = map[string]int{PolicySSORequired: level}
 		for name, token := range tokens {
-			session, err := svc.ValidateRefreshToken(token)
+			session, err := svc.ValidateRefreshToken(token, SessionDevice{})
 			want := false
 			for _, s := range survivors {
 				want = want || s == name
@@ -350,7 +351,7 @@ func TestRequiredSSOEndsOtherSessionsAtRefresh(t *testing.T) {
 			case !want && (!errors.Is(err, ErrInvalidRefreshToken) || !errors.Is(err, ErrSSORequired)):
 				t.Errorf("level %d: %s session = %v", level, name, err)
 			case want:
-				if again, err := svc.ValidateRefreshToken(session.NewRefreshToken); err != nil || again.SignInMethod != session.SignInMethod {
+				if again, err := svc.ValidateRefreshToken(session.NewRefreshToken, SessionDevice{}); err != nil || again.SignInMethod != session.SignInMethod {
 					t.Errorf("level %d: the method must survive rotation: %v", level, err)
 				}
 			}

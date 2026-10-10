@@ -15,29 +15,24 @@ import (
 	"github.com/nauticana/keel/storage"
 )
 
-// AbstractWorker is the embed-only base for a JobExecutor-driven worker. Embed
-// it, set Caption / Interval / HCPort, implement GetOLTPQueries plus one of the
-// processing contracts (JobWorker or QueueWorker), then call w.Run(ctx, w) from
-// main. Run builds the keel runtime and publishes the secret provider on .Secret
-// before the loop. See the README "Background job scheduler" section.
+// AbstractWorker is the embed-only base for a JobExecutor-driven worker: set
+// Caption / Interval / HCPort, implement GetOLTPQueries and JobWorker or
+// QueueWorker, then call w.Run(ctx, w) from main.
 type AbstractWorker struct {
 	Caption  string                // journal/log caption
 	Interval int                   // poll interval, seconds
 	HCPort   int                   // /health port
 	Secret   secret.SecretProvider // set by Run before the loop; for AI/OAuth workers
 	Storage  storage.ObjectStorage // storage_bucket, set by Run when storage_mode is set; nil otherwise
-	// LoadConfig loads the runtime configuration once the DB is up, before
-	// anything reads config.Config() (storage backend, HC port, tunables). Nil
-	// loads KeelConfig alone. Applications with a composite config set this to
-	// construct and load a fresh application config instance.
+	// LoadConfig loads the runtime configuration once the DB is up; nil loads
+	// KeelConfig alone.
 	LoadConfig func(ctx context.Context, db port.DatabaseRepository) error
 }
 
 func (a *AbstractWorker) GetHealthcheckPort() int { return a.HCPort }
 
-// Run is the worker entry point. self is the concrete worker — pass the embedder
-// (w.Run(ctx, w)); Go has no virtual dispatch, so the base can't reach the
-// embedder's processing methods without it.
+// Run is the worker entry point; self is the embedding worker, which the base
+// cannot reach otherwise.
 func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 	journal, err := logger.NewApplicationLogger(a.Caption)
 	if err != nil {

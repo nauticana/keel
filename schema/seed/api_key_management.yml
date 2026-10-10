@@ -10,11 +10,17 @@ seeds:
     rows:
       - [API_KEY, GENERATE, Generate]
       - [API_KEY, ROLL, Roll]
+      - [API_KEY, RESTRICT, Restrict networks]
   - table: table_action
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
     rows:
       - [api_key, generate, Generate, plus, V, false, 10]
       - [api_key, roll, Roll, edit, V, true, 20]
+      - [api_key, restrict, Restrict networks, lock, P, true, 30]
+  - table: table_action_parameter
+    columns: [table_name, action_name, seq, param_name, caption, data_type, required]
+    rows:
+      - [api_key, restrict, 1, allowed_cidrs, Allowed networks (CSV of CIDRs; empty allows any), string, false]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:

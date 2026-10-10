@@ -19,6 +19,7 @@ import (
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/domain"
+	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/pgsql"
@@ -44,6 +45,9 @@ var (
 	ErrLegalHold           = errors.New("user: account is under legal hold")
 	ErrNoMembership        = errors.New("user: no current membership of the partner")
 	ErrSSORequired         = errors.New("user: single sign-on is required")
+	ErrSignInNetwork       = errors.New("user: sign-in is not allowed from this network")
+	ErrSessionNotFound     = errors.New("user: no such active session")
+	ErrStepUpUnavailable   = errors.New("user: no way to deliver a sign-in code")
 )
 
 // classifyUniqueViolation maps a pgx unique-index error from user_account
@@ -84,6 +88,8 @@ const (
 
 	// OTPPurposeReauth binds a one-time code to re-authenticating a signed-in user.
 	OTPPurposeReauth = "reauth"
+	// OTPPurposeStepUp binds a one-time code to a sign-in from a new device.
+	OTPPurposeStepUp = "stepup"
 
 	// SSO_REQUIRED values.
 	SSOAnyIdentity     = 1 // any external identity
@@ -155,6 +161,11 @@ const (
 	qEndPermissions              = "end_permissions"
 	qRevokeRefreshToken          = "revoke_refresh_token"
 	qRevokeAllRefreshTokensForID = "revoke_all_refresh_tokens_for_user"
+	qLiveSessions                = "live_sessions"
+	qRevokeSession               = "revoke_session"
+	qRevokeSessionsOverCap       = "revoke_sessions_over_cap"
+	qDeviceSeen                  = "device_seen"
+	qSignInNetworks              = "signin_networks"
 
 	// Trusted device queries
 	qInsertTrustedDevice  = "insert_trusted_device"
@@ -282,7 +293,8 @@ SELECT id, user_name, first_name, last_name, user_email, status, passdate, passt
 `,
 
 	qUserById: `
-SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time, phone
+SELECT id, user_name, first_name, last_name, user_email, status, passdate, passtext, login_attempts, last_login_attempt, lock_time, phone,
+       twofa_enabled
   FROM user_account
  WHERE id = ?
 `,
@@ -466,8 +478,43 @@ DELETE FROM user_registration
 `,
 
 	qInsertRefreshToken: `
-INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at, session_started_at, sign_in_method, session_max_seconds)
-VALUES (nextval('user_refresh_token_seq'), ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP), ?, ?)
+INSERT INTO user_refresh_token (id, user_id, token_hash, expires_at, session_started_at, sign_in_method, session_max_seconds,
+                                session_id, user_agent, client_ip, device_hash)
+VALUES (nextval('user_refresh_token_seq'), ?, ?, ?, COALESCE(CAST(? AS TIMESTAMP), CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?)
+`,
+	// A session has one live token; created_at of that token is its last refresh.
+	qLiveSessions: `
+SELECT session_id, user_agent, client_ip, sign_in_method, session_started_at, created_at
+  FROM user_refresh_token
+ WHERE user_id = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+ ORDER BY created_at DESC
+`,
+	qRevokeSession: `
+UPDATE user_refresh_token SET revoked_at = CURRENT_TIMESTAMP
+ WHERE user_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+RETURNING id
+`,
+	qRevokeSessionsOverCap: `
+UPDATE user_refresh_token SET revoked_at = CURRENT_TIMESTAMP
+ WHERE user_id = ? AND revoked_at IS NULL
+   AND session_id IN (SELECT session_id FROM user_refresh_token
+                       WHERE user_id = ? AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+                       ORDER BY session_started_at DESC, session_id DESC
+                       OFFSET ?)
+`,
+	qDeviceSeen: `
+SELECT EXISTS (SELECT 1 FROM user_refresh_token WHERE user_id = ?),
+       EXISTS (SELECT 1 FROM user_refresh_token WHERE user_id = ? AND device_hash = ?)
+`,
+	// The networks of the user's session partner, resolved like sessionPartnerJoin.
+	qSignInNetworks: `
+SELECT n.cidr FROM partner_signin_network n
+ WHERE n.partner_id = (SELECT pu.partner_id FROM partner_user pu
+                        WHERE pu.user_id = ?
+                          AND pu.begda <= CURRENT_TIMESTAMP
+                          AND (pu.endda IS NULL OR pu.endda > CURRENT_TIMESTAMP)
+                        ORDER BY pu.begda, pu.partner_id
+                        LIMIT 1)
 `,
 	qEndMembership: `
 UPDATE partner_user SET endda = CURRENT_TIMESTAMP
@@ -481,7 +528,8 @@ UPDATE user_permission SET endda = CURRENT_TIMESTAMP
 	qGetRefreshToken: `
 SELECT t.user_id, U.first_name, U.last_name, U.user_email, U.status, U.twofa_enabled, p.partner_id, U.phone,
        U.last_login_attempt, t.session_started_at, t.sign_in_method,
-       CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - t.session_started_at)) AS BIGINT), t.session_max_seconds
+       CAST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - t.session_started_at)) AS BIGINT), t.session_max_seconds,
+       t.session_id, t.device_hash
   FROM user_refresh_token t
   JOIN user_account U ON U.id = t.user_id
 ` + sessionPartnerJoin + `
@@ -745,6 +793,9 @@ type LocalUserService struct {
 	// records a revocation that failed. Both are optional.
 	GrantRevoker port.IdentityGrantRevoker
 	Journal      logger.ApplicationLogger
+	// SignInNotifier sends new-device notices and step-up codes; optional
+	// unless notify_new_device_signin or stepup_new_device is on.
+	SignInNotifier SignInNotifier
 
 	// Ctx is the parent context used by every service method that needs
 	// to issue a DB query. Set by NewLocalUserService / Init from the
@@ -1053,6 +1104,8 @@ func (s *LocalUserService) GetUserById(userId int) (*model.UserSession, error) {
 		Provider:    "local",
 		ExpiresAt:   time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:    time.Now().Unix(),
+		// The 2FA step tells a TOTP login token from a step-up one by it.
+		TwoFactorEnabled: common.AsBool(row[12]),
 	}
 
 	partnerRes, err := s.queryService.Query(ctx, qPartnerUserByid, userAccountId)
@@ -1512,35 +1565,62 @@ func (s *LocalUserService) forgetTokenCutoff(userID int) {
 
 // --- Refresh Token ---
 
-// CreateRefreshToken starts a session. signInMethod is a sign_in_method code,
-// or empty when unknown; an unknown method cannot refresh once SSO is required.
-func (s *LocalUserService) CreateRefreshToken(userID int, signInMethod string, maxAge time.Duration) (string, error) {
-	if maxAge < 0 {
+// CreateRefreshToken starts the session's sign-in session from device and
+// sets session.SessionID. signInMethod is a sign_in_method code, or empty when
+// unknown; an unknown method cannot refresh once SSO is required. The session
+// partner's sign-in networks must admit device.ClientIP, and past
+// max_sessions_per_user the oldest sessions end.
+func (s *LocalUserService) CreateRefreshToken(session *model.UserSession, device SessionDevice) (string, error) {
+	if session == nil || session.Id <= 0 {
+		return "", fmt.Errorf("create refresh token: user id is required")
+	}
+	if session.SessionMaxAge < 0 {
 		return "", fmt.Errorf("create refresh token: negative session lifetime")
 	}
+	userID := session.Id
 	var maxSeconds any
-	if maxAge > 0 {
+	if maxAge := session.SessionMaxAge; maxAge > 0 {
 		seconds := maxAge / time.Second
 		if maxAge%time.Second != 0 {
 			seconds++
 		}
 		maxSeconds = int64(seconds)
 	}
+	if err := s.checkSignInNetwork(userID, device.ClientIP); err != nil {
+		return "", err
+	}
+	deviceHash := deviceHashOf(device.DeviceSecret)
+	priorSessions, knownDevice := false, false
+	if config.Config().NotifyNewDeviceSignin {
+		prior, known, lookupErr := s.deviceSeen(userID, deviceHash)
+		if lookupErr != nil {
+			if s.Journal != nil {
+				s.Journal.Error(fmt.Sprintf("user: device lookup for user %d: %v", userID, lookupErr))
+			}
+		} else {
+			priorSessions, knownDevice = prior, known
+		}
+	}
 	ctx := s.ctx()
 	raw, err := generateRandomToken(48)
 	if err != nil {
 		return "", err
 	}
-	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
+	tx, err := s.database.BeginTx(ctx, localUserTxQueries)
 	if err != nil {
 		return "", fmt.Errorf("create refresh token: begin transaction: %w", err)
 	}
+	sessionID := tx.GenID()
 	committed := false
 	defer func() {
 		if !committed {
 			_ = data.RollbackDetached(tx)
 		}
 	}()
+	maxSessions := config.Config().MaxSessionsPerUser
+	if err := guard.Lock(ctx, tx, "user_sessions:"+strconv.Itoa(userID)); err != nil {
+		return "", fmt.Errorf("create refresh token: lock: %w", err)
+	}
 	// Enforce single-device policy: if the bit is set on user_account, this
 	// revokes every prior active refresh token for the user before we issue
 	// a new one. Both writes commit together, so an insert failure cannot
@@ -1548,14 +1628,23 @@ func (s *LocalUserService) CreateRefreshToken(userID int, signInMethod string, m
 	if _, err := tx.Query(ctx, qRevokePriorOnSingleDevicePolicy, userID, userID); err != nil {
 		return "", fmt.Errorf("create refresh token: revoke prior tokens: %w", err)
 	}
-	hash := sha256Hex(raw)
-	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, hash, refreshTokenExpiry(), nil, nullIfEmpty(signInMethod), maxSeconds); err != nil {
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, sha256Hex(raw), refreshTokenExpiry(), nil, nullIfEmpty(session.SignInMethod), maxSeconds,
+		sessionID, nullIfEmpty(common.TruncateRunes(device.UserAgent, maxUserAgentLen)), nullIfEmpty(device.ClientIP), nullIfEmpty(deviceHash)); err != nil {
 		return "", fmt.Errorf("create refresh token: insert: %w", err)
+	}
+	if maxSessions > 0 {
+		if _, err := tx.Query(ctx, qRevokeSessionsOverCap, userID, userID, maxSessions); err != nil {
+			return "", fmt.Errorf("create refresh token: end sessions over the cap: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("create refresh token: commit: %w", err)
 	}
 	committed = true
+	session.SessionID = sessionID
+	if priorSessions && !knownDevice {
+		s.notifyNewDevice(session, device)
+	}
 	return raw, nil
 }
 
@@ -1626,8 +1715,9 @@ func (s *LocalUserService) SetSingleDevicePolicy(userID int, on bool) error {
 // old token will fail on the next refresh.
 //
 // Rotation limits replay of a long-lived stolen token: after either holder
-// rotates it, the other holder cannot reuse the presented value.
-func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSession, error) {
+// rotates it, the other holder cannot reuse the presented value. The partner's
+// sign-in networks must admit device.ClientIP.
+func (s *LocalUserService) ValidateRefreshToken(token string, device SessionDevice) (*model.UserSession, error) {
 	if token == "" {
 		return nil, ErrInvalidRefreshToken
 	}
@@ -1678,6 +1768,9 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 	if !ssoAdmits(policies[PolicySSORequired], method) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRefreshToken, ErrSSORequired)
 	}
+	if err := s.checkSignInNetwork(userID, device.ClientIP); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRefreshToken, err)
+	}
 	session := &model.UserSession{
 		Id:               userID,
 		SignInMethod:     method,
@@ -1688,6 +1781,7 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 		TwoFactorEnabled: common.AsBool(row[5]),
 		PartnerId:        common.AsInt64(row[6]),
 		PhoneNumber:      common.AsString(row[7]),
+		SessionID:        common.AsInt64(row[13]),
 		Issuer:           s.Issuer,
 		ExpiresAt:        time.Now().Add(sessionTimeout()).Unix(),
 		IssuedAt:         time.Now().Unix(),
@@ -1697,7 +1791,8 @@ func (s *LocalUserService) ValidateRefreshToken(token string) (*model.UserSessio
 	// revoking the old token in the same transaction makes concurrent reuse
 	// deterministic: only one caller can rotate a token successfully.
 	rotatedHash := sha256Hex(rotated)
-	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, rotatedHash, refreshTokenExpiry(), row[9], nullIfEmpty(method), row[12]); err != nil {
+	if _, err := tx.Query(ctx, qInsertRefreshToken, userID, rotatedHash, refreshTokenExpiry(), row[9], nullIfEmpty(method), row[12],
+		row[13], nullIfEmpty(common.TruncateRunes(device.UserAgent, maxUserAgentLen)), nullIfEmpty(device.ClientIP), row[14]); err != nil {
 		return nil, fmt.Errorf("rotate refresh token: %w", err)
 	}
 	if _, err := tx.Query(ctx, qRevokeRefreshToken, hash); err != nil {
