@@ -1,0 +1,49 @@
+table: action_token
+comment: Single-use tokens that authorize one action by one user on one resource at one content digest; only the hash is stored, and a claimed row is the claim its idempotency_ledger entry resolves
+columns:
+  - name: id
+    type: BIGINT
+  - name: token_hash
+    type: CHAR(64)
+  - name: user_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: action
+    type: VARCHAR(100)
+  - name: resource_key
+    type: VARCHAR(200)
+  - name: content_digest
+    type: VARCHAR(128)
+  - name: expires_at
+    type: TIMESTAMP
+  - name: claimed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: action_token_seq
+  column: id
+foreign_keys:
+  - name: action_token_user
+    columns: [user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: action_token_partner
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+indexes:
+  - name: idx_action_token_hash
+    columns: [token_hash]
+    unique: true
+  - name: idx_action_token_user
+    columns: [user_id]
+  - name: idx_action_token_partner
+    columns: [partner_id]

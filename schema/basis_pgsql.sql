@@ -2007,6 +2007,27 @@ CREATE TABLE IF NOT EXISTS partner_scim_group_member (
 );
 CREATE INDEX IF NOT EXISTS idx_partner_scim_group_member_user ON partner_scim_group_member(partner_id, user_id);
 
+-- Single-use tokens that authorize one action by one user on one resource at one content digest; only the hash is stored, and a claimed row is the claim its idempotency_ledger entry resolves
+CREATE TABLE IF NOT EXISTS action_token (
+    id                                   BIGINT        NOT NULL,
+    token_hash                           CHAR(64)      NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    action                               VARCHAR(100)  NOT NULL,
+    resource_key                         VARCHAR(200)  NOT NULL,
+    content_digest                       VARCHAR(128)  NOT NULL,
+    expires_at                           TIMESTAMP     NOT NULL,
+    claimed_at                           TIMESTAMP    ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT action_token_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_token_hash ON action_token(token_hash);
+CREATE INDEX IF NOT EXISTS idx_action_token_user ON action_token(user_id);
+CREATE INDEX IF NOT EXISTS idx_action_token_partner ON action_token(partner_id);
+
+CREATE SEQUENCE IF NOT EXISTS action_token_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('action_token', 'id', 'action_token_seq') ON CONFLICT DO NOTHING;
+
 -- Foreign keys (emitted post-CREATE so order doesn't matter)
 DO $$
 BEGIN
@@ -3473,5 +3494,23 @@ BEGIN
      WHERE constraint_name = 'partner_scim_user_groups' AND table_name = 'partner_scim_group_member'
   ) THEN
     ALTER TABLE partner_scim_group_member ADD CONSTRAINT partner_scim_user_groups FOREIGN KEY (partner_id, user_id) REFERENCES partner_scim_user(partner_id, user_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'action_token_user' AND table_name = 'action_token'
+  ) THEN
+    ALTER TABLE action_token ADD CONSTRAINT action_token_user FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'action_token_partner' AND table_name = 'action_token'
+  ) THEN
+    ALTER TABLE action_token ADD CONSTRAINT action_token_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
   END IF;
 END $$;

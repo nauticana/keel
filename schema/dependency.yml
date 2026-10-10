@@ -123,3 +123,9 @@ groups:
     seed: seed/sso.yml
     depends_on: [core, tenant_management]
     seed_depends_on: [core]
+
+  - name: action_token
+    path: action_token
+    seed: seed/action_token.yml
+    depends_on: [core, tenant_management]
+    seed_depends_on: []

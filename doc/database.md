@@ -130,6 +130,8 @@ flowchart BT
     sso --> tenant_management
     notification --> core
     notification --> tenant_management
+    action_token --> core
+    action_token --> tenant_management
 
     core["Core (see diagram above)"]
 
@@ -294,6 +296,11 @@ flowchart BT
         notification_t["notification"]
         notification_preference["notification_preference"]
         notification_suppression["notification_suppression"]
+    end
+
+    subgraph action_token["Action Token"]
+        direction TB
+        action_token_t["action_token"]
     end
 
 ```
@@ -1543,6 +1550,33 @@ erDiagram
         VARCHAR contact
         BIGINT partner_id FK
         VARCHAR reason
+        TIMESTAMP created_at
+    }
+    user_account {
+        BIGINT id PK
+    }
+    business_partner {
+        BIGINT id PK
+    }
+```
+
+### Action Token
+
+```mermaid
+erDiagram
+    user_account ||--o{ action_token : "action_token_user"
+    business_partner o|--o{ action_token : "action_token_partner"
+
+    action_token {
+        BIGINT id PK
+        CHAR token_hash
+        BIGINT user_id FK
+        BIGINT partner_id FK
+        VARCHAR action
+        VARCHAR resource_key
+        VARCHAR content_digest
+        TIMESTAMP expires_at
+        TIMESTAMP claimed_at
         TIMESTAMP created_at
     }
     user_account {

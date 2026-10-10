@@ -503,6 +503,7 @@ this summary can be checked directly against the generated schema.
 | `payout_webhook_log` | Raw payout-provider account/transfer events with idempotency + audit |
 | `outbox_event` | Transactional outbox records for asynchronous delivery |
 | `idempotency_ledger` | Replay-safe record of mutating operations by key: in flight, completed with result, or unknown |
+| `action_token` | Single-use token hashes bound to one user, action, resource and content digest; a claimed row is the claim the ledger resolves |
 | `application_config_flag` | Non-secret runtime configuration catalogue and defaults |
 | `application_config_value` | Per-node/shared overrides for configuration flags |
 | `agency_profile` | Agency approval, suspension, wholesale permission, and default rate override |

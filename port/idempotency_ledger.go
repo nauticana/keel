@@ -13,7 +13,7 @@ import (
 // lease may be taken over under a new fence; the previous holder's ledger writes then fail. The fence protects
 // the ledger only: a taken-over worker that is merely slow still finishes its external call. A caller that
 // enables takeover must make the side effect idempotent under the stable ledger key, arrange for the target to
-// reject superseded fences, or leave the lease at zero and reconcile stuck keys explicitly with ReclaimUnknown.
+// reject superseded fences, or leave the lease at zero and use ReconciliationLedger for operator-driven recovery.
 type IdempotencyLedger interface {
 	// Begin claims a new key, or a lapsed in-flight key, returning LedgerNew with a Fence; otherwise it returns
 	// the existing entry without one. Unknown keys are never taken over.
@@ -28,4 +28,11 @@ type IdempotencyLedger interface {
 	// ReclaimUnknown fences an unknown key for its reconciler, which then resolves it through Complete, Release or
 	// MarkUnknown. The key stays unknown; a later reclaim supersedes the fence. Any other state is refused.
 	ReclaimUnknown(ctx context.Context, key string) (fence string, err error)
+}
+
+// ReconciliationLedger can fence an abandoned in-flight or unknown operation.
+// Callers must establish that normal execution is no longer authoritative.
+type ReconciliationLedger interface {
+	IdempotencyLedger
+	ReclaimForReconciliation(ctx context.Context, key string) (fence string, err error)
 }

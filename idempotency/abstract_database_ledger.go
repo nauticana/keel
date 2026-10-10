@@ -16,6 +16,7 @@ const (
 	qClaim        = "keel_idempotency_claim"
 	qReclaim      = "keel_idempotency_reclaim"
 	qFenceUnknown = "keel_idempotency_fence_unknown"
+	qReconcile    = "keel_idempotency_reconcile"
 	qRenew        = "keel_idempotency_renew"
 	qComplete     = "keel_idempotency_complete"
 	qUnknown      = "keel_idempotency_unknown"
@@ -146,6 +147,14 @@ func (l *AbstractDatabaseLedger) renew(ctx context.Context, key, fence string) e
 }
 
 func (l *AbstractDatabaseLedger) reclaimUnknown(ctx context.Context, key string) (string, error) {
+	return l.reclaim(ctx, key, qFenceUnknown)
+}
+
+func (l *AbstractDatabaseLedger) reclaimForReconciliation(ctx context.Context, key string) (string, error) {
+	return l.reclaim(ctx, key, qReconcile)
+}
+
+func (l *AbstractDatabaseLedger) reclaim(ctx context.Context, key, query string) (string, error) {
 	if err := l.validateKey(key); err != nil {
 		return "", err
 	}
@@ -157,7 +166,7 @@ func (l *AbstractDatabaseLedger) reclaimUnknown(ctx context.Context, key string)
 	if err != nil {
 		return "", err
 	}
-	fenced, err := l.changed(ctx, qs, qFenceUnknown, fence, key)
+	fenced, err := l.changed(ctx, qs, query, fence, key)
 	if err != nil {
 		return "", err
 	}

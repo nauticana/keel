@@ -2039,3 +2039,23 @@ CREATE TABLE IF NOT EXISTS partner_scim_group_member (
     CONSTRAINT partner_scim_user_groups FOREIGN KEY (partner_id, user_id) REFERENCES partner_scim_user(partner_id, user_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_partner_scim_group_member_user ON partner_scim_group_member(partner_id, user_id);
+
+-- Single-use tokens that authorize one action by one user on one resource at one content digest; only the hash is stored, and a claimed row is the claim its idempotency_ledger entry resolves
+CREATE TABLE IF NOT EXISTS action_token (
+    id                                   BIGINT        NOT NULL,
+    token_hash                           CHAR(64)      NOT NULL,
+    user_id                              BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    action                               VARCHAR(100)  NOT NULL,
+    resource_key                         VARCHAR(200)  NOT NULL,
+    content_digest                       VARCHAR(128)  NOT NULL,
+    expires_at                           DATETIME      NOT NULL,
+    claimed_at                           DATETIME     ,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT action_token_user FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT action_token_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX idx_action_token_hash ON action_token(token_hash);
+CREATE INDEX idx_action_token_user ON action_token(user_id);
+CREATE INDEX idx_action_token_partner ON action_token(partner_id);

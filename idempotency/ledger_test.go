@@ -316,6 +316,22 @@ func TestMemoryLedgerReclaimUnknownFencesTheReconciler(t *testing.T) {
 	}
 }
 
+func TestMemoryLedgerReclaimForReconciliationFencesInFlight(t *testing.T) {
+	l := &MemoryLedger{}
+	ctx := context.Background()
+	live, _ := l.Begin(ctx, "k")
+	fence, err := l.ReclaimForReconciliation(ctx, "k")
+	if err != nil || fence == "" || fence == live.Fence {
+		t.Fatalf("reclaim = %q, %v", fence, err)
+	}
+	if err := l.Complete(ctx, "k", live.Fence, []byte("stale")); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("stale worker completed: %v", err)
+	}
+	if entry, _ := l.Begin(ctx, "k"); entry.State != model.LedgerUnknown {
+		t.Fatalf("reclaimed entry = %+v", entry)
+	}
+}
+
 func TestPgsqlLedgerReclaimUnknown(t *testing.T) {
 	ctx := context.Background()
 	db := &scriptedDB{rows: map[string][][]any{qFenceUnknown: {{"k"}}}}
@@ -336,5 +352,16 @@ func TestPgsqlLedgerReclaimUnknown(t *testing.T) {
 	}
 	if _, err := refused.ReclaimUnknown(ctx, ""); !errors.Is(err, ErrEmptyKey) {
 		t.Fatalf("empty key = %v", err)
+	}
+}
+
+func TestPgsqlLedgerReclaimForReconciliation(t *testing.T) {
+	db := &scriptedDB{rows: map[string][][]any{qReconcile: {{"k"}}}}
+	fence, err := NewPgsqlLedger(db, 0).ReclaimForReconciliation(context.Background(), "k")
+	if err != nil || fence == "" {
+		t.Fatalf("reclaim = %q, %v", fence, err)
+	}
+	if args := db.args[qReconcile]; len(args) != 2 || args[0] != fence || args[1] != "k" {
+		t.Fatalf("reclaim args = %v", args)
 	}
 }

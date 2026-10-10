@@ -12,7 +12,7 @@ flowchart TB
 
     KEEL --> TRUST["Identity, Trust & Governance<br/><small>authentication · MFA · OAuth · API keys · SSO · SCIM<br/>RBAC · tenant management · agency delegation · consent</small>"]
     KEEL --> PLATFORM["Application Platform<br/><small>HTTP infrastructure · metadata-driven REST · table actions<br/>persistence · queries · transactions · schemas · IDs</small>"]
-    KEEL --> RUNTIME["Reliable Runtime<br/><small>config · secrets · cache · quotas · limiters · workers<br/>idempotency · outbox · approvals · audit</small>"]
+    KEEL --> RUNTIME["Reliable Runtime<br/><small>config · secrets · cache · quotas · limiters · workers<br/>idempotency · action tokens · outbox · approvals · audit</small>"]
     KEEL --> COMMERCE["Commerce<br/><small>billing · payments · subscriptions · payouts</small>"]
     KEEL --> EXPERIENCE["Content & Engagement<br/><small>DMS · storage · geo · content creation<br/>messaging · notifications · realtime · recording</small>"]
 

@@ -34,7 +34,7 @@ type memoryEntry struct {
 	at time.Time
 }
 
-var _ port.IdempotencyLedger = (*MemoryLedger)(nil)
+var _ port.ReconciliationLedger = (*MemoryLedger)(nil)
 
 func (l *MemoryLedger) Begin(_ context.Context, key string) (model.LedgerEntry, error) {
 	if err := l.validateKey(key); err != nil {
@@ -109,6 +109,14 @@ func (l *MemoryLedger) Release(_ context.Context, key, fence string) error {
 }
 
 func (l *MemoryLedger) ReclaimUnknown(ctx context.Context, key string) (string, error) {
+	return l.reclaim(ctx, key, false)
+}
+
+func (l *MemoryLedger) ReclaimForReconciliation(ctx context.Context, key string) (string, error) {
+	return l.reclaim(ctx, key, true)
+}
+
+func (l *MemoryLedger) reclaim(ctx context.Context, key string, allowInFlight bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -122,9 +130,10 @@ func (l *MemoryLedger) ReclaimUnknown(ctx context.Context, key string) (string, 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e, ok := l.entries[key]
-	if !ok || e.State != model.LedgerUnknown {
+	if !ok || (e.State != model.LedgerUnknown && (!allowInFlight || e.State != model.LedgerInFlight)) {
 		return "", ErrInvalidTransition
 	}
+	e.State = model.LedgerUnknown
 	e.Fence, e.at = fence, l.now()
 	l.entries[key] = e
 	return fence, nil

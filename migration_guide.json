@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.107",
+   "title": "Single-use action tokens",
+   "tags": [
+    "additive"
+   ],
+   "summary": "New `actiontoken` package: a token for an emailed or chat link that authorizes one action by one user on one resource at one content digest, redeemed once through the idempotency ledger.",
+   "body_markdown": "- Apply the new `action_token` schema group.\n- `actiontoken.Service{DB, Ledger}` mints hashed tokens bound to one user, action, resource, and content digest.\n- `Redeem` runs a fresh authorization callback once and replays its recorded result. `*UnknownOutcome` carries the claim ID for `Reconcile`.\n- Built-in idempotency ledgers now implement `port.ReconciliationLedger`, which fences abandoned in-flight or unknown claims."
+  },
+  {
    "version": "v1.2.106",
    "title": "OAuth grant policy, consent account switching, API key limits, sign-in sessions",
    "tags": [
