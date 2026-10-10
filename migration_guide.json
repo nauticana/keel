@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.105",
+   "title": "Partner-scoped notification suppression",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "notification_suppression moves to the notification schema group, gains a surrogate id and a foreign key to the partner table, and stores a fleet-wide entry as a NULL partner_id, so generic CRUD scopes it to the caller's partner.",
+   "body_markdown": "### Partner-scoped notification suppression (breaking)\n\n`notification_suppression` now belongs to the `notification` group and is partner-specific: `partner_id` is nullable with foreign key `notification_suppressions` to `business_partner` (`ON DELETE CASCADE`). A fleet-wide entry is a NULL `partner_id` instead of `0`. The primary key is a surrogate `id` from `notification_suppression_seq`; uniqueness is `notification_suppressions_uq (channel, contact, partner_id) WHERE partner_id IS NOT NULL` and `notification_suppression_fleet_uq (channel, contact) WHERE partner_id IS NULL`. On MySQL the fleet index is not unique and is service-enforced.\n\nThe Go API is unchanged: `dispatcher.AllPartners` (0) still selects the fleet-wide scope and is stored as NULL. `Suppress` and `Release` reject a negative partner. Generic CRUD reads return only the caller's own entries, not fleet-wide ones; inserts are pinned to the caller's partner.\n\n### Migration steps\n\n1. Recreate `notification_suppression` from `schema/basis_pgsql.sql`, or carry rows over: add `id` from the new sequence, set `partner_id = NULL` where it was `0`, drop the old primary key, then create the new key, indexes and foreign key. Delete rows whose `partner_id` no longer exists in `business_partner` first.\n2. Grant partner roles read access only; releasing an unsubscribe belongs to a service calling `SuppressionService.Release`, not generic delete."
+  },
+  {
    "version": "v1.2.104",
    "title": "Partner scope through composite keys, request ids, TikTok and X, tenant resolver",
    "tags": [

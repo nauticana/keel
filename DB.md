@@ -128,6 +128,8 @@ flowchart BT
     agency --> billing
     sso --> core
     sso --> tenant_management
+    notification --> core
+    notification --> tenant_management
 
     core["Core (see diagram above)"]
 
@@ -286,6 +288,13 @@ flowchart BT
     agency_payout --> agency_profile
     agency_payout_line --> agency_payout
     agency_payout_line --> agency_commission
+
+    subgraph notification["Notification"]
+        direction TB
+        notification_t["notification"]
+        notification_preference["notification_preference"]
+        notification_suppression["notification_suppression"]
+    end
 
 ```
 
@@ -1489,6 +1498,57 @@ erDiagram
         BIGINT partner_id
     }
     invoice_line_payment {
+        BIGINT id PK
+    }
+```
+
+### Notification
+
+```mermaid
+erDiagram
+    business_partner o|--o{ notification_suppression : "notification_suppressions"
+    business_partner o|--o{ notification : "notification_partner"
+    user_account ||--o{ notification_preference : "notification_preferences"
+    user_account ||--o{ notification : "notification_recipient"
+
+    notification {
+        BIGINT id PK
+        BIGINT user_id FK
+        BIGINT partner_id FK
+        VARCHAR notification_type
+        VARCHAR channel
+        VARCHAR title
+        TEXT body
+        TEXT data
+        CHAR status
+        INTEGER attempts
+        TIMESTAMP available_at
+        TIMESTAMP lease_until
+        BIGINT lease_token
+        TEXT last_error
+        TIMESTAMP sent_at
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+    notification_preference {
+        BIGINT user_id PK,FK
+        VARCHAR notification_type PK
+        VARCHAR channel PK
+        BOOLEAN enabled
+        TIMESTAMP updated_at
+    }
+    notification_suppression {
+        BIGINT id PK
+        VARCHAR channel
+        VARCHAR contact
+        BIGINT partner_id FK
+        VARCHAR reason
+        TIMESTAMP created_at
+    }
+    user_account {
+        BIGINT id PK
+    }
+    business_partner {
         BIGINT id PK
     }
 ```

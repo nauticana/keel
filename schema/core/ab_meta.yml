@@ -25,7 +25,6 @@ tables:
   - user_external_identity
   - device_token
   - user_notification
-  - notification_suppression
   - authorization_object
   - authorization_object_action
   - authorization_role

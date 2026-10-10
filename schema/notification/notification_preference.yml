@@ -14,7 +14,7 @@ columns:
     default: CURRENT_TIMESTAMP
 primary_key: [user_id, notification_type, channel]
 foreign_keys:
-  - name: user_notification_preferences
+  - name: notification_preferences
     columns: [user_id]
     references:
       table: user_account

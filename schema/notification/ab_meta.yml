@@ -1,3 +1,4 @@
 tables:
   - notification
   - notification_preference
+  - notification_suppression

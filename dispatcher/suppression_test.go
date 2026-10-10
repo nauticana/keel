@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/keel/model"
@@ -340,7 +341,9 @@ func TestSuppressionServiceMissIsNotSuppressed(t *testing.T) {
 	}
 }
 
-func TestSuppressAndRelease(t *testing.T) {
+// A fleet-wide entry is stored with a NULL partner_id, a tenant entry with its
+// partner; each scope has its own upsert and release so neither touches the other.
+func TestSuppressAndReleaseByScope(t *testing.T) {
 	qs := &suppressionQS{}
 	s := newSuppressionService(qs)
 	ctx := context.Background()
@@ -348,18 +351,65 @@ func TestSuppressAndRelease(t *testing.T) {
 	if err := s.Suppress(ctx, EmailChannel, "Gone@X.test", AllPartners, SuppressBounced); err != nil {
 		t.Fatal(err)
 	}
-	args := qs.argsFor(qSuppressionInsert)
-	if args[1].(string) != "gone@x.test" || args[2].(int64) != AllPartners || args[3].(string) != SuppressBounced {
-		t.Fatalf("insert args = %v", args)
+	args := qs.argsFor(qSuppressionInsertFleet)
+	if len(args) != 4 || args[1].(string) != EmailChannel || args[2].(string) != "gone@x.test" || args[3].(string) != SuppressBounced {
+		t.Fatalf("fleet insert args = %v", args)
 	}
-	if err := s.Suppress(ctx, EmailChannel, "", 0, SuppressBounced); err == nil {
-		t.Error("an empty contact must be refused")
+	if err := s.Suppress(ctx, EmailChannel, "Gone@X.test", 7, SuppressUnsubscribed); err != nil {
+		t.Fatal(err)
 	}
+	args = qs.argsFor(qSuppressionInsert)
+	if len(args) != 5 || args[2].(string) != "gone@x.test" || args[3].(int64) != 7 || args[4].(string) != SuppressUnsubscribed {
+		t.Fatalf("tenant insert args = %v", args)
+	}
+
 	if err := s.Release(ctx, EmailChannel, "GONE@x.test", AllPartners); err != nil {
 		t.Fatal(err)
 	}
-	if got := qs.argsFor(qSuppressionRelease)[1].(string); got != "gone@x.test" {
-		t.Fatalf("release contact = %q", got)
+	if args := qs.argsFor(qSuppressionReleaseFleet); len(args) != 2 || args[1].(string) != "gone@x.test" {
+		t.Fatalf("fleet release args = %v", args)
+	}
+	if err := s.Release(ctx, EmailChannel, "GONE@x.test", 7); err != nil {
+		t.Fatal(err)
+	}
+	if args := qs.argsFor(qSuppressionRelease); len(args) != 3 || args[1].(string) != "gone@x.test" || args[2].(int64) != 7 {
+		t.Fatalf("tenant release args = %v", args)
+	}
+}
+
+func TestSuppressRejectsInvalidInput(t *testing.T) {
+	qs := &suppressionQS{}
+	s := newSuppressionService(qs)
+	ctx := context.Background()
+
+	if err := s.Suppress(ctx, EmailChannel, "", 7, SuppressBounced); err == nil {
+		t.Error("an empty contact must be refused")
+	}
+	if err := s.Suppress(ctx, EmailChannel, "a@x.test", -1, SuppressBounced); err == nil {
+		t.Error("a negative partner must be refused")
+	}
+	if err := s.Release(ctx, EmailChannel, "a@x.test", -1); err == nil {
+		t.Error("a negative partner must be refused on release")
+	}
+	if len(qs.calls) != 0 {
+		t.Fatalf("invalid input reached the database: %v", qs.calls)
+	}
+}
+
+// Every query targets the scope it names: the fleet queries match a NULL
+// partner_id, the tenant ones a concrete partner, and the upserts name the
+// partial unique index they conflict on.
+func TestSuppressionQueriesMatchPartialIndexes(t *testing.T) {
+	for name, want := range map[string]string{
+		qSuppressionLookup:       "partner_id IS NULL OR partner_id = ?",
+		qSuppressionInsert:       "WHERE partner_id IS NOT NULL",
+		qSuppressionInsertFleet:  "WHERE partner_id IS NULL",
+		qSuppressionRelease:      "partner_id = ?",
+		qSuppressionReleaseFleet: "partner_id IS NULL",
+	} {
+		if !strings.Contains(suppressionQueries[name], want) {
+			t.Errorf("%s does not contain %q", name, want)
+		}
 	}
 }
 

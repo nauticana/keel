@@ -20,32 +20,45 @@ const (
 )
 
 // AllPartners records a suppression that applies to every tenant — a hard
-// bounce or a complaint is about the contact, not about who is sending.
+// bounce or a complaint is about the contact, not about who is sending. It is
+// stored as a NULL partner_id.
 const AllPartners int64 = 0
 
 const (
-	qSuppressionLookup  = "notification_suppression_lookup"
-	qSuppressionInsert  = "notification_suppression_insert"
-	qSuppressionRelease = "notification_suppression_release"
+	qSuppressionLookup       = "notification_suppression_lookup"
+	qSuppressionInsert       = "notification_suppression_insert"
+	qSuppressionInsertFleet  = "notification_suppression_insert_fleet"
+	qSuppressionRelease      = "notification_suppression_release"
+	qSuppressionReleaseFleet = "notification_suppression_release_fleet"
 )
 
 var suppressionQueries = map[string]string{
 	// A fleet-wide entry outranks a tenant one: it is the stronger statement.
 	qSuppressionLookup: `
 SELECT reason FROM notification_suppression
- WHERE channel = ? AND contact = ? AND partner_id IN (0, ?)
- ORDER BY partner_id
+ WHERE channel = ? AND contact = ? AND (partner_id IS NULL OR partner_id = ?)
+ ORDER BY partner_id NULLS FIRST
  LIMIT 1`,
 
 	qSuppressionInsert: `
-INSERT INTO notification_suppression (channel, contact, partner_id, reason)
-VALUES (?, ?, ?, ?)
-ON CONFLICT (channel, contact, partner_id)
+INSERT INTO notification_suppression (id, channel, contact, partner_id, reason)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (channel, contact, partner_id) WHERE partner_id IS NOT NULL
+DO UPDATE SET reason = EXCLUDED.reason, created_at = CURRENT_TIMESTAMP`,
+
+	qSuppressionInsertFleet: `
+INSERT INTO notification_suppression (id, channel, contact, partner_id, reason)
+VALUES (?, ?, ?, NULL, ?)
+ON CONFLICT (channel, contact) WHERE partner_id IS NULL
 DO UPDATE SET reason = EXCLUDED.reason, created_at = CURRENT_TIMESTAMP`,
 
 	qSuppressionRelease: `
 DELETE FROM notification_suppression
  WHERE channel = ? AND contact = ? AND partner_id = ?`,
+
+	qSuppressionReleaseFleet: `
+DELETE FROM notification_suppression
+ WHERE channel = ? AND contact = ? AND partner_id IS NULL`,
 }
 
 // SuppressionService is the table-backed port.NotificationSuppressor over
@@ -104,11 +117,19 @@ func (s *SuppressionService) Suppress(ctx context.Context, channel, contact stri
 	if channel == "" || contact == "" || reason == "" {
 		return fmt.Errorf("suppression: channel, contact and reason required")
 	}
+	if partnerID < 0 {
+		return fmt.Errorf("suppression: invalid partner %d", partnerID)
+	}
 	qs, err := s.queries(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err := qs.Query(ctx, qSuppressionInsert, channel, contact, partnerID, reason); err != nil {
+	if partnerID == AllPartners {
+		_, err = qs.Query(ctx, qSuppressionInsertFleet, qs.GenID(), channel, contact, reason)
+	} else {
+		_, err = qs.Query(ctx, qSuppressionInsert, qs.GenID(), channel, contact, partnerID, reason)
+	}
+	if err != nil {
 		return fmt.Errorf("suppression: record %s: %w", channel, err)
 	}
 	return nil
@@ -118,11 +139,20 @@ func (s *SuppressionService) Suppress(ctx context.Context, channel, contact stri
 // It removes exactly the scope given: releasing a tenant entry leaves a
 // fleet-wide one in force.
 func (s *SuppressionService) Release(ctx context.Context, channel, contact string, partnerID int64) error {
+	if partnerID < 0 {
+		return fmt.Errorf("suppression: invalid partner %d", partnerID)
+	}
 	qs, err := s.queries(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err := qs.Query(ctx, qSuppressionRelease, channel, normalizeContact(contact), partnerID); err != nil {
+	contact = normalizeContact(contact)
+	if partnerID == AllPartners {
+		_, err = qs.Query(ctx, qSuppressionReleaseFleet, channel, contact)
+	} else {
+		_, err = qs.Query(ctx, qSuppressionRelease, channel, contact, partnerID)
+	}
+	if err != nil {
 		return fmt.Errorf("suppression: release %s: %w", channel, err)
 	}
 	return nil

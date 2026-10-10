@@ -347,16 +347,6 @@ CREATE INDEX IF NOT EXISTS idx_user_notification_user ON user_notification(user_
 CREATE SEQUENCE IF NOT EXISTS user_notification_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('user_notification', 'id', 'user_notification_seq') ON CONFLICT DO NOTHING;
 
--- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). partner_id 0 is every tenant, so it carries no FK; contact is stored lowercased.
-CREATE TABLE IF NOT EXISTS notification_suppression (
-    channel                              VARCHAR(20)   NOT NULL,
-    contact                              VARCHAR(255)  NOT NULL,
-    partner_id                           BIGINT        NOT NULL DEFAULT 0,
-    reason                               VARCHAR(30)   NOT NULL,
-    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT notification_suppression_pk PRIMARY KEY (channel, contact, partner_id)
-);
-
 -- RBAC authorization object definitions
 CREATE TABLE IF NOT EXISTS authorization_object (
     id                                   VARCHAR(30)   NOT NULL,
@@ -1780,6 +1770,22 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT notification_preference_pk PRIMARY KEY (user_id, notification_type, channel)
 );
+
+-- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). A NULL partner_id suppresses the contact for every tenant; contact is stored lowercased.
+CREATE TABLE IF NOT EXISTS notification_suppression (
+    id                                   BIGINT        NOT NULL,
+    channel                              VARCHAR(20)   NOT NULL,
+    contact                              VARCHAR(255)  NOT NULL,
+    partner_id                           BIGINT       ,
+    reason                               VARCHAR(30)   NOT NULL,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT notification_suppression_pk PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS notification_suppressions_uq ON notification_suppression(channel, contact, partner_id) WHERE partner_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS notification_suppression_fleet_uq ON notification_suppression(channel, contact) WHERE partner_id IS NULL;
+
+CREATE SEQUENCE IF NOT EXISTS notification_suppression_seq INCREMENT BY 1 START WITH 1;
+INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('notification_suppression', 'id', 'notification_suppression_seq') ON CONFLICT DO NOTHING;
 
 -- A request to erase one user's personal data, executed by the erasure
 -- Worker. status P=pending, A=active (claimed; lease_token/lease_until),
@@ -3225,9 +3231,18 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
-     WHERE constraint_name = 'user_notification_preferences' AND table_name = 'notification_preference'
+     WHERE constraint_name = 'notification_preferences' AND table_name = 'notification_preference'
   ) THEN
-    ALTER TABLE notification_preference ADD CONSTRAINT user_notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE;
+    ALTER TABLE notification_preference ADD CONSTRAINT notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'notification_suppressions' AND table_name = 'notification_suppression'
+  ) THEN
+    ALTER TABLE notification_suppression ADD CONSTRAINT notification_suppressions FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE CASCADE;
   END IF;
 END $$;
 DO $$

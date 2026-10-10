@@ -350,16 +350,6 @@ CREATE TABLE IF NOT EXISTS user_notification (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_user_notification_user ON user_notification(user_id, created_at);
 
--- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). partner_id 0 is every tenant, so it carries no FK; contact is stored lowercased.
-CREATE TABLE IF NOT EXISTS notification_suppression (
-    channel                              VARCHAR(20)   NOT NULL,
-    contact                              VARCHAR(255)  NOT NULL,
-    partner_id                           BIGINT        NOT NULL DEFAULT 0,
-    reason                               VARCHAR(30)   NOT NULL,
-    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (channel, contact, partner_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- RBAC authorization object definitions
 CREATE TABLE IF NOT EXISTS authorization_object (
     id                                   VARCHAR(30)   NOT NULL,
@@ -1802,8 +1792,23 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     enabled                              TINYINT(1)    NOT NULL,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, notification_type, channel),
-    CONSTRAINT user_notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE
+    CONSTRAINT notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). A NULL partner_id suppresses the contact for every tenant; contact is stored lowercased.
+CREATE TABLE IF NOT EXISTS notification_suppression (
+    id                                   BIGINT        NOT NULL,
+    channel                              VARCHAR(20)   NOT NULL,
+    contact                              VARCHAR(255)  NOT NULL,
+    partner_id                           BIGINT       ,
+    reason                               VARCHAR(30)   NOT NULL,
+    created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT notification_suppressions FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX notification_suppressions_uq ON notification_suppression(channel, contact, partner_id);
+-- notification_suppression_fleet_uq is a partial index on PostgreSQL (WHERE partner_id IS NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX notification_suppression_fleet_uq ON notification_suppression(channel, contact);
 
 -- A request to erase one user's personal data, executed by the erasure
 -- Worker. status P=pending, A=active (claimed; lease_token/lease_until),

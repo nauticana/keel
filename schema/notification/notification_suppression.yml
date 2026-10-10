@@ -1,0 +1,37 @@
+table: notification_suppression
+comment: Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). A NULL partner_id suppresses the contact for every tenant; contact is stored lowercased.
+columns:
+  - name: id
+    type: BIGINT
+  - name: channel
+    type: VARCHAR(20)
+  - name: contact
+    type: VARCHAR(255)
+  - name: partner_id
+    type: BIGINT
+    nullable: true
+  - name: reason
+    type: VARCHAR(30)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: notification_suppression_seq
+  column: id
+indexes:
+  - name: notification_suppressions_uq
+    columns: [channel, contact, partner_id]
+    unique: true
+    where: "partner_id IS NOT NULL"
+  - name: notification_suppression_fleet_uq
+    columns: [channel, contact]
+    unique: true
+    where: "partner_id IS NULL"
+foreign_keys:
+  - name: notification_suppressions
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+    on_delete: CASCADE
