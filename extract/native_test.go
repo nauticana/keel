@@ -461,13 +461,13 @@ func TestLimitsUnsupportedAndFactory(t *testing.T) {
 	if native.Supports("image/png") || !native.Supports("application/pdf") {
 		t.Error("Supports")
 	}
-	if _, err := New("native", 1); err != nil {
+	if _, err := New(context.Background(), "native", 1, 0); err != nil {
 		t.Error(err)
 	}
-	if _, err := New("native", 0); err == nil {
+	if _, err := New(context.Background(), "native", 0, 0); err == nil {
 		t.Error("a zero cap must fail at construction")
 	}
-	if _, err := New("tesseract", 1); err == nil {
+	if _, err := New(context.Background(), "tesseract", 1, 1); err == nil {
 		t.Error("unknown mode must fail")
 	}
 }

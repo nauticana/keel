@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"context"
 	"fmt"
 	"time"
 )
@@ -20,16 +19,6 @@ type AdmissionResult struct {
 	RejectedKey string        // scope that would have exceeded its limit
 	RetryAfter  time.Duration // rejecting window's remaining TTL, 0 when unknown
 	Counts      []int64       // post-charge counters in scope order; nil when rejected
-}
-
-// MultiScopeAdmitter charges several fixed-window counters as one all-or-nothing
-// decision. Composing single-key increments cannot: a later scope's rejection
-// leaves the earlier ones charged, and compensating still exposes the count to
-// concurrent callers, so the wider scope over-admits. Separate from CacheService
-// because adding a method there breaks every external implementation, so callers
-// type-assert. On Redis Cluster all keys must share a hash tag (`{tenant:42}:rpm`).
-type MultiScopeAdmitter interface {
-	Admit(ctx context.Context, scopes ...AdmissionScope) (AdmissionResult, error)
 }
 
 func (s AdmissionScope) normalized() AdmissionScope {

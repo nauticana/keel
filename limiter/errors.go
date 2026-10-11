@@ -1,5 +1,5 @@
 // Package limiter is admission control: token buckets, fair concurrency slots, and partner×fleet fixed-window
-// rate limits kept locally or shared across replicas through cache.MultiScopeAdmitter.
+// rate limits kept locally or shared across replicas through cache.CacheService.Admit.
 package limiter
 
 import "errors"

@@ -195,8 +195,6 @@ func (s *CacheServiceImpl) Subscribe(ctx context.Context, channel string) (<-cha
 
 var _ CacheService = (*CacheServiceImpl)(nil)
 
-var _ MultiScopeAdmitter = (*CacheServiceImpl)(nil)
-
 // admitScript checks every scope before charging any. Returns
 // {1, 0, 0, counts...} on admission, {0, rejectedIndex, ttl_ms} on rejection.
 var admitScript = redis.NewScript(`
@@ -256,4 +254,28 @@ func (s *CacheServiceImpl) Admit(ctx context.Context, scopes ...AdmissionScope) 
 		return AdmissionResult{RejectedKey: scopes[idx].Key, RetryAfter: time.Duration(raw[2]) * time.Millisecond}, nil
 	}
 	return AdmissionResult{Admitted: true, Counts: raw[3:]}, nil
+}
+
+var compareAndSetScript = redis.NewScript(`
+if (redis.call('GET', KEYS[1]) or '') ~= ARGV[1] then
+  return 0
+end
+if tonumber(ARGV[3]) > 0 then
+  redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+else
+  redis.call('SET', KEYS[1], ARGV[2])
+end
+return 1
+`)
+
+func (s *CacheServiceImpl) CompareAndSet(ctx context.Context, key, expected, value string, ttl time.Duration) (bool, error) {
+	if ttl < 0 {
+		return false, errNegativeTTL
+	}
+	ttlMillis := ttl.Milliseconds()
+	if ttl%time.Millisecond != 0 {
+		ttlMillis++
+	}
+	n, err := compareAndSetScript.Run(ctx, s.client, []string{key}, expected, value, ttlMillis).Int64()
+	return n == 1, err
 }

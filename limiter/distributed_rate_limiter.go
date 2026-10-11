@@ -76,7 +76,7 @@ var _ port.RateLimiter = (*DistributedRateLimiter)(nil)
 
 // NewDistributedRateLimiter validates config and binds the limiter to a store that charges every scope of one
 // decision atomically; two separate increments would over-admit the fleet by the callers in flight.
-func NewDistributedRateLimiter(store cache.MultiScopeAdmitter, config DistributedRateLimiterConfig) (*DistributedRateLimiter, error) {
+func NewDistributedRateLimiter(store cache.CacheService, config DistributedRateLimiterConfig) (*DistributedRateLimiter, error) {
 	if store == nil {
 		return nil, fmt.Errorf("distributed rate limiter: store is required")
 	}
@@ -316,7 +316,7 @@ type retryAdvice struct {
 // locally, so the rest of the window costs no round trips — a fixed-window counter only grows inside its epoch,
 // so the mark cannot go stale.
 type sharedAdmitter struct {
-	store        cache.MultiScopeAdmitter
+	store        cache.CacheService
 	timeout      time.Duration
 	maxExhausted int
 	now          func() time.Time

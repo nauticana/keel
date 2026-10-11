@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.108",
+   "title": "Cache compare-and-set and admission on CacheService, OCR for scanned PDF pages",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "CacheService gains CompareAndSet and absorbs Admit, removing cache.MultiScopeAdmitter. extract adds an OCR fallback for PDF pages without a text layer, with a Google Cloud Vision recognizer selected by extract_mode=gcp_vision; extract.New and NewFromConfig take a context.",
+   "body_markdown": "### Breaking\n\n- `cache.CacheService` adds `CompareAndSet(ctx, key, expected, value, ttl) (bool, error)`: a missing or expired key holds `\"\"`, a zero `ttl` never expires, a negative one fails.\n- `cache.MultiScopeAdmitter` is removed; `Admit` is a `CacheService` method. Drop `cacheSvc.(cache.MultiScopeAdmitter)` assertions, and `limiter.NewDistributedRateLimiter` takes a `cache.CacheService`. A consumer that wants a one-method port declares its own interface.\n- Both keel backends implement the new methods; an external `CacheService` implementation or test fake must add them.\n- `extract.New(mode, maxBytes)` → `extract.New(ctx, mode, maxBytes, ocrMaxPages)`; `extract.NewFromConfig()` → `extract.NewFromConfig(ctx)`.\n\n### Additive\n\n- `extract.OCR{Primary, Recognizer, MaxBytes, MaxPages}` sends only the PDF pages without a text layer to an `extract.PageRecognizer` and splices the text into their page sections. More than `MaxPages` such pages, or text over `MaxBytes`, returns `ErrTooLarge`.\n- `extract.NewVision(ctx, opts...)` recognizes pages with Google Cloud Vision, using Application Default Credentials. `extract_mode=gcp_vision` composes it over `Native`.\n- Apply the new `application_config_flag` seed row `extract_ocr_max_pages` (`core`, default 100; 0 takes the default)."
+  },
+  {
    "version": "v1.2.107",
    "title": "Single-use action tokens",
    "tags": [

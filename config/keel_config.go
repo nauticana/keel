@@ -68,6 +68,7 @@ const (
 	scan_addr                     = "scan_addr"
 	extract_mode                  = "extract_mode"
 	extract_max_bytes             = "extract_max_bytes"
+	extract_ocr_max_pages         = "extract_ocr_max_pages"
 	storage_public_base_url       = "storage_public_base_url"
 	storage_account_url           = "storage_account_url"
 	storage_region                = "storage_region"
@@ -213,8 +214,9 @@ type KeelConfig struct {
 	DmsMaxBytes                 int64         // dms_max_bytes                 104857600          Largest document component the dms core buffers (bytes)
 	ScanMode                    string        // scan_mode                     none               Content scanner: none | clamd
 	ScanAddr                    string        // scan_addr                     ""                 clamd host:port
-	ExtractMode                 string        // extract_mode                  native             Text extractor: native
+	ExtractMode                 string        // extract_mode                  native             Text extractor: native | gcp_vision
 	ExtractMaxBytes             int64         // extract_max_bytes             67108864           Largest decompressed document part or extracted text (bytes)
+	ExtractOCRMaxPages          int           // extract_ocr_max_pages         100                Most pages of one document sent to OCR, more fail with ErrTooLarge; 0 = 100
 	StoragePublicBaseURL        string        // storage_public_base_url       ""                 Public base URL for ObjectStorage.PublicURL
 	StorageAccountURL           string        // storage_account_url           ""                 Azure Blob service endpoint
 	StorageRegion               string        // storage_region                ""                 S3 region or GCS location; empty = provider default chain (R2: auto)
@@ -360,6 +362,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.ScanAddr = c.String(m, scan_addr)
 	c.ExtractMode = c.String(m, extract_mode)
 	c.ExtractMaxBytes = c.Int64(m, extract_max_bytes)
+	c.ExtractOCRMaxPages = c.Int(m, extract_ocr_max_pages)
 	c.StoragePublicBaseURL = c.String(m, storage_public_base_url)
 	c.StorageAccountURL = c.String(m, storage_account_url)
 	c.StorageRegion = c.String(m, storage_region)
@@ -454,7 +457,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_access_token_cache_ttl))
 	}
 	for flag, n := range map[string]int{oauth_max_pending_clients: c.OAuthMaxPendingClients, oauth_max_grants_per_user: c.OAuthMaxGrantsPerUser,
-		api_key_max_per_partner: c.APIKeyMaxPerPartner, max_sessions_per_user: c.MaxSessionsPerUser} {
+		api_key_max_per_partner: c.APIKeyMaxPerPartner, max_sessions_per_user: c.MaxSessionsPerUser, extract_ocr_max_pages: c.ExtractOCRMaxPages} {
 		if n < 0 {
 			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", flag))
 		}

@@ -66,7 +66,7 @@ The MCP server layer (transports, tool/resource registry, response envelopes, te
 - `LimitError{Err, Scope, After}` — every rejection; it satisfies `port.RetryAfterError` and `handler.HeaderCarrier`, so `Retry-After` reaches the client through `handler.JSON`.
 
 ```go
-rl, err := limiter.NewDistributedRateLimiter(cacheSvc.(cache.MultiScopeAdmitter), limiter.DistributedRateLimiterConfig{
+rl, err := limiter.NewDistributedRateLimiter(cacheSvc, limiter.DistributedRateLimiterConfig{
     Lanes:               map[string]limiter.WindowLane{"turn": {Partner: {Limit: 600, Window: time.Minute}, Fleet: {Limit: 10000, Window: time.Minute}}},
     KeyPrefix:           "app:rl",
     StoreTimeout:        50 * time.Millisecond,

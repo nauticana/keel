@@ -230,7 +230,26 @@ func (c *MemoryCacheService) IncrementByWithTTL(_ context.Context, key string, n
 	return count, nil
 }
 
-var _ MultiScopeAdmitter = (*MemoryCacheService)(nil)
+func (c *MemoryCacheService) CompareAndSet(_ context.Context, key, expected, value string, ttl time.Duration) (bool, error) {
+	if ttl < 0 {
+		return false, errNegativeTTL
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current := ""
+	if e, ok := c.entry(key, false); ok {
+		current = e.value
+	}
+	if current != expected {
+		return false, nil
+	}
+	var expires time.Time
+	if ttl > 0 {
+		expires = c.now().Add(ttl)
+	}
+	c.store(&kvEntry{key: key, value: value, expires: expires})
+	return true, nil
+}
 
 // Admit charges every scope under one lock. Process-local like the rest of
 // MemoryCacheService: N instances admit N times the configured limit.

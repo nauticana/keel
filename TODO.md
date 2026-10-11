@@ -30,7 +30,7 @@ This file consolidates the v0.6 deferral notes plus the downstream-consumer revi
 | C7 | Tax + coupon on `CheckoutRequest` | C | MED | ⏳ open — driven by demand |
 | C12 | Remote ArchiveLink `document.ContentStore` | C | LOW | ⏳ open — driven by demand |
 | C13 | `recording_media` on a content repository | C | LOW | ⏳ open — driven by demand |
-| C14 | OCR providers behind `extract.TextExtractor` | C | LOW | ⏳ open — driven by demand |
+| C14 | More OCR providers behind `extract.PageRecognizer` | C | LOW | ⏳ open — Cloud Vision shipped; others driven by demand |
 | C15 | Adopt the folio release with #457–#459 fixed | C | **HIGH** | ⏳ open — waiting on folio PRs #460–#462; nested forms can stall a page until then |
 | C8 | IP allowlist on webhook endpoints (defence-in-depth) | C | MED | ⏳ open — driven by demand |
 | C9 | Fuzz tests on Stripe signature verification | C | LOW | ✅ done |
@@ -106,7 +106,7 @@ Real value but no concrete consumer asking yet. Defer until a downstream project
 | C11 | Subscription pause / resume — the only mutation C4 listed that `billing.SubscriptionLifecycle` does not cover | 3–4 hr |
 | C12 | `document.ContentStore` port with a second implementation that stores partner documents on a remote ArchiveLink content server over HTTP, so client applications can share one central content server instead of their own buckets | 2–3 days |
 | C13 | `recording_media` on a content repository (`contrep_id` + `doc_key`) instead of recording a `bucket` column; `ObjectStorage` stays usable directly, so this is only for relocation and per-repository credentials | 1 day |
-| C14 | OCR providers behind `extract.TextExtractor` (GCP Vision, AWS Textract, Azure Vision) for scanned pages, selected by `extract_mode`; a chain that tries `Native` first and falls back to OCR when a page has no text layer | 2 days |
+| C14 | AWS Textract and Azure Vision `extract.PageRecognizer` providers, selected by `extract_mode` like `gcp_vision` | 1 day each |
 | C15 | Pin the first folio release containing [#460](https://github.com/carlos7ags/folio/pull/460), [#461](https://github.com/carlos7ags/folio/pull/461) and [#462](https://github.com/carlos7ags/folio/pull/462) (fixes for folio#458, #457, #459), map its `ErrFormBudgetExceeded` to `ErrTooLarge`, un-skip `TestPDFFormOwnResources`, `TestPDFSimpleFontWideCodespace` and `TestPDFNestedFormsBounded`, and decide whether the README still routes untrusted PDFs through `extract.Isolated` | 2 hr |
 
 ---

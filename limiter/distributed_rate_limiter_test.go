@@ -13,8 +13,9 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// stubStore is an in-memory MultiScopeAdmitter whose calls can be failed or blocked.
+// stubStore implements only Admit, counting in memory; its calls can be failed or blocked.
 type stubStore struct {
+	cache.CacheService
 	mu      sync.Mutex
 	counts  map[string]int64
 	fail    error

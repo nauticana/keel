@@ -15,6 +15,8 @@ import (
 // without importing the underlying client.
 var ErrCacheMiss = errors.New("cache: miss")
 
+var errNegativeTTL = errors.New("cache: compare-and-set ttl must not be negative")
+
 // CacheService is the unified key-value + list + pub/sub port. The KV half
 // (Get/Set/Delete/Increment) covers session/rate-limit caching; the list
 // half (RPush/LPopAll) backs lightweight queues — e.g. batched location
@@ -34,6 +36,13 @@ type CacheService interface {
 	// IncrementByWithTTL is IncrementWithTTL adding n at once, so coalesced
 	// batches (e.g. a distributed rate limiter) cost one round-trip.
 	IncrementByWithTTL(ctx context.Context, key string, n int64, ttl time.Duration) (int64, error)
+	// CompareAndSet atomically writes value when key holds expected, a missing or
+	// expired key holding "", and reports whether it wrote. A zero ttl never expires.
+	CompareAndSet(ctx context.Context, key, expected, value string, ttl time.Duration) (bool, error)
+	// Admit charges several fixed-window counters as one all-or-nothing decision,
+	// which per-key increments cannot: a later rejection leaves earlier scopes
+	// charged. On Redis Cluster all keys must share a hash tag (`{tenant:42}:rpm`).
+	Admit(ctx context.Context, scopes ...AdmissionScope) (AdmissionResult, error)
 
 	RPush(ctx context.Context, key string, value string) error
 	LPopAll(ctx context.Context, key string) ([]string, error)
