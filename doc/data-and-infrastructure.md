@@ -417,11 +417,12 @@ constant passes the keel seed file that defines its codes.
 
 #### Extending a keel code domain
 
-keel seeds the codes it writes. `device_platform`, `notification_channel` and
-`webhook_processing_status` are closed. `notification_type`, `consent_type`
-and `policy_type` are open: a downstream inserts its own `constant_value` rows
-and re-creates each mapped column's `chk_<table>_<column>` over keel's codes
-plus its own, after the keel DDL:
+keel seeds the codes it writes. `device_platform` and
+`webhook_processing_status` are closed. `notification_channel`,
+`notification_type`, `consent_type` and `policy_type` are open: a downstream
+that registers its own channel or writes its own types inserts its
+`constant_value` rows and re-creates each mapped column's
+`chk_<table>_<column>` over keel's codes plus its own, after the keel DDL:
 
 ```sql
 INSERT INTO constant_value (constant_id, value, caption) VALUES ('notification_type', 'R', 'Reminder');
@@ -429,8 +430,9 @@ ALTER TABLE notification DROP CONSTRAINT IF EXISTS chk_notification_notification
 ALTER TABLE notification ADD CONSTRAINT chk_notification_notification_type CHECK (notification_type IN ('otp', 'R'));
 ```
 
-Repeat the CHECK for every column the domain maps to (`notification_type`:
-`notification`, `notification_preference`, `user_notification`). The
+Repeat the CHECK for every column the domain maps to (`notification_channel`:
+`notification`, `notification_preference`; `notification_type`: those and
+`user_notification`). The
 downstream's own test asserts the union, as `ValidateConstantChecks` does for
 keel.
 

@@ -18,6 +18,7 @@ seeds:
       - [notification_channel, sms, SMS]
       - [notification_channel, email, Email]
       - [notification_channel, inbox, In-app inbox]
+      - [notification_channel, realtime, WebSocket]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

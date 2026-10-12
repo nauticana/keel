@@ -10,9 +10,9 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// Codes of the notification_channel constant domain, with InboxChannel.
-// Suppression is checked on the contact email and SMS resolve to; push and the
-// inbox are not addressed by a contact and have nothing to suppress.
+// Codes of the notification_channel constant domain, with InboxChannel and
+// realtime.NotificationChannel. Suppression is checked on the contact email
+// and SMS resolve to; the other channels are not addressed by a contact.
 const (
 	EmailChannel = "email"
 	SMSChannel   = "sms"

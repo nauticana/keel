@@ -1849,7 +1849,7 @@ CREATE TABLE IF NOT EXISTS notification (
     CONSTRAINT notification_recipient FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE,
     CONSTRAINT notification_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL,
     CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F')),
-    CONSTRAINT chk_notification_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox', 'realtime')),
     CONSTRAINT chk_notification_notification_type CHECK (notification_type IN ('otp'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_notification_drain ON notification(status, available_at);
@@ -1864,7 +1864,7 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, notification_type, channel),
     CONSTRAINT notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE,
-    CONSTRAINT chk_notification_preference_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_preference_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox', 'realtime')),
     CONSTRAINT chk_notification_preference_notification_type CHECK (notification_type IN ('otp'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

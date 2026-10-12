@@ -1822,7 +1822,7 @@ CREATE TABLE IF NOT EXISTS notification (
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT notification_pk PRIMARY KEY (id),
     CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F')),
-    CONSTRAINT chk_notification_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox', 'realtime')),
     CONSTRAINT chk_notification_notification_type CHECK (notification_type IN ('otp'))
 );
 CREATE INDEX IF NOT EXISTS idx_notification_drain ON notification(status, available_at);
@@ -1839,7 +1839,7 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     enabled                              BOOLEAN       NOT NULL,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT notification_preference_pk PRIMARY KEY (user_id, notification_type, channel),
-    CONSTRAINT chk_notification_preference_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_preference_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox', 'realtime')),
     CONSTRAINT chk_notification_preference_notification_type CHECK (notification_type IN ('otp'))
 );
 
