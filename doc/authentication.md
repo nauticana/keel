@@ -175,6 +175,8 @@ When the login page receives `?return=`, the SPA posts `{"return": <value>}` wit
 - `Active(ctx, userID, clientID)` lets a resource server honor a revocation before the access token expires.
 - `PurgeUnauthorizedClients(ctx, olderThan)` deletes, in batches, openly registered clients that never completed an authorization.
 
+`handler.GrantHandler{Grants: setup.Grants}` serves them to the signed-in user from `GetAuthRoutes()`: `GET /api/user/oauth-grants` lists the caller's grants, and `POST /api/user/oauth-grants/revoke {"clientId"}` revokes one (204; 404 `grant_not_found`).
+
 Dynamic registration gives every reconnect a new client, and a hosted assistant that drops its connection does not revoke it. With `oauth_replace_same_app_grant` on, redeeming a code revokes the user's grants to other clients of the same app, those sharing a non-loopback redirect host; consent alone replaces nothing, and loopback hosts, shared by every native app, never match. `oauth_max_grants_per_user` refuses an authorization past the cap with `access_denied` and an `error_description`, and rechecks it when the code is redeemed (`invalid_grant`); a reconnect of an app the user already holds is admitted. `prompt` is honored on the consent post as on the request. Direct composition sets `authserver.Config.ReplaceSameAppGrant` and `MaxGrantsPerUser`.
 
 `oauth_max_pending_clients` bounds that pending set atomically. One more registration returns `ErrOAuthClientLimit` (`temporarily_unavailable`, 503). Direct composition uses `ClientStoreDB.MaxPending`. `authserver.UserIDFromSubject` parses the `user:<id>` token subject.

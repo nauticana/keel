@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.112",
+   "title": "OAuth grant routes",
+   "tags": [
+    "additive"
+   ],
+   "summary": "handler.GrantHandler serves the signed-in user's authorization-server grants.",
+   "body_markdown": "### Additive\n\n- `handler.GrantHandler{Grants: oauth.Setup.Grants}` mounts `GET /api/user/oauth-grants` (`[]authserver.Grant`) and `POST /api/user/oauth-grants/revoke {\"clientId\"}` (204; 404 `grant_not_found`) from `GetAuthRoutes()`. Applications that served these routes themselves can drop their handlers."
+  },
+  {
    "version": "v1.2.111",
    "title": "Currency catalog, minor-unit money columns, provider API clients",
    "tags": [
