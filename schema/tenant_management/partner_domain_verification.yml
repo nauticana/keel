@@ -75,3 +75,6 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+checks:
+  - name: chk_partner_domain_verification_method
+    expression: "method IN ('EC', 'VE', 'GH', 'GM', 'HF', 'DT', 'GS', 'GB', 'GW', 'ME')"

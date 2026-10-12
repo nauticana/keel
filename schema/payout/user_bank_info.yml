@@ -57,6 +57,12 @@ sequence:
   name: user_bank_info_seq
   column: id
 checks:
+  - name: chk_user_bank_info_provider
+    expression: "provider IN ('AW', 'SC', 'WI')"
+  - name: chk_user_bank_info_tax_id_type
+    expression: "tax_id_type IN ('S', 'N', 'E', 'V', 'O')"
+  - name: chk_user_bank_info_status
+    expression: "status IN ('A', 'S')"
   - name: chk_user_bank_info_lifecycle
     expression: "(status = 'A' AND superseded_at IS NULL) OR (status = 'S' AND superseded_at IS NOT NULL)"
 indexes:

@@ -409,6 +409,11 @@ downstream installing some components passes exactly their seed files.
 A component seed may insert configuration rows into shared metadata, menu, or
 RBAC tables; the filename identifies the component being configured, not only
 the tables receiving those rows.
+With `-seed`, `schemagen` runs `schema.ValidateSeeds`: every seeded FK resolves,
+and every column a `constant_lookup` row maps to carries a CHECK
+`column IN (...)` listing exactly that domain's `constant_value` codes
+(`schema.ValidateConstantChecks`). A downstream whose lookup targets a keel
+constant passes the keel seed file that defines its codes.
 
 Each component directory contains unprefixed `<table>.yml` definitions and an
 `ab_meta.yml`. The ordered `tables` list in `ab_meta.yml` is the authoritative

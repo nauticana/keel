@@ -69,3 +69,6 @@ foreign_keys:
       table: user_account
       columns: [id]
     on_delete: SET NULL
+checks:
+  - name: chk_agency_client_invitation_status
+    expression: "status IN ('S', 'I', 'V', 'X')"

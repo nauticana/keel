@@ -47,6 +47,10 @@ columns:
     default: CURRENT_TIMESTAMP
 primary_key: [instruction_id, leg_no]
 checks:
+  - name: chk_payout_instruction_leg_provider
+    expression: "provider IN ('AW', 'SC', 'WI')"
+  - name: chk_payout_instruction_leg_status
+    expression: "status IN ('D', 'P', 'S', 'F', 'R', 'V')"
   - name: chk_payout_instruction_leg_amount
     expression: "amount_minor > 0"
   - name: chk_payout_instruction_leg_reversed

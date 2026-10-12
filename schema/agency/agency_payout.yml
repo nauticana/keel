@@ -56,6 +56,10 @@ sequence:
   name: agency_payout_seq
   column: id
 checks:
+  - name: chk_agency_payout_status
+    expression: "status IN ('C', 'P', 'D', 'F', 'R', 'V', 'M')"
+  - name: chk_agency_payout_provider
+    expression: "provider IN ('AW', 'SC', 'WI')"
   - name: chk_agency_payout_amount
     expression: "amount_minor > 0"
 indexes:

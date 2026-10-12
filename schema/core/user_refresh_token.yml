@@ -55,3 +55,6 @@ indexes:
     columns: [token_hash]
   - name: idx_refresh_token_session
     columns: [user_id, session_id]
+checks:
+  - name: chk_user_refresh_token_sign_in_method
+    expression: "sign_in_method IN ('P', 'O', 'E', 'T')"

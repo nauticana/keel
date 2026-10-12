@@ -55,3 +55,6 @@ foreign_keys:
     references:
       table: business_partner
       columns: [id]
+checks:
+  - name: chk_content_repository_status
+    expression: "status IN ('active', 'read-only', 'migrating')"

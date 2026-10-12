@@ -63,3 +63,6 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+checks:
+  - name: chk_approval_request_status
+    expression: "status IN ('P', 'A', 'R', 'W', 'E')"

@@ -37,3 +37,6 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+checks:
+  - name: chk_approval_event_event_type
+    expression: "event_type IN ('S', 'A', 'R', 'W', 'E')"

@@ -19,6 +19,8 @@ columns:
     default: CURRENT_TIMESTAMP
 primary_key: [client_delegation_id, role]
 checks:
+  - name: chk_agency_delegation_role_role
+    expression: "role IN ('view', 'operate', 'publish')"
   - name: chk_agency_delegation_role_expiry
     expression: "expires_at IS NULL OR expires_at >= granted_at"
 foreign_keys:

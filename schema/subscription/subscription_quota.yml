@@ -22,3 +22,6 @@ foreign_keys:
     references:
       table: subscription_resource
       columns: [id]
+checks:
+  - name: chk_subscription_quota_period_type
+    expression: "period_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')"

@@ -8,3 +8,6 @@ columns:
   - name: display_column
     type: VARCHAR(60)
 primary_key: [constraint_name]
+checks:
+  - name: chk_foreign_key_lookup_lookup_style
+    expression: "lookup_style IN ('D', 'S')"

@@ -49,3 +49,6 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+checks:
+  - name: chk_recording_media_status
+    expression: "status IN ('P', 'U', 'X', 'R')"

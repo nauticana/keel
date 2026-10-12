@@ -318,3 +318,19 @@ func TestLemonSqueezyParser(t *testing.T) {
 		t.Error("expected PaidAt")
 	}
 }
+
+func TestStripeParser_AuthorizationEvents(t *testing.T) {
+	for typ, kind := range map[string]string{
+		"payment_intent.amount_capturable_updated": KindPaymentAuthorized,
+		"payment_intent.canceled":                  KindPaymentCanceled,
+	} {
+		e, err := NewStripeEventParser().Parse([]byte(`{"id":"evt_a","type":"` + typ + `",
+			"data":{"object":{"id":"pi_9","amount":1200,"amount_capturable":1150,"currency":"usd"}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.EventKind != kind || e.PaymentID != "pi_9" {
+			t.Errorf("%s: kind %q payment %q", typ, e.EventKind, e.PaymentID)
+		}
+	}
+}

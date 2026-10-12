@@ -60,6 +60,10 @@ indexes:
     unique: true
     where: "status = 'A'"
 checks:
+  - name: chk_partner_identity_provider_protocol
+    expression: "protocol IN ('O', 'S')"
+  - name: chk_partner_identity_provider_status
+    expression: "status IN ('D', 'A', 'X')"
   - name: chk_partner_identity_provider_tested
     expression: "status <> 'A' OR tested_at IS NOT NULL"
 foreign_keys:

@@ -22,3 +22,6 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+checks:
+  - name: chk_user_account_history_action_type
+    expression: "action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E')"

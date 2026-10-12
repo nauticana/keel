@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS foreign_key_lookup (
     constraint_name                      VARCHAR(60)   NOT NULL,
     lookup_style                         CHAR(1)       NOT NULL,
     display_column                       VARCHAR(60)   NOT NULL,
-    CONSTRAINT foreign_key_lookup_pk PRIMARY KEY (constraint_name)
+    CONSTRAINT foreign_key_lookup_pk PRIMARY KEY (constraint_name),
+    CONSTRAINT chk_foreign_key_lookup_lookup_style CHECK (lookup_style IN ('D', 'S'))
 );
 
 -- Metadata-driven REST API definitions
@@ -158,7 +159,8 @@ CREATE TABLE IF NOT EXISTS table_action (
     method_name                          VARCHAR(80)  ,
     display_order                        SMALLINT      NOT NULL DEFAULT 10,
     confirm_message                      VARCHAR(200) ,
-    CONSTRAINT table_action_pk PRIMARY KEY (table_name, action_name)
+    CONSTRAINT table_action_pk PRIMARY KEY (table_name, action_name),
+    CONSTRAINT chk_table_action_action_kind CHECK (action_kind IN ('P', 'R', 'V'))
 );
 CREATE INDEX IF NOT EXISTS idx_table_action_table ON table_action(table_name);
 
@@ -203,7 +205,8 @@ CREATE TABLE IF NOT EXISTS user_account (
     deleted_at                           TIMESTAMP    ,
     single_device_session                BOOLEAN       NOT NULL DEFAULT FALSE,
     tokens_valid_after                   TIMESTAMP    ,
-    CONSTRAINT user_account_pk PRIMARY KEY (id)
+    CONSTRAINT user_account_pk PRIMARY KEY (id),
+    CONSTRAINT chk_user_account_email_verification_method CHECK (email_verification_method IN ('O', 'R', 'C', 'P', 'G', 'A', 'T', 'X', 'L'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS user_account_email_uq ON user_account(user_email);
 CREATE UNIQUE INDEX IF NOT EXISTS user_account_phone_uq ON user_account(phone);
@@ -216,7 +219,8 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     status                               CHAR(1)       NOT NULL,
     object_name                          VARCHAR(80)  ,
     client_address                       VARCHAR(15)  ,
-    CONSTRAINT user_account_history_pk PRIMARY KEY (user_id, action_time)
+    CONSTRAINT user_account_history_pk PRIMARY KEY (user_id, action_time),
+    CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E'))
 );
 
 -- A legal hold on a user's data. While any hold of the user is unreleased,
@@ -266,7 +270,8 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
     device_hash                          CHAR(64)     ,
     revoked_at                           TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT user_refresh_token_pk PRIMARY KEY (id)
+    CONSTRAINT user_refresh_token_pk PRIMARY KEY (id),
+    CONSTRAINT chk_user_refresh_token_sign_in_method CHECK (sign_in_method IN ('P', 'O', 'E', 'T'))
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_token_hash ON user_refresh_token(token_hash);
 CREATE INDEX IF NOT EXISTS idx_refresh_token_session ON user_refresh_token(user_id, session_id);
@@ -545,7 +550,8 @@ CREATE TABLE IF NOT EXISTS partner_domain_verification (
     lapsed_at                            TIMESTAMP    ,
     cancelled_at                         TIMESTAMP    ,
     cancelled_by                         BIGINT       ,
-    CONSTRAINT partner_domain_verification_pk PRIMARY KEY (partner_id, domain_url, verified_at)
+    CONSTRAINT partner_domain_verification_pk PRIMARY KEY (partner_id, domain_url, verified_at),
+    CONSTRAINT chk_partner_domain_verification_method CHECK (method IN ('EC', 'VE', 'GH', 'GM', 'HF', 'DT', 'GS', 'GB', 'GW', 'ME'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS partner_domain_verification_current_uq ON partner_domain_verification(partner_id, domain_url, method) WHERE lapsed_at IS NULL AND cancelled_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_partner_domain_verification_name ON partner_domain_verification(domain_name, method) WHERE lapsed_at IS NULL AND cancelled_at IS NULL;
@@ -564,7 +570,8 @@ CREATE TABLE IF NOT EXISTS partner_domain_challenge (
     issued_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at                           TIMESTAMP     NOT NULL,
     attempts                             SMALLINT      NOT NULL DEFAULT 0,
-    CONSTRAINT partner_domain_challenge_pk PRIMARY KEY (partner_id, domain_url, method)
+    CONSTRAINT partner_domain_challenge_pk PRIMARY KEY (partner_id, domain_url, method),
+    CONSTRAINT chk_partner_domain_challenge_method CHECK (method IN ('EC', 'VE', 'GH', 'GM', 'HF', 'DT', 'GS', 'GB', 'GW', 'ME'))
 );
 
 -- Networks a partner's users may sign in from; no rows allows any address
@@ -603,6 +610,7 @@ CREATE TABLE IF NOT EXISTS work_schedule (
     lease_token                          BIGINT       ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT work_schedule_pk PRIMARY KEY (partner_id, task_kind),
+    CONSTRAINT chk_work_schedule_cadence_code CHECK (cadence IN ('I', 'W', 'M')),
     CONSTRAINT chk_work_schedule_cadence CHECK ((cadence = 'I' AND cadence_day IS NULL AND cadence_minute IS NULL AND time_zone IS NULL) OR (cadence IN ('W', 'M') AND cadence_minute BETWEEN 0 AND 1439 AND time_zone IS NOT NULL AND ((cadence = 'W' AND cadence_day BETWEEN 0 AND 6) OR (cadence = 'M' AND cadence_day BETWEEN 1 AND 31))))
 );
 CREATE INDEX IF NOT EXISTS idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
@@ -755,7 +763,9 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
     trial_days                           INTEGER      ,
-    CONSTRAINT subscription_plan_pk PRIMARY KEY (id)
+    CONSTRAINT subscription_plan_pk PRIMARY KEY (id),
+    CONSTRAINT chk_subscription_plan_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F'))
 );
 
 -- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
@@ -767,7 +777,10 @@ CREATE TABLE IF NOT EXISTS subscription_plan_price (
     amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     provider_price_id                    VARCHAR(64)  ,
-    CONSTRAINT subscription_plan_price_pk PRIMARY KEY (plan_id, billing_cycle, term_type, term_count)
+    CONSTRAINT subscription_plan_price_pk PRIMARY KEY (plan_id, billing_cycle, term_type, term_count),
+    CONSTRAINT chk_subscription_plan_price_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_subscription_plan_price_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_subscription_plan_price_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 );
 
 -- Quota-tracked resources (domains, API calls, etc.)
@@ -786,7 +799,8 @@ CREATE TABLE IF NOT EXISTS subscription_quota (
     resource_id                          VARCHAR(20)   NOT NULL,
     max_value                            BIGINT        NOT NULL,
     period_type                          CHAR(1)       NOT NULL DEFAULT 'M',
-    CONSTRAINT subscription_quota_pk PRIMARY KEY (plan_id, resource_id)
+    CONSTRAINT subscription_quota_pk PRIMARY KEY (plan_id, resource_id),
+    CONSTRAINT chk_subscription_quota_period_type CHECK (period_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 );
 
 -- Optional add-on features with separate pricing
@@ -801,7 +815,10 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     term_count                           INTEGER       NOT NULL DEFAULT 1,
     term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
-    CONSTRAINT subscription_addon_pk PRIMARY KEY (id)
+    CONSTRAINT subscription_addon_pk PRIMARY KEY (id),
+    CONSTRAINT chk_subscription_addon_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_subscription_addon_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_subscription_addon_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 );
 
 -- Active plan subscriptions per business partner
@@ -825,7 +842,11 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     effective_cancel_date                TIMESTAMP    ,
     trial_end                            TIMESTAMP    ,
     seats                                INTEGER      ,
-    CONSTRAINT partner_plan_subscription_pk PRIMARY KEY (partner_id, plan_id, begda)
+    CONSTRAINT partner_plan_subscription_pk PRIMARY KEY (partner_id, plan_id, begda),
+    CONSTRAINT chk_partner_plan_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_partner_plan_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_plan_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_plan_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
 );
 CREATE INDEX IF NOT EXISTS idx_partner_plan_subscription_provider_sub ON partner_plan_subscription(provider_subscription_id);
 
@@ -846,7 +867,11 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     amount_minor                         BIGINT       ,
     renewal_date                         TIMESTAMP    ,
     next_charge_date                     TIMESTAMP    ,
-    CONSTRAINT partner_addon_subscription_pk PRIMARY KEY (partner_id, addon_id, begda)
+    CONSTRAINT partner_addon_subscription_pk PRIMARY KEY (partner_id, addon_id, begda),
+    CONSTRAINT chk_partner_addon_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_partner_addon_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_addon_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_addon_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
 );
 
 -- Resource usage tracking for quota enforcement, attributed to the acting user, API key or OAuth client when known
@@ -926,7 +951,8 @@ CREATE TABLE IF NOT EXISTS user_payment_method (
     currency                             CHAR(3)      ,
     is_default                           BOOLEAN       NOT NULL DEFAULT FALSE,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT user_payment_method_pk PRIMARY KEY (id)
+    CONSTRAINT user_payment_method_pk PRIMARY KEY (id),
+    CONSTRAINT chk_user_payment_method_type CHECK (method_type IN ('card', 'bank', 'wallet', 'apple_pay', 'google_pay'))
 );
 CREATE INDEX IF NOT EXISTS idx_user_payment_method_user ON user_payment_method(user_id, is_default);
 
@@ -1024,6 +1050,9 @@ CREATE TABLE IF NOT EXISTS user_bank_info (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT user_bank_info_pk PRIMARY KEY (id),
+    CONSTRAINT chk_user_bank_info_provider CHECK (provider IN ('AW', 'SC', 'WI')),
+    CONSTRAINT chk_user_bank_info_tax_id_type CHECK (tax_id_type IN ('S', 'N', 'E', 'V', 'O')),
+    CONSTRAINT chk_user_bank_info_status CHECK (status IN ('A', 'S')),
     CONSTRAINT chk_user_bank_info_lifecycle CHECK ((status = 'A' AND superseded_at IS NULL) OR (status = 'S' AND superseded_at IS NOT NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS user_bank_info_active_uq ON user_bank_info(user_id, partner_id) WHERE status = 'A';
@@ -1049,7 +1078,8 @@ CREATE TABLE IF NOT EXISTS payout_webhook_log (
     raw_payload                          TEXT         ,
     received_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     processed_at                         TIMESTAMP    ,
-    CONSTRAINT payout_webhook_log_pk PRIMARY KEY (id)
+    CONSTRAINT payout_webhook_log_pk PRIMARY KEY (id),
+    CONSTRAINT chk_payout_webhook_log_provider CHECK (provider IN ('AW', 'SC', 'WI'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payout_webhook_log_uq ON payout_webhook_log(provider, event_id);
 CREATE INDEX IF NOT EXISTS idx_payout_webhook_transfer ON payout_webhook_log(provider_transfer_id);
@@ -1064,7 +1094,8 @@ CREATE TABLE IF NOT EXISTS partner_payout_provider (
     partner_id                           BIGINT        NOT NULL,
     provider                             CHAR(2)       NOT NULL,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT partner_payout_provider_pk PRIMARY KEY (partner_id)
+    CONSTRAINT partner_payout_provider_pk PRIMARY KEY (partner_id),
+    CONSTRAINT chk_partner_payout_provider_provider CHECK (provider IN ('AW', 'SC', 'WI'))
 );
 
 -- One idempotent payout to a partner's payee, allocated against the
@@ -1083,6 +1114,7 @@ CREATE TABLE IF NOT EXISTS payout_instruction (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT payout_instruction_pk PRIMARY KEY (id),
+    CONSTRAINT chk_payout_instruction_status CHECK (status IN ('N', 'D', 'P', 'S', 'F', 'V', 'X', 'M')),
     CONSTRAINT chk_payout_instruction_amount CHECK (amount_minor > 0)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS payout_instruction_key_uq ON payout_instruction(partner_id, idempotency_key);
@@ -1115,6 +1147,8 @@ CREATE TABLE IF NOT EXISTS payout_instruction_leg (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT payout_instruction_leg_pk PRIMARY KEY (instruction_id, leg_no),
+    CONSTRAINT chk_payout_instruction_leg_provider CHECK (provider IN ('AW', 'SC', 'WI')),
+    CONSTRAINT chk_payout_instruction_leg_status CHECK (status IN ('D', 'P', 'S', 'F', 'R', 'V')),
     CONSTRAINT chk_payout_instruction_leg_amount CHECK (amount_minor > 0),
     CONSTRAINT chk_payout_instruction_leg_reversed CHECK (reversed_minor >= 0 AND reversed_minor <= amount_minor)
 );
@@ -1135,7 +1169,8 @@ CREATE TABLE IF NOT EXISTS payout_instruction_event (
     amount_minor                         BIGINT        NOT NULL DEFAULT 0,
     amount_reversed_minor                BIGINT        NOT NULL DEFAULT 0,
     applied_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT payout_instruction_event_pk PRIMARY KEY (provider, event_id)
+    CONSTRAINT payout_instruction_event_pk PRIMARY KEY (provider, event_id),
+    CONSTRAINT chk_payout_instruction_event_provider CHECK (provider IN ('AW', 'SC', 'WI'))
 );
 CREATE INDEX IF NOT EXISTS idx_payout_instruction_event_leg ON payout_instruction_event(instruction_id, leg_no);
 
@@ -1361,7 +1396,8 @@ CREATE TABLE IF NOT EXISTS agency_client_invitation (
     accepted_at                          TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT agency_client_invitation_pk PRIMARY KEY (id)
+    CONSTRAINT agency_client_invitation_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_client_invitation_status CHECK (status IN ('S', 'I', 'V', 'X'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS invitation_token_uq ON agency_client_invitation(invite_token);
 CREATE INDEX IF NOT EXISTS idx_agency_client_invitation ON agency_client_invitation(agency_partner_id, status);
@@ -1383,6 +1419,7 @@ CREATE TABLE IF NOT EXISTS agency_client_delegation (
     revoked_at                           TIMESTAMP    ,
     revoked_by                           BIGINT       ,
     CONSTRAINT agency_client_delegation_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_client_delegation_status CHECK (status IN ('A', 'R')),
     CONSTRAINT chk_delegation_distinct CHECK (client_partner_id <> agency_partner_id),
     CONSTRAINT chk_delegation_lifecycle CHECK ((status = 'A' AND revoked_at IS NULL AND revoked_by IS NULL) OR (status = 'R' AND revoked_at IS NOT NULL AND revoked_by IS NOT NULL))
 );
@@ -1404,6 +1441,7 @@ CREATE TABLE IF NOT EXISTS agency_delegation_role (
     granted_by                           BIGINT        NOT NULL,
     granted_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT agency_delegation_role_pk PRIMARY KEY (client_delegation_id, role),
+    CONSTRAINT chk_agency_delegation_role_role CHECK (role IN ('view', 'operate', 'publish')),
     CONSTRAINT chk_agency_delegation_role_expiry CHECK (expires_at IS NULL OR expires_at >= granted_at)
 );
 
@@ -1419,6 +1457,7 @@ CREATE TABLE IF NOT EXISTS agency_delegation_event (
     new_expires_at                       TIMESTAMP    ,
     changed_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT agency_delegation_event_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_delegation_event_role CHECK (role IN ('view', 'operate', 'publish')),
     CONSTRAINT chk_agency_delegation_event_type CHECK (change_type IN ('G', 'E', 'R'))
 );
 CREATE INDEX IF NOT EXISTS idx_agency_delegation_event ON agency_delegation_event(client_delegation_id, id);
@@ -1491,6 +1530,8 @@ CREATE TABLE IF NOT EXISTS agency_commission (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     earned_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT agency_commission_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_commission_entry_type CHECK (entry_type IN ('E', 'R')),
+    CONSTRAINT chk_agency_commission_status CHECK (status IN ('H', 'P', 'R', 'D', 'O')),
     CONSTRAINT chk_agency_commission_entry CHECK ((entry_type = 'E' AND gross_amount_minor > 0 AND commission_amount_minor > 0 AND reversal_of_id IS NULL) OR (entry_type = 'R' AND gross_amount_minor < 0 AND commission_amount_minor < 0 AND reversal_of_id IS NOT NULL)),
     CONSTRAINT chk_agency_commission_period CHECK (earning_period_end > earning_period_start),
     CONSTRAINT chk_agency_commission_rate CHECK (applied_rate_bp > 0 AND applied_rate_bp <= 10000)
@@ -1527,6 +1568,8 @@ CREATE TABLE IF NOT EXISTS agency_payout (
     failure_message                      TEXT         ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT agency_payout_pk PRIMARY KEY (id),
+    CONSTRAINT chk_agency_payout_status CHECK (status IN ('C', 'P', 'D', 'F', 'R', 'V', 'M')),
+    CONSTRAINT chk_agency_payout_provider CHECK (provider IN ('AW', 'SC', 'WI')),
     CONSTRAINT chk_agency_payout_amount CHECK (amount_minor > 0)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS agency_payout_idem_uq ON agency_payout(idempotency_key);
@@ -1566,7 +1609,8 @@ CREATE TABLE IF NOT EXISTS recording_session (
     created_by                           BIGINT        NOT NULL,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT recording_session_pk PRIMARY KEY (id)
+    CONSTRAINT recording_session_pk PRIMARY KEY (id),
+    CONSTRAINT chk_recording_session_status CHECK (status IN ('W', 'A', 'R', 'F', 'D', 'S', 'X'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS recording_session_context_uq ON recording_session(partner_id, context_ref);
 
@@ -1595,7 +1639,8 @@ CREATE TABLE IF NOT EXISTS recording_media (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at                         TIMESTAMP    ,
     purged_at                            TIMESTAMP    ,
-    CONSTRAINT recording_media_pk PRIMARY KEY (id)
+    CONSTRAINT recording_media_pk PRIMARY KEY (id),
+    CONSTRAINT chk_recording_media_status CHECK (status IN ('P', 'U', 'X', 'R'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS recording_media_key_uq ON recording_media(session_id, object_key);
 
@@ -1636,7 +1681,8 @@ CREATE TABLE IF NOT EXISTS content_repository (
     partner_id                           BIGINT       ,
     default_doc_prot                     VARCHAR(4)   ,
     status                               VARCHAR(10)   NOT NULL DEFAULT 'active',
-    CONSTRAINT content_repository_pk PRIMARY KEY (id)
+    CONSTRAINT content_repository_pk PRIMARY KEY (id),
+    CONSTRAINT chk_content_repository_status CHECK (status IN ('active', 'read-only', 'migrating'))
 );
 
 -- A kind of partner document: which repository it is routed to, its upload
@@ -1687,7 +1733,8 @@ CREATE TABLE IF NOT EXISTS partner_document (
     superseded_at                        TIMESTAMP    ,
     retired_at                           TIMESTAMP    ,
     purged_at                            TIMESTAMP    ,
-    CONSTRAINT partner_document_pk PRIMARY KEY (id)
+    CONSTRAINT partner_document_pk PRIMARY KEY (id),
+    CONSTRAINT chk_partner_document_status CHECK (status IN ('P', 'Y', 'N', 'X', 'R'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS partner_document_key_uq ON partner_document(contrep_id, doc_key);
 CREATE INDEX IF NOT EXISTS partner_document_ix1 ON partner_document(partner_id, document_type, version_no);
@@ -1720,7 +1767,8 @@ CREATE TABLE IF NOT EXISTS approval_request (
     decided_at                           TIMESTAMP    ,
     decision_note                        VARCHAR(500) ,
     expires_at                           TIMESTAMP    ,
-    CONSTRAINT approval_request_pk PRIMARY KEY (id)
+    CONSTRAINT approval_request_pk PRIMARY KEY (id),
+    CONSTRAINT chk_approval_request_status CHECK (status IN ('P', 'A', 'R', 'W', 'E'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS approval_request_open_uq ON approval_request(partner_id, object_type, object_id) WHERE status = 'P';
 CREATE INDEX IF NOT EXISTS idx_approval_request_due ON approval_request(expires_at) WHERE status = 'P' AND expires_at IS NOT NULL;
@@ -1739,7 +1787,8 @@ CREATE TABLE IF NOT EXISTS approval_event (
     actor_id                             BIGINT       ,
     note                                 VARCHAR(500) ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT approval_event_pk PRIMARY KEY (id)
+    CONSTRAINT approval_event_pk PRIMARY KEY (id),
+    CONSTRAINT chk_approval_event_event_type CHECK (event_type IN ('S', 'A', 'R', 'W', 'E'))
 );
 CREATE INDEX IF NOT EXISTS idx_approval_event_request ON approval_event(request_id, id);
 
@@ -1767,7 +1816,8 @@ CREATE TABLE IF NOT EXISTS notification (
     sent_at                              TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT notification_pk PRIMARY KEY (id)
+    CONSTRAINT notification_pk PRIMARY KEY (id),
+    CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F'))
 );
 CREATE INDEX IF NOT EXISTS idx_notification_drain ON notification(status, available_at);
 CREATE INDEX IF NOT EXISTS idx_notification_user ON notification(user_id, created_at);
@@ -1817,7 +1867,8 @@ CREATE TABLE IF NOT EXISTS erasure_request (
     lease_until                          TIMESTAMP    ,
     completed_at                         TIMESTAMP    ,
     last_error                           TEXT         ,
-    CONSTRAINT erasure_request_pk PRIMARY KEY (id)
+    CONSTRAINT erasure_request_pk PRIMARY KEY (id),
+    CONSTRAINT chk_erasure_request_status CHECK (status IN ('P', 'A', 'H', 'D', 'F', 'X'))
 );
 CREATE INDEX IF NOT EXISTS erasure_request_ix1 ON erasure_request(status, available_at);
 CREATE INDEX IF NOT EXISTS erasure_request_ix2 ON erasure_request(user_id, status);
@@ -1835,7 +1886,8 @@ CREATE TABLE IF NOT EXISTS erasure_audit (
     action                               CHAR(1)       NOT NULL,
     reason                               VARCHAR(500) ,
     executed_at                          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT erasure_audit_pk PRIMARY KEY (request_id, table_name, row_key)
+    CONSTRAINT erasure_audit_pk PRIMARY KEY (request_id, table_name, row_key),
+    CONSTRAINT chk_erasure_audit_action CHECK (action IN ('D', 'A', 'H'))
 );
 
 -- The random pseudonym anonymized rows carry in place of a user. Read only
@@ -1883,6 +1935,8 @@ CREATE TABLE IF NOT EXISTS partner_identity_provider (
     status_changed_by                    BIGINT       ,
     status_changed_at                    TIMESTAMP    ,
     CONSTRAINT partner_identity_provider_pk PRIMARY KEY (id),
+    CONSTRAINT chk_partner_identity_provider_protocol CHECK (protocol IN ('O', 'S')),
+    CONSTRAINT chk_partner_identity_provider_status CHECK (status IN ('D', 'A', 'X')),
     CONSTRAINT chk_partner_identity_provider_tested CHECK (status <> 'A' OR tested_at IS NOT NULL)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS partner_identity_provider_partner_uq ON partner_identity_provider(partner_id, id);
@@ -1904,6 +1958,7 @@ CREATE TABLE IF NOT EXISTS partner_idp_oidc (
     credential_sealed                    TEXT         ,
     scopes                               VARCHAR(255)  NOT NULL DEFAULT 'openid email profile',
     CONSTRAINT partner_idp_oidc_pk PRIMARY KEY (partner_id, provider_id),
+    CONSTRAINT chk_partner_idp_oidc_client_auth CHECK (client_auth IN ('P', 'B', 'J')),
     CONSTRAINT chk_partner_idp_oidc_credential CHECK ((secret_name IS NULL) <> (credential_sealed IS NULL))
 );
 

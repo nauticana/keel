@@ -136,3 +136,35 @@ func TestCharge_RejectsMalformedResponse(t *testing.T) {
 		t.Fatal("malformed response must fail")
 	}
 }
+
+func TestCharge_DeclineCarriesReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		io.WriteString(w, `{"error":{"code":"expired_card","message":"Your card has expired.","payment_intent":{"id":"pi_1","status":"requires_payment_method"}}}`)
+	}))
+	defer srv.Close()
+
+	res, err := newTestChargeClient(srv).Charge(context.Background(), ChargeRequest{AmountMinor: 100, Currency: "CAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != ChargeFailed || res.DeclineReason != DeclineExpiredCard || res.ProviderDeclineCode != "expired_card" || res.Error != "Your card has expired." {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestCharge_RequestErrorHasNoDeclineReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"type":"invalid_request_error","code":"resource_missing","message":"No such customer"}}`)
+	}))
+	defer srv.Close()
+
+	res, err := newTestChargeClient(srv).Charge(context.Background(), ChargeRequest{CustomerToken: "cus_gone", AmountMinor: 100, Currency: "CAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != ChargeFailed || res.DeclineReason != "" || res.ProviderDeclineCode != "" || res.Error != "No such customer" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}

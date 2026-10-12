@@ -12,12 +12,28 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// SetupIntentCardClient is the Stripe (or compatible) API hop used to
-// look up card metadata (brand/last4/expiry) attached to a SetupIntent.
-// Returns the card details + true when populated; false on any failure
-// so callers can persist the bare provider_token even without details.
+// payment_method_type codes for a saved card; the wallet ones mark a
+// wallet-tokenized card.
+const (
+	MethodTypeCard      = "card"
+	MethodTypeWallet    = "wallet"
+	MethodTypeApplePay  = "apple_pay"
+	MethodTypeGooglePay = "google_pay"
+)
+
+// SavedCard is the card metadata attached to a SetupIntent.
+type SavedCard struct {
+	MethodType string
+	Last4      string
+	Brand      string
+	ExpMonth   int
+	ExpYear    int
+}
+
+// SetupIntentCardClient looks up the card attached to a SetupIntent; ok is
+// false on any failure so callers can persist the bare provider_token.
 type SetupIntentCardClient interface {
-	GetSetupIntentCard(ctx context.Context, setupIntentID string) (last4, brand string, expMonth, expYear int, ok bool)
+	GetSetupIntentCard(ctx context.Context, setupIntentID string) (card SavedCard, ok bool)
 }
 
 // ErrPaymentMethodNotFound: no saved method with that id belongs to the user.
@@ -125,13 +141,12 @@ func (s *UserPaymentMethodService) Remove(ctx context.Context, userID int, metho
 // SetupIntent succeeded event. The provider name is taken from the
 // PaymentEvent.Provider; provider_token holds the SetupIntent id (the
 // reusable handle for future PaymentIntents). When CardClient is wired
-// the row also carries card metadata; otherwise it lands with just the
-// token and the UI shows "Card on file".
+// the row also carries card metadata and wallet method_type; otherwise it
+// lands as a card with just the token and the UI shows "Card on file".
 //
 // userID is supplied by the caller — typically extracted from the
 // PaymentEvent.Metadata["user_id"] field that keel auto-injects on
-// checkout-session creation. method_type defaults to "card" since
-// SetupIntent flows are card-flow today.
+// checkout-session creation.
 func (s *UserPaymentMethodService) RecordFromSetupIntent(ctx context.Context, userID int, provider, setupIntentID, currency string) error {
 	if userID <= 0 {
 		return fmt.Errorf("RecordFromSetupIntent: userID required")
@@ -139,19 +154,21 @@ func (s *UserPaymentMethodService) RecordFromSetupIntent(ctx context.Context, us
 	if setupIntentID == "" {
 		return fmt.Errorf("RecordFromSetupIntent: setupIntentID required")
 	}
-	last4, brand, expMonth, expYear := "", "", 0, 0
+	var card SavedCard
 	if s.CardClient != nil {
-		l, b, m, y, ok := s.CardClient.GetSetupIntentCard(ctx, setupIntentID)
-		if ok {
-			last4, brand, expMonth, expYear = l, b, m, y
+		if c, ok := s.CardClient.GetSetupIntentCard(ctx, setupIntentID); ok {
+			card = c
 		}
+	}
+	if card.MethodType == "" {
+		card.MethodType = MethodTypeCard
 	}
 	qs := s.DB.GetQueryService(ctx, userPaymentMethodQueries)
 	if qs == nil {
 		return fmt.Errorf("query service not available")
 	}
 	if _, err := qs.Query(ctx, qUPMInsert,
-		userID, "card", provider, setupIntentID, last4, brand, expMonth, expYear, common.NullIfEmpty(currency),
+		userID, card.MethodType, provider, setupIntentID, card.Last4, card.Brand, card.ExpMonth, card.ExpYear, common.NullIfEmpty(currency),
 	); err != nil {
 		return fmt.Errorf("insert user_payment_method: %w", err)
 	}
@@ -170,16 +187,16 @@ type StripeSetupIntentCardClient struct {
 	Journal logger.ApplicationLogger
 }
 
-func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, setupIntentID string) (last4, brand string, expMonth, expYear int, ok bool) {
+func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, setupIntentID string) (SavedCard, bool) {
 	if c.Client == nil {
-		return
+		return SavedCard{}, false
 	}
 	body, err := c.Client.Get(ctx, "/setup_intents/"+setupIntentID, url.Values{"expand[]": {"payment_method"}})
 	if err != nil {
 		if c.Journal != nil {
 			c.Journal.Error("stripe setup_intent fetch: " + err.Error())
 		}
-		return
+		return SavedCard{}, false
 	}
 	var parsed struct {
 		PaymentMethod struct {
@@ -188,6 +205,9 @@ func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, se
 				Brand    string `json:"brand"`
 				ExpMonth int    `json:"exp_month"`
 				ExpYear  int    `json:"exp_year"`
+				Wallet   *struct {
+					Type string `json:"type"`
+				} `json:"wallet"`
 			} `json:"card"`
 		} `json:"payment_method"`
 	}
@@ -195,10 +215,21 @@ func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, se
 		if c.Journal != nil {
 			c.Journal.Error("stripe setup_intent fetch: parse: " + err.Error())
 		}
-		return
+		return SavedCard{}, false
 	}
 	cd := parsed.PaymentMethod.Card
-	return cd.Last4, cd.Brand, cd.ExpMonth, cd.ExpYear, true
+	card := SavedCard{MethodType: MethodTypeCard, Last4: cd.Last4, Brand: cd.Brand, ExpMonth: cd.ExpMonth, ExpYear: cd.ExpYear}
+	if cd.Wallet != nil {
+		switch cd.Wallet.Type {
+		case "apple_pay":
+			card.MethodType = MethodTypeApplePay
+		case "google_pay":
+			card.MethodType = MethodTypeGooglePay
+		default:
+			card.MethodType = MethodTypeWallet
+		}
+	}
+	return card, true
 }
 
 var _ SetupIntentCardClient = (*StripeSetupIntentCardClient)(nil)

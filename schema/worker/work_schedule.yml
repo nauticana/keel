@@ -42,6 +42,8 @@ columns:
     default: CURRENT_TIMESTAMP
 primary_key: [partner_id, task_kind]
 checks:
+  - name: chk_work_schedule_cadence_code
+    expression: "cadence IN ('I', 'W', 'M')"
   - name: chk_work_schedule_cadence
     expression: "(cadence = 'I' AND cadence_day IS NULL AND cadence_minute IS NULL AND time_zone IS NULL) OR (cadence IN ('W', 'M') AND cadence_minute BETWEEN 0 AND 1439 AND time_zone IS NOT NULL AND ((cadence = 'W' AND cadence_day BETWEEN 0 AND 6) OR (cadence = 'M' AND cadence_day BETWEEN 1 AND 31)))"
 foreign_keys:

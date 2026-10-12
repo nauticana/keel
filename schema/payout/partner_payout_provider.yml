@@ -18,3 +18,6 @@ foreign_keys:
     references:
       table: business_partner
       columns: [id]
+checks:
+  - name: chk_partner_payout_provider_provider
+    expression: "provider IN ('AW', 'SC', 'WI')"

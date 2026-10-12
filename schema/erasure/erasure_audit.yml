@@ -25,3 +25,6 @@ foreign_keys:
     references:
       table: erasure_request
       columns: [id]
+checks:
+  - name: chk_erasure_audit_action
+    expression: "action IN ('D', 'A', 'H')"

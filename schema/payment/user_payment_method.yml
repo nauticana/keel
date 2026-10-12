@@ -39,6 +39,9 @@ columns:
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
 primary_key: [id]
+checks:
+  - name: chk_user_payment_method_type
+    expression: "method_type IN ('card', 'bank', 'wallet', 'apple_pay', 'google_pay')"
 sequence:
   name: user_payment_method_seq
   column: id

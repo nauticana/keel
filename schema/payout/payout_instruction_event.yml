@@ -33,3 +33,6 @@ foreign_keys:
     references:
       table: payout_instruction_leg
       columns: [instruction_id, leg_no]
+checks:
+  - name: chk_payout_instruction_event_provider
+    expression: "provider IN ('AW', 'SC', 'WI')"

@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS foreign_key_lookup (
     constraint_name                      VARCHAR(60)   NOT NULL,
     lookup_style                         CHAR(1)       NOT NULL,
     display_column                       VARCHAR(60)   NOT NULL,
-    PRIMARY KEY (constraint_name)
+    PRIMARY KEY (constraint_name),
+    CONSTRAINT chk_foreign_key_lookup_lookup_style CHECK (lookup_style IN ('D', 'S'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Metadata-driven REST API definitions
@@ -168,7 +169,8 @@ CREATE TABLE IF NOT EXISTS table_action (
     method_name                          VARCHAR(80)  ,
     display_order                        SMALLINT      NOT NULL DEFAULT 10,
     confirm_message                      VARCHAR(200) ,
-    PRIMARY KEY (table_name, action_name)
+    PRIMARY KEY (table_name, action_name),
+    CONSTRAINT chk_table_action_action_kind CHECK (action_kind IN ('P', 'R', 'V'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_table_action_table ON table_action(table_name);
 
@@ -214,7 +216,8 @@ CREATE TABLE IF NOT EXISTS user_account (
     deleted_at                           DATETIME     ,
     single_device_session                TINYINT(1)    NOT NULL DEFAULT 0,
     tokens_valid_after                   DATETIME     ,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT chk_user_account_email_verification_method CHECK (email_verification_method IN ('O', 'R', 'C', 'P', 'G', 'A', 'T', 'X', 'L'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX user_account_email_uq ON user_account(user_email);
 CREATE UNIQUE INDEX user_account_phone_uq ON user_account(phone);
@@ -228,7 +231,8 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     object_name                          VARCHAR(80)  ,
     client_address                       VARCHAR(15)  ,
     PRIMARY KEY (user_id, action_time),
-    CONSTRAINT user_historic_actions FOREIGN KEY (user_id) REFERENCES user_account(id)
+    CONSTRAINT user_historic_actions FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A legal hold on a user's data. While any hold of the user is unreleased,
@@ -279,7 +283,8 @@ CREATE TABLE IF NOT EXISTS user_refresh_token (
     revoked_at                           DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT user_refresh_tokens FOREIGN KEY (user_id) REFERENCES user_account(id)
+    CONSTRAINT user_refresh_tokens FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT chk_user_refresh_token_sign_in_method CHECK (sign_in_method IN ('P', 'O', 'E', 'T'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_refresh_token_hash ON user_refresh_token(token_hash);
 CREATE INDEX idx_refresh_token_session ON user_refresh_token(user_id, session_id);
@@ -553,7 +558,8 @@ CREATE TABLE IF NOT EXISTS partner_domain_verification (
     PRIMARY KEY (partner_id, domain_url, verified_at),
     CONSTRAINT partner_domain_verifications FOREIGN KEY (partner_id, domain_url) REFERENCES partner_domain(partner_id, domain_url) ON DELETE CASCADE,
     CONSTRAINT partner_domain_verifier FOREIGN KEY (verified_by) REFERENCES user_account(id),
-    CONSTRAINT partner_domain_verification_canceller FOREIGN KEY (cancelled_by) REFERENCES user_account(id)
+    CONSTRAINT partner_domain_verification_canceller FOREIGN KEY (cancelled_by) REFERENCES user_account(id),
+    CONSTRAINT chk_partner_domain_verification_method CHECK (method IN ('EC', 'VE', 'GH', 'GM', 'HF', 'DT', 'GS', 'GB', 'GW', 'ME'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- partner_domain_verification_current_uq is a partial index on PostgreSQL (WHERE lapsed_at IS NULL AND cancelled_at IS NULL); MySQL cannot enforce it — service-enforced
 CREATE INDEX partner_domain_verification_current_uq ON partner_domain_verification(partner_id, domain_url, method);
@@ -577,7 +583,8 @@ CREATE TABLE IF NOT EXISTS partner_domain_challenge (
     attempts                             SMALLINT      NOT NULL DEFAULT 0,
     PRIMARY KEY (partner_id, domain_url, method),
     CONSTRAINT partner_domain_challenges FOREIGN KEY (partner_id, domain_url) REFERENCES partner_domain(partner_id, domain_url) ON DELETE CASCADE,
-    CONSTRAINT partner_domain_challenge_issuer FOREIGN KEY (issued_by) REFERENCES user_account(id)
+    CONSTRAINT partner_domain_challenge_issuer FOREIGN KEY (issued_by) REFERENCES user_account(id),
+    CONSTRAINT chk_partner_domain_challenge_method CHECK (method IN ('EC', 'VE', 'GH', 'GM', 'HF', 'DT', 'GS', 'GB', 'GW', 'ME'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Networks a partner's users may sign in from; no rows allows any address
@@ -618,6 +625,7 @@ CREATE TABLE IF NOT EXISTS work_schedule (
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (partner_id, task_kind),
     CONSTRAINT work_schedule_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT chk_work_schedule_cadence_code CHECK (cadence IN ('I', 'W', 'M')),
     CONSTRAINT chk_work_schedule_cadence CHECK ((cadence = 'I' AND cadence_day IS NULL AND cadence_minute IS NULL AND time_zone IS NULL) OR (cadence IN ('W', 'M') AND cadence_minute BETWEEN 0 AND 1439 AND time_zone IS NOT NULL AND ((cadence = 'W' AND cadence_day BETWEEN 0 AND 6) OR (cadence = 'M' AND cadence_day BETWEEN 1 AND 31))))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_work_schedule_due ON work_schedule(task_kind, next_run_at);
@@ -760,7 +768,9 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
     trial_days                           INT          ,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT chk_subscription_plan_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.
@@ -773,7 +783,10 @@ CREATE TABLE IF NOT EXISTS subscription_plan_price (
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     provider_price_id                    VARCHAR(64)  ,
     PRIMARY KEY (plan_id, billing_cycle, term_type, term_count),
-    CONSTRAINT subscription_plan_prices FOREIGN KEY (plan_id) REFERENCES subscription_plan(id)
+    CONSTRAINT subscription_plan_prices FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
+    CONSTRAINT chk_subscription_plan_price_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_subscription_plan_price_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_subscription_plan_price_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Quota-tracked resources (domains, API calls, etc.)
@@ -794,7 +807,8 @@ CREATE TABLE IF NOT EXISTS subscription_quota (
     period_type                          CHAR(1)       NOT NULL DEFAULT 'M',
     PRIMARY KEY (plan_id, resource_id),
     CONSTRAINT subscription_quotas FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
-    CONSTRAINT sub_resources_quotas FOREIGN KEY (resource_id) REFERENCES subscription_resource(id)
+    CONSTRAINT sub_resources_quotas FOREIGN KEY (resource_id) REFERENCES subscription_resource(id),
+    CONSTRAINT chk_subscription_quota_period_type CHECK (period_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Optional add-on features with separate pricing
@@ -809,7 +823,10 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     term_count                           INT           NOT NULL DEFAULT 1,
     term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT chk_subscription_addon_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_subscription_addon_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_subscription_addon_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Active plan subscriptions per business partner
@@ -835,7 +852,11 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     seats                                INT          ,
     PRIMARY KEY (partner_id, plan_id, begda),
     CONSTRAINT partner_plan_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
-    CONSTRAINT partner_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES subscription_plan(id)
+    CONSTRAINT partner_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
+    CONSTRAINT chk_partner_plan_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_partner_plan_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_plan_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_plan_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_partner_plan_subscription_provider_sub ON partner_plan_subscription(provider_subscription_id);
 
@@ -858,7 +879,11 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     next_charge_date                     DATETIME     ,
     PRIMARY KEY (partner_id, addon_id, begda),
     CONSTRAINT partner_addon_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
-    CONSTRAINT partner_subscriptions_addon FOREIGN KEY (addon_id) REFERENCES subscription_addon(id)
+    CONSTRAINT partner_subscriptions_addon FOREIGN KEY (addon_id) REFERENCES subscription_addon(id),
+    CONSTRAINT chk_partner_addon_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT chk_partner_addon_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_addon_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
+    CONSTRAINT chk_partner_addon_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Resource usage tracking for quota enforcement, attributed to the acting user, API key or OAuth client when known
@@ -934,7 +959,8 @@ CREATE TABLE IF NOT EXISTS user_payment_method (
     is_default                           TINYINT(1)    NOT NULL DEFAULT 0,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id)
+    CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT chk_user_payment_method_type CHECK (method_type IN ('card', 'bank', 'wallet', 'apple_pay', 'google_pay'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_user_payment_method_user ON user_payment_method(user_id, is_default);
 
@@ -1029,6 +1055,9 @@ CREATE TABLE IF NOT EXISTS user_bank_info (
     PRIMARY KEY (id),
     CONSTRAINT user_bank_info_users FOREIGN KEY (user_id) REFERENCES user_account(id),
     CONSTRAINT user_bank_info_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT chk_user_bank_info_provider CHECK (provider IN ('AW', 'SC', 'WI')),
+    CONSTRAINT chk_user_bank_info_tax_id_type CHECK (tax_id_type IN ('S', 'N', 'E', 'V', 'O')),
+    CONSTRAINT chk_user_bank_info_status CHECK (status IN ('A', 'S')),
     CONSTRAINT chk_user_bank_info_lifecycle CHECK ((status = 'A' AND superseded_at IS NULL) OR (status = 'S' AND superseded_at IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- user_bank_info_active_uq is a partial index on PostgreSQL (WHERE status = 'A'); MySQL cannot enforce it — service-enforced
@@ -1052,7 +1081,8 @@ CREATE TABLE IF NOT EXISTS payout_webhook_log (
     raw_payload                          TEXT         ,
     received_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     processed_at                         DATETIME     ,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT chk_payout_webhook_log_provider CHECK (provider IN ('AW', 'SC', 'WI'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX payout_webhook_log_uq ON payout_webhook_log(provider, event_id);
 CREATE INDEX idx_payout_webhook_transfer ON payout_webhook_log(provider_transfer_id);
@@ -1065,7 +1095,8 @@ CREATE TABLE IF NOT EXISTS partner_payout_provider (
     provider                             CHAR(2)       NOT NULL,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (partner_id),
-    CONSTRAINT partner_payout_provider_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+    CONSTRAINT partner_payout_provider_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT chk_partner_payout_provider_provider CHECK (provider IN ('AW', 'SC', 'WI'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- One idempotent payout to a partner's payee, allocated against the
@@ -1086,6 +1117,7 @@ CREATE TABLE IF NOT EXISTS payout_instruction (
     PRIMARY KEY (id),
     CONSTRAINT partner_payout_instructions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT payee_payout_instructions FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT chk_payout_instruction_status CHECK (status IN ('N', 'D', 'P', 'S', 'F', 'V', 'X', 'M')),
     CONSTRAINT chk_payout_instruction_amount CHECK (amount_minor > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX payout_instruction_key_uq ON payout_instruction(partner_id, idempotency_key);
@@ -1118,6 +1150,8 @@ CREATE TABLE IF NOT EXISTS payout_instruction_leg (
     PRIMARY KEY (instruction_id, leg_no),
     CONSTRAINT payout_instruction_legs FOREIGN KEY (instruction_id) REFERENCES payout_instruction(id),
     CONSTRAINT payout_leg_destination FOREIGN KEY (user_bank_info_id) REFERENCES user_bank_info(id),
+    CONSTRAINT chk_payout_instruction_leg_provider CHECK (provider IN ('AW', 'SC', 'WI')),
+    CONSTRAINT chk_payout_instruction_leg_status CHECK (status IN ('D', 'P', 'S', 'F', 'R', 'V')),
     CONSTRAINT chk_payout_instruction_leg_amount CHECK (amount_minor > 0),
     CONSTRAINT chk_payout_instruction_leg_reversed CHECK (reversed_minor >= 0 AND reversed_minor <= amount_minor)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1139,7 +1173,8 @@ CREATE TABLE IF NOT EXISTS payout_instruction_event (
     amount_reversed_minor                BIGINT        NOT NULL DEFAULT 0,
     applied_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (provider, event_id),
-    CONSTRAINT payout_leg_events FOREIGN KEY (instruction_id, leg_no) REFERENCES payout_instruction_leg(instruction_id, leg_no)
+    CONSTRAINT payout_leg_events FOREIGN KEY (instruction_id, leg_no) REFERENCES payout_instruction_leg(instruction_id, leg_no),
+    CONSTRAINT chk_payout_instruction_event_provider CHECK (provider IN ('AW', 'SC', 'WI'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_payout_instruction_event_leg ON payout_instruction_event(instruction_id, leg_no);
 
@@ -1369,7 +1404,8 @@ CREATE TABLE IF NOT EXISTS agency_client_invitation (
     PRIMARY KEY (id),
     CONSTRAINT agency_client_invitations FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
     CONSTRAINT agency_invitations_client FOREIGN KEY (client_partner_id) REFERENCES business_partner(id) ON DELETE SET NULL,
-    CONSTRAINT invitation_accepted_by FOREIGN KEY (accepted_by) REFERENCES user_account(id) ON DELETE SET NULL
+    CONSTRAINT invitation_accepted_by FOREIGN KEY (accepted_by) REFERENCES user_account(id) ON DELETE SET NULL,
+    CONSTRAINT chk_agency_client_invitation_status CHECK (status IN ('S', 'I', 'V', 'X'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX invitation_token_uq ON agency_client_invitation(invite_token);
 CREATE INDEX idx_agency_client_invitation ON agency_client_invitation(agency_partner_id, status);
@@ -1392,6 +1428,7 @@ CREATE TABLE IF NOT EXISTS agency_client_delegation (
     CONSTRAINT delegation_agency FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id) ON DELETE CASCADE,
     CONSTRAINT delegation_grantor FOREIGN KEY (granted_by) REFERENCES user_account(id) ON DELETE RESTRICT,
     CONSTRAINT delegation_revoker FOREIGN KEY (revoked_by) REFERENCES user_account(id) ON DELETE RESTRICT,
+    CONSTRAINT chk_agency_client_delegation_status CHECK (status IN ('A', 'R')),
     CONSTRAINT chk_delegation_distinct CHECK (client_partner_id <> agency_partner_id),
     CONSTRAINT chk_delegation_lifecycle CHECK ((status = 'A' AND revoked_at IS NULL AND revoked_by IS NULL) OR (status = 'R' AND revoked_at IS NOT NULL AND revoked_by IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1412,6 +1449,7 @@ CREATE TABLE IF NOT EXISTS agency_delegation_role (
     PRIMARY KEY (client_delegation_id, role),
     CONSTRAINT delegation_roles FOREIGN KEY (client_delegation_id) REFERENCES agency_client_delegation(id) ON DELETE CASCADE,
     CONSTRAINT delegation_role_grantor FOREIGN KEY (granted_by) REFERENCES user_account(id) ON DELETE RESTRICT,
+    CONSTRAINT chk_agency_delegation_role_role CHECK (role IN ('view', 'operate', 'publish')),
     CONSTRAINT chk_agency_delegation_role_expiry CHECK (expires_at IS NULL OR expires_at >= granted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1429,6 +1467,7 @@ CREATE TABLE IF NOT EXISTS agency_delegation_event (
     PRIMARY KEY (id),
     CONSTRAINT delegation_role_changes FOREIGN KEY (client_delegation_id) REFERENCES agency_client_delegation(id) ON DELETE CASCADE,
     CONSTRAINT delegation_role_changed_by FOREIGN KEY (actor_id) REFERENCES user_account(id) ON DELETE RESTRICT,
+    CONSTRAINT chk_agency_delegation_event_role CHECK (role IN ('view', 'operate', 'publish')),
     CONSTRAINT chk_agency_delegation_event_type CHECK (change_type IN ('G', 'E', 'R'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_agency_delegation_event ON agency_delegation_event(client_delegation_id, id);
@@ -1504,6 +1543,8 @@ CREATE TABLE IF NOT EXISTS agency_commission (
     CONSTRAINT commission_client_billing FOREIGN KEY (client_billing_id) REFERENCES agency_client_billing(id),
     CONSTRAINT commission_source_allocation FOREIGN KEY (invoice_line_payment_id) REFERENCES invoice_line_payment(id),
     CONSTRAINT commission_reversal_of FOREIGN KEY (reversal_of_id) REFERENCES agency_commission(id),
+    CONSTRAINT chk_agency_commission_entry_type CHECK (entry_type IN ('E', 'R')),
+    CONSTRAINT chk_agency_commission_status CHECK (status IN ('H', 'P', 'R', 'D', 'O')),
     CONSTRAINT chk_agency_commission_entry CHECK ((entry_type = 'E' AND gross_amount_minor > 0 AND commission_amount_minor > 0 AND reversal_of_id IS NULL) OR (entry_type = 'R' AND gross_amount_minor < 0 AND commission_amount_minor < 0 AND reversal_of_id IS NOT NULL)),
     CONSTRAINT chk_agency_commission_period CHECK (earning_period_end > earning_period_start),
     CONSTRAINT chk_agency_commission_rate CHECK (applied_rate_bp > 0 AND applied_rate_bp <= 10000)
@@ -1540,6 +1581,8 @@ CREATE TABLE IF NOT EXISTS agency_payout (
     PRIMARY KEY (id),
     CONSTRAINT agency_payouts FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id),
     CONSTRAINT payout_destination_account FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id),
+    CONSTRAINT chk_agency_payout_status CHECK (status IN ('C', 'P', 'D', 'F', 'R', 'V', 'M')),
+    CONSTRAINT chk_agency_payout_provider CHECK (provider IN ('AW', 'SC', 'WI')),
     CONSTRAINT chk_agency_payout_amount CHECK (amount_minor > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX agency_payout_idem_uq ON agency_payout(idempotency_key);
@@ -1584,7 +1627,8 @@ CREATE TABLE IF NOT EXISTS recording_session (
     PRIMARY KEY (id),
     CONSTRAINT recording_session_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT recording_session_creator FOREIGN KEY (created_by) REFERENCES user_account(id),
-    CONSTRAINT recording_session_policy FOREIGN KEY (policy_id) REFERENCES consent_policy(id)
+    CONSTRAINT recording_session_policy FOREIGN KEY (policy_id) REFERENCES consent_policy(id),
+    CONSTRAINT chk_recording_session_status CHECK (status IN ('W', 'A', 'R', 'F', 'D', 'S', 'X'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX recording_session_context_uq ON recording_session(partner_id, context_ref);
 
@@ -1614,7 +1658,8 @@ CREATE TABLE IF NOT EXISTS recording_media (
     purged_at                            DATETIME     ,
     PRIMARY KEY (id),
     CONSTRAINT recording_media_session FOREIGN KEY (session_id) REFERENCES recording_session(id),
-    CONSTRAINT recording_media_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id)
+    CONSTRAINT recording_media_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id),
+    CONSTRAINT chk_recording_media_status CHECK (status IN ('P', 'U', 'X', 'R'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX recording_media_key_uq ON recording_media(session_id, object_key);
 
@@ -1655,7 +1700,8 @@ CREATE TABLE IF NOT EXISTS content_repository (
     default_doc_prot                     VARCHAR(4)   ,
     status                               VARCHAR(10)   NOT NULL DEFAULT 'active',
     PRIMARY KEY (id),
-    CONSTRAINT content_repository_owner FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+    CONSTRAINT content_repository_owner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT chk_content_repository_status CHECK (status IN ('active', 'read-only', 'migrating'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A kind of partner document: which repository it is routed to, its upload
@@ -1713,7 +1759,8 @@ CREATE TABLE IF NOT EXISTS partner_document (
     CONSTRAINT partner_document_type FOREIGN KEY (document_type) REFERENCES document_type(id),
     CONSTRAINT partner_document_subject FOREIGN KEY (user_id) REFERENCES user_account(id),
     CONSTRAINT partner_document_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id),
-    CONSTRAINT partner_document_reviewer FOREIGN KEY (reviewer_id) REFERENCES user_account(id)
+    CONSTRAINT partner_document_reviewer FOREIGN KEY (reviewer_id) REFERENCES user_account(id),
+    CONSTRAINT chk_partner_document_status CHECK (status IN ('P', 'Y', 'N', 'X', 'R'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX partner_document_key_uq ON partner_document(contrep_id, doc_key);
 CREATE INDEX partner_document_ix1 ON partner_document(partner_id, document_type, version_no);
@@ -1747,7 +1794,8 @@ CREATE TABLE IF NOT EXISTS approval_request (
     PRIMARY KEY (id),
     CONSTRAINT approval_request_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT approval_request_maker FOREIGN KEY (maker_id) REFERENCES user_account(id),
-    CONSTRAINT approval_request_checker FOREIGN KEY (checker_id) REFERENCES user_account(id)
+    CONSTRAINT approval_request_checker FOREIGN KEY (checker_id) REFERENCES user_account(id),
+    CONSTRAINT chk_approval_request_status CHECK (status IN ('P', 'A', 'R', 'W', 'E'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- approval_request_open_uq is a partial index on PostgreSQL (WHERE status = 'P'); MySQL cannot enforce it — service-enforced
 CREATE INDEX approval_request_open_uq ON approval_request(partner_id, object_type, object_id);
@@ -1767,7 +1815,8 @@ CREATE TABLE IF NOT EXISTS approval_event (
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT approval_request_events FOREIGN KEY (request_id) REFERENCES approval_request(id),
-    CONSTRAINT approval_event_actor FOREIGN KEY (actor_id) REFERENCES user_account(id)
+    CONSTRAINT approval_event_actor FOREIGN KEY (actor_id) REFERENCES user_account(id),
+    CONSTRAINT chk_approval_event_event_type CHECK (event_type IN ('S', 'A', 'R', 'W', 'E'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_approval_event_request ON approval_event(request_id, id);
 
@@ -1794,7 +1843,8 @@ CREATE TABLE IF NOT EXISTS notification (
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT notification_recipient FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE,
-    CONSTRAINT notification_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL
+    CONSTRAINT notification_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL,
+    CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_notification_drain ON notification(status, available_at);
 CREATE INDEX idx_notification_user ON notification(user_id, created_at);
@@ -1843,7 +1893,8 @@ CREATE TABLE IF NOT EXISTS erasure_request (
     last_error                           TEXT         ,
     PRIMARY KEY (id),
     CONSTRAINT erasure_requests FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT erasure_requester FOREIGN KEY (requested_by) REFERENCES user_account(id)
+    CONSTRAINT erasure_requester FOREIGN KEY (requested_by) REFERENCES user_account(id),
+    CONSTRAINT chk_erasure_request_status CHECK (status IN ('P', 'A', 'H', 'D', 'F', 'X'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX erasure_request_ix1 ON erasure_request(status, available_at);
 CREATE INDEX erasure_request_ix2 ON erasure_request(user_id, status);
@@ -1859,7 +1910,8 @@ CREATE TABLE IF NOT EXISTS erasure_audit (
     reason                               VARCHAR(500) ,
     executed_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (request_id, table_name, row_key),
-    CONSTRAINT erasure_request_audit FOREIGN KEY (request_id) REFERENCES erasure_request(id)
+    CONSTRAINT erasure_request_audit FOREIGN KEY (request_id) REFERENCES erasure_request(id),
+    CONSTRAINT chk_erasure_audit_action CHECK (action IN ('D', 'A', 'H'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- The random pseudonym anonymized rows carry in place of a user. Read only
@@ -1911,6 +1963,8 @@ CREATE TABLE IF NOT EXISTS partner_identity_provider (
     CONSTRAINT partner_identity_provider_creator FOREIGN KEY (created_by) REFERENCES user_account(id),
     CONSTRAINT partner_identity_provider_tester FOREIGN KEY (tested_by) REFERENCES user_account(id),
     CONSTRAINT partner_identity_provider_status_changer FOREIGN KEY (status_changed_by) REFERENCES user_account(id),
+    CONSTRAINT chk_partner_identity_provider_protocol CHECK (protocol IN ('O', 'S')),
+    CONSTRAINT chk_partner_identity_provider_status CHECK (status IN ('D', 'A', 'X')),
     CONSTRAINT chk_partner_identity_provider_tested CHECK (status <> 'A' OR tested_at IS NOT NULL)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX partner_identity_provider_partner_uq ON partner_identity_provider(partner_id, id);
@@ -1931,6 +1985,7 @@ CREATE TABLE IF NOT EXISTS partner_idp_oidc (
     scopes                               VARCHAR(255)  NOT NULL DEFAULT 'openid email profile',
     PRIMARY KEY (partner_id, provider_id),
     CONSTRAINT partner_identity_provider_oidc FOREIGN KEY (partner_id, provider_id) REFERENCES partner_identity_provider(partner_id, id) ON DELETE CASCADE,
+    CONSTRAINT chk_partner_idp_oidc_client_auth CHECK (client_auth IN ('P', 'B', 'J')),
     CONSTRAINT chk_partner_idp_oidc_credential CHECK ((secret_name IS NULL) <> (credential_sealed IS NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

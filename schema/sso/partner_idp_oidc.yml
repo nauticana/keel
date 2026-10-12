@@ -26,6 +26,8 @@ columns:
     default: openid email profile
 primary_key: [partner_id, provider_id]
 checks:
+  - name: chk_partner_idp_oidc_client_auth
+    expression: "client_auth IN ('P', 'B', 'J')"
   - name: chk_partner_idp_oidc_credential
     expression: "(secret_name IS NULL) <> (credential_sealed IS NULL)"
 foreign_keys:

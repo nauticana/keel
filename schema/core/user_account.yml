@@ -78,3 +78,6 @@ indexes:
   - name: user_account_phone_uq
     columns: [phone]
     unique: true
+checks:
+  - name: chk_user_account_email_verification_method
+    expression: "email_verification_method IN ('O', 'R', 'C', 'P', 'G', 'A', 'T', 'X', 'L')"

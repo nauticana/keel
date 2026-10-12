@@ -34,6 +34,8 @@ sequence:
   name: payout_instruction_seq
   column: id
 checks:
+  - name: chk_payout_instruction_status
+    expression: "status IN ('N', 'D', 'P', 'S', 'F', 'V', 'X', 'M')"
   - name: chk_payout_instruction_amount
     expression: "amount_minor > 0"
 indexes:

@@ -27,6 +27,8 @@ sequence:
   name: agency_delegation_event_seq
   column: id
 checks:
+  - name: chk_agency_delegation_event_role
+    expression: "role IN ('view', 'operate', 'publish')"
   - name: chk_agency_delegation_event_type
     expression: "change_type IN ('G', 'E', 'R')"
 indexes:

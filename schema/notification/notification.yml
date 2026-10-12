@@ -74,3 +74,6 @@ indexes:
     columns: [status, available_at]
   - name: idx_notification_user
     columns: [user_id, created_at]
+checks:
+  - name: chk_notification_status
+    expression: "status IN ('P', 'A', 'S', 'X', 'F')"

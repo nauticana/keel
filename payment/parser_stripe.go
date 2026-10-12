@@ -120,6 +120,9 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 	if s, ok := obj["payment_intent"].(string); ok {
 		event.PaymentID = s
 	}
+	if strings.HasPrefix(raw.Type, "payment_intent.") {
+		event.PaymentID, _ = obj["id"].(string)
+	}
 	event.ChargeID, event.DisputeID = stripeFinancialIdentities(raw.Type, obj)
 	if strings.HasPrefix(raw.Type, "charge.refund.") {
 		event.RefundID, _ = obj["id"].(string)
@@ -228,6 +231,10 @@ func stripeEventKind(eventType string) string {
 		return KindSubscriptionCanceled
 	case "setup_intent.succeeded":
 		return KindSetupCompleted
+	case "payment_intent.amount_capturable_updated":
+		return KindPaymentAuthorized
+	case "payment_intent.canceled":
+		return KindPaymentCanceled
 	}
 	return KindOther
 }

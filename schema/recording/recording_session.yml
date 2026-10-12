@@ -59,3 +59,6 @@ foreign_keys:
     references:
       table: consent_policy
       columns: [id]
+checks:
+  - name: chk_recording_session_status
+    expression: "status IN ('W', 'A', 'R', 'F', 'D', 'S', 'X')"

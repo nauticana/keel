@@ -30,6 +30,8 @@ sequence:
   name: agency_client_delegation_seq
   column: id
 checks:
+  - name: chk_agency_client_delegation_status
+    expression: "status IN ('A', 'R')"
   - name: chk_delegation_distinct
     expression: "client_partner_id <> agency_partner_id"
   - name: chk_delegation_lifecycle

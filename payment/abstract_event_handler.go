@@ -19,6 +19,8 @@ type AbstractWebhookEventHandler struct {
 	OnSubscriptionUpdated  func(ctx context.Context, e *PaymentEvent) error
 	OnSubscriptionCanceled func(ctx context.Context, e *PaymentEvent) error
 	OnSetupCompleted       func(ctx context.Context, e *PaymentEvent) error
+	OnPaymentAuthorized    func(ctx context.Context, e *PaymentEvent) error
+	OnPaymentCanceled      func(ctx context.Context, e *PaymentEvent) error
 
 	// OnOther receives any event whose EventKind matched no specific hook
 	// (including KindOther). Nil = ignore.
@@ -42,6 +44,10 @@ func (h *AbstractWebhookEventHandler) OnPaymentEvent(ctx context.Context, e *Pay
 		hook = h.OnSubscriptionCanceled
 	case KindSetupCompleted:
 		hook = h.OnSetupCompleted
+	case KindPaymentAuthorized:
+		hook = h.OnPaymentAuthorized
+	case KindPaymentCanceled:
+		hook = h.OnPaymentCanceled
 	}
 	if hook == nil {
 		hook = h.OnOther

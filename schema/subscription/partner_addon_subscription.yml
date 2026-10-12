@@ -53,3 +53,12 @@ foreign_keys:
     references:
       table: subscription_addon
       columns: [id]
+checks:
+  - name: chk_partner_addon_subscription_currency
+    expression: "currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')"
+  - name: chk_partner_addon_subscription_billing_cycle
+    expression: "billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')"
+  - name: chk_partner_addon_subscription_term_type
+    expression: "term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')"
+  - name: chk_partner_addon_subscription_status
+    expression: "status IN ('A', 'P', 'T', 'C', 'X')"

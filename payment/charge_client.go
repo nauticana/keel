@@ -5,16 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 )
 
-// ChargeStatus is the normalized outcome of an off-session charge.
+// ChargeStatus is the normalized outcome of an off-session charge or authorization.
 type ChargeStatus string
 
 const (
 	ChargeSucceeded      ChargeStatus = "succeeded"
+	ChargeAuthorized     ChargeStatus = "authorized"      // the hold is placed and awaits Capture
 	ChargeRequiresAction ChargeStatus = "requires_action" // PaymentIntent carries a next_action to run
 	// ChargeAuthenticationRequired: the off-session confirmation was refused for
 	// SCA. The PaymentIntent has no next_action; the customer must come
@@ -31,7 +33,7 @@ type ChargeRequest struct {
 	Currency           string            // ISO 4217 (any case)
 	IdempotencyKey     string            // de-dupe key — use the invoice id
 	Description        string            // free-text shown on the provider charge
-	Metadata           map[string]string // arbitrary key/value pairs forwarded onto the provider charge (Stripe PaymentIntent metadata); surfaced back on the settled charge's PaymentEvent.Metadata so a webhook can correlate it to the originating record
+	Metadata           map[string]string // forwarded onto the provider charge and surfaced back on its PaymentEvent.Metadata so a webhook can correlate it
 }
 
 // Stripe metadata limits (https://stripe.com/docs/api/metadata): at most 50
@@ -44,14 +46,10 @@ const (
 	reservedMetadataKey = "idempotency_key"
 )
 
-// ErrInvalidMetadata is returned by ChargeClient.Charge before any network call
-// when ChargeRequest.Metadata violates the provider's metadata constraints.
-// It is a caller (programming) error, so the charge is rejected loudly rather
-// than silently truncated. Map it to a 4xx at the handler boundary.
+// ErrInvalidMetadata is returned before any network call when request metadata
+// violates the provider's limits. Map it to a 4xx at the handler boundary.
 var ErrInvalidMetadata = errors.New("payment: invalid charge metadata")
 
-// validateMetadata enforces the provider's metadata limits and protects the
-// reserved reconciliation key. It does not mutate the request.
 func validateMetadata(md map[string]string) error {
 	if len(md) > maxMetadataPairs {
 		return fmt.Errorf("%w: %d pairs exceeds limit of %d", ErrInvalidMetadata, len(md), maxMetadataPairs)
@@ -75,12 +73,14 @@ func validateMetadata(md map[string]string) error {
 
 // ChargeResult is the normalized outcome of ChargeClient.Charge.
 type ChargeResult struct {
-	Status           ChargeStatus
-	ProviderChargeID string // PaymentIntent / charge id (pi_xxx)
-	ClientSecret     string // PI client_secret: requires_action runs its next_action; authentication_required re-confirms with PaymentMethodID (Stripe.js confirmCardPayment, stripe-ios STPPaymentHandler.confirmPayment)
-	PaymentMethodID  string // stored method to re-confirm with when Status==authentication_required
-	ActionURL        string // a provider-hosted redirect URL when one exists (often empty for off-session 3DS)
-	Error            string // decline / error message when failed
+	Status              ChargeStatus
+	ProviderChargeID    string        // PaymentIntent / charge id (pi_xxx)
+	ClientSecret        string        // PI client_secret: requires_action runs its next_action; authentication_required re-confirms with PaymentMethodID (Stripe.js confirmCardPayment, stripe-ios STPPaymentHandler.confirmPayment)
+	PaymentMethodID     string        // stored method to re-confirm with when Status==authentication_required
+	ActionURL           string        // a provider-hosted redirect URL when one exists (often empty for off-session 3DS)
+	Error               string        // decline / error message when failed
+	DeclineReason       DeclineReason // set when a failure carries a provider decline
+	ProviderDeclineCode string        // the provider's raw decline code, for logs
 }
 
 // ChargeClient charges a partner's saved (vaulted) payment method off-session.
@@ -111,27 +111,30 @@ type stripeNextAction struct {
 	} `json:"redirect_to_url"`
 }
 
+type stripePaymentIntent struct {
+	ID               string            `json:"id"`
+	Status           string            `json:"status"`
+	ClientSecret     string            `json:"client_secret"`
+	AmountCapturable int64             `json:"amount_capturable"`
+	AmountReceived   int64             `json:"amount_received"`
+	NextAction       *stripeNextAction `json:"next_action"`
+	LatestCharge     json.RawMessage   `json:"latest_charge"` // an id, or the charge object when expanded
+	LastPaymentError *stripeError      `json:"last_payment_error"`
+}
+
+type stripeError struct {
+	Code          string                  `json:"code"`
+	DeclineCode   string                  `json:"decline_code"`
+	Message       string                  `json:"message"`
+	PaymentMethod *stripePaymentMethodRef `json:"payment_method"`
+	PaymentIntent *stripePaymentIntent    `json:"payment_intent"`
+}
+
 // stripeChargeResponse covers BOTH the 2xx PaymentIntent body and the 4xx
 // error envelope (which carries the PaymentIntent under error.payment_intent).
 type stripeChargeResponse struct {
-	ID           string            `json:"id"`
-	Status       string            `json:"status"`
-	ClientSecret string            `json:"client_secret"`
-	NextAction   *stripeNextAction `json:"next_action"`
-	Error        *struct {
-		Code          string                  `json:"code"`
-		Message       string                  `json:"message"`
-		PaymentMethod *stripePaymentMethodRef `json:"payment_method"`
-		PaymentIntent *struct {
-			ID               string            `json:"id"`
-			Status           string            `json:"status"`
-			ClientSecret     string            `json:"client_secret"`
-			NextAction       *stripeNextAction `json:"next_action"`
-			LastPaymentError *struct {
-				PaymentMethod *stripePaymentMethodRef `json:"payment_method"`
-			} `json:"last_payment_error"`
-		} `json:"payment_intent"`
-	} `json:"error"`
+	stripePaymentIntent
+	Error *stripeError `json:"error"`
 }
 
 func actionURL(na *stripeNextAction) string {
@@ -142,8 +145,15 @@ func actionURL(na *stripeNextAction) string {
 }
 
 func (c *StripeChargeClient) Charge(ctx context.Context, req ChargeRequest) (ChargeResult, error) {
+	res, _, err := c.confirm(ctx, req, false)
+	return res, err
+}
+
+// confirm creates and confirms an off-session PaymentIntent, automatic or
+// manual capture, and returns the PaymentIntent it reports on, if any.
+func (c *StripeChargeClient) confirm(ctx context.Context, req ChargeRequest, manual bool) (ChargeResult, *stripePaymentIntent, error) {
 	if err := validateMetadata(req.Metadata); err != nil {
-		return ChargeResult{}, err
+		return ChargeResult{}, nil, err
 	}
 	form := url.Values{
 		"amount":      {strconv.FormatInt(req.AmountMinor, 10)},
@@ -152,90 +162,124 @@ func (c *StripeChargeClient) Charge(ctx context.Context, req ChargeRequest) (Cha
 		"off_session": {"true"},
 		"confirm":     {"true"},
 	}
+	if manual {
+		form.Set("capture_method", "manual")
+		form.Set("payment_method_options[card][request_incremental_authorization]", "if_available")
+		form.Set("expand[]", "latest_charge")
+	}
 	if req.PaymentMethodToken != "" {
 		form.Set("payment_method", req.PaymentMethodToken)
 	}
 	if req.Description != "" {
 		form.Set("description", req.Description)
 	}
-	for k, v := range req.Metadata {
-		form.Set("metadata["+k+"]", v)
-	}
+	setMetadata(form, req.Metadata)
 	if req.IdempotencyKey != "" {
-		// Also carry the key in metadata for human reconciliation in the Stripe
-		// dashboard; the real dedupe is the Idempotency-Key header set below.
-		// Set last so the reserved key always wins (validateMetadata also
-		// rejects callers trying to supply it themselves).
+		// Dashboard reconciliation only; the Idempotency-Key header is the real
+		// dedupe. Set last so the reserved key always wins.
 		form.Set("metadata["+reservedMetadataKey+"]", req.IdempotencyKey)
 	}
 
-	// Pass the caller's operation-scoped key (the invoice id) as Stripe's
-	// Idempotency-Key so a charge retried after an ambiguous transport failure
-	// resolves to the ORIGINAL PaymentIntent instead of creating a second one.
-	// Stripe remembers a key for 24h; a dunning retry scheduled beyond that
-	// window is treated as new, so the engine must still stop charging once the
-	// invoice flips to paid.
+	// The operation-scoped key makes a retry after an ambiguous transport
+	// failure resolve to the ORIGINAL PaymentIntent. Stripe remembers a key for
+	// 24h; a dunning retry beyond that is new, so the engine must stop charging
+	// once the invoice flips to paid.
 	status, body, err := c.Stripe.PostRaw(ctx, "/payment_intents", form, req.IdempotencyKey)
 	if err != nil {
-		return ChargeResult{}, err // transport / exhausted retries — caller retries later
+		return ChargeResult{}, nil, err // transport / exhausted retries — caller retries later
 	}
-
 	var resp stripeChargeResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return ChargeResult{}, fmt.Errorf("stripe charge: decode response: %w", err)
+		return ChargeResult{}, nil, fmt.Errorf("stripe charge: decode response: %w", err)
 	}
-
-	if status >= 200 && status < 300 {
-		res := ChargeResult{ProviderChargeID: resp.ID, ClientSecret: resp.ClientSecret}
-		switch resp.Status {
-		case "succeeded", "processing":
-			res.Status = ChargeSucceeded
-		case "requires_action":
-			res.Status = ChargeRequiresAction
-			res.ActionURL = actionURL(resp.NextAction)
-		default:
-			res.Status = ChargeFailed
-			res.Error = "unexpected PaymentIntent status " + resp.Status
-		}
-		return res, nil
+	if is2xx(status) {
+		return intentResult(&resp.stripePaymentIntent, manual), &resp.stripePaymentIntent, nil
 	}
-
-	// Non-2xx: a decline or an off-session authentication_required error. Stripe
-	// puts the PaymentIntent under error.payment_intent in that case.
-	if resp.Error != nil {
-		pi := resp.Error.PaymentIntent
-		if pi != nil && pi.Status == "requires_action" {
-			return ChargeResult{
-				Status:           ChargeRequiresAction,
-				ProviderChargeID: pi.ID,
-				ClientSecret:     pi.ClientSecret,
-				ActionURL:        actionURL(pi.NextAction),
-			}, nil
+	if resp.Error == nil {
+		return ChargeResult{Status: ChargeFailed, Error: fmt.Sprintf("stripe charge failed: status %d", status)}, nil, nil
+	}
+	// Non-2xx: a decline or an off-session authentication_required error.
+	e, pi := resp.Error, resp.Error.PaymentIntent
+	if pi != nil && pi.Status == "requires_action" {
+		return intentResult(pi, manual), pi, nil
+	}
+	if e.Code == "authentication_required" {
+		res := ChargeResult{Status: ChargeAuthenticationRequired}
+		if e.PaymentMethod != nil {
+			res.PaymentMethodID = e.PaymentMethod.ID
 		}
-		if resp.Error.Code == "authentication_required" {
-			res := ChargeResult{Status: ChargeAuthenticationRequired}
-			if resp.Error.PaymentMethod != nil {
-				res.PaymentMethodID = resp.Error.PaymentMethod.ID
-			}
-			if pi != nil {
-				res.ProviderChargeID = pi.ID
-				res.ClientSecret = pi.ClientSecret
-				if res.PaymentMethodID == "" && pi.LastPaymentError != nil && pi.LastPaymentError.PaymentMethod != nil {
-					res.PaymentMethodID = pi.LastPaymentError.PaymentMethod.ID
-				}
-			}
-			if res.PaymentMethodID == "" {
-				res.PaymentMethodID = req.PaymentMethodToken
-			}
-			return res, nil
-		}
-		res := ChargeResult{Status: ChargeFailed, Error: resp.Error.Message}
 		if pi != nil {
 			res.ProviderChargeID = pi.ID
+			res.ClientSecret = pi.ClientSecret
+			if res.PaymentMethodID == "" && pi.LastPaymentError != nil && pi.LastPaymentError.PaymentMethod != nil {
+				res.PaymentMethodID = pi.LastPaymentError.PaymentMethod.ID
+			}
 		}
-		return res, nil
+		if res.PaymentMethodID == "" {
+			res.PaymentMethodID = req.PaymentMethodToken
+		}
+		return res, pi, nil
 	}
-	return ChargeResult{Status: ChargeFailed, Error: fmt.Sprintf("stripe charge failed: status %d", status)}, nil
+	// Only a 402 is a card decline; a 400 is a request error with no decline reason.
+	res := ChargeResult{Status: ChargeFailed, Error: e.Message}
+	if status == http.StatusPaymentRequired {
+		res = declineResult(e)
+	}
+	if pi != nil {
+		res.ProviderChargeID = pi.ID
+	}
+	return res, pi, nil
+}
+
+// intentResult maps a PaymentIntent body; manual expects requires_capture
+// where an automatic-capture charge expects succeeded.
+func intentResult(pi *stripePaymentIntent, manual bool) ChargeResult {
+	res := ChargeResult{ProviderChargeID: pi.ID, ClientSecret: pi.ClientSecret}
+	switch {
+	case pi.Status == "requires_action":
+		res.Status = ChargeRequiresAction
+		res.ActionURL = actionURL(pi.NextAction)
+	case manual && pi.Status == "requires_capture":
+		res.Status = ChargeAuthorized
+	case !manual && (pi.Status == "succeeded" || pi.Status == "processing"):
+		res.Status = ChargeSucceeded
+	case pi.LastPaymentError != nil:
+		res = declineResult(pi.LastPaymentError)
+		res.ProviderChargeID = pi.ID
+	default:
+		res.Status = ChargeFailed
+		res.Error = "unexpected PaymentIntent status " + pi.Status
+	}
+	return res
+}
+
+func declineResult(e *stripeError) ChargeResult {
+	code := e.DeclineCode
+	if code == "" {
+		code = e.Code
+	}
+	return ChargeResult{Status: ChargeFailed, Error: e.Message, DeclineReason: stripeDeclineReason(code), ProviderDeclineCode: code}
+}
+
+func stripeDeclineReason(code string) DeclineReason {
+	switch code {
+	case "":
+		return ""
+	case "insufficient_funds":
+		return DeclineInsufficientFunds
+	case "expired_card":
+		return DeclineExpiredCard
+	case "incorrect_cvc", "invalid_cvc":
+		return DeclineIncorrectCVC
+	case "processing_error":
+		return DeclineProcessingError
+	case "payment_intent_authentication_failure", "authentication_required":
+		return DeclineAuthenticationFailed
+	case "card_declined", "generic_decline", "do_not_honor", "lost_card", "stolen_card",
+		"pickup_card", "restricted_card", "transaction_not_allowed", "card_not_supported":
+		return DeclineCardDeclined
+	}
+	return DeclineOther
 }
 
 var _ ChargeClient = (*StripeChargeClient)(nil)

@@ -44,3 +44,6 @@ indexes:
     unique: true
   - name: idx_payout_webhook_transfer
     columns: [provider_transfer_id]
+checks:
+  - name: chk_payout_webhook_log_provider
+    expression: "provider IN ('AW', 'SC', 'WI')"

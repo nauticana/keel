@@ -48,3 +48,6 @@ primary_key: [table_name, action_name]
 indexes:
   - name: idx_table_action_table
     columns: [table_name]
+checks:
+  - name: chk_table_action_action_kind
+    expression: "action_kind IN ('P', 'R', 'V')"

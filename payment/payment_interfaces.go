@@ -39,6 +39,8 @@ const (
 	KindSubscriptionUpdated  = "subscription_updated"
 	KindSubscriptionCanceled = "subscription_canceled"
 	KindSetupCompleted       = "setup_completed"
+	KindPaymentAuthorized    = "payment_authorized"
+	KindPaymentCanceled      = "payment_canceled"
 	KindOther                = "other"
 )
 

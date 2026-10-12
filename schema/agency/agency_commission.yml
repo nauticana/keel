@@ -42,6 +42,10 @@ sequence:
   name: agency_commission_seq
   column: id
 checks:
+  - name: chk_agency_commission_entry_type
+    expression: "entry_type IN ('E', 'R')"
+  - name: chk_agency_commission_status
+    expression: "status IN ('H', 'P', 'R', 'D', 'O')"
   - name: chk_agency_commission_entry
     expression: "(entry_type = 'E' AND gross_amount_minor > 0 AND commission_amount_minor > 0 AND reversal_of_id IS NULL) OR (entry_type = 'R' AND gross_amount_minor < 0 AND commission_amount_minor < 0 AND reversal_of_id IS NOT NULL)"
   - name: chk_agency_commission_period
