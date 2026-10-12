@@ -2,6 +2,7 @@ package billing
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -124,10 +125,16 @@ func (t BillingTerms) normalized() BillingTerms {
 
 // TotalInstallments is the number of charges over the whole term.
 func (t BillingTerms) TotalInstallments() (int, error) {
+	if t.TermCount < 0 {
+		return 0, fmt.Errorf("term count cannot be negative")
+	}
 	t = t.normalized()
 	per, err := InstallmentsPerUnit(t.TermType, t.BillingCycle)
 	if err != nil {
 		return 0, err
+	}
+	if t.TermCount > math.MaxInt/per {
+		return 0, fmt.Errorf("installment count overflows int")
 	}
 	return per * t.TermCount, nil
 }
@@ -139,8 +146,18 @@ func (t BillingTerms) TermEnd(begda time.Time) time.Time {
 }
 
 // ContractTotalMinor is the full committed value: per-unit amount × term_count.
-func (t BillingTerms) ContractTotalMinor(amountPerUnitMinor int64) int64 {
-	return amountPerUnitMinor * int64(t.normalized().TermCount)
+func (t BillingTerms) ContractTotalMinor(amountPerUnitMinor int64) (int64, error) {
+	if t.TermCount < 0 {
+		return 0, fmt.Errorf("term count cannot be negative")
+	}
+	count := int64(t.normalized().TermCount)
+	if amountPerUnitMinor < 0 {
+		return 0, fmt.Errorf("contract amount cannot be negative")
+	}
+	if amountPerUnitMinor > math.MaxInt64/count {
+		return 0, fmt.Errorf("contract amount overflows int64 minor units")
+	}
+	return amountPerUnitMinor * count, nil
 }
 
 // InstallmentMinor is the charge for installment k (0-based) of n. Every charge

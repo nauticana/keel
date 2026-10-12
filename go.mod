@@ -136,7 +136,7 @@ require (
 	golang.org/x/net v0.56.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0
+	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0
 	google.golang.org/api v0.274.0
 	google.golang.org/appengine/v2 v2.0.6 // indirect

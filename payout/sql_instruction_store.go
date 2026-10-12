@@ -37,11 +37,12 @@ RETURNING id`,
 SELECT id FROM payout_instruction WHERE partner_id = ? AND idempotency_key = ?`,
 
 	qInstructionLock: `
-SELECT id, partner_id, user_id, currency, amount_minor, idempotency_key, status,
-       COALESCE(failure_reason, ''), created_at
-  FROM payout_instruction
- WHERE id = ?
-   FOR UPDATE`,
+SELECT pi.id, pi.partner_id, pi.user_id, pi.currency, pi.amount_minor, pi.idempotency_key, pi.status,
+       COALESCE(pi.failure_reason, ''), pi.created_at, cur.exponent
+  FROM payout_instruction pi
+  JOIN currency cur ON cur.code = pi.currency
+ WHERE pi.id = ?
+   FOR UPDATE OF pi`,
 
 	qInstructionLegs: `
 SELECT leg_no, provider, user_bank_info_id, provider_account_id, amount_minor,

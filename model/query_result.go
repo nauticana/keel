@@ -1,5 +1,14 @@
 package model
 
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// ErrColumnNotFound reports a column name absent from a QueryResult.
+var ErrColumnNotFound = errors.New("column not found")
+
 // QueryResult is the column-name-aware return shape of every QueryService.
 // Rows is a positional slice (one entry per Columns position).
 type QueryResult struct {
@@ -7,11 +16,34 @@ type QueryResult struct {
 	Rows    [][]any
 }
 
-// AsMaps projects Rows into []map[string]any keyed by Columns. Useful when
-// a handler needs to JSON-encode an ad-hoc query response without a typed
-// model on the receiving side. Returns an empty slice (not nil) when the
-// result is nil or has no rows. Each row is a fresh map; callers may
-// mutate without affecting the underlying QueryResult.
+// Indexes resolves column names to row positions once per result, so callers
+// index rows directly. Every missing name is reported in one error.
+func (qr *QueryResult) Indexes(names ...string) ([]int, error) {
+	out := make([]int, len(names))
+	var missing []string
+	for i, name := range names {
+		out[i] = -1
+		if qr != nil {
+			for j, col := range qr.Columns {
+				if col == name {
+					out[i] = j
+					break
+				}
+			}
+		}
+		if out[i] < 0 {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrColumnNotFound, strings.Join(missing, ", "))
+	}
+	return out, nil
+}
+
+// AsMaps projects Rows into []map[string]any keyed by Columns, for JSON-encoding
+// an ad-hoc query. Returns an empty slice (not nil) when there are no rows; each
+// row is a fresh map.
 func (qr *QueryResult) AsMaps() []map[string]any {
 	if qr == nil || len(qr.Rows) == 0 {
 		return []map[string]any{}

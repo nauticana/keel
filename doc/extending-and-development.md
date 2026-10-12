@@ -122,6 +122,17 @@ common.WriteJSON(w, http.StatusOK, res.AsMaps())
 
 Returns an empty slice (not nil) when there are no rows, so JSON encoding always emits `[]`.
 
+To read columns by name, resolve them once per result and index rows directly; a missing name fails with `model.ErrColumnNotFound`, listing every one:
+
+```go
+idx, err := res.Indexes("id", "amount_minor")
+for _, row := range res.Rows {
+    id, amount := common.AsInt64(row[idx[0]]), common.AsInt64(row[idx[1]])
+}
+```
+
+Cells arrive as Go primitives: NUMERIC as `float64` (a NaN or infinite value fails the query with `pgsql.ErrNonFiniteNumeric`) and TIME as `"HH:MM:SS"`. Money is never NUMERIC; it is `BIGINT` minor units.
+
 ## Directory Structure
 
 ```

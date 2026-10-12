@@ -20,30 +20,34 @@ import (
 
 // Subscription is a partner's active plan subscription.
 type Subscription struct {
-	ID           int64   `json:"id"`
-	PartnerID    int64   `json:"partnerId"`
-	PlanID       string  `json:"planId"`
-	Caption      string  `json:"caption,omitempty"` // plan display name (from subscription_plan)
-	Status       string  `json:"status"`            // A=active, P=pending, C=cancelled
-	Begda        string  `json:"begda"`
-	Endda        string  `json:"endda,omitempty"`
-	MonthlyCost  float64 `json:"monthlyCost"`
-	Currency     string  `json:"currency"`
-	BillingCycle string  `json:"billingCycle,omitempty"` // PERIOD_TYPE code copied from the plan's billing_period (M/Q/A/…)
-	AutoRenew    bool    `json:"autoRenew"`
-	TrialEnd     string  `json:"trialEnd"`
-	Seats        int     `json:"seats"`
+	ID               int64   `json:"id"`
+	PartnerID        int64   `json:"partnerId"`
+	PlanID           string  `json:"planId"`
+	Caption          string  `json:"caption,omitempty"` // plan display name (from subscription_plan)
+	Status           string  `json:"status"`            // A=active, P=pending, C=cancelled
+	Begda            string  `json:"begda"`
+	Endda            string  `json:"endda,omitempty"`
+	MonthlyCost      float64 `json:"monthlyCost"` // display projection of InstallmentMinor
+	InstallmentMinor int64   `json:"installmentMinor"`
+	Currency         string  `json:"currency"`
+	Exponent         int     `json:"exponent"`
+	BillingCycle     string  `json:"billingCycle,omitempty"` // PERIOD_TYPE code copied from the plan's billing_period (M/Q/A/…)
+	AutoRenew        bool    `json:"autoRenew"`
+	TrialEnd         string  `json:"trialEnd"`
+	Seats            int     `json:"seats"`
 }
 
 // Invoice is one billing invoice row (provider-issued or self-scheduled).
 type Invoice struct {
-	ID       int64   `json:"id,string"` // bigint ids exceed JS number precision
-	Number   string  `json:"number"`
-	Status   string  `json:"status"`
-	Total    float64 `json:"total"`
-	Currency string  `json:"currency"`
-	IssuedAt string  `json:"issuedAt"`
-	PaidAt   string  `json:"paidAt,omitempty"`
+	ID         int64   `json:"id,string"` // bigint ids exceed JS number precision
+	Number     string  `json:"number"`
+	Status     string  `json:"status"`
+	Total      float64 `json:"total"` // display projection of TotalMinor
+	TotalMinor int64   `json:"totalMinor"`
+	Currency   string  `json:"currency"`
+	Exponent   int     `json:"exponent"`
+	IssuedAt   string  `json:"issuedAt"`
+	PaidAt     string  `json:"paidAt,omitempty"`
 }
 
 // Plan is a public catalog plan. Prices holds one entry per offer (the
@@ -58,8 +62,8 @@ type Plan struct {
 }
 
 // PlanPrice is one purchasable offer (billing cycle + commitment term + price).
-// AmountMinor is authoritative minor units for ONE term_type unit; Amount is its
-// major-unit projection. PriceID is the provider price id (empty for free plans).
+// AmountMinor is minor units for ONE term_type unit; Amount is its display-only
+// major-unit projection at Exponent. PriceID is the provider price id (empty for free plans).
 type PlanPrice struct {
 	BillingCycle string  `json:"billingCycle"` // PERIOD_TYPE code: how often charged
 	TermCount    int     `json:"termCount"`    // commitment length
@@ -67,6 +71,7 @@ type PlanPrice struct {
 	AmountMinor  int64   `json:"amountMinor"`  // price per term_type unit
 	Amount       float64 `json:"amount"`
 	Currency     string  `json:"currency"`
+	Exponent     int     `json:"exponent"`
 	PriceID      string  `json:"priceId,omitempty"`
 }
 
@@ -104,10 +109,11 @@ const (
 // defaultBillingQueries is pgsql; a mysql consumer overrides affected entries via Queries.
 var defaultBillingQueries = map[string]string{
 	qBillGetSubscription: `
-SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.monthly_cost, ps.currency,
-       ps.billing_cycle, ps.auto_renew, ps.trial_end, ps.seats
+SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.installment_minor, ps.currency,
+       ps.billing_cycle, ps.auto_renew, ps.trial_end, ps.seats, cur.exponent
   FROM partner_plan_subscription ps
   JOIN subscription_plan sp ON sp.id = ps.plan_id
+  JOIN currency cur ON cur.code = ps.currency
  WHERE ps.partner_id = ?
    AND ps.status = 'A'
    AND (ps.endda IS NULL OR ps.endda > CURRENT_TIMESTAMP)
@@ -118,7 +124,7 @@ SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.monthly_cost, p
 	// see qLcInsertActive for the column semantics.
 	qBillCreateSub: `
 INSERT INTO partner_plan_subscription
-  (partner_id, plan_id, begda, monthly_cost, currency, status, billing_cycle,
+  (partner_id, plan_id, begda, installment_minor, currency, status, billing_cycle,
    term_count, term_type, amount_minor, renewal_date, next_charge_date)
 VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, 'A', ?, ?, ?, ?, ?, ?)`,
 
@@ -129,8 +135,10 @@ UPDATE partner_plan_subscription
    AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 
 	qBillGetInvoices: `
-SELECT id, invoice_number, total, currency, status, issued_at, paid_at
-  FROM invoice WHERE partner_id = ? ORDER BY issued_at DESC LIMIT 50`,
+SELECT i.id, i.invoice_number, i.total_minor, i.currency, i.status, i.issued_at, i.paid_at, cur.exponent
+  FROM invoice i
+  JOIN currency cur ON cur.code = i.currency
+ WHERE i.partner_id = ? ORDER BY i.issued_at DESC LIMIT 50`,
 
 	qBillGetUsage: `
 SELECT COALESCE(SUM(amount), 0) FROM usage_ledger
@@ -145,17 +153,19 @@ SELECT COALESCE(MAX(sq.max_value), 0)
 	// One row per (plan, offer); LEFT JOIN keeps plans with no price rows.
 	qBillGetAllPlans: `
 SELECT sp.id, sp.caption, sp.currency, sp.activation_mode, sp.trial_days,
-       pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id
+       pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id,
+       cur.exponent
   FROM subscription_plan sp
   LEFT JOIN subscription_plan_price pp ON pp.plan_id = sp.id
+  LEFT JOIN currency cur ON cur.code = pp.currency
  WHERE sp.is_active = TRUE
  ORDER BY sp.id, pp.term_type, pp.term_count, pp.billing_cycle`,
 
 	// Written on a provider invoice.paid so GetInvoices has data. Idempotent on
 	// UNIQUE invoice_number (redelivered webhook no-ops).
 	qBillRecordInvoice: `
-INSERT INTO invoice (id, partner_id, invoice_number, status, subtotal, tax, total, total_minor, currency, issued_at, paid_at, provider_invoice_id)
-VALUES (?, ?, ?, 'P', ?, 0, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+INSERT INTO invoice (id, partner_id, invoice_number, status, subtotal_minor, tax_minor, total_minor, currency, issued_at, paid_at, provider_invoice_id)
+VALUES (?, ?, ?, 'P', ?, 0, ?, ?, CURRENT_TIMESTAMP, ?, ?)
 ON CONFLICT (invoice_number) DO NOTHING`,
 
 	// Partner ↔ provider-customer token; idempotent on the composite PK.
@@ -237,20 +247,25 @@ func (s *AbstractBillingService) GetSubscription(ctx context.Context, partnerID 
 		return nil, ErrNoSubscription
 	}
 	row := res.Rows[0]
-	return &Subscription{
-		PartnerID:    partnerID,
-		PlanID:       common.AsString(row[0]),
-		Caption:      common.AsString(row[1]),
-		Status:       common.AsString(row[2]),
-		Begda:        common.AsString(row[3]),
-		Endda:        common.AsString(row[4]),
-		MonthlyCost:  common.AsFloat64(row[5]),
-		Currency:     common.AsString(row[6]),
-		BillingCycle: common.AsString(row[7]),
-		AutoRenew:    common.AsString(row[8]) == "true" || common.AsInt64(row[8]) == 1,
-		TrialEnd:     common.AsString(row[9]),
-		Seats:        int(common.AsInt32(row[10])),
-	}, nil
+	sub := &Subscription{
+		PartnerID:        partnerID,
+		PlanID:           common.AsString(row[0]),
+		Caption:          common.AsString(row[1]),
+		Status:           common.AsString(row[2]),
+		Begda:            common.AsString(row[3]),
+		Endda:            common.AsString(row[4]),
+		InstallmentMinor: common.AsInt64(row[5]),
+		Currency:         common.AsString(row[6]),
+		Exponent:         int(common.AsInt64(row[11])),
+		BillingCycle:     common.AsString(row[7]),
+		AutoRenew:        common.AsString(row[8]) == "true" || common.AsInt64(row[8]) == 1,
+		TrialEnd:         common.AsString(row[9]),
+		Seats:            int(common.AsInt32(row[10])),
+	}
+	if sub.MonthlyCost, err = majorAmount(sub.InstallmentMinor, sub.Exponent); err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 func (s *AbstractBillingService) CreateSubscription(ctx context.Context, partnerID int64, planID string, terms BillingTerms) error {
@@ -264,7 +279,7 @@ func (s *AbstractBillingService) CreateSubscription(ctx context.Context, partner
 		return err
 	}
 	_, err = s.qs.Query(ctx, qBillCreateSub,
-		partnerID, planID, pc.perChargeMajor, pc.currency, pc.billingCycle,
+		partnerID, planID, pc.installmentMinor, pc.currency, pc.billingCycle,
 		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now)
 	return err
 }
@@ -283,15 +298,20 @@ func (s *AbstractBillingService) GetInvoices(ctx context.Context, partnerID int6
 	}
 	invoices := make([]Invoice, len(res.Rows))
 	for i, row := range res.Rows {
-		invoices[i] = Invoice{
-			ID:       common.AsInt64(row[0]),
-			Number:   common.AsString(row[1]),
-			Total:    common.AsFloat64(row[2]),
-			Currency: common.AsString(row[3]),
-			Status:   common.AsString(row[4]),
-			IssuedAt: common.AsString(row[5]),
-			PaidAt:   common.AsString(row[6]),
+		inv := Invoice{
+			ID:         common.AsInt64(row[0]),
+			Number:     common.AsString(row[1]),
+			TotalMinor: common.AsInt64(row[2]),
+			Currency:   common.AsString(row[3]),
+			Status:     common.AsString(row[4]),
+			IssuedAt:   common.AsString(row[5]),
+			PaidAt:     common.AsString(row[6]),
+			Exponent:   int(common.AsInt64(row[7])),
 		}
+		if inv.Total, err = majorAmount(inv.TotalMinor, inv.Exponent); err != nil {
+			return nil, err
+		}
+		invoices[i] = inv
 	}
 	return invoices, nil
 }
@@ -356,6 +376,7 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 			AmountMinor:  common.AsInt64(row[8]),
 			Currency:     common.AsString(row[9]),
 			PriceID:      common.AsString(row[10]),
+			Exponent:     int(common.AsInt64(row[11])),
 		}
 		if err := price.FillAmount(); err != nil {
 			return nil, fmt.Errorf("plan %s: %w", id, err)
@@ -385,12 +406,8 @@ func (s *AbstractBillingService) RecordProviderInvoice(ctx context.Context, part
 		return nil
 	}
 	s.init(ctx)
-	major, err := decimalAmount(e.MinorUnits, e.Currency)
-	if err != nil {
-		return err
-	}
-	_, err = s.qs.Query(ctx, qBillRecordInvoice,
-		s.qs.GenID(), partnerID, e.InvoiceID, major, major, e.MinorUnits, e.Currency, e.PaidAt, e.InvoiceID)
+	_, err := s.qs.Query(ctx, qBillRecordInvoice,
+		s.qs.GenID(), partnerID, e.InvoiceID, e.MinorUnits, e.MinorUnits, e.Currency, e.PaidAt, e.InvoiceID)
 	return err
 }
 

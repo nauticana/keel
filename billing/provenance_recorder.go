@@ -82,18 +82,18 @@ SELECT id, currency
 	qProvenanceInsertPayment: `
 INSERT INTO payment_record
  (id, partner_id, provider, provider_payment_id, provider_event_type,
-  provider_charge_id, amount, amount_minor, currency, invoice_id,
+  provider_charge_id, amount_minor, currency, invoice_id,
   payment_status, paid_at, raw_payload)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'P', ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'P', ?, ?)
 ON CONFLICT (provider, provider_payment_id)
   WHERE provider_payment_id IS NOT NULL DO NOTHING
 RETURNING id`,
 
 	qProvenanceInsertLine: `
 INSERT INTO invoice_line
- (invoice_id, seq, description, quantity, unit_price, amount,
+ (invoice_id, seq, description, quantity, unit_price_minor,
   amount_minor, service_from, service_to)
-VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, 1, ?, ?, ?, ?)
 ON CONFLICT (invoice_id, seq) DO NOTHING
 RETURNING invoice_id`,
 
@@ -153,15 +153,10 @@ func (s *BaseProvenanceRecorder) RecordPayment(ctx context.Context, partnerID in
 	if !strings.EqualFold(common.AsString(invoice.Rows[0][1]), currency) {
 		return fmt.Errorf("billing: payment currency %s differs from invoice currency %s", currency, common.AsString(invoice.Rows[0][1]))
 	}
-	paymentMajor, err := decimalAmount(event.MinorUnits, currency)
-	if err != nil {
-		return err
-	}
 	paymentID := tx.GenID()
 	inserted, err := tx.Query(ctx, qProvenanceInsertPayment,
 		paymentID, partnerID, event.Provider, providerPaymentID, event.EventType,
-		event.ChargeID, paymentMajor,
-		event.MinorUnits, currency, invoiceID, event.PaidAt, event.RawPayload)
+		event.ChargeID, event.MinorUnits, currency, invoiceID, event.PaidAt, event.RawPayload)
 	if err != nil {
 		return fmt.Errorf("billing: insert payment provenance: %w", err)
 	}
@@ -182,13 +177,8 @@ func (s *BaseProvenanceRecorder) RecordPayment(ctx context.Context, partnerID in
 	for index, line := range lines {
 		sequence := index + 1
 		amountMinor := amounts[index]
-		major, err := decimalAmount(line.AmountMinor, currency)
-		if err != nil {
-			return err
-		}
 		result, insertErr := tx.Query(ctx, qProvenanceInsertLine,
-			invoiceID, sequence, line.Description, major, major,
-			line.AmountMinor, line.ServiceFrom, line.ServiceTo)
+			invoiceID, sequence, line.Description, line.AmountMinor, line.AmountMinor, line.ServiceFrom, line.ServiceTo)
 		if insertErr != nil {
 			return fmt.Errorf("billing: insert invoice line %d: %w", sequence, insertErr)
 		}

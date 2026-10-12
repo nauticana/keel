@@ -233,6 +233,7 @@ type InstantPayoutInput struct {
 	ProviderAccountID string // pre-resolved by the service layer
 	Amount            int64  // minor units
 	Currency          string
+	Exponent          *int // the currency table's exponent; required by providers that wire decimals
 	IdempotencyKey    string
 }
 

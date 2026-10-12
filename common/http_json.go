@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/nauticana/keel/config"
 )
@@ -58,6 +59,10 @@ func HTTPStatus(err error) int {
 	return 0
 }
 
+// ErrRedirectOffOrigin refuses a redirect that would carry a request's
+// credentials to another scheme or host.
+var ErrRedirectOffOrigin = errors.New("outbound: redirect leaves the request's origin")
+
 // ErrResponseTooLarge means the response body exceeded outbound_max_response_size.
 var ErrResponseTooLarge = errors.New("outbound: response body exceeds outbound_max_response_size")
 
@@ -97,7 +102,7 @@ func requestJSON(ctx context.Context, client *http.Client, method, url string, h
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := client.Do(req)
+	resp, err := sameOrigin(client).Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -118,4 +123,21 @@ func requestJSON(ctx context.Context, client *http.Client, method, url string, h
 		return respBody, resp.Header, &HTTPStatusError{Status: resp.StatusCode, Body: string(respBody), Header: resp.Header}
 	}
 	return respBody, resp.Header, nil
+}
+
+// sameOrigin copies client so redirects stay on the first request's origin; the
+// client's own redirect policy still applies.
+func sameOrigin(client *http.Client) *http.Client {
+	c := *client
+	next := client.CheckRedirect
+	if next == nil {
+		next = checkRedirect
+	}
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != via[0].URL.Scheme || !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+			return ErrRedirectOffOrigin
+		}
+		return next(req, via)
+	}
+	return &c
 }

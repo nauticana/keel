@@ -17,6 +17,15 @@ const (
 	ConsentTypeSocialPublish = "social_publish"
 )
 
+// Policy type codes of the policy_type constant domain, which is open like
+// consent_type.
+const (
+	PolicyTypePrivacyPolicy  = "privacy_policy"
+	PolicyTypeTerms          = "terms"
+	PolicyTypeEmailMarketing = "email_marketing"
+	PolicyTypeSMS            = "sms"
+)
+
 // ConsentRequest represents a single consent decision being recorded.
 // Use UserID when the row is tied to a registered user; otherwise the
 // Email fallback is hashed and stored so the event can be linked to

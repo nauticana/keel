@@ -51,31 +51,30 @@ func wiseTestSign(t *testing.T, key *rsa.PrivateKey, body []byte) string {
 // minorToDecimal — the provider amount contract (USD 2dp, JPY 0dp, BHD 3dp)
 // -----------------------------------------------------------------------------
 
-func TestMinorToDecimal(t *testing.T) {
+func exponent(n int) *int { return &n }
+
+func TestDecimalAmount(t *testing.T) {
 	cases := []struct {
 		amount   int64
-		currency string
+		exponent int
 		want     string
 	}{
-		{599, "USD", "5.99"},
-		{2499, "usd", "24.99"},
-		{100, "EUR", "1.00"},
-		{5, "USD", "0.05"},
-		{0, "USD", "0.00"},
-		{-599, "USD", "-5.99"},
-		{599, "JPY", "599"},
-		{-1500, "JPY", "-1500"},
-		{599, "BHD", "0.599"},
-		{12345, "BHD", "12.345"},
-		{1, "KWD", "0.001"},
+		{599, 2, "5.99"},
+		{5, 2, "0.05"},
+		{0, 2, "0.00"},
+		{-599, 2, "-5.99"},
+		{599, 0, "599"},
+		{599, 3, "0.599"},
+		{1, 3, "0.001"},
 	}
 	for _, c := range cases {
-		if got, err := minorToDecimal(c.amount, c.currency); err != nil || got != c.want {
-			t.Errorf("minorToDecimal(%d, %s)=%q, %v, want %q", c.amount, c.currency, got, err, c.want)
+		got, err := decimalAmount(InstantPayoutInput{Amount: c.amount, Exponent: exponent(c.exponent)})
+		if err != nil || got != c.want {
+			t.Errorf("decimalAmount(%d, %d)=%q, %v, want %q", c.amount, c.exponent, got, err, c.want)
 		}
 	}
-	if _, err := minorToDecimal(599, "XYZ"); err == nil {
-		t.Error("unknown currency must fail, not assume two decimals")
+	if _, err := decimalAmount(InstantPayoutInput{Amount: 599}); !errors.Is(err, errNoExponent) {
+		t.Errorf("missing exponent must fail, not assume one: %v", err)
 	}
 }
 
@@ -91,7 +90,7 @@ func TestAirwallex_Payout_ContractAndDecimalAmount(t *testing.T) {
 	p, _ := NewAirwallexProvider("key", "secret", nil)
 	p.apiBase = ts.URL
 	_, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "ben_x", Amount: 599, Currency: "USD", IdempotencyKey: "k1",
+		ProviderAccountID: "ben_x", Amount: 599, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "k1",
 	})
 	if err != nil {
 		t.Fatalf("RequestInstantPayout: %v", err)
@@ -119,14 +118,14 @@ func TestAirwallex_Payout_ContractAndDecimalAmount(t *testing.T) {
 	}
 
 	_, _ = p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "ben_x", Amount: 1500, Currency: "JPY", IdempotencyKey: "k2",
+		ProviderAccountID: "ben_x", Amount: 1500, Currency: "JPY", Exponent: exponent(0), IdempotencyKey: "k2",
 	})
 	if !strings.Contains(body, `"transfer_amount":1500`) || strings.Contains(body, "15.00") {
 		t.Errorf("JPY 1500 must wire as 1500, body=%s", body)
 	}
 
 	_, _ = p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "ben_x", Amount: 599, Currency: "BHD", IdempotencyKey: "k3",
+		ProviderAccountID: "ben_x", Amount: 599, Currency: "BHD", Exponent: exponent(3), IdempotencyKey: "k3",
 	})
 	if !strings.Contains(body, `"transfer_amount":0.599`) {
 		t.Errorf("BHD 599 must wire as 0.599, body=%s", body)
@@ -161,7 +160,7 @@ func TestWise_Payout_QuotesDecimalAndFundsTransfer(t *testing.T) {
 	p.profileID = "77"
 
 	res, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "555", Amount: 599, Currency: "USD", IdempotencyKey: "idem-1",
+		ProviderAccountID: "555", Amount: 599, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "idem-1",
 	})
 	if err != nil {
 		t.Fatalf("RequestInstantPayout: %v", err)
@@ -198,7 +197,7 @@ func TestWise_Payout_FundingRejectedKeepsTransferIdentity(t *testing.T) {
 	p.apiBase = ts.URL
 	p.profileID = "77"
 	res, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "555", Amount: 100, Currency: "USD", IdempotencyKey: "idem-2",
+		ProviderAccountID: "555", Amount: 100, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "idem-2",
 	})
 	if err == nil || !strings.Contains(err.Error(), "funding rejected") {
 		t.Fatalf("err=%v, want funding rejected", err)
@@ -213,7 +212,7 @@ func TestWise_Payout_FundingRejectedKeepsTransferIdentity(t *testing.T) {
 	// typed errorCode — must map to ErrInsufficientBalance.
 	fundResp = `{"status":"REJECTED","errorCode":"transfer.insufficient_funds"}`
 	res, err = p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "555", Amount: 100, Currency: "USD", IdempotencyKey: "idem-3",
+		ProviderAccountID: "555", Amount: 100, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "idem-3",
 	})
 	if err != ErrInsufficientBalance {
 		t.Fatalf("err=%v, want ErrInsufficientBalance", err)
@@ -496,7 +495,7 @@ func TestOnboardingService_HandleWebhook_IgnoredEventIsAcked(t *testing.T) {
 func TestAirwallex_RejectsConnectedAccountAsDestination(t *testing.T) {
 	p, _ := NewAirwallexProvider("key", "secret", nil)
 	if _, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "acct_aw_123", Amount: 100, Currency: "USD", IdempotencyKey: "k9",
+		ProviderAccountID: "acct_aw_123", Amount: 100, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "k9",
 	}); err == nil || !strings.Contains(err.Error(), "Beneficiary") {
 		t.Fatalf("err=%v, want beneficiary-required rejection", err)
 	}
@@ -526,7 +525,7 @@ func TestStripeConnect_ResumePayout_ValidatesAndReconciles(t *testing.T) {
 
 	p, _ := NewStripeConnectProvider("sk", "s", nil)
 	p.apiBase = ts.URL
-	in := InstantPayoutInput{ProviderAccountID: "acct_x", Amount: 500, Currency: "USD", IdempotencyKey: "k1"}
+	in := InstantPayoutInput{ProviderAccountID: "acct_x", Amount: 500, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "k1"}
 
 	res, err := p.ResumePayout(context.Background(), in, "tr_9")
 	if err != nil {
@@ -548,7 +547,7 @@ func TestStripeConnect_ResumePayout_ValidatesAndReconciles(t *testing.T) {
 
 	// A mismatched funding transfer is refused.
 	if _, err := p.ResumePayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "acct_other", Amount: 500, Currency: "USD", IdempotencyKey: "k1",
+		ProviderAccountID: "acct_other", Amount: 500, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "k1",
 	}, "tr_9"); err == nil {
 		t.Fatal("mismatched destination must be refused")
 	}
@@ -628,7 +627,7 @@ func TestStripeConnect_ResumePayout_ReversedFunding(t *testing.T) {
 
 	p, _ := NewStripeConnectProvider("sk", "s", nil)
 	p.apiBase = ts.URL
-	in := InstantPayoutInput{ProviderAccountID: "acct_x", Amount: 500, Currency: "USD", IdempotencyKey: "k1"}
+	in := InstantPayoutInput{ProviderAccountID: "acct_x", Amount: 500, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "k1"}
 
 	// No existing payout: reversed funding refuses creation.
 	if _, err := p.ResumePayout(context.Background(), in, "tr_9"); err == nil || !strings.Contains(err.Error(), "reversed") {
@@ -666,7 +665,7 @@ func TestStripeConnect_ResumePayout_FindsPayoutOnLaterPage(t *testing.T) {
 	p, _ := NewStripeConnectProvider("sk", "s", nil)
 	p.apiBase = ts.URL
 	res, err := p.ResumePayout(context.Background(), InstantPayoutInput{
-		ProviderAccountID: "acct_x", Amount: 500, Currency: "USD", IdempotencyKey: "k1",
+		ProviderAccountID: "acct_x", Amount: 500, Currency: "USD", Exponent: exponent(2), IdempotencyKey: "k1",
 	}, "tr_9")
 	if err != nil || res.ProviderPayoutID != "acct_x:po_b" || creates != 0 {
 		t.Fatalf("res=%+v err=%v creates=%d, want po_b from page 2 without a create", res, err, creates)

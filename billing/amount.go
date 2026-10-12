@@ -1,28 +1,23 @@
 package billing
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/nauticana/keel/common"
 )
 
-// decimalAmount is minor as the exact major-unit decimal a NUMERIC display
-// column stores; an unknown currency fails rather than assuming two decimals.
-func decimalAmount(minor int64, currency string) (string, error) {
-	decimal, ok := common.FormatMinorUnits(minor, currency)
-	if !ok {
-		return "", fmt.Errorf("billing: unknown currency %q", currency)
+// majorAmount is the display-only major-unit projection of minor units at the
+// currency's exponent; money math stays in minor units.
+func majorAmount(minor int64, exponent int) (float64, error) {
+	decimal, err := common.FormatMinorUnits(minor, exponent)
+	if err != nil {
+		return 0, err
 	}
-	return decimal, nil
+	return strconv.ParseFloat(decimal, 64)
 }
 
-// FillAmount sets the display Amount from AmountMinor.
-func (p *PlanPrice) FillAmount() error {
-	decimal, err := decimalAmount(p.AmountMinor, p.Currency)
-	if err != nil {
-		return err
-	}
-	p.Amount, err = strconv.ParseFloat(decimal, 64)
+// FillAmount sets the display Amount from AmountMinor and Exponent.
+func (p *PlanPrice) FillAmount() (err error) {
+	p.Amount, err = majorAmount(p.AmountMinor, p.Exponent)
 	return err
 }

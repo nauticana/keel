@@ -375,7 +375,7 @@ Nil-safe: with `Consent` unset both routes return **503**.
 
 ### Consent types
 
-`user.ConsentTypePrivacyPolicy`, `ConsentTypeTerms`, `ConsentTypeCrossBorder`, `ConsentTypeVideoOptIn`, `ConsentTypeVideoSession`, `ConsentTypeMarketing` and `ConsentTypeSocialPublish` are the codes of the seeded `consent_type` domain; `consent_policy.policy_type` uses the `policy_type` domain (`privacy_policy`, `terms`). Both columns carry a CHECK, so a consumer type or policy type is added by [extending the domain](data-and-infrastructure.md#extending-a-keel-code-domain).
+`user.ConsentTypePrivacyPolicy`, `ConsentTypeTerms`, `ConsentTypeCrossBorder`, `ConsentTypeVideoOptIn`, `ConsentTypeVideoSession`, `ConsentTypeMarketing` and `ConsentTypeSocialPublish` are the codes of the seeded `consent_type` domain; `consent_policy.policy_type` uses the `policy_type` domain (`privacy_policy`, `terms`, `email_marketing`, `sms`). Both columns carry a CHECK, so a consumer type or policy type is added by [extending the domain](data-and-infrastructure.md#extending-a-keel-code-domain).
 
 ### Session-scoped consent — `LatestConsentFor`
 

@@ -417,7 +417,7 @@ CREATE TABLE IF NOT EXISTS consent_policy (
     effective_from                       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deprecated_at                        TIMESTAMP    ,
     CONSTRAINT consent_policy_pk PRIMARY KEY (id),
-    CONSTRAINT chk_consent_policy_policy_type CHECK (policy_type IN ('privacy_policy', 'terms'))
+    CONSTRAINT chk_consent_policy_policy_type CHECK (policy_type IN ('privacy_policy', 'terms', 'email_marketing', 'sms'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS consent_policy_uq ON consent_policy(policy_type, region, version, language);
 
@@ -448,6 +448,15 @@ CREATE INDEX IF NOT EXISTS idx_consent_event_phone ON consent_event(phone_hash, 
 
 CREATE SEQUENCE IF NOT EXISTS consent_event_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('consent_event', 'id', 'consent_event_seq') ON CONFLICT DO NOTHING;
+
+-- ISO 4217 currencies with their minor-unit exponent, the only source of exponents
+CREATE TABLE IF NOT EXISTS currency (
+    code                                 CHAR(3)       NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    exponent                             SMALLINT      NOT NULL,
+    CONSTRAINT currency_pk PRIMARY KEY (code),
+    CONSTRAINT chk_currency_exponent CHECK (exponent BETWEEN 0 AND 6)
+);
 
 -- Country reference table
 CREATE TABLE IF NOT EXISTS country (
@@ -768,7 +777,6 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
     trial_days                           INTEGER      ,
     CONSTRAINT subscription_plan_pk PRIMARY KEY (id),
-    CONSTRAINT chk_subscription_plan_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
     CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F'))
 );
 
@@ -782,7 +790,6 @@ CREATE TABLE IF NOT EXISTS subscription_plan_price (
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     provider_price_id                    VARCHAR(64)  ,
     CONSTRAINT subscription_plan_price_pk PRIMARY KEY (plan_id, billing_cycle, term_type, term_count),
-    CONSTRAINT chk_subscription_plan_price_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
     CONSTRAINT chk_subscription_plan_price_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_subscription_plan_price_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 );
@@ -813,14 +820,13 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     caption                              VARCHAR(80)   NOT NULL,
     max_value                            BIGINT        NOT NULL,
     is_active                            BOOLEAN       NOT NULL DEFAULT TRUE,
-    monthly_cost                         NUMERIC(18,2) NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     billing_cycle                        CHAR(1)       NOT NULL DEFAULT 'M',
     term_count                           INTEGER       NOT NULL DEFAULT 1,
     term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
     CONSTRAINT subscription_addon_pk PRIMARY KEY (id),
-    CONSTRAINT chk_subscription_addon_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
     CONSTRAINT chk_subscription_addon_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_subscription_addon_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 );
@@ -831,7 +837,7 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     plan_id                              VARCHAR(20)   NOT NULL,
     begda                                TIMESTAMP     NOT NULL,
     endda                                TIMESTAMP    ,
-    monthly_cost                         NUMERIC(18,2) NOT NULL,
+    installment_minor                    BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           BOOLEAN       NOT NULL DEFAULT TRUE,
@@ -847,7 +853,6 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     trial_end                            TIMESTAMP    ,
     seats                                INTEGER      ,
     CONSTRAINT partner_plan_subscription_pk PRIMARY KEY (partner_id, plan_id, begda),
-    CONSTRAINT chk_partner_plan_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
     CONSTRAINT chk_partner_plan_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_plan_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_plan_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
@@ -861,7 +866,7 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     auto_increase                        BOOLEAN       NOT NULL DEFAULT FALSE,
     begda                                TIMESTAMP     NOT NULL,
     endda                                TIMESTAMP    ,
-    monthly_cost                         NUMERIC(18,2) NOT NULL,
+    installment_minor                    BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           BOOLEAN       NOT NULL DEFAULT TRUE,
@@ -872,7 +877,6 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     renewal_date                         TIMESTAMP    ,
     next_charge_date                     TIMESTAMP    ,
     CONSTRAINT partner_addon_subscription_pk PRIMARY KEY (partner_id, addon_id, begda),
-    CONSTRAINT chk_partner_addon_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
     CONSTRAINT chk_partner_addon_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_addon_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_addon_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
@@ -1242,9 +1246,8 @@ CREATE TABLE IF NOT EXISTS invoice (
     partner_id                           BIGINT        NOT NULL,
     invoice_number                       VARCHAR(30)   NOT NULL,
     status                               CHAR(1)       NOT NULL DEFAULT 'D',
-    subtotal                             NUMERIC(20,4) NOT NULL,
-    tax                                  NUMERIC(20,4) NOT NULL DEFAULT 0.00,
-    total                                NUMERIC(20,4) NOT NULL,
+    subtotal_minor                       BIGINT        NOT NULL,
+    tax_minor                            BIGINT        NOT NULL DEFAULT 0,
     total_minor                          BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     issued_at                            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1267,8 +1270,8 @@ CREATE SEQUENCE IF NOT EXISTS invoice_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('invoice', 'id', 'invoice_seq') ON CONFLICT DO NOTHING;
 
 -- Line items for an invoice — domain-neutral finance data only.
--- amount_minor is the authoritative integer minor-unit amount (amount
--- stays for display) and has NO default: writers must supply it.
+-- Amounts are minor units of the invoice currency; amount_minor has NO
+-- default: writers must supply it.
 -- service_from / service_to (inclusive / exclusive) bound the
 -- covered-service period for period-scoped consumers (proration,
 -- partial refunds). What a line sells lives in domain extension tables
@@ -1278,8 +1281,7 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     seq                                  INTEGER       NOT NULL,
     description                          VARCHAR(200)  NOT NULL,
     quantity                             INTEGER       NOT NULL DEFAULT 1,
-    unit_price                           NUMERIC(20,4) NOT NULL,
-    amount                               NUMERIC(20,4) NOT NULL,
+    unit_price_minor                     BIGINT        NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     service_from                         TIMESTAMP    ,
     service_to                           TIMESTAMP    ,
@@ -1324,7 +1326,6 @@ CREATE TABLE IF NOT EXISTS payment_record (
     provider_payment_id                  VARCHAR(255) ,
     provider_event_type                  VARCHAR(100) ,
     provider_charge_id                   VARCHAR(255) ,
-    amount                               NUMERIC(20,4) NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
     invoice_id                           BIGINT       ,
@@ -2330,6 +2331,15 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'country_currency' AND table_name = 'country'
+  ) THEN
+    ALTER TABLE country ADD CONSTRAINT country_currency FOREIGN KEY (currency) REFERENCES currency(code);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'states' AND table_name = 'state'
   ) THEN
     ALTER TABLE state ADD CONSTRAINT states FOREIGN KEY (country_id) REFERENCES country(id);
@@ -2546,9 +2556,27 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'subscription_plan_currency' AND table_name = 'subscription_plan'
+  ) THEN
+    ALTER TABLE subscription_plan ADD CONSTRAINT subscription_plan_currency FOREIGN KEY (currency) REFERENCES currency(code);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'subscription_plan_prices' AND table_name = 'subscription_plan_price'
   ) THEN
     ALTER TABLE subscription_plan_price ADD CONSTRAINT subscription_plan_prices FOREIGN KEY (plan_id) REFERENCES subscription_plan(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'subscription_plan_price_currency' AND table_name = 'subscription_plan_price'
+  ) THEN
+    ALTER TABLE subscription_plan_price ADD CONSTRAINT subscription_plan_price_currency FOREIGN KEY (currency) REFERENCES currency(code);
   END IF;
 END $$;
 DO $$
@@ -2573,6 +2601,15 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'subscription_addon_currency' AND table_name = 'subscription_addon'
+  ) THEN
+    ALTER TABLE subscription_addon ADD CONSTRAINT subscription_addon_currency FOREIGN KEY (currency) REFERENCES currency(code);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'partner_plan_subscriptions' AND table_name = 'partner_plan_subscription'
   ) THEN
     ALTER TABLE partner_plan_subscription ADD CONSTRAINT partner_plan_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id);
@@ -2591,6 +2628,15 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_plan_subscription_currency' AND table_name = 'partner_plan_subscription'
+  ) THEN
+    ALTER TABLE partner_plan_subscription ADD CONSTRAINT partner_plan_subscription_currency FOREIGN KEY (currency) REFERENCES currency(code);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'partner_addon_subscriptions' AND table_name = 'partner_addon_subscription'
   ) THEN
     ALTER TABLE partner_addon_subscription ADD CONSTRAINT partner_addon_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id);
@@ -2603,6 +2649,15 @@ BEGIN
      WHERE constraint_name = 'partner_subscriptions_addon' AND table_name = 'partner_addon_subscription'
   ) THEN
     ALTER TABLE partner_addon_subscription ADD CONSTRAINT partner_subscriptions_addon FOREIGN KEY (addon_id) REFERENCES subscription_addon(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_addon_subscription_currency' AND table_name = 'partner_addon_subscription'
+  ) THEN
+    ALTER TABLE partner_addon_subscription ADD CONSTRAINT partner_addon_subscription_currency FOREIGN KEY (currency) REFERENCES currency(code);
   END IF;
 END $$;
 DO $$
@@ -2654,9 +2709,27 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_payment_method_currency' AND table_name = 'user_payment_method'
+  ) THEN
+    ALTER TABLE user_payment_method ADD CONSTRAINT user_payment_method_currency FOREIGN KEY (currency) REFERENCES currency(code);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'user_billing_customers' AND table_name = 'user_billing_customer'
   ) THEN
     ALTER TABLE user_billing_customer ADD CONSTRAINT user_billing_customers FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'refund_balance_currency' AND table_name = 'refund_balance'
+  ) THEN
+    ALTER TABLE refund_balance ADD CONSTRAINT refund_balance_currency FOREIGN KEY (currency) REFERENCES currency(code);
   END IF;
 END $$;
 DO $$
@@ -2708,6 +2781,15 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_bank_info_currency' AND table_name = 'user_bank_info'
+  ) THEN
+    ALTER TABLE user_bank_info ADD CONSTRAINT user_bank_info_currency FOREIGN KEY (currency) REFERENCES currency(code);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'partner_payout_provider_partner' AND table_name = 'partner_payout_provider'
   ) THEN
     ALTER TABLE partner_payout_provider ADD CONSTRAINT partner_payout_provider_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id);
@@ -2729,6 +2811,15 @@ BEGIN
      WHERE constraint_name = 'payee_payout_instructions' AND table_name = 'payout_instruction'
   ) THEN
     ALTER TABLE payout_instruction ADD CONSTRAINT payee_payout_instructions FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payout_instruction_currency' AND table_name = 'payout_instruction'
+  ) THEN
+    ALTER TABLE payout_instruction ADD CONSTRAINT payout_instruction_currency FOREIGN KEY (currency) REFERENCES currency(code);
   END IF;
 END $$;
 DO $$
@@ -2792,6 +2883,15 @@ BEGIN
      WHERE constraint_name = 'partner_invoices' AND table_name = 'invoice'
   ) THEN
     ALTER TABLE invoice ADD CONSTRAINT partner_invoices FOREIGN KEY (partner_id) REFERENCES business_partner(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'invoice_currency' AND table_name = 'invoice'
+  ) THEN
+    ALTER TABLE invoice ADD CONSTRAINT invoice_currency FOREIGN KEY (currency) REFERENCES currency(code);
   END IF;
 END $$;
 DO $$
@@ -2873,6 +2973,15 @@ BEGIN
      WHERE constraint_name = 'payment_record_invoice_currency' AND table_name = 'payment_record'
   ) THEN
     ALTER TABLE payment_record ADD CONSTRAINT payment_record_invoice_currency FOREIGN KEY (invoice_id, currency) REFERENCES invoice(id, currency);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'payment_record_currency' AND table_name = 'payment_record'
+  ) THEN
+    ALTER TABLE payment_record ADD CONSTRAINT payment_record_currency FOREIGN KEY (currency) REFERENCES currency(code);
   END IF;
 END $$;
 DO $$
@@ -3077,6 +3186,15 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'agency_commission_currency' AND table_name = 'agency_commission'
+  ) THEN
+    ALTER TABLE agency_commission ADD CONSTRAINT agency_commission_currency FOREIGN KEY (currency) REFERENCES currency(code);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_name = 'agency_payouts' AND table_name = 'agency_payout'
   ) THEN
     ALTER TABLE agency_payout ADD CONSTRAINT agency_payouts FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id);
@@ -3089,6 +3207,15 @@ BEGIN
      WHERE constraint_name = 'payout_destination_account' AND table_name = 'agency_payout'
   ) THEN
     ALTER TABLE agency_payout ADD CONSTRAINT payout_destination_account FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'agency_payout_currency' AND table_name = 'agency_payout'
+  ) THEN
+    ALTER TABLE agency_payout ADD CONSTRAINT agency_payout_currency FOREIGN KEY (currency) REFERENCES currency(code);
   END IF;
 END $$;
 DO $$

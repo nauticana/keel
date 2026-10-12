@@ -106,7 +106,7 @@ func TestProvenanceRecorderPreservesCreditsAndAllocatesCapturedMoney(t *testing.
 		t.Fatalf("provider payment identity = %#v, want pi_1", payments)
 	}
 	lines := callsNamed(tx.calls, qProvenanceInsertLine)
-	if len(lines) != 2 || lines[0].args[5] != int64(3000) || lines[1].args[5] != int64(-500) {
+	if len(lines) != 2 || lines[0].args[4] != int64(3000) || lines[1].args[4] != int64(-500) {
 		t.Fatalf("persisted canonical line amounts = %#v", lines)
 	}
 	allocations := callsNamed(tx.calls, qProvenanceInsertAllocation)

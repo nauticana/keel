@@ -33,9 +33,12 @@ foreign_keys:
     references:
       table: subscription_plan
       columns: [id]
+  - name: subscription_plan_price_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]
 checks:
-  - name: chk_subscription_plan_price_currency
-    expression: "currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')"
   - name: chk_subscription_plan_price_billing_cycle
     expression: "billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')"
   - name: chk_subscription_plan_price_term_type

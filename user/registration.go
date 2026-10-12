@@ -483,7 +483,7 @@ func (r *RegistrationService) createPartnerTx(ctx context.Context, tx port.TxQue
 	}
 	o := plan.offer
 	if o.status != "" {
-		if _, err := tx.Query(ctx, qAddSubscription, partnerID, plan.id, o.status, o.monthlyCost, plan.currency,
+		if _, err := tx.Query(ctx, qAddSubscription, partnerID, plan.id, o.status, o.installmentMinor, plan.currency,
 			o.billingCycle, o.termCount, o.termType, o.amountMinor, o.renewalDate, o.nextChargeDate); err != nil {
 			return nil, fmt.Errorf("add subscription: %w", err)
 		}
@@ -684,6 +684,7 @@ func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, erro
 			AmountMinor:  common.AsInt64(row[7]),
 			Currency:     common.AsString(row[8]),
 			PriceID:      common.AsString(row[9]),
+			Exponent:     int(common.AsInt64(row[10])),
 		}
 		if err := price.FillAmount(); err != nil {
 			return nil, err

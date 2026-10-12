@@ -184,7 +184,7 @@ type wiseTransferResp struct {
 // incoming_payment_waiting forever — creation alone is NOT disbursement.
 //
 // Amounts on the quote are ordinary source-currency decimals; the
-// integer minor-unit input converts via minorToDecimal (599 USD → 5.99).
+// integer minor-unit input converts via decimalAmount (599 USD → 5.99).
 //
 // IdempotencyKey rides in customerTransactionId per Wise's spec; Wise
 // dedupes transfer creation on it within the platform profile. A
@@ -209,7 +209,7 @@ func (p *WiseProvider) RequestInstantPayout(ctx context.Context, in InstantPayou
 	}
 
 	// Quote first — Wise rejects /v1/transfers without a quote uuid.
-	amount, err := minorToDecimal(in.Amount, in.Currency)
+	amount, err := decimalAmount(in)
 	if err != nil {
 		return nil, fmt.Errorf("wise payout: %w", err)
 	}

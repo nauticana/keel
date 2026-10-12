@@ -74,18 +74,15 @@ func TestRecordProviderInvoice_WritesRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := lastCall(t, qs, qBillRecordInvoice)
-	// args: id, partner, number, subtotal, total, total_minor, currency, paid_at, provider_invoice_id
-	if len(c.args) != 9 {
-		t.Fatalf("want 9 args, got %d: %v", len(c.args), c.args)
+	// args: id, partner, number, subtotal_minor, total_minor, currency, paid_at, provider_invoice_id
+	if len(c.args) != 8 {
+		t.Fatalf("want 8 args, got %d: %v", len(c.args), c.args)
 	}
-	if c.args[1] != int64(7) || c.args[2] != "in_123" || c.args[5] != int64(1999) || c.args[6] != "USD" || c.args[8] != "in_123" {
+	if c.args[1] != int64(7) || c.args[2] != "in_123" || c.args[3] != int64(1999) || c.args[4] != int64(1999) || c.args[5] != "USD" || c.args[7] != "in_123" {
 		t.Fatalf("bad args: %v", c.args)
 	}
-	if c.args[3] != "19.99" || c.args[4] != "19.99" {
-		t.Fatalf("major projection should equal subtotal==total>0: %v / %v", c.args[3], c.args[4])
-	}
-	if c.args[7] != paid {
-		t.Fatalf("paid_at mismatch: %v", c.args[7])
+	if c.args[6] != paid {
+		t.Fatalf("paid_at mismatch: %v", c.args[6])
 	}
 }
 
@@ -167,7 +164,7 @@ func TestActivate_MonthlyCreateActive(t *testing.T) {
 	c := lastCall(t, qs, qLcInsertActive)
 	want := map[int]any{
 		0: int64(7), 1: "pro",
-		iaCost: "100.00", iaCurrency: "USD", iaBillingCycle: "M",
+		iaCost: int64(10000), iaCurrency: "USD", iaBillingCycle: "M",
 		iaTermCount: int64(1), iaTermType: "M", iaAmountMinor: int64(10000),
 		iaRenewal:     time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC), // +1 month term
 		iaNextCharge:  time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC), // due now
@@ -198,8 +195,8 @@ func TestActivate_AnnualPaidMonthly(t *testing.T) {
 	if c.args[iaAmountMinor] != int64(100000) {
 		t.Fatalf("per-unit amount snapshot 100000 expected, got %#v", c.args[iaAmountMinor])
 	}
-	if c.args[iaCost] != "83.33" { // 100000/12 floored
-		t.Fatalf("per-charge should be 83.33, got %#v", c.args[iaCost])
+	if c.args[iaCost] != int64(8333) { // 100000/12 floored
+		t.Fatalf("per-charge should be 8333, got %#v", c.args[iaCost])
 	}
 	if c.args[iaRenewal] != time.Date(2027, 6, 8, 12, 0, 0, 0, time.UTC) {
 		t.Fatalf("term end should be +1 year, got %#v", c.args[iaRenewal])
@@ -252,12 +249,12 @@ func TestActivate_OfferNotOffered(t *testing.T) {
 }
 
 func TestGetPlans_GroupsPricesByPlan(t *testing.T) {
-	// rows: id, caption, currency, activation_mode, trial_days, billing_cycle, term_count, term_type, amount_minor, currency, provider_price_id
+	// rows: id, caption, currency, activation_mode, trial_days, billing_cycle, term_count, term_type, amount_minor, currency, provider_price_id, exponent
 	svc, _ := newSvc(map[string][][]any{
 		qBillGetAllPlans: {
-			{"pro", "Pro", "USD", "A", int64(14), "M", int64(1), "M", int64(10000), "USD", "price_m"},
-			{"pro", "Pro", "USD", "A", int64(14), "A", int64(1), "A", int64(100000), "USD", "price_a"},
-			{"free", "Free", "USD", "F", nil, "", nil, nil, nil, nil, nil}, // LEFT JOIN, no price
+			{"pro", "Pro", "USD", "A", int64(14), "M", int64(1), "M", int64(10000), "USD", "price_m", int64(2)},
+			{"pro", "Pro", "BHD", "A", int64(14), "A", int64(1), "A", int64(100000), "BHD", "price_a", int64(3)},
+			{"free", "Free", "USD", "F", nil, "", nil, nil, nil, nil, nil, nil}, // LEFT JOIN, no price
 		},
 	})
 	plans, err := svc.GetPlans(context.Background())
@@ -271,10 +268,10 @@ func TestGetPlans_GroupsPricesByPlan(t *testing.T) {
 	if pro.ID != "pro" || len(pro.Prices) != 2 {
 		t.Fatalf("pro should have 2 prices: %+v", pro)
 	}
-	if pro.Prices[0].AmountMinor != 10000 || pro.Prices[0].TermType != "M" {
+	if pro.Prices[0].AmountMinor != 10000 || pro.Prices[0].TermType != "M" || pro.Prices[0].Amount != 100 || pro.Prices[0].Exponent != 2 {
 		t.Fatalf("monthly price row wrong: %+v", pro.Prices[0])
 	}
-	if pro.Prices[1].AmountMinor != 100000 || pro.Prices[1].TermType != "A" {
+	if pro.Prices[1].AmountMinor != 100000 || pro.Prices[1].TermType != "A" || pro.Prices[1].Amount != 100 || pro.Prices[1].Exponent != 3 {
 		t.Fatalf("annual price row wrong: %+v", pro.Prices)
 	}
 	if free := plans[1]; free.ID != "free" || len(free.Prices) != 0 {

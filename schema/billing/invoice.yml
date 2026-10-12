@@ -10,16 +10,14 @@ columns:
   - name: status
     type: CHAR(1)
     default: D
-  - name: subtotal
-    type: NUMERIC(20,4)
-  - name: tax
-    type: NUMERIC(20,4)
-    default: "0.00"
-  - name: total
-    type: NUMERIC(20,4)
+  - name: subtotal_minor
+    type: BIGINT
+  - name: tax_minor
+    type: BIGINT
+    default: "0"
   - name: total_minor
     type: BIGINT
-    comment: authoritative charge amount, no default — writers must supply it
+    comment: charge amount in minor units of currency, no default — writers must supply it
   - name: currency
     type: CHAR(3)
     default: USD
@@ -60,6 +58,11 @@ foreign_keys:
     references:
       table: business_partner
       columns: [id]
+  - name: invoice_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]
 indexes:
   - name: idx_invoice_number
     columns: [invoice_number]

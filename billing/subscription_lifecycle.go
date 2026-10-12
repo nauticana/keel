@@ -82,21 +82,21 @@ SELECT amount_minor, currency
 	// Fresh active row (create-active / free / change-plan target).
 	qLcInsertActive: `
 INSERT INTO partner_plan_subscription
-  (partner_id, plan_id, begda, monthly_cost, currency, status, billing_cycle,
+  (partner_id, plan_id, begda, installment_minor, currency, status, billing_cycle,
    term_count, term_type, amount_minor, renewal_date, next_charge_date, provider_subscription_id, seats)
 VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, 'A', ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 	qLcFlipPending: `
 UPDATE partner_plan_subscription
    SET status = 'A', provider_subscription_id = ?, seats = ?, begda = CURRENT_TIMESTAMP,
-       monthly_cost = ?, currency = ?, billing_cycle = ?, term_count = ?, term_type = ?,
+       installment_minor = ?, currency = ?, billing_cycle = ?, term_count = ?, term_type = ?,
        amount_minor = ?, renewal_date = ?, next_charge_date = ?
  WHERE partner_id = ? AND plan_id = ? AND status = 'P'`,
 
 	// Trial dates are anchored at trial_end (the paid term starts then).
 	qLcStartTrial: `
 INSERT INTO partner_plan_subscription
-  (partner_id, plan_id, begda, monthly_cost, currency, status, billing_cycle,
+  (partner_id, plan_id, begda, installment_minor, currency, status, billing_cycle,
    term_count, term_type, amount_minor, trial_end, renewal_date, next_charge_date, provider_subscription_id, seats)
 VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, 'T', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
@@ -192,13 +192,13 @@ func (s *AbstractBillingService) loadPlanPolicy(ctx context.Context, planID stri
 
 // planCharge is the priced+scheduled result of a (plan, terms) selection.
 type planCharge struct {
-	amountUnitMinor int64  // price for one term_type unit (snapshot)
-	perChargeMajor  string // one installment, exact major-unit decimal (display monthly_cost)
-	currency        string
-	termCount       int64
-	termType        string
-	billingCycle    string
-	renewalDate     time.Time // term end
+	amountUnitMinor  int64 // price for one term_type unit (snapshot)
+	installmentMinor int64 // one installment
+	currency         string
+	termCount        int64
+	termType         string
+	billingCycle     string
+	renewalDate      time.Time // term end
 }
 
 // loadPlanCharge reads the price row for the chosen terms and derives the
@@ -219,18 +219,18 @@ func (s *AbstractBillingService) loadPlanCharge(ctx context.Context, planID stri
 	row := res.Rows[0]
 	amountUnit := common.AsInt64(row[0])
 	currency := common.AsString(row[1])
-	perCharge, err := decimalAmount(InstallmentMinor(terms.ContractTotalMinor(amountUnit), n, 0), currency)
+	total, err := terms.ContractTotalMinor(amountUnit)
 	if err != nil {
 		return planCharge{}, err
 	}
 	return planCharge{
-		amountUnitMinor: amountUnit,
-		perChargeMajor:  perCharge,
-		currency:        currency,
-		termCount:       int64(terms.TermCount),
-		termType:        terms.TermType.Code(),
-		billingCycle:    terms.BillingCycle.Code(),
-		renewalDate:     terms.TermEnd(start),
+		amountUnitMinor:  amountUnit,
+		installmentMinor: InstallmentMinor(total, n, 0),
+		currency:         currency,
+		termCount:        int64(terms.TermCount),
+		termType:         terms.TermType.Code(),
+		billingCycle:     terms.BillingCycle.Code(),
+		renewalDate:      terms.TermEnd(start),
 	}, nil
 }
 
@@ -249,17 +249,17 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 	switch pol.mode {
 	case ActivateCreateActive, ActivateFree:
 		_, err = s.qs.Query(ctx, qLcInsertActive,
-			partnerID, planID, pc.perChargeMajor, pc.currency, pc.billingCycle,
+			partnerID, planID, pc.installmentMinor, pc.currency, pc.billingCycle,
 			pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, nextCharge, providerSubID, seatsArg(seats))
 	case ActivatePending:
 		_, err = s.qs.Query(ctx, qLcFlipPending,
-			providerSubID, seatsArg(seats), pc.perChargeMajor, pc.currency, pc.billingCycle,
+			providerSubID, seatsArg(seats), pc.installmentMinor, pc.currency, pc.billingCycle,
 			pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, nextCharge, partnerID, planID)
 	case ActivateTrial:
 		trialEnd := now.AddDate(0, 0, int(pol.trialDays))
 		termEnd := terms.normalized().TermEnd(trialEnd) // paid term starts at trial end
 		_, err = s.qs.Query(ctx, qLcStartTrial,
-			partnerID, planID, pc.perChargeMajor, pc.currency, pc.billingCycle,
+			partnerID, planID, pc.installmentMinor, pc.currency, pc.billingCycle,
 			pc.termCount, pc.termType, pc.amountUnitMinor, trialEnd, termEnd, trialEnd, providerSubID, seatsArg(seats))
 	default:
 		return fmt.Errorf("unknown activation_mode %q for plan %s", pol.mode, planID)
@@ -315,7 +315,7 @@ func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQue
 		return err
 	}
 	_, err = tx.Query(ctx, qLcInsertActive,
-		partnerID, newPlanID, pc.perChargeMajor, pc.currency, pc.billingCycle,
+		partnerID, newPlanID, pc.installmentMinor, pc.currency, pc.billingCycle,
 		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now, providerSubID, nil)
 	return err
 }

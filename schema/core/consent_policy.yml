@@ -33,4 +33,4 @@ indexes:
     unique: true
 checks:
   - name: chk_consent_policy_policy_type
-    expression: "policy_type IN ('privacy_policy', 'terms')"
+    expression: "policy_type IN ('privacy_policy', 'terms', 'email_marketing', 'sms')"

@@ -33,7 +33,7 @@ func (f *payoutServiceQueryStub) Query(_ context.Context, name string, _ ...any)
 	case qPayoutClaim:
 		return &model.QueryResult{Rows: [][]any{{
 			int64(9), int64(10), int64(500), "USD", "acct_1", "agency-1", "",
-			int64(4), f.now.Add(-24 * time.Hour),
+			int64(4), f.now.Add(-24 * time.Hour), int64(2),
 		}}}, nil
 	case qPayoutMarkManual:
 		return &model.QueryResult{Rows: [][]any{{int64(1)}}}, nil

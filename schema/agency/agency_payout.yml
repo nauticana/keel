@@ -88,3 +88,8 @@ foreign_keys:
     references:
       table: user_bank_info
       columns: [id, partner_id]
+  - name: agency_payout_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]

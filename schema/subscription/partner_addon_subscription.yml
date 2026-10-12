@@ -13,8 +13,9 @@ columns:
   - name: endda
     type: TIMESTAMP
     nullable: true
-  - name: monthly_cost
-    type: NUMERIC(18,2)
+  - name: installment_minor
+    type: BIGINT
+    comment: one installment in minor units, snapshot at purchase
   - name: currency
     type: CHAR(3)
   - name: status
@@ -53,9 +54,12 @@ foreign_keys:
     references:
       table: subscription_addon
       columns: [id]
+  - name: partner_addon_subscription_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]
 checks:
-  - name: chk_partner_addon_subscription_currency
-    expression: "currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')"
   - name: chk_partner_addon_subscription_billing_cycle
     expression: "billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')"
   - name: chk_partner_addon_subscription_term_type

@@ -425,7 +425,7 @@ CREATE TABLE IF NOT EXISTS consent_policy (
     effective_from                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deprecated_at                        DATETIME     ,
     PRIMARY KEY (id),
-    CONSTRAINT chk_consent_policy_policy_type CHECK (policy_type IN ('privacy_policy', 'terms'))
+    CONSTRAINT chk_consent_policy_policy_type CHECK (policy_type IN ('privacy_policy', 'terms', 'email_marketing', 'sms'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX consent_policy_uq ON consent_policy(policy_type, region, version, language);
 
@@ -453,12 +453,22 @@ CREATE INDEX idx_consent_event_user ON consent_event(user_id, consent_type);
 CREATE INDEX idx_consent_event_email ON consent_event(email_hash, consent_type);
 CREATE INDEX idx_consent_event_phone ON consent_event(phone_hash, consent_type);
 
+-- ISO 4217 currencies with their minor-unit exponent, the only source of exponents
+CREATE TABLE IF NOT EXISTS currency (
+    code                                 CHAR(3)       NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
+    exponent                             SMALLINT      NOT NULL,
+    PRIMARY KEY (code),
+    CONSTRAINT chk_currency_exponent CHECK (exponent BETWEEN 0 AND 6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Country reference table
 CREATE TABLE IF NOT EXISTS country (
     id                                   CHAR(2)       NOT NULL,
     caption                              VARCHAR(100)  NOT NULL,
     currency                             CHAR(3)       NOT NULL,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT country_currency FOREIGN KEY (currency) REFERENCES currency(code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- State/province reference table
@@ -773,7 +783,7 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
     trial_days                           INT          ,
     PRIMARY KEY (id),
-    CONSTRAINT chk_subscription_plan_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT subscription_plan_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -788,7 +798,7 @@ CREATE TABLE IF NOT EXISTS subscription_plan_price (
     provider_price_id                    VARCHAR(64)  ,
     PRIMARY KEY (plan_id, billing_cycle, term_type, term_count),
     CONSTRAINT subscription_plan_prices FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
-    CONSTRAINT chk_subscription_plan_price_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT subscription_plan_price_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_subscription_plan_price_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_subscription_plan_price_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -821,14 +831,14 @@ CREATE TABLE IF NOT EXISTS subscription_addon (
     caption                              VARCHAR(80)   NOT NULL,
     max_value                            BIGINT        NOT NULL,
     is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
-    monthly_cost                         DECIMAL(18,2) NOT NULL,
+    amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     billing_cycle                        CHAR(1)       NOT NULL DEFAULT 'M',
     term_count                           INT           NOT NULL DEFAULT 1,
     term_type                            CHAR(1)       NOT NULL DEFAULT 'M',
     description                          VARCHAR(255) ,
     PRIMARY KEY (id),
-    CONSTRAINT chk_subscription_addon_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT subscription_addon_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_subscription_addon_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_subscription_addon_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -839,7 +849,7 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     plan_id                              VARCHAR(20)   NOT NULL,
     begda                                DATETIME      NOT NULL,
     endda                                DATETIME     ,
-    monthly_cost                         DECIMAL(18,2) NOT NULL,
+    installment_minor                    BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           TINYINT(1)    NOT NULL DEFAULT 1,
@@ -857,7 +867,7 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     PRIMARY KEY (partner_id, plan_id, begda),
     CONSTRAINT partner_plan_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT partner_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES subscription_plan(id),
-    CONSTRAINT chk_partner_plan_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT partner_plan_subscription_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_partner_plan_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_plan_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_plan_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
@@ -871,7 +881,7 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     auto_increase                        TINYINT(1)    NOT NULL DEFAULT 0,
     begda                                DATETIME      NOT NULL,
     endda                                DATETIME     ,
-    monthly_cost                         DECIMAL(18,2) NOT NULL,
+    installment_minor                    BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
     status                               CHAR(1)       NOT NULL,
     auto_renew                           TINYINT(1)    NOT NULL DEFAULT 1,
@@ -884,7 +894,7 @@ CREATE TABLE IF NOT EXISTS partner_addon_subscription (
     PRIMARY KEY (partner_id, addon_id, begda),
     CONSTRAINT partner_addon_subscriptions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT partner_subscriptions_addon FOREIGN KEY (addon_id) REFERENCES subscription_addon(id),
-    CONSTRAINT chk_partner_addon_subscription_currency CHECK (currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')),
+    CONSTRAINT partner_addon_subscription_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_partner_addon_subscription_billing_cycle CHECK (billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_addon_subscription_term_type CHECK (term_type IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')),
     CONSTRAINT chk_partner_addon_subscription_status CHECK (status IN ('A', 'P', 'T', 'C', 'X'))
@@ -964,6 +974,7 @@ CREATE TABLE IF NOT EXISTS user_payment_method (
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT user_payment_method_users FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT user_payment_method_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_user_payment_method_type CHECK (method_type IN ('card', 'bank', 'wallet', 'apple_pay', 'google_pay'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_user_payment_method_user ON user_payment_method(user_id, is_default);
@@ -993,6 +1004,7 @@ CREATE TABLE IF NOT EXISTS refund_balance (
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           DATETIME     ,
     PRIMARY KEY (id),
+    CONSTRAINT refund_balance_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_refund_balance_amounts CHECK (captured_minor >= 0 AND refunded_minor >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX refund_balance_payment_uq ON refund_balance(provider, payment_id);
@@ -1059,6 +1071,7 @@ CREATE TABLE IF NOT EXISTS user_bank_info (
     PRIMARY KEY (id),
     CONSTRAINT user_bank_info_users FOREIGN KEY (user_id) REFERENCES user_account(id),
     CONSTRAINT user_bank_info_partners FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT user_bank_info_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_user_bank_info_provider CHECK (provider IN ('AW', 'SC', 'WI')),
     CONSTRAINT chk_user_bank_info_tax_id_type CHECK (tax_id_type IN ('S', 'N', 'E', 'V', 'O')),
     CONSTRAINT chk_user_bank_info_status CHECK (status IN ('A', 'S')),
@@ -1121,6 +1134,7 @@ CREATE TABLE IF NOT EXISTS payout_instruction (
     PRIMARY KEY (id),
     CONSTRAINT partner_payout_instructions FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT payee_payout_instructions FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT payout_instruction_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_payout_instruction_status CHECK (status IN ('N', 'D', 'P', 'S', 'F', 'V', 'X', 'M')),
     CONSTRAINT chk_payout_instruction_amount CHECK (amount_minor > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1243,9 +1257,8 @@ CREATE TABLE IF NOT EXISTS invoice (
     partner_id                           BIGINT        NOT NULL,
     invoice_number                       VARCHAR(30)   NOT NULL,
     status                               CHAR(1)       NOT NULL DEFAULT 'D',
-    subtotal                             DECIMAL(20,4) NOT NULL,
-    tax                                  DECIMAL(20,4) NOT NULL DEFAULT 0.00,
-    total                                DECIMAL(20,4) NOT NULL,
+    subtotal_minor                       BIGINT        NOT NULL,
+    tax_minor                            BIGINT        NOT NULL DEFAULT 0,
     total_minor                          BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL DEFAULT 'USD',
     issued_at                            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1258,7 +1271,8 @@ CREATE TABLE IF NOT EXISTS invoice (
     next_attempt_at                      DATETIME     ,
     last_error                           TEXT         ,
     PRIMARY KEY (id),
-    CONSTRAINT partner_invoices FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+    CONSTRAINT partner_invoices FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT invoice_currency FOREIGN KEY (currency) REFERENCES currency(code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_invoice_number ON invoice(invoice_number);
 CREATE INDEX idx_invoice_partner ON invoice(partner_id);
@@ -1266,8 +1280,8 @@ CREATE UNIQUE INDEX invoice_id_partner_uq ON invoice(id, partner_id);
 CREATE UNIQUE INDEX invoice_id_currency_uq ON invoice(id, currency);
 
 -- Line items for an invoice — domain-neutral finance data only.
--- amount_minor is the authoritative integer minor-unit amount (amount
--- stays for display) and has NO default: writers must supply it.
+-- Amounts are minor units of the invoice currency; amount_minor has NO
+-- default: writers must supply it.
 -- service_from / service_to (inclusive / exclusive) bound the
 -- covered-service period for period-scoped consumers (proration,
 -- partial refunds). What a line sells lives in domain extension tables
@@ -1277,8 +1291,7 @@ CREATE TABLE IF NOT EXISTS invoice_line (
     seq                                  INT           NOT NULL,
     description                          VARCHAR(200)  NOT NULL,
     quantity                             INT           NOT NULL DEFAULT 1,
-    unit_price                           DECIMAL(20,4) NOT NULL,
-    amount                               DECIMAL(20,4) NOT NULL,
+    unit_price_minor                     BIGINT        NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     service_from                         DATETIME     ,
     service_to                           DATETIME     ,
@@ -1328,7 +1341,6 @@ CREATE TABLE IF NOT EXISTS payment_record (
     provider_payment_id                  VARCHAR(255) ,
     provider_event_type                  VARCHAR(100) ,
     provider_charge_id                   VARCHAR(255) ,
-    amount                               DECIMAL(20,4) NOT NULL,
     amount_minor                         BIGINT        NOT NULL,
     currency                             CHAR(3)       NOT NULL,
     invoice_id                           BIGINT       ,
@@ -1340,7 +1352,8 @@ CREATE TABLE IF NOT EXISTS payment_record (
     CONSTRAINT partner_payment_records FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT invoice_payment_records FOREIGN KEY (invoice_id) REFERENCES invoice(id),
     CONSTRAINT payment_record_invoice_partner FOREIGN KEY (invoice_id, partner_id) REFERENCES invoice(id, partner_id),
-    CONSTRAINT payment_record_invoice_currency FOREIGN KEY (invoice_id, currency) REFERENCES invoice(id, currency)
+    CONSTRAINT payment_record_invoice_currency FOREIGN KEY (invoice_id, currency) REFERENCES invoice(id, currency),
+    CONSTRAINT payment_record_currency FOREIGN KEY (currency) REFERENCES currency(code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_payment_record_partner ON payment_record(partner_id, paid_at);
 CREATE INDEX idx_payment_record_provider_charge ON payment_record(provider, provider_charge_id);
@@ -1547,6 +1560,7 @@ CREATE TABLE IF NOT EXISTS agency_commission (
     CONSTRAINT commission_client_billing FOREIGN KEY (client_billing_id) REFERENCES agency_client_billing(id),
     CONSTRAINT commission_source_allocation FOREIGN KEY (invoice_line_payment_id) REFERENCES invoice_line_payment(id),
     CONSTRAINT commission_reversal_of FOREIGN KEY (reversal_of_id) REFERENCES agency_commission(id),
+    CONSTRAINT agency_commission_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_agency_commission_entry_type CHECK (entry_type IN ('E', 'R')),
     CONSTRAINT chk_agency_commission_status CHECK (status IN ('H', 'P', 'R', 'D', 'O')),
     CONSTRAINT chk_agency_commission_entry CHECK ((entry_type = 'E' AND gross_amount_minor > 0 AND commission_amount_minor > 0 AND reversal_of_id IS NULL) OR (entry_type = 'R' AND gross_amount_minor < 0 AND commission_amount_minor < 0 AND reversal_of_id IS NOT NULL)),
@@ -1585,6 +1599,7 @@ CREATE TABLE IF NOT EXISTS agency_payout (
     PRIMARY KEY (id),
     CONSTRAINT agency_payouts FOREIGN KEY (agency_partner_id) REFERENCES agency_profile(agency_partner_id),
     CONSTRAINT payout_destination_account FOREIGN KEY (user_bank_info_id, agency_partner_id) REFERENCES user_bank_info(id, partner_id),
+    CONSTRAINT agency_payout_currency FOREIGN KEY (currency) REFERENCES currency(code),
     CONSTRAINT chk_agency_payout_status CHECK (status IN ('C', 'P', 'D', 'F', 'R', 'V', 'M')),
     CONSTRAINT chk_agency_payout_provider CHECK (provider IN ('AW', 'SC', 'WI')),
     CONSTRAINT chk_agency_payout_amount CHECK (amount_minor > 0)

@@ -654,13 +654,19 @@ erDiagram
 
 ```mermaid
 erDiagram
+    currency ||--o{ country : "country_currency"
     country ||--o{ state : "states"
     state ||--o{ county : "counties"
 
+    currency {
+        CHAR code PK
+        VARCHAR caption
+        SMALLINT exponent
+    }
     country {
         CHAR id PK
         VARCHAR caption
-        CHAR currency
+        CHAR currency FK
     }
     state {
         CHAR country_id PK,FK
@@ -1032,7 +1038,7 @@ erDiagram
         VARCHAR id PK
         VARCHAR caption
         BOOLEAN is_active
-        CHAR currency
+        CHAR currency FK
         CHAR activation_mode
         INTEGER trial_days
     }
@@ -1042,7 +1048,7 @@ erDiagram
         INTEGER term_count PK
         CHAR term_type PK
         BIGINT amount_minor
-        CHAR currency
+        CHAR currency FK
         VARCHAR provider_price_id
     }
     subscription_resource {
@@ -1063,8 +1069,8 @@ erDiagram
         VARCHAR caption
         BIGINT max_value
         BOOLEAN is_active
-        NUMERIC monthly_cost
-        CHAR currency
+        BIGINT amount_minor
+        CHAR currency FK
         CHAR billing_cycle
         INTEGER term_count
         CHAR term_type
@@ -1075,8 +1081,8 @@ erDiagram
         VARCHAR plan_id PK,FK
         TIMESTAMP begda PK
         TIMESTAMP endda
-        NUMERIC monthly_cost
-        CHAR currency
+        BIGINT installment_minor
+        CHAR currency FK
         CHAR status
         BOOLEAN auto_renew
         VARCHAR provider_subscription_id
@@ -1097,8 +1103,8 @@ erDiagram
         BOOLEAN auto_increase
         TIMESTAMP begda PK
         TIMESTAMP endda
-        NUMERIC monthly_cost
-        CHAR currency
+        BIGINT installment_minor
+        CHAR currency FK
         CHAR status
         BOOLEAN auto_renew
         CHAR billing_cycle
@@ -1161,7 +1167,7 @@ erDiagram
         VARCHAR brand
         SMALLINT expiry_month
         SMALLINT expiry_year
-        CHAR currency "nullable"
+        CHAR currency FK "nullable"
         BOOLEAN is_default
         TIMESTAMP created_at
     }
@@ -1191,7 +1197,7 @@ erDiagram
         BIGINT user_id FK
         BIGINT partner_id FK
         CHAR country_code
-        CHAR currency
+        CHAR currency FK
         VARCHAR account_holder_name
         TEXT billing_address
         CHAR tax_id_type
@@ -1288,11 +1294,10 @@ erDiagram
         BIGINT partner_id FK
         VARCHAR invoice_number
         CHAR status
-        NUMERIC subtotal
-        NUMERIC tax
-        NUMERIC total
+        BIGINT subtotal_minor
+        BIGINT tax_minor
         BIGINT total_minor
-        CHAR currency
+        CHAR currency FK
         TIMESTAMP issued_at
         TIMESTAMP due_at
         TIMESTAMP paid_at
@@ -1308,8 +1313,7 @@ erDiagram
         INTEGER seq PK
         VARCHAR description
         INTEGER quantity
-        NUMERIC unit_price
-        NUMERIC amount
+        BIGINT unit_price_minor
         BIGINT amount_minor
         TIMESTAMP service_from
         TIMESTAMP service_to
@@ -1327,7 +1331,6 @@ erDiagram
         VARCHAR provider_payment_id
         VARCHAR provider_event_type
         VARCHAR provider_charge_id
-        NUMERIC amount
         BIGINT amount_minor
         CHAR currency FK
         BIGINT invoice_id FK
@@ -1461,7 +1464,7 @@ erDiagram
         BIGINT gross_amount_minor
         BIGINT commission_amount_minor
         INTEGER applied_rate_bp
-        CHAR currency
+        CHAR currency FK
         CHAR entry_type
         CHAR status
         BIGINT reversal_of_id FK
@@ -1473,7 +1476,7 @@ erDiagram
         BIGINT agency_partner_id FK
         BIGINT user_bank_info_id FK
         BIGINT amount_minor
-        CHAR currency
+        CHAR currency FK
         CHAR provider
         VARCHAR provider_account_id
         TIMESTAMP selection_cutoff_at

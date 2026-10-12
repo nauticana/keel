@@ -536,28 +536,15 @@ func (s *TableServicePgsql) selectRows(ctx context.Context, sqlText string, vals
 	}
 	defer rows.Close()
 
-	fieldDescs := rows.FieldDescriptions()
-	colNames := make([]string, len(fieldDescs))
-	for i, fd := range fieldDescs {
-		colNames[i] = fd.Name
-	}
-
-	scanDest := make([]any, len(colNames))
 	var results []any
-	rowVals := make([]any, len(colNames))
-	for i := range rowVals {
-		scanDest[i] = &rowVals[i]
-	}
 	for rows.Next() {
-		if err := rows.Scan(scanDest...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+		row, err := scanRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		rowMap := make(map[string]any)
-		for i := range colNames {
-			jsonName := s.Table.Columns[i].PascalName
-			// Strip pgx wrapper types (pgtype.Time/Date/Numeric/…) so JSON clients
-			// get primitives, not "[object Object]". Matches QueryService.Query.
-			rowMap[jsonName] = normalizeValue(rowVals[i])
+		rowMap := make(map[string]any, len(row)+1)
+		for i, v := range row {
+			rowMap[s.Table.Columns[i].PascalName] = v
 		}
 		rowMap["op_code"] = "R"
 		results = append(results, rowMap)

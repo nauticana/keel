@@ -1,8 +1,8 @@
 table: invoice_line
 comment: |
   Line items for an invoice — domain-neutral finance data only.
-  amount_minor is the authoritative integer minor-unit amount (amount
-  stays for display) and has NO default: writers must supply it.
+  Amounts are minor units of the invoice currency; amount_minor has NO
+  default: writers must supply it.
   service_from / service_to (inclusive / exclusive) bound the
   covered-service period for period-scoped consumers (proration,
   partial refunds). What a line sells lives in domain extension tables
@@ -17,10 +17,8 @@ columns:
   - name: quantity
     type: INTEGER
     default: "1"
-  - name: unit_price
-    type: NUMERIC(20,4)
-  - name: amount
-    type: NUMERIC(20,4)
+  - name: unit_price_minor
+    type: BIGINT
   - name: amount_minor
     type: BIGINT
   - name: service_from

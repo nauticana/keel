@@ -9,3 +9,9 @@ columns:
     type: CHAR(3)
     comment: ISO 4217 default currency — country→currency lookup for app defaults
 primary_key: [id]
+foreign_keys:
+  - name: country_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]

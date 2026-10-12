@@ -30,12 +30,12 @@ const (
 
 var selfSchedQueries = map[string]string{
 	qSSCreateInvoice: `
-INSERT INTO invoice (id, partner_id, invoice_number, status, subtotal, tax, total, total_minor, currency, issued_at)
-VALUES (?, ?, ?, 'O', ?, 0, ?, ?, ?, CURRENT_TIMESTAMP)`,
+INSERT INTO invoice (id, partner_id, invoice_number, status, subtotal_minor, tax_minor, total_minor, currency, issued_at)
+VALUES (?, ?, ?, 'O', ?, 0, ?, ?, CURRENT_TIMESTAMP)`,
 
 	qSSInsertLine: `
-INSERT INTO invoice_line (invoice_id, seq, description, quantity, unit_price, amount, amount_minor, service_from, service_to)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO invoice_line (invoice_id, seq, description, quantity, unit_price_minor, amount_minor, service_from, service_to)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 
 	qSSInsertSubLine: `
 INSERT INTO subscription_invoice_line (invoice_id, invoice_line_seq, plan_id, addon_id)
@@ -80,7 +80,7 @@ SELECT amount_minor
 
 	// Roll into the next term, re-snapshotting the refreshed price.
 	qSSRenewTerm: `
-UPDATE partner_plan_subscription SET renewal_date = ?, next_charge_date = ?, amount_minor = ?, monthly_cost = ?
+UPDATE partner_plan_subscription SET renewal_date = ?, next_charge_date = ?, amount_minor = ?, installment_minor = ?
  WHERE partner_id = ? AND plan_id = ? AND begda = ?`,
 
 	// Term complete, not renewing: stop charging, end the row.
@@ -265,11 +265,7 @@ func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invI
 }
 
 func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64, draft *InvoiceDraft) (int64, error) {
-	totalMinor := draft.TotalMinor() // authoritative; subtotal/total are major-unit display
-	totalMajor, err := decimalAmount(totalMinor, draft.Currency)
-	if err != nil {
-		return 0, err
-	}
+	totalMinor := draft.TotalMinor()
 
 	// Header + lines in one tx, so the charge path never sees a half-written invoice.
 	tx, err := e.Repo.BeginTx(ctx, selfSchedQueries)
@@ -285,19 +281,11 @@ func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64
 
 	id := tx.GenID()
 	number := fmt.Sprintf("INV-%d", id)
-	if _, err := tx.Query(ctx, qSSCreateInvoice, id, partnerID, number, totalMajor, totalMajor, totalMinor, draft.Currency); err != nil {
+	if _, err := tx.Query(ctx, qSSCreateInvoice, id, partnerID, number, totalMinor, totalMinor, draft.Currency); err != nil {
 		return 0, err
 	}
 	for i, l := range draft.Lines {
 		amountMinor := l.UnitPriceMinor * l.Quantity
-		unit, err := decimalAmount(l.UnitPriceMinor, draft.Currency)
-		if err != nil {
-			return 0, err
-		}
-		amount, err := decimalAmount(amountMinor, draft.Currency)
-		if err != nil {
-			return 0, err
-		}
 		var svcFrom, svcTo any
 		if !l.ServiceFrom.IsZero() {
 			svcFrom = l.ServiceFrom
@@ -305,7 +293,7 @@ func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64
 		if !l.ServiceTo.IsZero() {
 			svcTo = l.ServiceTo
 		}
-		if _, err := tx.Query(ctx, qSSInsertLine, id, i+1, l.Description, l.Quantity, unit, amount, amountMinor, svcFrom, svcTo); err != nil {
+		if _, err := tx.Query(ctx, qSSInsertLine, id, i+1, l.Description, l.Quantity, l.UnitPriceMinor, amountMinor, svcFrom, svcTo); err != nil {
 			return 0, err
 		}
 		if l.PlanID != "" || l.AddonID != "" {
@@ -365,7 +353,11 @@ func (e *SelfScheduledEngine) chargeDueSub(ctx context.Context, row []any) {
 		e.logErr(fmt.Sprintf("self-scheduled: bad terms for partner %d plan %s: %s", partnerID, planID, err.Error()))
 		return
 	}
-	total := terms.ContractTotalMinor(amountUnit)
+	total, err := terms.ContractTotalMinor(amountUnit)
+	if err != nil {
+		e.logErr(fmt.Sprintf("self-scheduled: partner %d plan %s: %s", partnerID, planID, err.Error()))
+		return
+	}
 	// Last installment (absorbs the remainder) when one more cycle reaches term end.
 	isLast := !terms.BillingCycle.NextRenewal(nextCharge).Before(renewal)
 	k := 0
@@ -395,14 +387,14 @@ func (e *SelfScheduledEngine) chargeDueSub(ctx context.Context, row []any) {
 	// reuse the same PaymentIntent instead of charging again.
 	idemKey := fmt.Sprintf("sub:%d:%s:%d", partnerID, planID, nextCharge.Unix())
 	e.chargeInvoice(ctx, partnerID, invID, amount, currency, 0, idemKey, func() {
-		e.advanceSubscription(ctx, partnerID, planID, begda, terms, currency, n, renewal, nextCharge, isLast, autoRenew)
+		e.advanceSubscription(ctx, partnerID, planID, begda, terms, n, renewal, nextCharge, isLast, autoRenew)
 	})
 }
 
 // advanceSubscription moves the sub forward after a paid installment: bump
 // next_charge_date within the term; at term end roll to a new term (re-reading
 // the current price, since price locks only per term) or end the row.
-func (e *SelfScheduledEngine) advanceSubscription(ctx context.Context, partnerID int64, planID string, begda time.Time, terms BillingTerms, currency string, n int, renewal, nextCharge time.Time, isLast, autoRenew bool) {
+func (e *SelfScheduledEngine) advanceSubscription(ctx context.Context, partnerID int64, planID string, begda time.Time, terms BillingTerms, n int, renewal, nextCharge time.Time, isLast, autoRenew bool) {
 	if !isLast {
 		e.exec(ctx, qSSAdvanceCharge, terms.BillingCycle.NextRenewal(nextCharge), partnerID, planID, begda)
 		return
@@ -422,13 +414,13 @@ func (e *SelfScheduledEngine) advanceSubscription(ctx context.Context, partnerID
 		return
 	}
 	newUnit := common.AsInt64(res.Rows[0][0])
-	perCharge, err := decimalAmount(InstallmentMinor(terms.ContractTotalMinor(newUnit), n, 0), currency)
+	total, err := terms.ContractTotalMinor(newUnit)
 	if err != nil {
 		e.logErr(fmt.Sprintf("self-scheduled: renew partner %d plan %s: %s", partnerID, planID, err.Error()))
 		return
 	}
 	newRenewal := terms.TermType.AddUnits(renewal, terms.TermCount)
-	e.exec(ctx, qSSRenewTerm, newRenewal, renewal, newUnit, perCharge, partnerID, planID, begda)
+	e.exec(ctx, qSSRenewTerm, newRenewal, renewal, newUnit, InstallmentMinor(total, n, 0), partnerID, planID, begda)
 }
 
 func (e *SelfScheduledEngine) markRetry(ctx context.Context, invID int64, msg string) {

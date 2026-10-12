@@ -86,3 +86,8 @@ foreign_keys:
     references:
       table: business_partner
       columns: [id]
+  - name: user_bank_info_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]

@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -59,9 +60,9 @@ func TestBillingTerms_UserCases(t *testing.T) {
 			if err != nil || n != c.wantN {
 				t.Fatalf("TotalInstallments = %d,%v want %d", n, err, c.wantN)
 			}
-			total := c.terms.ContractTotalMinor(c.perUnit)
-			if total != c.wantTotal {
-				t.Fatalf("ContractTotalMinor = %d want %d", total, c.wantTotal)
+			total, err := c.terms.ContractTotalMinor(c.perUnit)
+			if err != nil || total != c.wantTotal {
+				t.Fatalf("ContractTotalMinor = %d, %v want %d", total, err, c.wantTotal)
 			}
 			if end := c.terms.TermEnd(begda); !end.Equal(c.wantTermEnd) {
 				t.Fatalf("TermEnd = %v want %v", end, c.wantTermEnd)
@@ -78,6 +79,21 @@ func TestBillingTerms_UserCases(t *testing.T) {
 				t.Fatalf("installments sum = %d want %d", sum, c.wantTotal)
 			}
 		})
+	}
+}
+
+func TestContractTotalMinorRejectsOverflowAndNegativeAmount(t *testing.T) {
+	terms := BillingTerms{TermCount: 2}
+	for _, amount := range []int64{math.MaxInt64, -1} {
+		if _, err := terms.ContractTotalMinor(amount); err == nil {
+			t.Errorf("amount %d accepted", amount)
+		}
+	}
+	if _, err := (BillingTerms{TermCount: -1}).ContractTotalMinor(1); err == nil {
+		t.Error("negative term count accepted")
+	}
+	if _, err := (BillingTerms{TermCount: -1}).TotalInstallments(); err == nil {
+		t.Error("negative term count accepted by TotalInstallments")
 	}
 }
 

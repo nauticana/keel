@@ -1,4 +1,5 @@
 tables:
+  - currency
   - country
   - state
   - county

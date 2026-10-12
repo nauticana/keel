@@ -25,6 +25,12 @@ columns:
     type: TIMESTAMP
     nullable: true
 primary_key: [id]
+foreign_keys:
+  - name: refund_balance_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]
 sequence:
   name: refund_balance_seq
   column: id

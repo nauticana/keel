@@ -89,8 +89,9 @@ SELECT ubi.id, ubi.country_code, ubi.currency, ubi.account_holder_name, ubi.bill
        ubi.provider, COALESCE(ubi.provider_account_id, ''),
        COALESCE(ua.email, ''),
        ubi.provider_agreement,
-       ubi.provider_onboarded_at
+       ubi.provider_onboarded_at, cur.exponent
   FROM user_bank_info ubi
+  JOIN currency cur ON cur.code = ubi.currency
   LEFT JOIN user_account ua ON ua.id = ubi.user_id
  WHERE ubi.user_id = ? AND ubi.partner_id = ? AND ubi.status = 'A'`,
 
@@ -486,7 +487,8 @@ func (s *OnboardingService) RequestInstantPayout(ctx context.Context, userID int
 		PartnerID:         partnerID,
 		ProviderAccountID: bank.ProviderAccountID,
 		Amount:            amount,
-		Currency:          currency,
+		Currency:          bank.Currency,
+		Exponent:          &bank.Exponent,
 		IdempotencyKey:    idempotencyKey,
 	})
 }
@@ -631,6 +633,7 @@ type bankInfoRow struct {
 	Email             string
 	ProviderAgreement bool
 	OnboardedAt       string
+	Exponent          int
 }
 
 func (s *OnboardingService) loadBankInfo(ctx context.Context, userID int, partnerID int64) (*bankInfoRow, error) {
@@ -654,6 +657,7 @@ func (s *OnboardingService) loadBankInfo(ctx context.Context, userID int, partne
 		Email:             kcommon.AsString(row[7]),
 		ProviderAgreement: kcommon.AsBool(row[8]),
 		OnboardedAt:       kcommon.AsString(row[9]),
+		Exponent:          int(kcommon.AsInt64(row[10])),
 	}, nil
 }
 

@@ -288,7 +288,9 @@ func (t *memInstructionTx) Lock(_ context.Context, id int64) (*Instruction, erro
 	if !ok {
 		return nil, ErrInstructionNotFound
 	}
-	return cloneInstruction(instr), nil
+	out := cloneInstruction(instr)
+	out.Exponent = 2 // what the SQL store's currency join yields for USD
+	return out, nil
 }
 
 func (t *memInstructionTx) LockByTransfer(ctx context.Context, provider, transferID string) (*Instruction, error) {

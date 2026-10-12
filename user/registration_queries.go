@@ -104,7 +104,7 @@ SELECT billing_cycle, term_type, term_count, amount_minor, currency, COALESCE(pr
 `,
 	qAddSubscription: `
 INSERT INTO partner_plan_subscription
- (partner_id, plan_id, begda, status, monthly_cost, currency, auto_renew,
+ (partner_id, plan_id, begda, status, installment_minor, currency, auto_renew,
   billing_cycle, term_count, term_type, amount_minor, renewal_date, next_charge_date)
 VALUES
  (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?)
@@ -116,9 +116,11 @@ UPDATE partner_plan_subscription
 `,
 	qListActivePlans: `
 SELECT sp.id, sp.caption, sp.activation_mode, sp.trial_days,
-       pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id
+       pp.billing_cycle, pp.term_count, pp.term_type, pp.amount_minor, pp.currency, pp.provider_price_id,
+       cur.exponent
   FROM subscription_plan sp
   LEFT JOIN subscription_plan_price pp ON pp.plan_id = sp.id
+  LEFT JOIN currency cur ON cur.code = pp.currency
  WHERE sp.is_active = TRUE
  ORDER BY sp.id, pp.term_type, pp.term_count, pp.billing_cycle
 `,

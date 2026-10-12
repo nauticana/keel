@@ -58,3 +58,8 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+  - name: payout_instruction_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]

@@ -10,10 +10,10 @@ columns:
   - name: is_active
     type: BOOLEAN
     default: "TRUE"
-  # monthly_cost is the price for one term_type unit (display/NUMERIC; the charge
-  # path uses minor units). Per-charge = this ÷ (term_type ÷ billing_cycle).
-  - name: monthly_cost
-    type: NUMERIC(18,2)
+  # amount_minor is the price for one term_type unit in minor units.
+  # Per-charge = this ÷ (term_type ÷ billing_cycle).
+  - name: amount_minor
+    type: BIGINT
   - name: currency
     type: CHAR(3)
     default: USD
@@ -32,9 +32,13 @@ columns:
     type: VARCHAR(255)
     nullable: true
 primary_key: [id]
+foreign_keys:
+  - name: subscription_addon_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]
 checks:
-  - name: chk_subscription_addon_currency
-    expression: "currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')"
   - name: chk_subscription_addon_billing_cycle
     expression: "billing_cycle IN ('A', 'Q', 'M', 'W', 'D', 'H', 'N', 'S', 'L')"
   - name: chk_subscription_addon_term_type

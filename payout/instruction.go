@@ -22,6 +22,7 @@ type Instruction struct {
 	PartnerID      int64            `json:"partnerId"`
 	UserID         int64            `json:"userId"`
 	Currency       string           `json:"currency"`
+	Exponent       int              `json:"exponent"`
 	AmountMinor    int64            `json:"amountMinor"`
 	IdempotencyKey string           `json:"idempotencyKey"`
 	Status         string           `json:"status"`

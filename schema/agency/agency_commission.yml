@@ -77,3 +77,8 @@ foreign_keys:
     references:
       table: agency_commission
       columns: [id]
+  - name: agency_commission_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]

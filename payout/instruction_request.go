@@ -3,8 +3,6 @@ package payout
 import (
 	"fmt"
 	"strings"
-
-	"github.com/nauticana/keel/common"
 )
 
 const maxInstructionKeyLength = 200
@@ -27,8 +25,9 @@ func (r InstructionRequest) validate() error {
 	case r.IdempotencyKey == "" || len(r.IdempotencyKey) > maxInstructionKeyLength:
 		return fmt.Errorf("%w: idempotency key must be 1-%d bytes", ErrInvalidInstruction, maxInstructionKeyLength)
 	}
-	if _, ok := common.CurrencyExponent(strings.ToUpper(r.Currency)); !ok {
-		return fmt.Errorf("%w: unknown currency %q", ErrInvalidInstruction, r.Currency)
+	code := normalizeCurrency(r.Currency)
+	if len(code) != 3 || strings.Trim(code, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "" {
+		return fmt.Errorf("%w: currency %q is not an ISO 4217 code", ErrInvalidInstruction, r.Currency)
 	}
 	return nil
 }
@@ -37,7 +36,7 @@ func (r InstructionRequest) instruction() *Instruction {
 	return &Instruction{
 		PartnerID:      r.PartnerID,
 		UserID:         r.UserID,
-		Currency:       strings.ToUpper(r.Currency),
+		Currency:       normalizeCurrency(r.Currency),
 		AmountMinor:    r.AmountMinor,
 		IdempotencyKey: r.IdempotencyKey,
 		Status:         InstructionNew,
@@ -47,5 +46,7 @@ func (r InstructionRequest) instruction() *Instruction {
 func (r InstructionRequest) sameAs(existing *Instruction) bool {
 	return existing.UserID == r.UserID &&
 		existing.AmountMinor == r.AmountMinor &&
-		strings.EqualFold(existing.Currency, r.Currency)
+		existing.Currency == normalizeCurrency(r.Currency)
 }
+
+func normalizeCurrency(code string) string { return strings.ToUpper(strings.TrimSpace(code)) }

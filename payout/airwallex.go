@@ -320,7 +320,7 @@ func (p *AirwallexProvider) RequestInstantPayout(ctx context.Context, in Instant
 	if in.Currency == "" {
 		return nil, fmt.Errorf("airwallex payout: Currency required")
 	}
-	amount, err := minorToDecimal(in.Amount, in.Currency)
+	amount, err := decimalAmount(in)
 	if err != nil {
 		return nil, fmt.Errorf("airwallex payout: %w", err)
 	}

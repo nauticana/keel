@@ -49,7 +49,7 @@ payoutHandler.SealTaxID = taxIDs.SealBytes
 
 ### `common.RequestJSON` — typed outbound JSON calls
 
-Sends a JSON body on the shared client and returns body + headers. A non-2xx response returns both alongside `*common.HTTPStatusError`, which classifies itself (`Unauthorized`, `RateLimited`, `Transient`, `Permanent`); mapping to provider errors and decoding stay with the caller. Bodies over `outbound_max_response_size` return the truncated body with `ErrResponseTooLarge` (joined with the status error on a non-2xx).
+Sends a JSON body on the shared client and returns body + headers. Redirects stay on the original origin, so credentials are never forwarded elsewhere. A non-2xx response returns both alongside `*common.HTTPStatusError`, which classifies itself (`Unauthorized`, `RateLimited`, `Transient`, `Permanent`); mapping to provider errors and decoding stay with the caller. Bodies over `outbound_max_response_size` return the truncated body with `ErrResponseTooLarge` (joined with the status error on a non-2xx).
 
 ```go
 body, hdr, err := common.RequestJSON(ctx, http.MethodPost, url, map[string]string{"Authorization": "Bearer " + tok}, payload)

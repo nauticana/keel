@@ -24,11 +24,9 @@ columns:
     type: VARCHAR(255)
     nullable: true
     comment: typed provider charge identity for refund/dispute correlation
-  - name: amount
-    type: NUMERIC(20,4)
   - name: amount_minor
     type: BIGINT
-    comment: authoritative integer minor-unit amount, no default — writers must supply it; amount stays for display
+    comment: minor units of currency, no default — writers must supply it
   - name: currency
     type: CHAR(3)
   - name: invoice_id
@@ -76,6 +74,11 @@ foreign_keys:
     references:
       table: invoice
       columns: [id, currency]
+  - name: payment_record_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]
 indexes:
   - name: idx_payment_record_partner
     columns: [partner_id, paid_at]

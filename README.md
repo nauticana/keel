@@ -14,7 +14,7 @@ flowchart TB
     KEEL --> PLATFORM["Application Platform<br/><small>HTTP infrastructure · metadata-driven REST · table actions<br/>persistence · queries · transactions · schemas · IDs</small>"]
     KEEL --> RUNTIME["Reliable Runtime<br/><small>config · secrets · cache · quotas · limiters · workers<br/>idempotency · action tokens · outbox · approvals · audit</small>"]
     KEEL --> COMMERCE["Commerce<br/><small>billing · payments · subscriptions · payouts</small>"]
-    KEEL --> EXPERIENCE["Content & Engagement<br/><small>DMS · storage · geo · content creation<br/>messaging · notifications · realtime · recording</small>"]
+    KEEL --> EXPERIENCE["Content & Engagement<br/><small>DMS · storage · geo · content creation<br/>messaging · notifications · realtime · recording<br/>telephony events · ads · marketing · Sheets</small>"]
 
     TRUST -.-> IDP(["Identity providers<br/><small>OIDC · SAML · Google · Apple</small>"])
     PLATFORM --> DB[(PostgreSQL)]

@@ -1,40 +1,32 @@
 package common
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
-
-	"golang.org/x/text/currency"
 )
 
-// CurrencyExponent returns the ISO 4217 minor-unit exponent for an uppercase
-// three-letter code (USD → 2, JPY → 0, BHD → 3), or false for an unknown code.
-// Money in ledgers is integer minor units; never assume two decimals.
-func CurrencyExponent(code string) (int, bool) {
-	unit, err := currency.ParseISO(code)
-	if err != nil || unit.String() != code {
-		return 0, false
-	}
-	exponent, _ := currency.Standard.Rounding(unit)
-	return exponent, true
-}
+// MaxCurrencyExponent bounds a minor-unit exponent, as the currency table's
+// CHECK does.
+const MaxCurrencyExponent = 6
 
-// ParseMinorUnits converts a decimal amount ("19.99") to integer minor units of
-// currency without passing through float64. Precision beyond the currency's
-// exponent is an error, never a rounding.
-func ParseMinorUnits(amount, currencyCode string) (int64, error) {
-	code := strings.ToUpper(strings.TrimSpace(currencyCode))
-	exponent, ok := CurrencyExponent(code)
-	if !ok {
-		return 0, fmt.Errorf("unknown currency %q", currencyCode)
+// ErrCurrencyExponent rejects an exponent outside 0..MaxCurrencyExponent.
+var ErrCurrencyExponent = errors.New("currency exponent out of range")
+
+// ParseMinorUnits converts a decimal amount ("19.99") to integer minor units at
+// the currency's exponent (the currency table's), without passing through
+// float64. Precision beyond the exponent is an error, never a rounding.
+func ParseMinorUnits(amount string, exponent int) (int64, error) {
+	if exponent < 0 || exponent > MaxCurrencyExponent {
+		return 0, fmt.Errorf("%w: %d", ErrCurrencyExponent, exponent)
 	}
 	text := strings.TrimSpace(amount)
 	negative := strings.HasPrefix(text, "-")
 	whole, fraction, _ := strings.Cut(strings.TrimPrefix(text, "-"), ".")
 	if whole == "" || !isDigits(whole) || !isDigits(fraction) || len(fraction) > exponent {
-		return 0, fmt.Errorf("amount %q is not a %s value", amount, code)
+		return 0, fmt.Errorf("amount %q is not a decimal with at most %d places", amount, exponent)
 	}
 	limit := uint64(math.MaxInt64)
 	if negative {
@@ -44,7 +36,7 @@ func ParseMinorUnits(amount, currencyCode string) (int64, error) {
 	for _, r := range whole + fraction + strings.Repeat("0", exponent-len(fraction)) {
 		digit := uint64(r - '0')
 		if minor > (limit-digit)/10 {
-			return 0, fmt.Errorf("amount %q overflows %s minor units", amount, code)
+			return 0, fmt.Errorf("amount %q overflows int64 minor units", amount)
 		}
 		minor = minor*10 + digit
 	}
@@ -57,12 +49,11 @@ func ParseMinorUnits(amount, currencyCode string) (int64, error) {
 	return int64(minor), nil
 }
 
-// FormatMinorUnits renders minor units at the currency's precision, without the
-// code ("12.50", "1250", "1.250"); false for an unknown currency.
-func FormatMinorUnits(minor int64, currencyCode string) (string, bool) {
-	exponent, ok := CurrencyExponent(strings.ToUpper(strings.TrimSpace(currencyCode)))
-	if !ok {
-		return "", false
+// FormatMinorUnits renders minor units at the currency's exponent, without the
+// code ("12.50", "1250", "1.250").
+func FormatMinorUnits(minor int64, exponent int) (string, error) {
+	if exponent < 0 || exponent > MaxCurrencyExponent {
+		return "", fmt.Errorf("%w: %d", ErrCurrencyExponent, exponent)
 	}
 	digits := strconv.FormatUint(absUint64(minor), 10)
 	if exponent > 0 {
@@ -74,7 +65,7 @@ func FormatMinorUnits(minor int64, currencyCode string) (string, bool) {
 	if minor < 0 {
 		digits = "-" + digits
 	}
-	return digits, true
+	return digits, nil
 }
 
 func absUint64(n int64) uint64 {

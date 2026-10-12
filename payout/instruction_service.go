@@ -193,6 +193,7 @@ func (s *InstructionService) dispatch(ctx context.Context, plan *dispatchPlan) (
 		ProviderAccountID: plan.leg.ProviderAccountID,
 		Amount:            plan.leg.AmountMinor,
 		Currency:          plan.instr.Currency,
+		Exponent:          &plan.instr.Exponent,
 		IdempotencyKey:    plan.leg.IdempotencyKey,
 	}
 	if plan.leg.FundingID != "" {

@@ -159,3 +159,33 @@ func TestHTTPStatusErrorMessageIsBounded(t *testing.T) {
 		t.Fatal("Body was truncated")
 	}
 }
+
+func TestRequestJSONKeepsRedirectsOnTheOrigin(t *testing.T) {
+	withResponseCap(t, 1<<20)
+	saved := config.Config().OutboundMaxRedirects
+	config.Config().OutboundMaxRedirects = 10
+	t.Cleanup(func() { config.Config().OutboundMaxRedirects = saved })
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("credentials followed a redirect to another origin: %v", r.Header)
+	}))
+	defer foreign.Close()
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/away":
+			http.Redirect(w, r, foreign.URL+"/steal", http.StatusFound)
+		case "/move":
+			http.Redirect(w, r, srv.URL+"/ok", http.StatusFound)
+		default:
+			_, _ = io.WriteString(w, `{}`)
+		}
+	}))
+	defer srv.Close()
+	auth := map[string]string{"Authorization": "Bearer tok"}
+	if _, _, err := RequestJSON(context.Background(), http.MethodGet, srv.URL+"/away", auth, nil); !errors.Is(err, ErrRedirectOffOrigin) {
+		t.Fatalf("cross-origin redirect: err = %v", err)
+	}
+	if body, _, err := RequestJSON(context.Background(), http.MethodGet, srv.URL+"/move", auth, nil); err != nil || string(body) != "{}" {
+		t.Fatalf("same-origin redirect: %q, %v", body, err)
+	}
+}

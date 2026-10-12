@@ -18,7 +18,7 @@ var keelTestFlagIDs = []string{
 	oauth_signing_key_secret, oauth_access_token_ttl, oauth_refresh_token_ttl,
 	oauth_code_ttl, oauth_max_pending_clients, oauth_max_auth_redirects, oauth_replace_same_app_grant, oauth_max_grants_per_user,
 	api_key_max_per_partner, notify_new_device_signin, stepup_new_device, max_sessions_per_user, outbound_max_redirects,
-	outbound_max_rps, outbound_max_response_size, trusted_proxy_cidr, request_id_header, nats_url, nats_name,
+	outbound_max_rps, outbound_max_pages, outbound_max_items, telephony_max_body_bytes, telephony_signature_tolerance, outbound_max_response_size, trusted_proxy_cidr, request_id_header, nats_url, nats_name,
 	nats_creds_secret, storage_mode, storage_bucket, s3_endpoint, storage_credential_secret, dms_max_bytes, scan_mode, scan_addr, extract_mode, extract_max_bytes, extract_ocr_max_pages,
 	storage_public_base_url, storage_account_url, storage_region, messaging_mode,
 	max_request_size, http_read_timeout, http_write_timeout,
@@ -55,6 +55,10 @@ func keelRows() ConfigRows {
 	m[default_commission_rate_bp] = ConfigRow{Default: "2000"}
 	m[refresh_token_ttl] = ConfigRow{Default: "2592000"}
 	m[outbound_max_response_size] = ConfigRow{Default: "16777216"}
+	m[outbound_max_pages] = ConfigRow{Default: "50"}
+	m[outbound_max_items] = ConfigRow{Default: "50000"}
+	m[telephony_max_body_bytes] = ConfigRow{Default: "65536"}
+	m[telephony_signature_tolerance] = ConfigRow{Default: "300"}
 	m[commission_hold_days] = ConfigRow{Default: "14"}
 	m[agency_payout_min_minor] = ConfigRow{Default: "2500"}
 	m[webhook_claim_lease_seconds] = ConfigRow{Default: "900"}
@@ -208,14 +212,16 @@ func TestParseErr_DownstreamAccumulateAndClear(t *testing.T) {
 	}
 }
 
-func TestApplyRejectsNonPositiveOutboundResponseCap(t *testing.T) {
-	for _, value := range []string{"0", "-1"} {
-		rows := keelRows()
-		row := rows[outbound_max_response_size]
-		row.Value = value
-		rows[outbound_max_response_size] = row
-		if err := (&KeelConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), outbound_max_response_size) {
-			t.Fatalf("value %s: err = %v", value, err)
+func TestApplyRejectsNonPositiveLimits(t *testing.T) {
+	for _, flag := range []string{outbound_max_response_size, outbound_max_pages, outbound_max_items, telephony_max_body_bytes, telephony_signature_tolerance} {
+		for _, value := range []string{"0", "-1"} {
+			rows := keelRows()
+			row := rows[flag]
+			row.Value = value
+			rows[flag] = row
+			if err := (&KeelConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+				t.Fatalf("%s=%s: err = %v", flag, value, err)
+			}
 		}
 	}
 }

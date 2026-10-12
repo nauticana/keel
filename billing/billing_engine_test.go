@@ -20,7 +20,7 @@ func TestAdvanceSubscription_WithinTerm(t *testing.T) {
 	nextCharge := begda.AddDate(0, 3, 0) // month 3 of 12, not last
 	terms := BillingTerms{PeriodMonthly, PeriodAnnual, 1}
 
-	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, "USD", 12, renewal, nextCharge, false, true)
+	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, 12, renewal, nextCharge, false, true)
 
 	c := lastCall(t, qs, qSSAdvanceCharge)
 	// args: next_charge_date, partner, plan, begda
@@ -42,10 +42,10 @@ func TestAdvanceSubscription_TermEndAutoRenewRefreshesPrice(t *testing.T) {
 	renewal := begda.AddDate(1, 0, 0)
 	terms := BillingTerms{PeriodMonthly, PeriodAnnual, 1}
 
-	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, "USD", 12, renewal, renewal.AddDate(0, -1, 0), true, true)
+	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, 12, renewal, renewal.AddDate(0, -1, 0), true, true)
 
 	c := lastCall(t, qs, qSSRenewTerm)
-	// args: new renewal, new next_charge, amount_minor, monthly_cost, partner, plan, begda
+	// args: new renewal, new next_charge, amount_minor, installment_minor, partner, plan, begda
 	if c.args[0] != renewal.AddDate(1, 0, 0) {
 		t.Fatalf("renewal should move +1 year, got %#v", c.args[0])
 	}
@@ -55,8 +55,8 @@ func TestAdvanceSubscription_TermEndAutoRenewRefreshesPrice(t *testing.T) {
 	if c.args[2] != int64(110000) { // refreshed per-unit amount
 		t.Fatalf("amount_minor should refresh to 110000, got %#v", c.args[2])
 	}
-	if c.args[3] != "91.66" {
-		t.Fatalf("monthly_cost should be the new per-installment, got %#v", c.args[3])
+	if c.args[3] != int64(9166) {
+		t.Fatalf("installment_minor should be the new per-installment, got %#v", c.args[3])
 	}
 }
 
@@ -68,7 +68,7 @@ func TestAdvanceSubscription_RenewOfferWithdrawnEnds(t *testing.T) {
 	renewal := begda.AddDate(1, 0, 0)
 	terms := BillingTerms{PeriodMonthly, PeriodAnnual, 1}
 
-	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, "USD", 12, renewal, renewal.AddDate(0, -1, 0), true, true)
+	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, 12, renewal, renewal.AddDate(0, -1, 0), true, true)
 
 	c := lastCall(t, qs, qSSEndTerm)
 	if c.args[0] != renewal {
@@ -83,7 +83,7 @@ func TestAdvanceSubscription_TermEndNoRenew(t *testing.T) {
 	renewal := begda.AddDate(1, 0, 0)
 	terms := BillingTerms{PeriodMonthly, PeriodAnnual, 1}
 
-	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, "USD", 12, renewal, renewal.AddDate(0, -1, 0), true, false)
+	e.advanceSubscription(context.Background(), 7, "pro", begda, terms, 12, renewal, renewal.AddDate(0, -1, 0), true, false)
 
 	c := lastCall(t, qs, qSSEndTerm)
 	if c.args[0] != renewal { // endda = term end

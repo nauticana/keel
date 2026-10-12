@@ -1,68 +1,86 @@
 package pgsql
 
 import (
+	"errors"
 	"fmt"
+	"math"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/nauticana/keel/model"
 )
 
-// normalizeValue converts the pgx-specific wrapper types that arrive
-// from a Scan-into-*any into the primitive Go types keel's
-// `common.As*` helpers (AsFloat64, AsTime, ...) actually recognize.
-//
-// Why this exists: pgx's default codec decodes PG `NUMERIC` to
-// pgtype.Numeric (a struct wrapping a *big.Int + Exp). Callers that
-// pass the scanned value through `common.AsFloat64` would hit the
-// default branch and receive the `-1` sentinel — silently corrupting
-// every NUMERIC column (money, coordinates, rates). Same story for
-// pgtype.Date / Timestamp / Timestamptz against `common.AsTime`. By
-// converting at the scan boundary we keep the keel/common helpers'
-// type switches tight (they stay free of pgx dependencies) and every
-// downstream service automatically gets correct values.
-//
-// A NULL column (Valid=false on the typed wrapper) becomes Go nil so
-// existing nil checks (`if v == nil`) keep working unchanged.
-//
-// Loss-of-precision note: NUMERIC values with more than ~15 significant
-// digits round when converted to float64. If a consumer ever stores
-// arbitrary-precision values in NUMERIC and expects exact reads,
-// they should call pgx directly (or via TableService.Get) and skip
-// the QueryService path.
-func normalizeValue(v any) any {
+// ErrNonFiniteNumeric rejects a NaN or infinite NUMERIC: no caller can use it
+// as a number, and passing it on would corrupt arithmetic silently.
+var ErrNonFiniteNumeric = errors.New("pgsql: non-finite NUMERIC value")
+
+// scanResult drains rows into a QueryResult with one allocation per row.
+func scanResult(rows pgx.Rows) (*model.QueryResult, error) {
+	defer rows.Close()
+	fieldDescs := rows.FieldDescriptions()
+	cols := make([]string, len(fieldDescs))
+	for i, fd := range fieldDescs {
+		cols[i] = fd.Name
+	}
+	var results [][]any
+	for rows.Next() {
+		row, err := scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query iteration: %w", err)
+	}
+	return &model.QueryResult{Columns: cols, Rows: results}, nil
+}
+
+// scanRow decodes the current row and normalizes it in place.
+func scanRow(rows pgx.Rows) ([]any, error) {
+	row, err := rows.Values()
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan row: %w", err)
+	}
+	for i, v := range row {
+		if row[i], err = normalizeValue(v); err != nil {
+			return nil, fmt.Errorf("column %s: %w", rows.FieldDescriptions()[i].Name, err)
+		}
+	}
+	return row, nil
+}
+
+// normalizeValue turns pgx wrapper types into the primitives common.As*
+// recognizes: NUMERIC becomes float64, TIME a "HH:MM:SS" string, and a NULL
+// wrapper nil.
+func normalizeValue(v any) (any, error) {
 	switch n := v.(type) {
 	case pgtype.Numeric:
 		if !n.Valid {
-			return nil
+			return nil, nil
 		}
-		f, err := n.Float64Value()
-		if err != nil || !f.Valid {
-			return nil
-		}
-		return f.Float64
-	case pgtype.Date:
-		if !n.Valid {
-			return nil
-		}
-		return n.Time
-	case pgtype.Timestamp:
-		if !n.Valid {
-			return nil
-		}
-		return n.Time
-	case pgtype.Timestamptz:
-		if !n.Valid {
-			return nil
-		}
-		return n.Time
+		return numericFloat(n)
 	case pgtype.Time:
-		// TIME-of-day has no date component, so a "HH:MM:SS" string is the
-		// useful primitive — time.Time would marshal a bogus 0001-01-01 date,
-		// and the raw pgtype.Time renders as "[object Object]" in JSON clients.
+		// time.Time would carry a bogus 0001-01-01 date.
 		if !n.Valid {
-			return nil
+			return nil, nil
 		}
 		sec := n.Microseconds / 1_000_000
-		return fmt.Sprintf("%02d:%02d:%02d", sec/3600, (sec%3600)/60, sec%60)
+		return fmt.Sprintf("%02d:%02d:%02d", sec/3600, (sec%3600)/60, sec%60), nil
 	}
-	return v
+	return v, nil
+}
+
+func numericFloat(n pgtype.Numeric) (any, error) {
+	if n.NaN || n.InfinityModifier != pgtype.Finite {
+		return nil, ErrNonFiniteNumeric
+	}
+	f, err := n.Float64Value()
+	if err != nil {
+		return nil, err
+	}
+	if math.IsInf(f.Float64, 0) {
+		return nil, ErrNonFiniteNumeric
+	}
+	return f.Float64, nil
 }

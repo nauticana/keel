@@ -13,20 +13,20 @@ import (
 // subscription a registration creates. The NULLable fields are nil for a free
 // offer.
 type subscriptionOffer struct {
-	paymentRequired bool
-	status          string // row status; "" when checkout creates the row
-	providerPriceID string
-	monthlyCost     string // per-installment display, exact major-unit decimal
-	currency        string // offer currency ("" for free → caller keeps plan currency)
-	billingCycle    any
-	termType        any
-	termCount       any
-	amountMinor     any
-	renewalDate     any
-	nextChargeDate  any
+	paymentRequired  bool
+	status           string // row status; "" when checkout creates the row
+	providerPriceID  string
+	installmentMinor int64
+	currency         string // offer currency ("" for free → caller keeps plan currency)
+	billingCycle     any
+	termType         any
+	termCount        any
+	amountMinor      any
+	renewalDate      any
+	nextChargeDate   any
 }
 
-var freeOffer = subscriptionOffer{status: "A", monthlyCost: "0"}
+var freeOffer = subscriptionOffer{status: "A"}
 
 // resolveSubscriptionOffer picks the offer from a plan's subscription_plan_price
 // rows: the requested terms, else the cheapest; no rows or a zero price is
@@ -68,7 +68,10 @@ func resolveSubscriptionOffer(rows [][]any, setup *PartnerSetup, mode string, no
 
 	row := rows[idx]
 	amount := common.AsInt64(row[3])
-	if amount <= 0 {
+	if amount < 0 {
+		return subscriptionOffer{}, fmt.Errorf("plan price cannot be negative")
+	}
+	if amount == 0 {
 		return freeOffer, nil
 	}
 	terms := billing.BillingTerms{
@@ -80,20 +83,20 @@ func resolveSubscriptionOffer(rows [][]any, setup *PartnerSetup, mode string, no
 	if err != nil {
 		return subscriptionOffer{}, err
 	}
-	monthlyCost, ok := common.FormatMinorUnits(billing.InstallmentMinor(terms.ContractTotalMinor(amount), n, 0), common.AsString(row[4]))
-	if !ok {
-		return subscriptionOffer{}, fmt.Errorf("plan price has unknown currency %q", common.AsString(row[4]))
+	total, err := terms.ContractTotalMinor(amount)
+	if err != nil {
+		return subscriptionOffer{}, err
 	}
 	offer := subscriptionOffer{
-		providerPriceID: common.AsString(row[5]),
-		monthlyCost:     monthlyCost,
-		currency:        common.AsString(row[4]),
-		billingCycle:    terms.BillingCycle.Code(),
-		termType:        terms.TermType.Code(),
-		termCount:       max(terms.TermCount, 1),
-		amountMinor:     amount,
-		renewalDate:     terms.TermEnd(now),
-		nextChargeDate:  terms.BillingCycle.NextRenewal(now),
+		providerPriceID:  common.AsString(row[5]),
+		installmentMinor: billing.InstallmentMinor(total, n, 0),
+		currency:         common.AsString(row[4]),
+		billingCycle:     terms.BillingCycle.Code(),
+		termType:         terms.TermType.Code(),
+		termCount:        max(terms.TermCount, 1),
+		amountMinor:      amount,
+		renewalDate:      terms.TermEnd(now),
+		nextChargeDate:   terms.BillingCycle.NextRenewal(now),
 	}
 	switch billing.ActivationMode(mode) {
 	case billing.ActivateFree:

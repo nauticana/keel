@@ -101,13 +101,17 @@ func TestInstructionCreate_Validation(t *testing.T) {
 	f := newInstructionFixture(t)
 	for _, req := range []InstructionRequest{
 		{PartnerID: testPartner, UserID: testPayee, Currency: "USD", AmountMinor: 0, IdempotencyKey: "k"},
-		{PartnerID: testPartner, UserID: testPayee, Currency: "XYZ", AmountMinor: 1, IdempotencyKey: "k"},
+		{PartnerID: testPartner, UserID: testPayee, Currency: "US", AmountMinor: 1, IdempotencyKey: "k"},
+		{PartnerID: testPartner, UserID: testPayee, Currency: "U$D", AmountMinor: 1, IdempotencyKey: "k"},
 		{PartnerID: testPartner, UserID: testPayee, Currency: "USD", AmountMinor: 1},
 		{UserID: testPayee, Currency: "USD", AmountMinor: 1, IdempotencyKey: "k"},
 	} {
 		if _, err := f.svc.Create(context.Background(), req); !errors.Is(err, ErrInvalidInstruction) {
 			t.Errorf("%+v: err=%v, want ErrInvalidInstruction", req, err)
 		}
+	}
+	if got, err := f.svc.Create(context.Background(), InstructionRequest{PartnerID: testPartner, UserID: testPayee, Currency: " usd ", AmountMinor: 1, IdempotencyKey: "normalized"}); err != nil || got == nil || got.Currency != "USD" {
+		t.Fatalf("normalized instruction = %+v, err = %v", got, err)
 	}
 }
 
@@ -122,7 +126,7 @@ func TestInstructionExecute_PaidOutsideTransaction(t *testing.T) {
 		t.Fatalf("leg=%+v", leg)
 	}
 	req := f.provider.requests[0]
-	if req.IdempotencyKey != fmt.Sprintf("payout-instruction-%d-1", instr.ID) || req.Amount != 1000 || req.ProviderAccountID != "acct_1" || req.Currency != "USD" {
+	if req.IdempotencyKey != fmt.Sprintf("payout-instruction-%d-1", instr.ID) || req.Amount != 1000 || req.ProviderAccountID != "acct_1" || req.Currency != "USD" || req.Exponent == nil || *req.Exponent != 2 {
 		t.Fatalf("provider request=%+v", req)
 	}
 	if again, err := f.svc.Execute(context.Background(), instr.ID); err != nil || again.Status != InstructionSettled || len(f.provider.requests) != 1 {

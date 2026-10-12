@@ -1,0 +1,13 @@
+table: currency
+comment: ISO 4217 currencies with their minor-unit exponent, the only source of exponents
+columns:
+  - name: code
+    type: CHAR(3)
+  - name: caption
+    type: VARCHAR(80)
+  - name: exponent
+    type: SMALLINT
+primary_key: [code]
+checks:
+  - name: chk_currency_exponent
+    expression: exponent BETWEEN 0 AND 6

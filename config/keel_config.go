@@ -49,6 +49,10 @@ const (
 	oauth_max_grants_per_user     = "oauth_max_grants_per_user"
 	outbound_max_redirects        = "outbound_max_redirects"
 	outbound_max_rps              = "outbound_max_rps"
+	outbound_max_pages            = "outbound_max_pages"
+	outbound_max_items            = "outbound_max_items"
+	telephony_max_body_bytes      = "telephony_max_body_bytes"
+	telephony_signature_tolerance = "telephony_signature_tolerance"
 	outbound_max_response_size    = "outbound_max_response_size"
 	trusted_proxy_cidr            = "trusted_proxy_cidr"
 	api_key_max_per_partner       = "api_key_max_per_partner"
@@ -198,6 +202,10 @@ type KeelConfig struct {
 	OAuthMaxGrantsPerUser       int           // oauth_max_grants_per_user     10                 Live OAuth grants a user may hold; 0 is unbounded
 	OutboundMaxRedirects        int           // outbound_max_redirects        10                 Max redirects the shared outbound HTTP client follows
 	OutboundMaxRPS              float64       // outbound_max_rps              0                  Global rate cap on the shared outbound HTTP client (0 = unlimited)
+	OutboundMaxPages            int           // outbound_max_pages            50                 Most pages a provider API client follows in one paged read
+	OutboundMaxItems            int           // outbound_max_items            50000              Most items a provider API client collects in one paged read
+	TelephonyMaxBodyBytes       int64         // telephony_max_body_bytes      65536              Largest inbound telephony webhook body (bytes)
+	TelephonySignatureTolerance time.Duration // telephony_signature_tolerance 300                Replay window for a timestamped telephony webhook signature (seconds)
 	APIKeyMaxPerPartner         int           // api_key_max_per_partner       20                 Usable API keys a partner may hold; 0 is unbounded
 	NotifyNewDeviceSignin       bool          // notify_new_device_signin      true               Notify the user of a sign-in from a device not seen before
 	StepUpNewDevice             bool          // stepup_new_device             false              A user without 2FA confirms a new-device sign-in with an emailed code
@@ -343,6 +351,10 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OAuthMaxGrantsPerUser = c.Int(m, oauth_max_grants_per_user)
 	c.OutboundMaxRedirects = c.Int(m, outbound_max_redirects)
 	c.OutboundMaxRPS = c.Float(m, outbound_max_rps)
+	c.OutboundMaxPages = c.Int(m, outbound_max_pages)
+	c.OutboundMaxItems = c.Int(m, outbound_max_items)
+	c.TelephonyMaxBodyBytes = c.Int64(m, telephony_max_body_bytes)
+	c.TelephonySignatureTolerance = c.Duration(m, telephony_signature_tolerance)
 	c.OutboundMaxResponseSize = c.Int64(m, outbound_max_response_size)
 	c.TrustedProxyCIDR = c.String(m, trusted_proxy_cidr)
 	c.APIKeyMaxPerPartner = c.Int(m, api_key_max_per_partner)
@@ -462,8 +474,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", flag))
 		}
 	}
-	if c.OutboundMaxResponseSize <= 0 {
-		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", outbound_max_response_size))
+	for flag, n := range map[string]int64{outbound_max_response_size: c.OutboundMaxResponseSize, outbound_max_pages: int64(c.OutboundMaxPages),
+		outbound_max_items: int64(c.OutboundMaxItems), telephony_max_body_bytes: c.TelephonyMaxBodyBytes, telephony_signature_tolerance: int64(c.TelephonySignatureTolerance)} {
+		if n <= 0 {
+			c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", flag))
+		}
 	}
 	if c.DefaultCommissionRateBP <= 0 || c.DefaultCommissionRateBP > 10000 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 1 and 10000", default_commission_rate_bp))

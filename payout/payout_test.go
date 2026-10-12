@@ -139,7 +139,7 @@ func TestAirwallex_RequestInstantPayout_InsufficientBalanceTyped(t *testing.T) {
 
 	_, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
 		UserID: 1, PartnerID: 1,
-		ProviderAccountID: "ben_xxx", Amount: 100, Currency: "USD",
+		ProviderAccountID: "ben_xxx", Amount: 100, Currency: "USD", Exponent: exponent(2),
 		IdempotencyKey: "k-1",
 	})
 	if !errors.Is(err, ErrInsufficientBalance) {
@@ -265,7 +265,7 @@ func TestStripeConnect_RequestInstantPayout_TwoLegs(t *testing.T) {
 
 	res, err := p.RequestInstantPayout(context.Background(), InstantPayoutInput{
 		UserID: 1, PartnerID: 1,
-		ProviderAccountID: "acct_x", Amount: 2500, Currency: "USD",
+		ProviderAccountID: "acct_x", Amount: 2500, Currency: "USD", Exponent: exponent(2),
 		IdempotencyKey: "idem-1",
 	})
 	if err != nil {

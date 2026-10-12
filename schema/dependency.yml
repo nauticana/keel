@@ -49,19 +49,19 @@ groups:
   - name: subscription
     path: subscription
     seed: seed/subscription.yml
-    depends_on: [core, tenant_management, api_key_management]
+    depends_on: [geo, core, tenant_management, api_key_management]
     seed_depends_on: [core]
 
   - name: payment
     path: payment
     seed: seed/payment.yml
-    depends_on: [core, tenant_management]
+    depends_on: [geo, core, tenant_management]
     seed_depends_on: [core]
 
   - name: payout
     path: payout
     seed: seed/payout.yml
-    depends_on: [core, tenant_management]
+    depends_on: [geo, core, tenant_management]
     seed_depends_on: [core]
 
   - name: outbox
@@ -79,13 +79,13 @@ groups:
   - name: billing
     path: billing
     seed: seed/billing.yml
-    depends_on: [tenant_management, subscription]
+    depends_on: [geo, tenant_management, subscription]
     seed_depends_on: [core]
 
   - name: agency
     path: agency
     seed: seed/agency.yml
-    depends_on: [core, tenant_management, payout, billing]
+    depends_on: [geo, core, tenant_management, payout, billing]
     seed_depends_on: [core]
 
   - name: recording

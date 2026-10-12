@@ -32,8 +32,8 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 		if !off.paymentRequired || off.amountMinor != int64(1000) || off.providerPriceID != "price_m" {
 			t.Fatalf("want cheapest 1000, got %+v", off)
 		}
-		if off.monthlyCost != "10.00" { // $10/mo, 1 installment
-			t.Fatalf("monthlyCost = %v, want 10", off.monthlyCost)
+		if off.installmentMinor != 1000 { // $10/mo, 1 installment
+			t.Fatalf("installmentMinor = %v, want 1000", off.installmentMinor)
 		}
 	})
 
@@ -45,9 +45,9 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 		if off.amountMinor != int64(10000) {
 			t.Fatalf("amount_minor = %v, want 10000", off.amountMinor)
 		}
-		// $100.00/yr = 10000 cents ÷ 12 = 833 cents (floor) = $8.33 per installment
-		if off.monthlyCost != "8.33" {
-			t.Fatalf("monthlyCost = %v, want 8.33", off.monthlyCost)
+		// $100.00/yr = 10000 cents ÷ 12 = 833 cents (floor) per installment
+		if off.installmentMinor != 833 {
+			t.Fatalf("installmentMinor = %v, want 833", off.installmentMinor)
 		}
 		if off.renewalDate != now.AddDate(1, 0, 0) {
 			t.Fatalf("renewal = %v, want +1yr", off.renewalDate)
@@ -62,6 +62,13 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 		var appErr *model.AppError
 		if !errors.As(err, &appErr) || appErr.Status != 400 {
 			t.Fatalf("err = %v, want 400", err)
+		}
+	})
+
+	t.Run("negative price is rejected", func(t *testing.T) {
+		bad := [][]any{{"M", "M", int64(1), int64(-1), "USD", "price_bad"}}
+		if _, err := resolveSubscriptionOffer(bad, &PartnerSetup{}, "P", now); err == nil {
+			t.Fatal("negative price accepted")
 		}
 	})
 

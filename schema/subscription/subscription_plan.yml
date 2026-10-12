@@ -23,8 +23,12 @@ columns:
     type: INTEGER
     nullable: true
 primary_key: [id]
+foreign_keys:
+  - name: subscription_plan_currency
+    columns: [currency]
+    references:
+      table: currency
+      columns: [code]
 checks:
-  - name: chk_subscription_plan_currency
-    expression: "currency IN ('ALL', 'ARS', 'AUD', 'BAM', 'BGN', 'BOB', 'BRL', 'BYN', 'CAD', 'CHF', 'CLP', 'COP', 'CZK', 'DKK', 'EUR', 'GBP', 'GYD', 'HUF', 'ISK', 'MDL', 'MKD', 'MXN', 'NOK', 'PEN', 'PLN', 'PYG', 'RON', 'RSD', 'SEK', 'SRD', 'TRY', 'UAH', 'USD', 'UYU', 'VES')"
   - name: chk_subscription_plan_activation_mode
     expression: "activation_mode IN ('A', 'P', 'T', 'F')"

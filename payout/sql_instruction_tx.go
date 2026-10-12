@@ -60,6 +60,7 @@ func (t *sqlInstructionTx) Lock(ctx context.Context, id int64) (*Instruction, er
 		Status:         common.AsString(row[6]),
 		FailureReason:  common.AsString(row[7]),
 		CreatedAt:      common.AsTime(row[8]),
+		Exponent:       int(common.AsInt64(row[9])),
 	}
 	legs, err := t.tx.Query(ctx, qInstructionLegs, id)
 	if err != nil {

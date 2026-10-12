@@ -201,9 +201,10 @@ WITH claimed AS (
 )
 SELECT c.agency_partner_id, ubi.user_id, c.amount_minor, c.currency,
        c.provider_account_id, c.idempotency_key, c.provider_funding_id,
-       c.attempt_count, c.created_at
+       c.attempt_count, c.created_at, cur.exponent
   FROM claimed c
-  JOIN user_bank_info ubi ON ubi.id = c.user_bank_info_id`,
+  JOIN user_bank_info ubi ON ubi.id = c.user_bank_info_id
+  JOIN currency cur ON cur.code = c.currency`,
 
 	qPayoutRecordDispatch: `
 UPDATE agency_payout
@@ -438,12 +439,14 @@ func (s *BaseAgencyPayoutService) dispatchOne(ctx context.Context, payoutID int6
 	row := claim.Rows[0]
 	agencyID := common.AsInt64(row[0])
 	userID := common.AsInt64(row[1])
+	exponent := int(common.AsInt64(row[9]))
 	input := payout.InstantPayoutInput{
 		UserID:            userID,
 		PartnerID:         agencyID,
 		ProviderAccountID: common.AsString(row[4]),
 		Amount:            common.AsInt64(row[2]),
 		Currency:          common.AsString(row[3]),
+		Exponent:          &exponent,
 		IdempotencyKey:    common.AsString(row[5]),
 	}
 	fundingID := common.AsString(row[6])
