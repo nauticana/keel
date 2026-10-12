@@ -104,9 +104,11 @@ type UserService interface {
 
 	// DeleteAccount soft-deletes: anonymizes the user_account row in place,
 	// revokes access and refresh tokens, deletes trusted devices and social
-	// links, and revokes the provider grants those links kept. Preserves referential integrity for history/audit rows. Returns
-	// ErrLegalHold while the user has an unreleased legal hold. Domain tables
-	// keyed on user_id are erased through the erasure package.
+	// links, and revokes the provider grants those links kept. Preserves
+	// referential integrity for history/audit rows. Returns ErrReasonTooLong
+	// for a reason over MaxHistoryReason characters and ErrLegalHold while the
+	// user has an unreleased legal hold. Domain tables keyed on user_id are
+	// erased through the erasure package.
 	DeleteAccount(userID int, reason string) error
 
 	// 2FA (TOTP)

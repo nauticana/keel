@@ -180,3 +180,12 @@ func TestSendReauthOTPChannel(t *testing.T) {
 		t.Fatalf("no cache = %d, want 503", w.Code)
 	}
 }
+
+func TestDeleteAccountRejectsLongReasonBeforeReauth(t *testing.T) {
+	users := &reauthUsers{}
+	h := &SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	body := `{"reauthCode":"x","reason":"` + strings.Repeat("a", user.MaxHistoryReason+1) + `"}`
+	if got := deleteAccount(h, body); got != http.StatusBadRequest || users.deleted || len(users.verified) != 0 {
+		t.Fatalf("status %d deleted=%v verified=%v; want 400 with the proof unspent", got, users.deleted, users.verified)
+	}
+}

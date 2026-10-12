@@ -20,3 +20,8 @@ foreign_keys:
       table: user_account
       columns: [id]
     on_delete: CASCADE
+checks:
+  - name: chk_notification_preference_channel
+    expression: "channel IN ('push', 'sms', 'email', 'inbox')"
+  - name: chk_notification_preference_notification_type
+    expression: "notification_type IN ('otp')"

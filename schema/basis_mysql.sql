@@ -340,12 +340,13 @@ CREATE TABLE IF NOT EXISTS device_token (
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at                         DATETIME     ,
     PRIMARY KEY (id),
-    CONSTRAINT device_token_users FOREIGN KEY (user_id) REFERENCES user_account(id)
+    CONSTRAINT device_token_users FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT chk_device_token_platform CHECK (platform IN ('I', 'A', 'W'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX device_token_user_token_uq ON device_token(user_id, token);
 CREATE INDEX idx_device_token_user_active ON device_token(user_id, is_active);
 
--- In-app notification inbox, one row per message shown to a user. notification_type is consumer-defined.
+-- In-app notification inbox, one row per message shown to a user
 CREATE TABLE IF NOT EXISTS user_notification (
     id                                   BIGINT        NOT NULL,
     user_id                              BIGINT        NOT NULL,
@@ -356,7 +357,8 @@ CREATE TABLE IF NOT EXISTS user_notification (
     read_at                              DATETIME     ,
     created_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT user_notifications FOREIGN KEY (user_id) REFERENCES user_account(id)
+    CONSTRAINT user_notifications FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT chk_user_notification_notification_type CHECK (notification_type IN ('otp'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_user_notification_user ON user_notification(user_id, created_at);
 
@@ -422,7 +424,8 @@ CREATE TABLE IF NOT EXISTS consent_policy (
     content_sha256                       VARCHAR(64)   NOT NULL,
     effective_from                       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deprecated_at                        DATETIME     ,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT chk_consent_policy_policy_type CHECK (policy_type IN ('privacy_policy', 'terms'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX consent_policy_uq ON consent_policy(policy_type, region, version, language);
 
@@ -443,7 +446,8 @@ CREATE TABLE IF NOT EXISTS consent_event (
     PRIMARY KEY (id),
     CONSTRAINT consent_event_policies FOREIGN KEY (policy_id) REFERENCES consent_policy(id),
     CONSTRAINT consent_event_users FOREIGN KEY (user_id) REFERENCES user_account(id),
-    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL)
+    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL),
+    CONSTRAINT chk_consent_event_consent_type CHECK (consent_type IN ('privacy_policy', 'terms', 'cross_border', 'video_opt_in', 'video_session', 'marketing', 'social_publish'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_consent_event_user ON consent_event(user_id, consent_type);
 CREATE INDEX idx_consent_event_email ON consent_event(email_hash, consent_type);
@@ -1844,7 +1848,9 @@ CREATE TABLE IF NOT EXISTS notification (
     PRIMARY KEY (id),
     CONSTRAINT notification_recipient FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE,
     CONSTRAINT notification_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id) ON DELETE SET NULL,
-    CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F'))
+    CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F')),
+    CONSTRAINT chk_notification_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_notification_type CHECK (notification_type IN ('otp'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_notification_drain ON notification(status, available_at);
 CREATE INDEX idx_notification_user ON notification(user_id, created_at);
@@ -1857,7 +1863,9 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     enabled                              TINYINT(1)    NOT NULL,
     updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, notification_type, channel),
-    CONSTRAINT notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE
+    CONSTRAINT notification_preferences FOREIGN KEY (user_id) REFERENCES user_account(id) ON DELETE CASCADE,
+    CONSTRAINT chk_notification_preference_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_preference_notification_type CHECK (notification_type IN ('otp'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). A NULL partner_id suppresses the contact for every tenant; contact is stored lowercased.

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
@@ -43,6 +44,7 @@ var (
 	ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
 	ErrAccessTokenRevoked  = errors.New("access token revoked")
 	ErrLegalHold           = errors.New("user: account is under legal hold")
+	ErrReasonTooLong       = fmt.Errorf("user: reason exceeds %d characters", MaxHistoryReason)
 	ErrNoMembership        = errors.New("user: no current membership of the partner")
 	ErrSSORequired         = errors.New("user: single sign-on is required")
 	ErrSignInNetwork       = errors.New("user: sign-in is not allowed from this network")
@@ -110,6 +112,8 @@ const (
 	UserActivityProfile       = "M"
 	UserActivityContact       = "N"
 	UserActivityMembershipEnd = "E"
+
+	MaxHistoryReason = 80 // user_account_history.object_name width
 
 	// EncryptionCost is the bcrypt work factor for password hashes.
 	// Bumped from 10 → 12 in v0.4.1 to track OWASP 2024 guidance.
@@ -2902,15 +2906,23 @@ func (s *LocalUserService) recordSignupConsent(userID int, email string, sc *Sig
 // integrity for history rows that legal retention requires), revokes every
 // access and refresh token, deletes trusted devices and social-provider links,
 // revokes the provider grants those links kept, and records a
-// UserActivityDelete history entry. Refuses with ErrLegalHold while the user
-// has an unreleased legal hold.
+// UserActivityDelete history entry. Refuses with ErrReasonTooLong before
+// deleting anything, and with ErrLegalHold while the user has an unreleased
+// legal hold. The deletion stands once committed; a failed history write is
+// journaled.
 func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
+	if utf8.RuneCountInString(reason) > MaxHistoryReason {
+		return ErrReasonTooLong
+	}
 	grants, err := s.deleteAccount(userID)
 	if err != nil {
 		return err
 	}
 	s.revokeGrants(userID, grants)
-	return s.AddUserHistory(userID, 0, "", UserActivityDelete, UserStatusDeleted, reason)
+	if err := s.AddUserHistory(userID, 0, "", UserActivityDelete, UserStatusDeleted, reason); err != nil && s.Journal != nil {
+		s.Journal.Error(fmt.Sprintf("delete: user %d: write history: %v", userID, err))
+	}
+	return nil
 }
 
 type identityGrant struct{ issuer, sealed string }

@@ -2,6 +2,7 @@ package user
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,5 +85,33 @@ func TestDeleteAccountRefusesLegalHold(t *testing.T) {
 	}
 	if err := s.DeleteAccount(11, "requested"); err == nil {
 		t.Error("an unknown user is an error")
+	}
+}
+
+func TestDeleteAccountRejectsLongReasonBeforeDeleting(t *testing.T) {
+	store := newMemStore(12)
+	s := newLocalUserService(t, store)
+	if err := s.DeleteAccount(12, strings.Repeat("é", MaxHistoryReason+1)); !errors.Is(err, ErrReasonTooLong) {
+		t.Fatalf("want ErrReasonTooLong, got %v", err)
+	}
+	if store.deleted[12] || store.commits != 0 {
+		t.Errorf("nothing is deleted: %+v", store)
+	}
+	if err := s.DeleteAccount(12, strings.Repeat("é", MaxHistoryReason)); err != nil {
+		t.Fatalf("a reason at the column width is accepted: %v", err)
+	}
+}
+
+func TestDeleteAccountJournalsFailedHistory(t *testing.T) {
+	store := newMemStore(13)
+	store.failQuery[qAddUserActivity] = errDatabaseDown
+	s := newLocalUserService(t, store)
+	journal := &errorJournal{}
+	s.Journal = journal
+	if err := s.DeleteAccount(13, "requested"); err != nil {
+		t.Fatalf("a committed deletion is not reported as failed: %v", err)
+	}
+	if !store.deleted[13] || len(journal.errors) != 1 || !strings.Contains(journal.errors[0], "write history") {
+		t.Fatalf("deleted and journaled: deleted=%v journal=%v", store.deleted[13], journal.errors)
 	}
 }

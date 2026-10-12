@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Consent type labels recorded in consent_event. Consumers may define
-// additional custom labels; these are the canonical shared ones.
+// Consent type codes of the consent_type constant domain. Consumers add their
+// own codes by extending the domain.
 const (
 	ConsentTypePrivacyPolicy = "privacy_policy"
 	ConsentTypeTerms         = "terms"
@@ -14,6 +14,7 @@ const (
 	ConsentTypeVideoOptIn    = "video_opt_in"
 	ConsentTypeVideoSession  = "video_session"
 	ConsentTypeMarketing     = "marketing"
+	ConsentTypeSocialPublish = "social_publish"
 )
 
 // ConsentRequest represents a single consent decision being recorded.

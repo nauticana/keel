@@ -7,7 +7,6 @@ columns:
     type: BIGINT
   - name: platform
     type: CHAR(1)
-    comment: I=iOS, A=Android, W=Web
   - name: token
     type: TEXT
   - name: app_version
@@ -44,3 +43,6 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+checks:
+  - name: chk_device_token_platform
+    expression: "platform IN ('I', 'A', 'W')"

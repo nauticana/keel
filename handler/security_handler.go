@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
@@ -435,7 +436,8 @@ func (h *SecurityHandler) LogoutEverywhere(w http.ResponseWriter, r *http.Reques
 //
 // DELETE /api/user/account  RecentAuth plus an optional "reason"
 //
-// A legal hold answers 409 without naming the hold.
+// A reason over user.MaxHistoryReason characters answers 400 before the
+// re-authentication proof is spent; a legal hold answers 409 without naming it.
 func (h *SecurityHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodDelete) {
 		return
@@ -446,6 +448,10 @@ func (h *SecurityHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) 
 	}
 	session, ok := h.ReadAuthRequest(w, r, &req)
 	if !ok {
+		return
+	}
+	if utf8.RuneCountInString(req.Reason) > user.MaxHistoryReason {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", user.ErrReasonTooLong.Error())
 		return
 	}
 	if !h.requireRecentAuth(w, r, session, req.RecentAuth) {

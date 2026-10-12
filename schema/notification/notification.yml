@@ -77,3 +77,7 @@ indexes:
 checks:
   - name: chk_notification_status
     expression: "status IN ('P', 'A', 'S', 'X', 'F')"
+  - name: chk_notification_channel
+    expression: "channel IN ('push', 'sms', 'email', 'inbox')"
+  - name: chk_notification_notification_type
+    expression: "notification_type IN ('otp')"

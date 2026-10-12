@@ -332,7 +332,8 @@ CREATE TABLE IF NOT EXISTS device_token (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at                         TIMESTAMP    ,
-    CONSTRAINT device_token_pk PRIMARY KEY (id)
+    CONSTRAINT device_token_pk PRIMARY KEY (id),
+    CONSTRAINT chk_device_token_platform CHECK (platform IN ('I', 'A', 'W'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS device_token_user_token_uq ON device_token(user_id, token);
 CREATE INDEX IF NOT EXISTS idx_device_token_user_active ON device_token(user_id, is_active);
@@ -340,7 +341,7 @@ CREATE INDEX IF NOT EXISTS idx_device_token_user_active ON device_token(user_id,
 CREATE SEQUENCE IF NOT EXISTS device_token_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('device_token', 'id', 'device_token_seq') ON CONFLICT DO NOTHING;
 
--- In-app notification inbox, one row per message shown to a user. notification_type is consumer-defined.
+-- In-app notification inbox, one row per message shown to a user
 CREATE TABLE IF NOT EXISTS user_notification (
     id                                   BIGINT        NOT NULL,
     user_id                              BIGINT        NOT NULL,
@@ -350,7 +351,8 @@ CREATE TABLE IF NOT EXISTS user_notification (
     data                                 TEXT         ,
     read_at                              TIMESTAMP    ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT user_notification_pk PRIMARY KEY (id)
+    CONSTRAINT user_notification_pk PRIMARY KEY (id),
+    CONSTRAINT chk_user_notification_notification_type CHECK (notification_type IN ('otp'))
 );
 CREATE INDEX IF NOT EXISTS idx_user_notification_user ON user_notification(user_id, created_at);
 
@@ -414,7 +416,8 @@ CREATE TABLE IF NOT EXISTS consent_policy (
     content_sha256                       VARCHAR(64)   NOT NULL,
     effective_from                       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deprecated_at                        TIMESTAMP    ,
-    CONSTRAINT consent_policy_pk PRIMARY KEY (id)
+    CONSTRAINT consent_policy_pk PRIMARY KEY (id),
+    CONSTRAINT chk_consent_policy_policy_type CHECK (policy_type IN ('privacy_policy', 'terms'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS consent_policy_uq ON consent_policy(policy_type, region, version, language);
 
@@ -436,7 +439,8 @@ CREATE TABLE IF NOT EXISTS consent_event (
     client_user_agent                    VARCHAR(500) ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT consent_event_pk PRIMARY KEY (id),
-    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL)
+    CONSTRAINT consent_event_identity CHECK (user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL),
+    CONSTRAINT chk_consent_event_consent_type CHECK (consent_type IN ('privacy_policy', 'terms', 'cross_border', 'video_opt_in', 'video_session', 'marketing', 'social_publish'))
 );
 CREATE INDEX IF NOT EXISTS idx_consent_event_user ON consent_event(user_id, consent_type);
 CREATE INDEX IF NOT EXISTS idx_consent_event_email ON consent_event(email_hash, consent_type);
@@ -1817,7 +1821,9 @@ CREATE TABLE IF NOT EXISTS notification (
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT notification_pk PRIMARY KEY (id),
-    CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F'))
+    CONSTRAINT chk_notification_status CHECK (status IN ('P', 'A', 'S', 'X', 'F')),
+    CONSTRAINT chk_notification_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_notification_type CHECK (notification_type IN ('otp'))
 );
 CREATE INDEX IF NOT EXISTS idx_notification_drain ON notification(status, available_at);
 CREATE INDEX IF NOT EXISTS idx_notification_user ON notification(user_id, created_at);
@@ -1832,7 +1838,9 @@ CREATE TABLE IF NOT EXISTS notification_preference (
     channel                              VARCHAR(20)   NOT NULL,
     enabled                              BOOLEAN       NOT NULL,
     updated_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT notification_preference_pk PRIMARY KEY (user_id, notification_type, channel)
+    CONSTRAINT notification_preference_pk PRIMARY KEY (user_id, notification_type, channel),
+    CONSTRAINT chk_notification_preference_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox')),
+    CONSTRAINT chk_notification_preference_notification_type CHECK (notification_type IN ('otp'))
 );
 
 -- Contacts that must not be delivered to on a channel (unsubscribe, bounce, complaint). A NULL partner_id suppresses the contact for every tenant; contact is stored lowercased.

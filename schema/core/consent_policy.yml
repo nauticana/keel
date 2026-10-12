@@ -31,3 +31,6 @@ indexes:
   - name: consent_policy_uq
     columns: [policy_type, region, version, language]
     unique: true
+checks:
+  - name: chk_consent_policy_policy_type
+    expression: "policy_type IN ('privacy_policy', 'terms')"

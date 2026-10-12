@@ -321,7 +321,7 @@ A sign-in starts a session whose id (`UserSession.SessionID`, the JWT `sid` clai
 | GET | `/api/user/sessions` | List live sign-in sessions, marking the caller's |
 | POST | `/api/user/sessions/revoke` | End one session by `id` |
 | POST | `/api/user/logout-everywhere` | Revoke every active refresh token (user will re-auth on every device) |
-| DELETE | `/api/user/account` | Soft-delete the caller's account (anonymize + cascade revoke). Body `{reason}` optional. Returns 204. |
+| DELETE | `/api/user/account` | Soft-delete the caller's account (anonymize + cascade revoke). Body `{reason}` optional, at most 80 characters (400 otherwise, checked before the re-authentication proof is spent). Returns 204. |
 
 2FA setup, logout-everywhere, account deletion and `LinkSocial` need re-authentication in the body (`handler.RecentAuth`): `password`, a current `twoFactorCode`, or a `reauthCode` sent by `POST /api/user/reauth/send` (below), so users who sign in only by one-time code or a social provider can still pass. A `reauthCode` is single-use, bound to the `reauth` purpose, and refused with 403 where the SSO policy refuses OTP sign-in.
 

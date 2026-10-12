@@ -1,5 +1,5 @@
 table: user_notification
-comment: In-app notification inbox, one row per message shown to a user. notification_type is consumer-defined.
+comment: In-app notification inbox, one row per message shown to a user
 columns:
   - name: id
     type: BIGINT
@@ -36,3 +36,6 @@ foreign_keys:
     references:
       table: user_account
       columns: [id]
+checks:
+  - name: chk_user_notification_notification_type
+    expression: "notification_type IN ('otp')"

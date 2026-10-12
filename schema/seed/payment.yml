@@ -6,6 +6,7 @@ seeds:
     rows:
       - [payment_method_type, Payment Method Type]
       - [refund_request_status, Refund Request Status]
+      - [webhook_processing_status, Webhook Processing Status]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -18,11 +19,18 @@ seeds:
       - [refund_request_status, A, Approved]
       - [refund_request_status, S, Succeeded]
       - [refund_request_status, F, Failed]
+      - [webhook_processing_status, R, Received]
+      - [webhook_processing_status, P, Processed]
+      - [webhook_processing_status, F, Failed]
+      - [webhook_processing_status, D, Duplicate]
+      - [webhook_processing_status, S, Skipped]
+      - [webhook_processing_status, L, Dead letter]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
       - [payment_method_type, user_payment_method, method_type]
       - [refund_request_status, refund_request, status]
+      - [webhook_processing_status, payment_webhook_log, processing_status]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:

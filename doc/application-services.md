@@ -177,7 +177,7 @@ Stale tokens (FCM `registration-token-not-registered`, APNs `410 Unregistered` /
 
 ### device_token table
 
-Columns: `id`, `user_id` (FK → user_account), `platform` (`CHAR(1)` — I=iOS, A=Android, W=Web), `token` (TEXT — FCM or raw APNs token), `app_version`, `device_model`, `is_active`, `created_at`, `updated_at`, `last_seen_at`. Unique index on `(user_id, token)` to keep re-registration idempotent. `DeleteAccount` cascades to deactivate every token for the user.
+Columns: `id`, `user_id` (FK → user_account), `platform` (`device_platform` domain: I=iOS, A=Android, W=Web), `token` (TEXT — FCM or raw APNs token), `app_version`, `device_model`, `is_active`, `created_at`, `updated_at`, `last_seen_at`. Unique index on `(user_id, token)` to keep re-registration idempotent. `DeleteAccount` cascades to deactivate every token for the user.
 
 ## Recording Sessions (consent-gated capture)
 
@@ -336,7 +336,7 @@ Unknown channel returns a typed error so callers can distinguish "channel not co
 
 ### `dispatcher.InboxService` — in-app inbox
 
-Persists messages in `user_notification` and implements `port.NotificationInbox` (`Add`, `List`, `MarkRead`, `MarkAllRead`). Registered as a channel it stores `req.Type` as the consumer-defined `notification_type`:
+Persists messages in `user_notification` and implements `port.NotificationInbox` (`Add`, `List`, `MarkRead`, `MarkAllRead`). Registered as a channel it stores `req.Type` as `notification_type`, a code of the `notification_type` domain that consumers [extend](data-and-infrastructure.md#extending-a-keel-code-domain):
 
 ```go
 inbox := &dispatcher.InboxService{DB: db}

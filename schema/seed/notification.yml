@@ -5,6 +5,7 @@ seeds:
     columns: [id, caption]
     rows:
       - [notification_status, Notification Status]
+      - [notification_channel, Notification Channel]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -13,7 +14,15 @@ seeds:
       - [notification_status, S, Sent]
       - [notification_status, X, Suppressed]
       - [notification_status, F, Failed]
+      - [notification_channel, push, Push]
+      - [notification_channel, sms, SMS]
+      - [notification_channel, email, Email]
+      - [notification_channel, inbox, In-app inbox]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
       - [notification_status, notification, status]
+      - [notification_channel, notification, channel]
+      - [notification_channel, notification_preference, channel]
+      - [notification_type, notification, notification_type]
+      - [notification_type, notification_preference, notification_type]

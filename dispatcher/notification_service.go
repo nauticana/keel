@@ -10,12 +10,13 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// Channels keel ships an address-based dispatcher for. Suppression is checked
-// on the contact these resolve to; a channel addressed by something other than
-// a contact (InboxChannel, push device tokens) has nothing to suppress.
+// Codes of the notification_channel constant domain, with InboxChannel.
+// Suppression is checked on the contact email and SMS resolve to; push and the
+// inbox are not addressed by a contact and have nothing to suppress.
 const (
 	EmailChannel = "email"
 	SMSChannel   = "sms"
+	PushChannel  = "push"
 )
 
 // LocalNotificationService is the keel-shipped implementation of
@@ -25,9 +26,9 @@ const (
 // channel at startup:
 //
 //	notif := service.NewLocalNotificationService()
-//	notif.Register("email", &service.EmailDispatcher{Mail: mailClient, Users: userSvc})
-//	notif.Register("push",  fcmProvider)            // FCMPushProvider satisfies MessageDispatcher
-//	notif.Register("sms",   smsDispatcher)          // dispatcher.NewSMSDispatcher(...)
+//	notif.Register(dispatcher.EmailChannel, &service.EmailDispatcher{Mail: mailClient, Users: userSvc})
+//	notif.Register(dispatcher.PushChannel, fcmProvider) // FCMPushProvider satisfies MessageDispatcher
+//	notif.Register(dispatcher.SMSChannel, smsDispatcher) // dispatcher.NewSMSDispatcher(...)
 //
 // Send returns a typed error when the channel is not registered so the
 // caller can distinguish "no dispatcher configured" from "dispatcher

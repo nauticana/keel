@@ -50,6 +50,8 @@ foreign_keys:
 checks:
   - name: consent_event_identity
     expression: user_id IS NOT NULL OR email_hash IS NOT NULL OR phone_hash IS NOT NULL
+  - name: chk_consent_event_consent_type
+    expression: "consent_type IN ('privacy_policy', 'terms', 'cross_border', 'video_opt_in', 'video_session', 'marketing', 'social_publish')"
 indexes:
   - name: idx_consent_event_user
     columns: [user_id, consent_type]

@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.110",
+   "title": "Seeded keel code domains, account-deletion reason limit",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "keel seeds the code domains it writes (device platform, notification channel and type, consent and policy type, webhook processing status) with CHECKs on every mapped column; consumers extend the open domains. DeleteAccount bounds its reason and no longer fails after a committed deletion.",
+   "body_markdown": "### Breaking\n\n- `device_token.platform`, `notification.channel`, `notification_preference.channel`, `notification.notification_type`, `notification_preference.notification_type`, `user_notification.notification_type`, `consent_event.consent_type` and `consent_policy.policy_type` gain `chk_<table>_<column>` CHECKs over newly seeded domains: `device_platform`, `notification_channel` and `notification_type` (`otp`), `consent_type`, `policy_type`. `payment_webhook_log.processing_status` gains the seeded `webhook_processing_status` domain over its existing CHECK. A deployment writing its own notification, consent or policy types inserts them into the domain and re-creates the CHECKs over keel's codes plus its own (doc/data-and-infrastructure.md, \"Extending a keel code domain\"). Existing databases add the CHECKs:\n\n```sql\nALTER TABLE device_token ADD CONSTRAINT chk_device_token_platform CHECK (platform IN ('I', 'A', 'W'));\nALTER TABLE notification ADD CONSTRAINT chk_notification_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox'));\nALTER TABLE notification_preference ADD CONSTRAINT chk_notification_preference_channel CHECK (channel IN ('push', 'sms', 'email', 'inbox'));\nALTER TABLE notification ADD CONSTRAINT chk_notification_notification_type CHECK (notification_type IN ('otp'));\nALTER TABLE notification_preference ADD CONSTRAINT chk_notification_preference_notification_type CHECK (notification_type IN ('otp'));\nALTER TABLE user_notification ADD CONSTRAINT chk_user_notification_notification_type CHECK (notification_type IN ('otp'));\nALTER TABLE consent_event ADD CONSTRAINT chk_consent_event_consent_type CHECK (consent_type IN ('privacy_policy', 'terms', 'cross_border', 'video_opt_in', 'video_session', 'marketing', 'social_publish'));\nALTER TABLE consent_policy ADD CONSTRAINT chk_consent_policy_policy_type CHECK (policy_type IN ('privacy_policy', 'terms'));\n```\n\n- `DeleteAccount` rejects a reason over `user.MaxHistoryReason` (80) characters with `user.ErrReasonTooLong` before deleting anything; `DELETE /api/user/account` answers 400 before spending the re-authentication proof.\n\n### Additive\n\n- `user.ConsentTypeSocialPublish` (`social_publish`) and `dispatcher.PushChannel` (`push`).\n- A failed history write after a committed account deletion is journaled instead of returned, so the deletion no longer reports failure."
+  },
+  {
    "version": "v1.2.109",
    "title": "Authorize-then-capture payments, typed decline reasons, wallet method types, constant CHECK constraints",
    "tags": [
