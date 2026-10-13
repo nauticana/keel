@@ -851,6 +851,7 @@ CREATE TABLE IF NOT EXISTS partner_plan_subscription (
     next_charge_date                     TIMESTAMP    ,
     cancelled_at                         TIMESTAMP    ,
     effective_cancel_date                TIMESTAMP    ,
+    successor_plan_id                    VARCHAR(20)  ,
     trial_end                            TIMESTAMP    ,
     seats                                INTEGER      ,
     CONSTRAINT partner_plan_subscription_pk PRIMARY KEY (partner_id, plan_id, begda),
@@ -2623,6 +2624,15 @@ BEGIN
      WHERE constraint_name = 'partner_subscriptions_plan' AND table_name = 'partner_plan_subscription'
   ) THEN
     ALTER TABLE partner_plan_subscription ADD CONSTRAINT partner_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES subscription_plan(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'partner_plan_subscription_successor' AND table_name = 'partner_plan_subscription'
+  ) THEN
+    ALTER TABLE partner_plan_subscription ADD CONSTRAINT partner_plan_subscription_successor FOREIGN KEY (successor_plan_id) REFERENCES subscription_plan(id);
   END IF;
 END $$;
 DO $$

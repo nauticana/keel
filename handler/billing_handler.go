@@ -102,7 +102,8 @@ func (h *BillingHandler) Cancel() http.HandlerFunc {
 	})
 }
 
-// ChangePlan: POST /api/billing/subscription/change {"planId": "..."}
+// ChangePlan: POST /api/billing/subscription/change {"planId": "..."} →
+// {"status": "changed" | "scheduled"}
 func (h *BillingHandler) ChangePlan() http.HandlerFunc {
 	return h.JSON(http.MethodPost, func(ctx context.Context, s *model.UserSession, body json.RawMessage) (any, error) {
 		partnerID, err := billingPartner(s)
@@ -115,10 +116,11 @@ func (h *BillingHandler) ChangePlan() http.HandlerFunc {
 		if json.Unmarshal(body, &req) != nil || req.PlanID == "" {
 			return nil, NewAPIError(http.StatusBadRequest, "planId is required")
 		}
-		if err := h.Subscriptions.ChangePlan(ctx, partnerID, req.PlanID); err != nil {
+		outcome, err := h.Subscriptions.ChangePlan(ctx, partnerID, req.PlanID)
+		if err != nil {
 			return nil, h.subscriptionError("plan change", err)
 		}
-		return map[string]string{"status": "changed"}, nil
+		return map[string]string{"status": string(outcome)}, nil
 	})
 }
 
@@ -141,9 +143,10 @@ func (h *BillingHandler) subscriptionError(action string, err error) error {
 	switch {
 	case errors.Is(err, billing.ErrNoSubscription):
 		return NewAPIError(http.StatusConflict, "no active subscription")
-	case errors.Is(err, billing.ErrNoProviderSubscription), errors.Is(err, billing.ErrNoProviderCustomer):
+	case errors.Is(err, billing.ErrNoProviderSubscription), errors.Is(err, billing.ErrNoProviderCustomer),
+		errors.Is(err, billing.ErrSubscriptionPending), errors.Is(err, billing.ErrProviderSubscription):
 		return NewAPIError(http.StatusConflict, err.Error())
-	case errors.Is(err, billing.ErrPriceNotFound), errors.Is(err, billing.ErrPlanNotFound):
+	case errors.Is(err, billing.ErrPriceNotFound), errors.Is(err, billing.ErrPlanNotFound), errors.Is(err, billing.ErrNotFreePlan):
 		return NewAPIError(http.StatusBadRequest, "plan is not available on the current billing terms")
 	}
 	if h.Journal != nil {

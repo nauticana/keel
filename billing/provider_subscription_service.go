@@ -15,30 +15,43 @@ var (
 	ErrNoProviderCustomer = errors.New("no provider customer on file")
 )
 
-// ProviderSubscription is the partner's active subscription as the provider knows it.
+// ProviderSubscription is the partner's live subscription; ID is the provider's
+// subscription id, empty when the provider does not hold it.
 type ProviderSubscription struct {
 	ID     string
 	PlanID string
 	Terms  BillingTerms
 }
 
-// ProviderSubscriptionStore reads what a provider-side subscription change needs.
+// ProviderSubscriptionStore reads what a subscription change needs.
 type ProviderSubscriptionStore interface {
 	CustomerToken(ctx context.Context, partnerID int64, provider string) (string, error)
-	ActiveProviderSubscription(ctx context.Context, partnerID int64) (*ProviderSubscription, error)
+	// CurrentSubscription returns ErrNoSubscription when the partner has no live subscription.
+	CurrentSubscription(ctx context.Context, partnerID int64) (*ProviderSubscription, error)
 	ProviderPriceID(ctx context.Context, planID string, terms BillingTerms) (string, error)
+	// PlanActivationMode returns ErrPlanNotFound for a missing or inactive plan.
+	PlanActivationMode(ctx context.Context, planID string) (ActivationMode, error)
 }
+
+// ChangeOutcome reports how a plan change took effect.
+type ChangeOutcome string
+
+const (
+	ChangeApplied   ChangeOutcome = "changed"   // the new plan is active now
+	ChangeScheduled ChangeOutcome = "scheduled" // the new plan starts when the current one ends
+)
 
 // SubscriptionManager is the self-service contract behind an app's billing page.
 type SubscriptionManager interface {
 	CancelAtPeriodEnd(ctx context.Context, partnerID int64) error
-	ChangePlan(ctx context.Context, partnerID int64, planID string) error
+	ChangePlan(ctx context.Context, partnerID int64, planID string) (ChangeOutcome, error)
 	PortalURL(ctx context.Context, partnerID int64) (string, error)
 }
 
 // ProviderSubscriptionService changes provider-managed subscriptions. The
 // provider is updated first and the local row follows, so a provider failure
-// leaves local state untouched; the provider's webhooks confirm later.
+// leaves local state untouched; the provider's webhooks confirm later. A move
+// to a free plan also applies to a subscription the provider does not hold.
 type ProviderSubscriptionService struct {
 	Store     ProviderSubscriptionStore
 	Lifecycle SubscriptionLifecycle
@@ -61,27 +74,65 @@ func (s *ProviderSubscriptionService) CancelAtPeriodEnd(ctx context.Context, par
 	return s.Lifecycle.CancelByPartner(ctx, partnerID, CancelAtPeriodEnd)
 }
 
-func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID int64, planID string) error {
-	sub, err := s.activeSubscription(ctx, partnerID)
+// ChangePlan to a free plan ends a provider-held subscription at period end
+// with the free plan scheduled as its successor, and replaces any other
+// subscription at once. A paid target needs a provider-held subscription.
+// Re-selecting the current plan resumes renewal, undoing a scheduled change.
+func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID int64, planID string) (ChangeOutcome, error) {
+	mode, err := s.Store.PlanActivationMode(ctx, planID)
 	if err != nil {
-		return err
+		return "", err
+	}
+	sub, err := s.Store.CurrentSubscription(ctx, partnerID)
+	if mode == ActivateFree && errors.Is(err, ErrNoSubscription) {
+		return ChangeApplied, s.Lifecycle.ChangePlan(ctx, partnerID, planID, BillingTerms{})
+	}
+	if err != nil {
+		return "", err
 	}
 	if planID == sub.PlanID {
-		return nil
+		return ChangeApplied, s.resumeRenewal(ctx, partnerID, sub)
+	}
+	if mode == ActivateFree {
+		if sub.ID == "" {
+			return ChangeApplied, s.Lifecycle.ChangePlan(ctx, partnerID, planID, BillingTerms{})
+		}
+		if err := s.Client.CancelSubscriptionAtPeriodEnd(ctx, sub.ID); err != nil {
+			return "", fmt.Errorf("provider cancel of %s: %w", sub.ID, err)
+		}
+		return ChangeScheduled, s.Lifecycle.ScheduleChange(ctx, partnerID, planID)
+	}
+	if sub.ID == "" {
+		return "", ErrNoProviderSubscription
 	}
 	to, err := s.Store.ProviderPriceID(ctx, planID, sub.Terms)
 	if err != nil {
-		return err
+		return "", err
 	}
 	// The current price only picks the item on a multi-item subscription.
 	from, err := s.Store.ProviderPriceID(ctx, sub.PlanID, sub.Terms)
 	if err != nil && !errors.Is(err, ErrPriceNotFound) {
-		return err
+		return "", err
 	}
 	if err := s.Client.ChangeSubscriptionPrice(ctx, sub.ID, from, to, s.ProrationBehavior); err != nil {
-		return fmt.Errorf("provider plan change of %s: %w", sub.ID, err)
+		return "", fmt.Errorf("provider plan change of %s: %w", sub.ID, err)
 	}
-	return s.Lifecycle.ChangePlan(ctx, partnerID, planID, sub.Terms)
+	return ChangeApplied, s.Lifecycle.ChangePlan(ctx, partnerID, planID, sub.Terms)
+}
+
+// resumeRenewal clears a scheduled cancellation at the provider (a price
+// change onto the current price, which also clears cancel_at_period_end) and locally.
+func (s *ProviderSubscriptionService) resumeRenewal(ctx context.Context, partnerID int64, sub *ProviderSubscription) error {
+	if sub.ID != "" {
+		price, err := s.Store.ProviderPriceID(ctx, sub.PlanID, sub.Terms)
+		if err != nil {
+			return err
+		}
+		if err := s.Client.ChangeSubscriptionPrice(ctx, sub.ID, price, price, ""); err != nil {
+			return fmt.Errorf("provider renewal of %s: %w", sub.ID, err)
+		}
+	}
+	return s.Lifecycle.ResumeRenewal(ctx, partnerID)
 }
 
 func (s *ProviderSubscriptionService) PortalURL(ctx context.Context, partnerID int64) (string, error) {
@@ -99,11 +150,11 @@ func (s *ProviderSubscriptionService) PortalURL(ctx context.Context, partnerID i
 }
 
 func (s *ProviderSubscriptionService) activeSubscription(ctx context.Context, partnerID int64) (*ProviderSubscription, error) {
-	sub, err := s.Store.ActiveProviderSubscription(ctx, partnerID)
+	sub, err := s.Store.CurrentSubscription(ctx, partnerID)
 	if err != nil {
 		return nil, err
 	}
-	if sub == nil {
+	if sub.ID == "" {
 		return nil, ErrNoProviderSubscription
 	}
 	return sub, nil

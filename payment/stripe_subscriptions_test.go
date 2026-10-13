@@ -36,16 +36,18 @@ func TestStripeSubscriptionChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A retry after the provider succeeded but before the local transaction
-	// committed recognizes the target price and does not fail or post again.
+	// committed recognizes the target price and only resumes renewal.
 	if err := c.ChangeSubscriptionPrice(context.Background(), "sub_1", "price_s", "price_p", "always_invoice"); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if err := c.CancelSubscriptionAtPeriodEnd(context.Background(), "sub_1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(posted) != 2 ||
+	if len(posted) != 3 ||
 		posted[0]["items[0][id]"] != "si_plan" || posted[0]["items[0][price]"] != "price_p" || posted[0]["proration_behavior"] != "always_invoice" ||
-		posted[1]["cancel_at_period_end"] != "true" {
+		posted[0]["cancel_at_period_end"] != "false" ||
+		posted[1]["cancel_at_period_end"] != "false" || posted[1]["items[0][price]"] != "" ||
+		posted[2]["cancel_at_period_end"] != "true" {
 		t.Fatalf("posted = %v", posted)
 	}
 	if err := c.ChangeSubscriptionPrice(context.Background(), "sub_1", "price_missing", "price_g", ""); err == nil {

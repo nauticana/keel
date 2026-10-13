@@ -18,8 +18,8 @@ func (c *StripeCheckoutClient) CancelSubscriptionAtPeriodEnd(ctx context.Context
 	return err
 }
 
-// ChangeSubscriptionPrice moves the item billed at fromPriceID to toPriceID; a
-// single-item subscription changes its only item.
+// ChangeSubscriptionPrice moves the item billed at fromPriceID to toPriceID and
+// clears cancel_at_period_end; a single-item subscription changes its only item.
 func (c *StripeCheckoutClient) ChangeSubscriptionPrice(ctx context.Context, subscriptionID, fromPriceID, toPriceID, prorationBehavior string) error {
 	if subscriptionID == "" || toPriceID == "" {
 		return errors.New("stripe: subscription id and target price are required")
@@ -54,12 +54,13 @@ func (c *StripeCheckoutClient) ChangeSubscriptionPrice(ctx context.Context, subs
 		}
 	}
 	if itemID == "" && alreadyChanged {
-		return nil
+		_, err = c.Post(ctx, path, url.Values{"cancel_at_period_end": {"false"}})
+		return err
 	}
 	if itemID == "" {
 		return fmt.Errorf("stripe: subscription %s has no item priced %q", subscriptionID, fromPriceID)
 	}
-	form := url.Values{"items[0][id]": {itemID}, "items[0][price]": {toPriceID}}
+	form := url.Values{"items[0][id]": {itemID}, "items[0][price]": {toPriceID}, "cancel_at_period_end": {"false"}}
 	if prorationBehavior != "" {
 		form.Set("proration_behavior", prorationBehavior)
 	}

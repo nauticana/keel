@@ -283,7 +283,8 @@ type IntentClient interface {
 type SubscriptionClient interface {
 	// CancelSubscriptionAtPeriodEnd stops renewal; the provider ends the subscription at period end.
 	CancelSubscriptionAtPeriodEnd(ctx context.Context, subscriptionID string) error
-	// ChangeSubscriptionPrice moves the item billed at fromPriceID (or the only item) to toPriceID.
+	// ChangeSubscriptionPrice moves the item billed at fromPriceID (or the only item)
+	// to toPriceID and resumes renewal if a cancellation was scheduled.
 	ChangeSubscriptionPrice(ctx context.Context, subscriptionID, fromPriceID, toPriceID, prorationBehavior string) error
 }
 

@@ -36,6 +36,9 @@ type Subscription struct {
 	TrialEnd         string  `json:"trialEnd"`
 	Seats            int     `json:"seats"`
 	ProviderManaged  bool    `json:"providerManaged"` // provider subscription and customer both exist
+	// ScheduledPlanID starts at ScheduledAt, when this subscription ends.
+	ScheduledPlanID string `json:"scheduledPlanId,omitempty"`
+	ScheduledAt     string `json:"scheduledAt,omitempty"`
 }
 
 // Invoice is one billing invoice row (provider-issued or self-scheduled).
@@ -90,12 +93,18 @@ var (
 	ErrPlanNotFound    = errors.New("plan not found")
 	ErrPriceNotFound   = errors.New("plan does not offer this billing interval")
 	ErrUnknownResource = errors.New("usage resource is not in subscription_resource")
+	ErrNotFreePlan     = errors.New("plan is not a free plan")
+	// ErrProviderSubscription: the provider holds the subscription, so it must cancel it first.
+	ErrProviderSubscription = errors.New("subscription is held by the payment provider")
+	// ErrUnknownSubscription: a provider event names a subscription with no live local row.
+	ErrUnknownSubscription = errors.New("provider subscription is not on file")
+	// ErrSubscriptionPending: a pending subscription blocks starting another plan.
+	ErrSubscriptionPending = errors.New("partner has a pending subscription")
 )
 
 const (
 	qBillGetSubscription = "bill_get_subscription"
 	qBillCreateSub       = "bill_create_subscription"
-	qBillCancelSub       = "bill_cancel_subscription"
 	qBillGetInvoices     = "bill_get_invoices"
 	qBillGetUsage        = "bill_get_usage"
 	qBillGetAllPlans     = "bill_get_all_plans"
@@ -114,7 +123,8 @@ var defaultBillingQueries = map[string]string{
 SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.installment_minor, ps.currency,
        ps.billing_cycle, ps.auto_renew, ps.trial_end, ps.seats, cur.exponent,
        COALESCE(ps.provider_subscription_id, '') <> ''
-         AND EXISTS (SELECT 1 FROM partner_billing_customer bc WHERE bc.partner_id = ps.partner_id)
+         AND EXISTS (SELECT 1 FROM partner_billing_customer bc WHERE bc.partner_id = ps.partner_id),
+       ps.effective_cancel_date, COALESCE(ps.successor_plan_id, ''), sp.activation_mode
   FROM partner_plan_subscription ps
   JOIN subscription_plan sp ON sp.id = ps.plan_id
   JOIN currency cur ON cur.code = ps.currency
@@ -131,12 +141,6 @@ INSERT INTO partner_plan_subscription
   (partner_id, plan_id, begda, installment_minor, currency, status, billing_cycle,
    term_count, term_type, amount_minor, renewal_date, next_charge_date)
 VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, 'A', ?, ?, ?, ?, ?, ?)`,
-
-	qBillCancelSub: `
-UPDATE partner_plan_subscription
-   SET status = 'C', cancelled_at = CURRENT_TIMESTAMP, auto_renew = FALSE
- WHERE partner_id = ? AND status IN ('A', 'T', 'X')
-   AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 
 	qBillGetInvoices: `
 SELECT i.id, i.invoice_number, i.total_minor, i.currency, i.status, i.issued_at, i.paid_at, cur.exponent
@@ -220,6 +224,10 @@ type AbstractBillingService struct {
 	// Now is the lifecycle clock; injectable for tests (default time.Now().UTC()).
 	Now func() time.Time
 
+	// FallbackPlanID is the free plan a partner moves to when a paid
+	// subscription ends without a successor; empty leaves the partner without one.
+	FallbackPlanID string
+
 	initOnce   sync.Once
 	qs         port.QueryService
 	allQueries map[string]string // merged default+lifecycle+override, reused by BeginTx
@@ -269,6 +277,10 @@ func (s *AbstractBillingService) GetSubscription(ctx context.Context, partnerID 
 		Seats:            int(common.AsInt32(row[10])),
 		ProviderManaged:  common.AsBool(row[12]),
 	}
+	if at := common.AsString(row[13]); at != "" {
+		sub.ScheduledAt = at
+		sub.ScheduledPlanID = successorPlan(common.AsString(row[14]), ActivationMode(common.AsString(row[15])), s.FallbackPlanID)
+	}
 	if sub.MonthlyCost, err = majorAmount(sub.InstallmentMinor, sub.Exponent); err != nil {
 		return nil, err
 	}
@@ -292,9 +304,7 @@ func (s *AbstractBillingService) CreateSubscription(ctx context.Context, partner
 }
 
 func (s *AbstractBillingService) CancelSubscription(ctx context.Context, partnerID int64) error {
-	s.init(ctx)
-	_, err := s.qs.Query(ctx, qBillCancelSub, partnerID)
-	return err
+	return s.CancelByPartner(ctx, partnerID, CancelImmediate)
 }
 
 func (s *AbstractBillingService) GetInvoices(ctx context.Context, partnerID int64) ([]Invoice, error) {
@@ -466,9 +476,7 @@ func (s *AbstractBillingService) ListPaymentMethods(ctx context.Context, partner
 var _ BillingService = (*AbstractBillingService)(nil)
 var _ ProviderBillingStore = (*AbstractBillingService)(nil)
 
-// ActiveProviderSubscription returns ErrNoSubscription when the partner has no
-// active subscription, and nil when that subscription has no provider id.
-func (s *AbstractBillingService) ActiveProviderSubscription(ctx context.Context, partnerID int64) (*ProviderSubscription, error) {
+func (s *AbstractBillingService) CurrentSubscription(ctx context.Context, partnerID int64) (*ProviderSubscription, error) {
 	s.init(ctx)
 	res, err := s.qs.Query(ctx, qBillActiveProvSub, partnerID)
 	if err != nil {
@@ -478,12 +486,8 @@ func (s *AbstractBillingService) ActiveProviderSubscription(ctx context.Context,
 		return nil, ErrNoSubscription
 	}
 	row := res.Rows[0]
-	id := common.AsString(row[0])
-	if id == "" {
-		return nil, nil
-	}
 	return &ProviderSubscription{
-		ID:     id,
+		ID:     common.AsString(row[0]),
 		PlanID: common.AsString(row[1]),
 		Terms: BillingTerms{
 			BillingCycle: ParseBillingPeriod(common.AsString(row[2])),
@@ -505,6 +509,12 @@ func (s *AbstractBillingService) ProviderPriceID(ctx context.Context, planID str
 		return "", fmt.Errorf("%w: plan %s has no provider price", ErrPriceNotFound, planID)
 	}
 	return common.AsString(res.Rows[0][0]), nil
+}
+
+func (s *AbstractBillingService) PlanActivationMode(ctx context.Context, planID string) (ActivationMode, error) {
+	s.init(ctx)
+	pol, err := s.loadPlanPolicy(ctx, planID)
+	return pol.mode, err
 }
 
 var _ ProviderSubscriptionStore = (*AbstractBillingService)(nil)

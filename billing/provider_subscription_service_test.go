@@ -11,14 +11,27 @@ import (
 type fakeSubStore struct {
 	sub      *ProviderSubscription
 	prices   map[string]string
+	modes    map[string]ActivationMode
 	customer string
 }
 
 func (f *fakeSubStore) CustomerToken(context.Context, int64, string) (string, error) {
 	return f.customer, nil
 }
-func (f *fakeSubStore) ActiveProviderSubscription(context.Context, int64) (*ProviderSubscription, error) {
+func (f *fakeSubStore) CurrentSubscription(context.Context, int64) (*ProviderSubscription, error) {
+	if f.sub == nil {
+		return nil, ErrNoSubscription
+	}
 	return f.sub, nil
+}
+func (f *fakeSubStore) PlanActivationMode(_ context.Context, planID string) (ActivationMode, error) {
+	if m, ok := f.modes[planID]; ok {
+		return m, nil
+	}
+	if f.prices[planID] != "" {
+		return ActivateCreateActive, nil
+	}
+	return "", ErrPlanNotFound
 }
 func (f *fakeSubStore) ProviderPriceID(_ context.Context, planID string, _ BillingTerms) (string, error) {
 	if p := f.prices[planID]; p != "" {
@@ -29,8 +42,20 @@ func (f *fakeSubStore) ProviderPriceID(_ context.Context, planID string, _ Billi
 
 type fakeLifecycle struct {
 	SubscriptionLifecycle
-	cancelled CancelMode
-	changedTo string
+	cancelled   CancelMode
+	changedTo   string
+	scheduledTo string
+	resumed     bool
+}
+
+func (f *fakeLifecycle) ResumeRenewal(context.Context, int64) error {
+	f.resumed = true
+	return nil
+}
+
+func (f *fakeLifecycle) ScheduleChange(_ context.Context, _ int64, planID string) error {
+	f.scheduledTo = planID
+	return nil
 }
 
 func (f *fakeLifecycle) CancelByPartner(_ context.Context, _ int64, mode CancelMode) error {
@@ -92,7 +117,7 @@ func TestProviderSubscriptionService_Cancel(t *testing.T) {
 		t.Fatalf("provider failure: err=%v local=%q", err, failLife.cancelled)
 	}
 
-	unmanaged, _, _ := newSubService(&fakeSubStore{}, &fakeSubClient{})
+	unmanaged, _, _ := newSubService(&fakeSubStore{sub: &ProviderSubscription{PlanID: "STANDARD"}}, &fakeSubClient{})
 	if err := unmanaged.CancelAtPeriodEnd(context.Background(), 7); !errors.Is(err, ErrNoProviderSubscription) {
 		t.Fatalf("err = %v", err)
 	}
@@ -102,16 +127,87 @@ func TestProviderSubscriptionService_ChangePlan(t *testing.T) {
 	store := &fakeSubStore{sub: annualSub, prices: map[string]string{"STANDARD": "price_s", "PRO": "price_p"}}
 	client := &fakeSubClient{}
 	s, life, _ := newSubService(store, client)
-	if err := s.ChangePlan(context.Background(), 7, "PRO"); err != nil {
+	outcome, err := s.ChangePlan(context.Background(), 7, "PRO")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if client.from != "price_s" || client.to != "price_p" || client.proration != "always_invoice" || life.changedTo != "PRO" {
-		t.Fatalf("client=%+v local=%q", client, life.changedTo)
+	if outcome != ChangeApplied || client.from != "price_s" || client.to != "price_p" || client.proration != "always_invoice" || life.changedTo != "PRO" {
+		t.Fatalf("outcome=%q client=%+v local=%q", outcome, client, life.changedTo)
 	}
 
-	unpriced, unpricedLife, _ := newSubService(store, &fakeSubClient{})
-	if err := unpriced.ChangePlan(context.Background(), 7, "GOLD"); !errors.Is(err, ErrPriceNotFound) || unpricedLife.changedTo != "" {
+	unpricedStore := &fakeSubStore{sub: annualSub, prices: store.prices, modes: map[string]ActivationMode{"GOLD": ActivateCreateActive}}
+	unpriced, unpricedLife, _ := newSubService(unpricedStore, &fakeSubClient{})
+	if _, err := unpriced.ChangePlan(context.Background(), 7, "GOLD"); !errors.Is(err, ErrPriceNotFound) || unpricedLife.changedTo != "" {
 		t.Fatalf("unpriced plan: err=%v local=%q", err, unpricedLife.changedTo)
+	}
+
+	manual, manualLife, _ := newSubService(&fakeSubStore{sub: &ProviderSubscription{PlanID: "STANDARD"}, prices: store.prices}, &fakeSubClient{})
+	if _, err := manual.ChangePlan(context.Background(), 7, "PRO"); !errors.Is(err, ErrNoProviderSubscription) || manualLife.changedTo != "" {
+		t.Fatalf("paid change without provider subscription: err=%v local=%q", err, manualLife.changedTo)
+	}
+}
+
+// Re-selecting the current plan undoes a scheduled downgrade: the provider
+// resumes renewal on the current price and the local schedule is cleared.
+func TestProviderSubscriptionService_ReselectCurrentPlanResumesRenewal(t *testing.T) {
+	client := &fakeSubClient{}
+	s, life, _ := newSubService(&fakeSubStore{sub: annualSub, prices: map[string]string{"STANDARD": "price_s"}}, client)
+	outcome, err := s.ChangePlan(context.Background(), 7, "STANDARD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != ChangeApplied || client.from != "price_s" || client.to != "price_s" || client.proration != "" || !life.resumed || life.changedTo != "" {
+		t.Fatalf("outcome=%q client=%+v resumed=%v changed=%q", outcome, client, life.resumed, life.changedTo)
+	}
+
+	failing, failLife, _ := newSubService(&fakeSubStore{sub: annualSub, prices: map[string]string{"STANDARD": "price_s"}}, &fakeSubClient{err: errors.New("stripe down")})
+	if _, err := failing.ChangePlan(context.Background(), 7, "STANDARD"); err == nil || failLife.resumed {
+		t.Fatalf("provider failure: err=%v resumed=%v", err, failLife.resumed)
+	}
+
+	manualClient := &fakeSubClient{}
+	manual, manualLife, _ := newSubService(&fakeSubStore{sub: &ProviderSubscription{PlanID: "FREE"}, modes: map[string]ActivationMode{"FREE": ActivateFree}}, manualClient)
+	if _, err := manual.ChangePlan(context.Background(), 7, "FREE"); err != nil || !manualLife.resumed || manualClient.to != "" {
+		t.Fatalf("not provider-held: err=%v resumed=%v client=%+v", err, manualLife.resumed, manualClient)
+	}
+}
+
+func TestProviderSubscriptionService_ChangeToFree(t *testing.T) {
+	free := map[string]ActivationMode{"FREE": ActivateFree}
+
+	client := &fakeSubClient{}
+	s, life, _ := newSubService(&fakeSubStore{sub: annualSub, modes: free}, client)
+	outcome, err := s.ChangePlan(context.Background(), 7, "FREE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != ChangeScheduled || client.cancelled != "sub_1" || life.scheduledTo != "FREE" || life.changedTo != "" || client.to != "" {
+		t.Fatalf("provider-held: outcome=%q cancelled=%q scheduled=%q changed=%q", outcome, client.cancelled, life.scheduledTo, life.changedTo)
+	}
+
+	failing, failLife, _ := newSubService(&fakeSubStore{sub: annualSub, modes: free}, &fakeSubClient{err: errors.New("stripe down")})
+	if _, err := failing.ChangePlan(context.Background(), 7, "FREE"); err == nil || failLife.scheduledTo != "" {
+		t.Fatalf("provider failure: err=%v scheduled=%q", err, failLife.scheduledTo)
+	}
+
+	manualClient := &fakeSubClient{}
+	manual, manualLife, _ := newSubService(&fakeSubStore{sub: &ProviderSubscription{PlanID: "STANDARD"}, modes: free}, manualClient)
+	outcome, err = manual.ChangePlan(context.Background(), 7, "FREE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != ChangeApplied || manualLife.changedTo != "FREE" || manualLife.scheduledTo != "" || manualClient.cancelled != "" {
+		t.Fatalf("not provider-held: outcome=%q changed=%q scheduled=%q", outcome, manualLife.changedTo, manualLife.scheduledTo)
+	}
+
+	none, noneLife, _ := newSubService(&fakeSubStore{modes: free}, &fakeSubClient{})
+	if outcome, err := none.ChangePlan(context.Background(), 7, "FREE"); err != nil || outcome != ChangeApplied || noneLife.changedTo != "FREE" {
+		t.Fatalf("no subscription: err=%v outcome=%q changed=%q", err, outcome, noneLife.changedTo)
+	}
+
+	unknown, _, _ := newSubService(&fakeSubStore{sub: annualSub}, &fakeSubClient{})
+	if _, err := unknown.ChangePlan(context.Background(), 7, "GONE"); !errors.Is(err, ErrPlanNotFound) {
+		t.Fatalf("unknown plan: err = %v", err)
 	}
 }
 
@@ -127,12 +223,12 @@ func TestProviderSubscriptionService_PortalURL(t *testing.T) {
 	}
 }
 
-func TestActiveProviderSubscriptionAndPrice(t *testing.T) {
+func TestCurrentSubscriptionAndPrice(t *testing.T) {
 	svc, _ := newSvc(map[string][][]any{
 		qBillActiveProvSub: {{"sub_1", "STANDARD", "A", "A", int64(1)}},
 		qBillProviderPrice: {{""}},
 	})
-	sub, err := svc.ActiveProviderSubscription(context.Background(), 7)
+	sub, err := svc.CurrentSubscription(context.Background(), 7)
 	if err != nil || sub == nil || sub.ID != "sub_1" || sub.Terms.TermType != PeriodAnnual {
 		t.Fatalf("sub=%+v err=%v", sub, err)
 	}
@@ -141,11 +237,11 @@ func TestActiveProviderSubscriptionAndPrice(t *testing.T) {
 	}
 
 	none, _ := newSvc(map[string][][]any{})
-	if _, err := none.ActiveProviderSubscription(context.Background(), 7); !errors.Is(err, ErrNoSubscription) {
+	if _, err := none.CurrentSubscription(context.Background(), 7); !errors.Is(err, ErrNoSubscription) {
 		t.Fatalf("no subscription: err = %v", err)
 	}
 	manual, _ := newSvc(map[string][][]any{qBillActiveProvSub: {{"", "FREE", "A", "A", int64(1)}}})
-	if sub, err := manual.ActiveProviderSubscription(context.Background(), 7); sub != nil || err != nil {
+	if sub, err := manual.CurrentSubscription(context.Background(), 7); err != nil || sub.ID != "" || sub.PlanID != "FREE" {
 		t.Fatalf("manual subscription: sub=%+v err=%v", sub, err)
 	}
 }

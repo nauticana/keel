@@ -22,11 +22,18 @@ type fakeCall struct {
 type fakeQS struct {
 	calls []fakeCall
 	rows  map[string][][]any
-	id    int64
+	// rowsFor, when set, answers a query from its arguments before rows is consulted.
+	rowsFor func(name string, args []any) ([][]any, bool)
+	id      int64
 }
 
 func (q *fakeQS) Query(_ context.Context, name string, args ...any) (*model.QueryResult, error) {
 	q.calls = append(q.calls, fakeCall{name, args})
+	if q.rowsFor != nil {
+		if rows, ok := q.rowsFor(name, args); ok {
+			return &model.QueryResult{Rows: rows}, nil
+		}
+	}
 	return &model.QueryResult{Rows: q.rows[name]}, nil
 }
 func (q *fakeQS) GenID() int64 { q.id++; return q.id }
@@ -36,9 +43,17 @@ func (q *fakeQS) GenID() int64 { q.id++; return q.id }
 type fakeRepo struct {
 	port.DatabaseRepository
 	qs port.QueryService
+	tx *fakeTx
 }
 
 func (r fakeRepo) GetQueryService(context.Context, map[string]string) port.QueryService { return r.qs }
+func (r fakeRepo) BeginTx(context.Context, map[string]string) (port.TxQueryService, error) {
+	if r.tx == nil {
+		return nil, errors.New("fakeRepo: no transaction configured")
+	}
+	r.tx.begun++
+	return r.tx, nil
+}
 
 func newSvc(rows map[string][][]any) (*AbstractBillingService, *fakeQS) {
 	qs := &fakeQS{rows: rows}
@@ -335,7 +350,7 @@ func TestGetUsage_UnknownResource(t *testing.T) {
 func TestGetSubscription_ProviderManaged(t *testing.T) {
 	for _, managed := range []bool{true, false} {
 		svc, _ := newSvc(map[string][][]any{qBillGetSubscription: {{
-			"PRO", "Pro", "A", "2026-01-01", nil, int64(999), "USD", "M", true, nil, int32(1), int64(2), managed,
+			"PRO", "Pro", "A", "2026-01-01", nil, int64(999), "USD", "M", true, nil, int32(1), int64(2), managed, nil, "", "A",
 		}}})
 		sub, err := svc.GetSubscription(context.Background(), 7)
 		if err != nil {
@@ -344,5 +359,31 @@ func TestGetSubscription_ProviderManaged(t *testing.T) {
 		if sub.ProviderManaged != managed || !sub.AutoRenew {
 			t.Fatalf("managed=%v autoRenew=%v, want %v true", sub.ProviderManaged, sub.AutoRenew, managed)
 		}
+	}
+}
+
+func TestGetSubscription_ScheduledChange(t *testing.T) {
+	for _, tc := range []struct {
+		name, successor, mode, fallback, wantPlan, wantAt string
+		ends                                              any
+	}{
+		{name: "not ending", mode: "A", fallback: "FREE"},
+		{name: "successor", ends: "2026-11-12", successor: "BASIC", mode: "A", fallback: "FREE", wantPlan: "BASIC", wantAt: "2026-11-12"},
+		{name: "paid falls back", ends: "2026-11-12", mode: "A", fallback: "FREE", wantPlan: "FREE", wantAt: "2026-11-12"},
+		{name: "free does not fall back", ends: "2026-11-12", mode: "F", fallback: "FREE", wantAt: "2026-11-12"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := newSvc(map[string][][]any{qBillGetSubscription: {{
+				"PRO", "Pro", "A", "2026-01-01", nil, int64(999), "USD", "M", false, nil, int32(1), int64(2), true, tc.ends, tc.successor, tc.mode,
+			}}})
+			svc.FallbackPlanID = tc.fallback
+			sub, err := svc.GetSubscription(context.Background(), 7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sub.ScheduledPlanID != tc.wantPlan || sub.ScheduledAt != tc.wantAt {
+				t.Fatalf("scheduled = %q at %q, want %q at %q", sub.ScheduledPlanID, sub.ScheduledAt, tc.wantPlan, tc.wantAt)
+			}
+		})
 	}
 }

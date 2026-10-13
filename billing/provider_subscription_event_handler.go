@@ -51,7 +51,10 @@ type SubscriptionHandlerOptions struct {
 //   - invoice_paid       → RecordProviderInvoice + ConvertTrial (+ RecordPayment)
 //   - invoice_payment_failed → SetDunningState 'X'
 //   - subscription_updated   → opts.OnSubscriptionUpdated
-//   - subscription_canceled  → CancelByProviderSubID, fallback CancelByPartner
+//   - subscription_canceled  → CancelByProviderSubID (CancelByPartner when the
+//     event names no subscription); the successor or fallback plan starts. A
+//     subscription with no live local row fails with ErrUnknownSubscription so
+//     the mismatch stays visible in the webhook log.
 //
 // checkout_completed always activates a NEW sub — it does not detect plan changes;
 // route upgrades/downgrades through ChangePlan. life and store are usually the
@@ -141,15 +144,17 @@ func NewProviderSubscriptionEventHandler(life SubscriptionLifecycle, store Provi
 		OnSubscriptionUpdated: opts.OnSubscriptionUpdated,
 
 		OnSubscriptionCanceled: func(ctx context.Context, e *payment.PaymentEvent) error {
-			// Prefer the provider-sub-id; fall back to partner-wide when no row matched.
+			// A named subscription ends only its own rows, so a repeated or late
+			// cancellation never ends the plan that replaced it.
 			if e.SubscriptionID != "" {
 				n, err := life.CancelByProviderSubID(ctx, e.SubscriptionID, CancelImmediate)
 				if err != nil {
 					return err
 				}
-				if n > 0 {
-					return nil
+				if n == 0 {
+					return fmt.Errorf("%w: %s", ErrUnknownSubscription, e.SubscriptionID)
 				}
+				return nil
 			}
 			partnerID, err := resolve(ctx, e)
 			if err != nil {

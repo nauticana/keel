@@ -6,9 +6,12 @@ import (
 	"testing"
 )
 
-type fakeTx struct{ fakeQS }
+type fakeTx struct {
+	fakeQS
+	begun, commits int
+}
 
-func (t *fakeTx) Commit(context.Context) error   { return nil }
+func (t *fakeTx) Commit(context.Context) error   { t.commits++; return nil }
 func (t *fakeTx) Rollback(context.Context) error { return nil }
 
 func TestChangePlanTx_RunsOnCallerTx(t *testing.T) {
@@ -16,7 +19,7 @@ func TestChangePlanTx_RunsOnCallerTx(t *testing.T) {
 		qLcPlanPolicy: {{"A", int64(14)}},
 		qLcPlanPrice:  {{int64(9900), "USD"}},
 	})
-	tx := &fakeTx{fakeQS{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1"}}}}}
+	tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1"}}}}}
 	err := svc.ChangePlanTx(context.Background(), tx, 7, "PRO", BillingTerms{})
 	if err != nil {
 		t.Fatal(err)

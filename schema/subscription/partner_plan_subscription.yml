@@ -52,6 +52,10 @@ columns:
   - name: effective_cancel_date
     type: TIMESTAMP
     nullable: true
+  # successor_plan_id: the free plan that starts when this row ends at effective_cancel_date.
+  - name: successor_plan_id
+    type: VARCHAR(20)
+    nullable: true
   # trial_end (trial mode) and seats (seat-based modifier — orthogonal to the
   # activation mode, so it overlays any policy, not a peer enum value).
   - name: trial_end
@@ -69,6 +73,11 @@ foreign_keys:
       columns: [id]
   - name: partner_subscriptions_plan
     columns: [plan_id]
+    references:
+      table: subscription_plan
+      columns: [id]
+  - name: partner_plan_subscription_successor
+    columns: [successor_plan_id]
     references:
       table: subscription_plan
       columns: [id]

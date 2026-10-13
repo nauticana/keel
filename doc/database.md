@@ -1029,6 +1029,7 @@ erDiagram
     subscription_plan ||--o{ subscription_quota : "subscription_quotas"
     subscription_plan ||--o{ subscription_plan_price : "subscription_plan_prices"
     subscription_plan ||--o{ partner_plan_subscription : "partner_subscriptions_plan"
+    subscription_plan ||--o{ partner_plan_subscription : "partner_plan_subscription_successor"
     subscription_addon ||--o{ partner_addon_subscription : "partner_subscriptions_addon"
     partner_plan_subscription }o--|| business_partner : "partner_plan_subscriptions"
     partner_addon_subscription }o--|| business_partner : "partner_addon_subscriptions"
@@ -1095,6 +1096,7 @@ erDiagram
         TIMESTAMP next_charge_date
         TIMESTAMP cancelled_at
         TIMESTAMP effective_cancel_date
+        VARCHAR successor_plan_id FK
         TIMESTAMP trial_end
         INTEGER seats
     }

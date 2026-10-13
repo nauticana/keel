@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,9 +24,20 @@ type SubscriptionLifecycle interface {
 	ConvertTrial(ctx context.Context, partnerID int64, providerSubID string) error
 	SetSeats(ctx context.Context, partnerID int64, planID string, seats int64) error
 	// CancelByPartner cancels immediately (C) or at period end (effective_cancel_date).
+	// An immediate cancel starts the successor or fallback plan.
 	CancelByPartner(ctx context.Context, partnerID int64, mode CancelMode) error
 	// CancelByProviderSubID is the webhook path; returns rows affected (0 → no local row).
 	CancelByProviderSubID(ctx context.Context, providerSubID string, mode CancelMode) (int, error)
+	// ScheduleChange ends the current subscription at period end and records the
+	// free plan that starts then (ErrNotFreePlan otherwise).
+	ScheduleChange(ctx context.Context, partnerID int64, planID string) error
+	// ResumeRenewal undoes a period-end cancellation or scheduled change.
+	ResumeRenewal(ctx context.Context, partnerID int64) error
+	// EndDue ends up to limit subscriptions the provider does not hold whose
+	// effective_cancel_date or endda has passed, starting each one's successor or
+	// fallback plan. It continues past a row whose next plan cannot start and
+	// returns how many it ended with those failures joined.
+	EndDue(ctx context.Context, limit int) (int, error)
 	// SetDunningState moves the CHAR(1) status (e.g. "X" past-due, "A" active).
 	SetDunningState(ctx context.Context, partnerID int64, providerSubID, status string) error
 }
@@ -61,9 +73,15 @@ const (
 	qLcReactivate             = "lc_reactivate"
 	qLcSetSeats               = "lc_set_seats"
 	qLcCancelPartnerPeriodEnd = "lc_cancel_partner_period_end"
-	qLcCancelSubIDImmediate   = "lc_cancel_subid_immediate"
 	qLcCancelSubIDPeriodEnd   = "lc_cancel_subid_period_end"
 	qLcSetDunning             = "lc_set_dunning"
+	qLcScheduleChange         = "lc_schedule_change"
+	qLcResumeRenewal          = "lc_resume_renewal"
+	qLcLiveByPartner          = "lc_live_by_partner"
+	qLcLiveByProviderSub      = "lc_live_by_provider_sub"
+	qLcDueToEnd               = "lc_due_to_end"
+	qLcEndRow                 = "lc_end_row"
+	qLcInsertFree             = "lc_insert_free"
 )
 
 // lifecycleQueries is pgsql; a mysql consumer overrides the RETURNING entries via
@@ -128,7 +146,7 @@ UPDATE partner_plan_subscription
 	qLcReactivate: `
 UPDATE partner_plan_subscription
    SET status = 'A', auto_renew = TRUE, cancelled_at = NULL,
-       effective_cancel_date = NULL, endda = NULL
+       effective_cancel_date = NULL, successor_plan_id = NULL, endda = NULL
  WHERE partner_id = ? AND plan_id = ? AND status IN ('A', 'C', 'P')`,
 
 	qLcSetSeats: `
@@ -138,22 +156,78 @@ UPDATE partner_plan_subscription
 
 	qLcCancelPartnerPeriodEnd: `
 UPDATE partner_plan_subscription
-   SET effective_cancel_date = COALESCE(renewal_date, trial_end), auto_renew = FALSE
+   SET effective_cancel_date = COALESCE(renewal_date, trial_end), auto_renew = FALSE,
+       successor_plan_id = NULL
  WHERE partner_id = ? AND status IN ('A', 'T', 'X')
    AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 
 	// RETURNING so len(Rows) is the affected count (mysql override: ROW_COUNT()).
-	qLcCancelSubIDImmediate: `
-UPDATE partner_plan_subscription
-   SET status = 'C', cancelled_at = CURRENT_TIMESTAMP, auto_renew = FALSE
- WHERE provider_subscription_id = ? AND status IN ('A', 'T', 'X')
- RETURNING partner_id`,
-
 	qLcCancelSubIDPeriodEnd: `
 UPDATE partner_plan_subscription
    SET effective_cancel_date = COALESCE(renewal_date, trial_end), auto_renew = FALSE
  WHERE provider_subscription_id = ? AND status IN ('A', 'T', 'X')
  RETURNING partner_id`,
+
+	qLcScheduleChange: `
+UPDATE partner_plan_subscription
+   SET effective_cancel_date = COALESCE(renewal_date, trial_end), auto_renew = FALSE,
+       successor_plan_id = ?
+ WHERE partner_id = ? AND status IN ('A', 'T', 'X')
+   AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
+ RETURNING partner_id`,
+
+	qLcResumeRenewal: `
+UPDATE partner_plan_subscription
+   SET auto_renew = TRUE, effective_cancel_date = NULL, successor_plan_id = NULL
+ WHERE partner_id = ? AND status IN ('A', 'T', 'X')
+   AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
+
+	qLcLiveByPartner: `
+SELECT ` + endingColumns + `
+  FROM partner_plan_subscription ps
+  JOIN subscription_plan sp ON sp.id = ps.plan_id
+ WHERE ps.partner_id = ? AND ps.status IN ('A', 'T', 'X')
+   AND (ps.endda IS NULL OR ps.endda > CURRENT_TIMESTAMP)`,
+
+	qLcLiveByProviderSub: `
+SELECT ` + endingColumns + `
+  FROM partner_plan_subscription ps
+  JOIN subscription_plan sp ON sp.id = ps.plan_id
+ WHERE ps.provider_subscription_id = ? AND ps.status IN ('A', 'T', 'X')`,
+
+	// Provider-held rows end on the provider's cancellation event, not here.
+	qLcDueToEnd: `
+SELECT ` + endingColumns + `
+  FROM partner_plan_subscription ps
+  JOIN subscription_plan sp ON sp.id = ps.plan_id
+ WHERE ps.status IN ('A', 'T', 'X')
+   AND COALESCE(ps.provider_subscription_id, '') = ''
+   AND (ps.effective_cancel_date <= CURRENT_TIMESTAMP OR ps.endda <= CURRENT_TIMESTAMP)
+ ORDER BY ps.partner_id, ps.begda
+ LIMIT ?`,
+
+	// The status guard makes a concurrent or repeated end a no-op (no rows returned).
+	qLcEndRow: `
+UPDATE partner_plan_subscription
+   SET status = 'C', auto_renew = FALSE,
+       cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP),
+       endda = LEAST(COALESCE(endda, CURRENT_TIMESTAMP), COALESCE(effective_cancel_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+ WHERE partner_id = ? AND plan_id = ? AND begda = ? AND status IN ('A', 'T', 'X')
+ RETURNING partner_id`,
+
+	// A free row carries no charge terms, as at registration. The NOT EXISTS is
+	// an approximate guard: it skips the insert while the partner holds another
+	// live or pending row but does not serialize concurrent ends of two rows.
+	qLcInsertFree: `
+INSERT INTO partner_plan_subscription
+  (partner_id, plan_id, begda, installment_minor, currency, status, auto_renew)
+SELECT ?, sp.id, CURRENT_TIMESTAMP, 0, sp.currency, 'A', TRUE
+  FROM subscription_plan sp
+ WHERE sp.id = ?
+   AND NOT EXISTS (SELECT 1 FROM partner_plan_subscription ps
+                    WHERE ps.partner_id = ? AND ps.status IN ('A', 'T', 'X', 'P')
+                      AND (ps.endda IS NULL OR ps.endda > CURRENT_TIMESTAMP))
+ RETURNING plan_id`,
 
 	qLcSetDunning: `
 UPDATE partner_plan_subscription
@@ -295,8 +369,31 @@ func (s *AbstractBillingService) ChangePlan(ctx context.Context, partnerID int64
 // TxQueries() entries.
 func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQueryService, partnerID int64, newPlanID string, terms BillingTerms) error {
 	s.init(ctx)
-	if _, err := s.loadPlanPolicy(ctx, newPlanID); err != nil {
+	pol, err := s.loadPlanPolicy(ctx, newPlanID)
+	if err != nil {
 		return err
+	}
+	if pol.mode == ActivateFree {
+		// The provider must cancel its subscription first (ProviderSubscriptionService
+		// schedules the change); closing the row here would leave it billing.
+		current, err := tx.Query(ctx, qLcChangePlanCurrent, partnerID)
+		if err != nil {
+			return err
+		}
+		if len(current.Rows) > 0 && common.AsString(current.Rows[0][0]) != "" {
+			return ErrProviderSubscription
+		}
+		if _, err := tx.Query(ctx, qLcChangePlanClose, partnerID); err != nil {
+			return err
+		}
+		started, err := startFree(ctx, tx, partnerID, newPlanID)
+		if err != nil {
+			return err
+		}
+		if !started {
+			return ErrSubscriptionPending
+		}
+		return nil
 	}
 	now := s.now()
 	pc, err := s.loadPlanCharge(ctx, newPlanID, terms, now)
@@ -347,25 +444,76 @@ func (s *AbstractBillingService) SetSeats(ctx context.Context, partnerID int64, 
 
 func (s *AbstractBillingService) CancelByPartner(ctx context.Context, partnerID int64, mode CancelMode) error {
 	s.init(ctx)
-	q := qBillCancelSub // immediate
 	if mode == CancelAtPeriodEnd {
-		q = qLcCancelPartnerPeriodEnd
+		_, err := s.qs.Query(ctx, qLcCancelPartnerPeriodEnd, partnerID)
+		return err
 	}
-	_, err := s.qs.Query(ctx, q, partnerID)
+	_, err := s.endLive(ctx, qLcLiveByPartner, partnerID)
 	return err
 }
 
 func (s *AbstractBillingService) CancelByProviderSubID(ctx context.Context, providerSubID string, mode CancelMode) (int, error) {
 	s.init(ctx)
-	q := qLcCancelSubIDImmediate
 	if mode == CancelAtPeriodEnd {
-		q = qLcCancelSubIDPeriodEnd
+		res, err := s.qs.Query(ctx, qLcCancelSubIDPeriodEnd, providerSubID)
+		if err != nil {
+			return 0, err
+		}
+		return len(res.Rows), nil
 	}
-	res, err := s.qs.Query(ctx, q, providerSubID)
+	return s.endLive(ctx, qLcLiveByProviderSub, providerSubID)
+}
+
+func (s *AbstractBillingService) ScheduleChange(ctx context.Context, partnerID int64, planID string) error {
+	s.init(ctx)
+	pol, err := s.loadPlanPolicy(ctx, planID)
+	if err != nil {
+		return err
+	}
+	if pol.mode != ActivateFree {
+		return fmt.Errorf("%w: %s", ErrNotFreePlan, planID)
+	}
+	res, err := s.qs.Query(ctx, qLcScheduleChange, planID, partnerID)
+	if err != nil {
+		return err
+	}
+	if len(res.Rows) == 0 {
+		return ErrNoSubscription
+	}
+	return nil
+}
+
+func (s *AbstractBillingService) ResumeRenewal(ctx context.Context, partnerID int64) error {
+	s.init(ctx)
+	_, err := s.qs.Query(ctx, qLcResumeRenewal, partnerID)
+	return err
+}
+
+// EndDue ends each row in its own transaction so one failure cannot hold the
+// others back.
+func (s *AbstractBillingService) EndDue(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, fmt.Errorf("billing: EndDue limit must be positive, got %d", limit)
+	}
+	s.init(ctx)
+	res, err := s.qs.Query(ctx, qLcDueToEnd, limit)
 	if err != nil {
 		return 0, err
 	}
-	return len(res.Rows), nil
+	ended := 0
+	cache := planModes{}
+	var errs []error
+	for _, row := range res.Rows {
+		if err := ctx.Err(); err != nil {
+			return ended, errors.Join(append(errs, err)...)
+		}
+		n, err := s.endRows(ctx, cache, []endingRow{parseEndingRow(row)})
+		ended += n
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return ended, errors.Join(errs...)
 }
 
 func (s *AbstractBillingService) SetDunningState(ctx context.Context, partnerID int64, providerSubID, status string) error {
