@@ -231,6 +231,10 @@ func (h *AbstractHandler) ReadStrictRequest(w http.ResponseWriter, r *http.Reque
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Invalid JSON: "+err.Error())
 		return false
 	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Invalid JSON: trailing content")
+		return false
+	}
 	return true
 }
 

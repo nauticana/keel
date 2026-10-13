@@ -96,11 +96,16 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 			event.SetupIntentID = s
 		}
 	}
-	// SubscriptionID: checkout / invoice events reference it via
-	// data.object.subscription; customer.subscription.* events ARE the
-	// subscription, so data.object.id is the id.
+	// SubscriptionID: checkout events reference it via data.object.subscription,
+	// invoices from API 2025-03-31.basil via parent.subscription_details, and
+	// customer.subscription.* events ARE the subscription.
 	if s, ok := obj["subscription"].(string); ok {
 		event.SubscriptionID = s
+	}
+	if event.SubscriptionID == "" {
+		parent, _ := obj["parent"].(map[string]any)
+		details, _ := parent["subscription_details"].(map[string]any)
+		event.SubscriptionID, _ = details["subscription"].(string)
 	}
 	if event.SubscriptionID == "" && strings.HasPrefix(raw.Type, "customer.subscription.") {
 		if s, ok := obj["id"].(string); ok {

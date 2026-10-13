@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,8 +24,10 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/crypto"
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/oauth/client"
+	"github.com/nauticana/keel/outbox"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
 	"golang.org/x/sync/singleflight"
@@ -68,6 +72,7 @@ const (
 	qConnectedProviders = "cred_connected_providers"
 	qActiveConnection   = "cred_active_connection"
 	qShopConnections    = "cred_shop_connections"
+	qDeleteConnection   = "cred_delete_connection"
 )
 
 var credentialQueries = map[string]string{
@@ -83,6 +88,7 @@ DO UPDATE SET cred_ref = EXCLUDED.cred_ref, connection_type = EXCLUDED.connectio
  status = 'A', api_endpoint = EXCLUDED.api_endpoint, granted_scopes = EXCLUDED.granted_scopes,
  rev = partner_credential.rev + 1,
  lease_until = NULL, issued_at = CURRENT_TIMESTAMP, last_checked = CURRENT_TIMESTAMP
+RETURNING id
 `,
 	// Atomic claim: exactly one worker wins (CAS on the worklist rev + an unheld
 	// lease) and gets cred_ref to refresh; losers get no row. The lease makes a
@@ -116,8 +122,20 @@ UPDATE partner_credential
 RETURNING id
 `,
 	qUpdateStatus: `
-UPDATE partner_credential SET status = ?, rev = rev + 1, last_checked = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND entity_id = ? AND provider = ? AND connection_type = ?
+WITH input(status) AS (VALUES (CAST(? AS CHAR(1)))), prior AS (
+ SELECT id, status FROM partner_credential
+  WHERE partner_id = ? AND entity_id = ? AND provider = ? AND connection_type = ?
+  FOR UPDATE
+)
+UPDATE partner_credential pc
+   SET status = input.status, rev = pc.rev + 1, last_checked = CURRENT_TIMESTAMP
+  FROM input, prior WHERE pc.id = prior.id
+RETURNING pc.id, prior.status <> input.status
+`,
+	qDeleteConnection: `
+DELETE FROM partner_credential
+ WHERE partner_id = ? AND entity_id = ? AND provider = ?
+RETURNING id
 `,
 	qTouchChecked: `
 UPDATE partner_credential SET last_checked = CURRENT_TIMESTAMP
@@ -193,9 +211,13 @@ type CredentialStoreDB struct {
 	EncKeySecret string                   // keystore key of the 32-byte KEK; default DefaultEncKeySecret
 	Refresh      Refresher                // provider-aware refresh; nil = tokens used as-is
 	Journal      logger.ApplicationLogger // optional; logs best-effort write failures instead of dropping them
+	// AnnounceChanges enqueues a ConnectionChangedEvent in the transaction of
+	// every connect, status change and disconnect; it needs the outbox schema.
+	AnnounceChanges bool
 
-	qs  port.QueryService
-	kek []byte
+	qs        port.QueryService
+	txQueries map[string]string
+	kek       []byte
 
 	accessOnce   sync.Once
 	access       *cache.LRU[accessKey, cachedAccess]
@@ -227,6 +249,10 @@ func (s *CredentialStoreDB) Init(ctx context.Context) error {
 	}
 	s.kek = key
 	s.qs = s.DB.GetQueryService(ctx, credentialQueries)
+	if s.AnnounceChanges {
+		s.txQueries = maps.Clone(credentialQueries)
+		maps.Copy(s.txQueries, outbox.WriteQueries())
+	}
 	if s.Nonce != nil {
 		s.Nonce.Init(ctx)
 	}
@@ -316,9 +342,62 @@ func (s *CredentialStoreDB) UpsertConnection(ctx context.Context, partnerID int6
 	if err != nil {
 		return fmt.Errorf("seal credential: %w", err)
 	}
-	_, err = s.qs.Query(ctx, qUpsertConnection, partnerID, client.EntityFromContext(ctx), conn.Provider, conn.ConnType, enc,
+	return s.write(ctx, partnerID, conn.Provider, true, qUpsertConnection, partnerID, client.EntityFromContext(ctx), conn.Provider, conn.ConnType, enc,
 		conn.APIEndpoint, common.NullIfEmpty(client.JoinScopes(conn.GrantedScopes)))
-	return err
+}
+
+// DisconnectConnection deletes the partner's connection to the provider; a
+// missing connection is not an error.
+func (s *CredentialStoreDB) DisconnectConnection(ctx context.Context, partnerID int64, provider string) error {
+	return s.write(ctx, partnerID, provider, false, qDeleteConnection, partnerID, client.EntityFromContext(ctx), provider)
+}
+
+// write optionally enqueues a ConnectionChange with the credential write.
+// A second false RETURNING column suppresses an unchanged-status event.
+func (s *CredentialStoreDB) write(ctx context.Context, partnerID int64, provider string, connected bool, query string, args ...any) error {
+	if !s.AnnounceChanges {
+		_, err := s.qs.Query(ctx, query, args...)
+		return err
+	}
+	tx, err := s.DB.BeginTx(ctx, s.txQueries)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = data.RollbackDetached(tx)
+		}
+	}()
+	res, err := tx.Query(ctx, query, args...)
+	if err != nil || len(res.Rows) == 0 {
+		return err
+	}
+	if len(res.Rows[0]) > 1 && !common.AsBool(res.Rows[0][1]) {
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	}
+	payload, err := json.Marshal(ConnectionChange{PartnerID: partnerID, EntityID: client.EntityFromContext(ctx), Provider: provider, Connected: connected})
+	if err != nil {
+		return err
+	}
+	if _, err := outbox.EnqueueTx(ctx, tx, outbox.Event{
+		PartnerID:     partnerID,
+		AggregateType: "partner_credential",
+		AggregateID:   strconv.FormatInt(common.AsInt64(res.Rows[0][0]), 10),
+		EventType:     ConnectionChangedEvent,
+		Payload:       string(payload),
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // GrantedScopes returns the scopes recorded for the connection; an empty slice
@@ -345,8 +424,8 @@ func (s *CredentialStoreDB) MissingScopes(ctx context.Context, partnerID int64, 
 }
 
 func (s *CredentialStoreDB) UpdateConnectionStatus(ctx context.Context, partnerID int64, provider, connType, status string) error {
-	_, err := s.qs.Query(ctx, qUpdateStatus, status, partnerID, client.EntityFromContext(ctx), provider, connType)
-	return err
+	return s.write(ctx, partnerID, provider, status == statusActive, qUpdateStatus,
+		status, partnerID, client.EntityFromContext(ctx), provider, connType)
 }
 
 func (s *CredentialStoreDB) touchLastChecked(ctx context.Context, partnerID int64, provider string) error {
@@ -475,8 +554,7 @@ func (s *CredentialStoreDB) completeCAS(ctx context.Context, partnerID int64, pr
 // markErroredCAS flips status to 'E' only if rev is unchanged (else a concurrent
 // write won and must stand). A DB failure is surfaced, not swallowed.
 func (s *CredentialStoreDB) markErroredCAS(ctx context.Context, partnerID int64, provider string, rev int) error {
-	_, err := s.qs.Query(ctx, qMarkErroredCAS, partnerID, client.EntityFromContext(ctx), provider, rev)
-	return err
+	return s.write(ctx, partnerID, provider, false, qMarkErroredCAS, partnerID, client.EntityFromContext(ctx), provider, rev)
 }
 
 // rotateCAS seals and persists a replacement refresh token only if rev is

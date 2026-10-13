@@ -314,3 +314,62 @@ func TestCreatePortalSession(t *testing.T) {
 		t.Errorf("missing customer param: %s", capturedBody)
 	}
 }
+
+func TestEnrichPaymentEvent_BasilInvoicePayment(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/invoice_payments" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		query = r.URL.RawQuery
+		io.WriteString(w, `{"data":[{"id":"inpay_1","status":"paid","payment":{"type":"payment_intent","payment_intent":{"id":"pi_1","latest_charge":"ch_1"}}}]}`)
+	}))
+	defer srv.Close()
+
+	p := &StripeProvider{InvoiceLineClient: &StripeCheckoutClient{
+		Secrets:    fakeSecrets{map[string]string{"stripe_secret_key": "sk_test"}},
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+	}}
+	e := &PaymentEvent{EventType: "invoice.paid", EventKind: KindInvoicePaid, InvoiceID: "in_1", MinorUnits: 599,
+		PaymentID: "ch_old", ChargeID: "ch_old", InvoiceLinesComplete: true}
+	if err := p.EnrichPaymentEvent(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if e.PaymentID != "pi_1" || e.ChargeID != "ch_1" {
+		t.Fatalf("payment=%q charge=%q", e.PaymentID, e.ChargeID)
+	}
+	if !strings.Contains(query, "invoice=in_1") || !strings.Contains(query, "status=paid") {
+		t.Fatalf("query=%s", query)
+	}
+}
+
+func TestEnrichPaymentEvent_SkipsWhenChargeKnown(t *testing.T) {
+	p := &StripeProvider{}
+	e := &PaymentEvent{EventType: "invoice.paid", EventKind: KindInvoicePaid, InvoiceID: "in_1", MinorUnits: 599,
+		ChargeID: "ch_1", PaymentID: "pi_1", InvoiceLinesComplete: true}
+	if err := p.EnrichPaymentEvent(context.Background(), e); err != nil {
+		t.Fatalf("no fetch is needed, got %v", err)
+	}
+}
+
+func TestFetchInvoicePaymentRejectsIncompletePage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, `{}`) }))
+	defer srv.Close()
+	c := &StripeCheckoutClient{Secrets: fakeSecrets{map[string]string{"stripe_secret_key": "sk_test"}}, BaseURL: srv.URL, HTTPClient: srv.Client()}
+	if _, _, err := c.FetchInvoicePayment(context.Background(), "in_1"); err == nil {
+		t.Fatal("expected incomplete page error")
+	}
+}
+
+func TestFetchInvoicePaymentChargeType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"data":[{"payment":{"type":"charge","charge":"ch_1"}}]}`)
+	}))
+	defer srv.Close()
+	c := &StripeCheckoutClient{Secrets: fakeSecrets{map[string]string{"stripe_secret_key": "sk_test"}}, BaseURL: srv.URL, HTTPClient: srv.Client()}
+	intent, charge, err := c.FetchInvoicePayment(context.Background(), "in_1")
+	if err != nil || intent != "" || charge != "ch_1" {
+		t.Fatalf("intent=%q charge=%q err=%v", intent, charge, err)
+	}
+}

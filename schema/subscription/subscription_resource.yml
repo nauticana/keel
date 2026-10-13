@@ -3,6 +3,8 @@ comment: Quota-tracked resources (domains, API calls, etc.)
 columns:
   - name: id
     type: VARCHAR(20)
+  - name: caption
+    type: VARCHAR(80)
   - name: table_name
     type: VARCHAR(32)
     nullable: true

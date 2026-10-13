@@ -28,4 +28,6 @@ type Store interface {
 	// expectRev (a lease gives exactly-one-worker exclusivity for the multi-replica
 	// sweep). refreshed is false when another replica already held it.
 	RefreshDue(ctx context.Context, partnerID int64, provider string, expectRev int) (refreshed bool, err error)
+	// DisconnectConnection deletes the connection of the context's entity; a missing one is not an error.
+	DisconnectConnection(ctx context.Context, partnerID int64, provider string) error
 }

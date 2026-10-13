@@ -334,3 +334,34 @@ func TestStripeParser_AuthorizationEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestStripeParser_BasilPayloads(t *testing.T) {
+	cases := []struct {
+		name, body                                            string
+		kind, subscription, invoice, payment, charge, dispute string
+	}{
+		{"invoice.paid", `{"id":"evt_1","type":"invoice.paid","data":{"object":{"object":"invoice","id":"in_1","amount_paid":599,"currency":"usd","customer":"cus_1",
+			"parent":{"type":"subscription_details","subscription_details":{"subscription":"sub_1","metadata":{}}}}}}`,
+			KindInvoicePaid, "sub_1", "in_1", "", "", ""},
+		{"invoice.payment_failed", `{"id":"evt_2","type":"invoice.payment_failed","data":{"object":{"object":"invoice","id":"in_2","amount_due":599,"currency":"usd",
+			"parent":{"type":"subscription_details","subscription_details":{"subscription":"sub_1"}}}}}`,
+			KindInvoicePaymentFailed, "sub_1", "in_2", "", "", ""},
+		{"charge.refunded", `{"id":"evt_3","type":"charge.refunded","data":{"object":{"object":"charge","id":"ch_1","payment_intent":"pi_1","amount":599,"amount_refunded":599,"currency":"usd"}}}`,
+			KindOther, "", "", "pi_1", "ch_1", ""},
+		{"charge.dispute.funds_withdrawn", `{"id":"evt_4","type":"charge.dispute.funds_withdrawn","data":{"object":{"object":"dispute","id":"dp_1","charge":"ch_1","payment_intent":"pi_1","amount":599,"currency":"usd"}}}`,
+			KindOther, "", "", "pi_1", "ch_1", "dp_1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e, err := NewStripeEventParser().Parse([]byte(c.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.EventKind != c.kind || e.SubscriptionID != c.subscription || e.InvoiceID != c.invoice ||
+				e.PaymentID != c.payment || e.ChargeID != c.charge || e.DisputeID != c.dispute {
+				t.Fatalf("kind=%q sub=%q invoice=%q payment=%q charge=%q dispute=%q",
+					e.EventKind, e.SubscriptionID, e.InvoiceID, e.PaymentID, e.ChargeID, e.DisputeID)
+			}
+		})
+	}
+}

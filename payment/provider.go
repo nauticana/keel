@@ -51,25 +51,47 @@ func NewStripeProvider(secrets secret.SecretProvider) *StripeProvider {
 	}
 }
 
+// EnrichPaymentEvent completes invoice lines and missing paid-invoice identities.
 func (p *StripeProvider) EnrichPaymentEvent(ctx context.Context, event *PaymentEvent) error {
-	if event == nil || event.InvoiceID == "" || event.InvoiceLinesComplete ||
-		!strings.HasPrefix(event.EventType, "invoice.") {
+	if event == nil || event.InvoiceID == "" || !strings.HasPrefix(event.EventType, "invoice.") {
+		return nil
+	}
+	needPayment := event.EventKind == KindInvoicePaid && event.MinorUnits > 0 &&
+		(event.ChargeID == "" || event.PaymentID == event.ChargeID)
+	if event.InvoiceLinesComplete && !needPayment {
 		return nil
 	}
 	if p.InvoiceLineClient == nil {
 		return fmt.Errorf("stripe: invoice-line client is not configured")
 	}
-	lines, err := p.InvoiceLineClient.FetchInvoiceLines(ctx, event.InvoiceID)
-	if err != nil {
-		return err
+	if !event.InvoiceLinesComplete {
+		lines, err := p.InvoiceLineClient.FetchInvoiceLines(ctx, event.InvoiceID)
+		if err != nil {
+			return err
+		}
+		for i := range lines {
+			if lines[i].Currency == "" {
+				lines[i].Currency = event.Currency
+			}
+		}
+		event.InvoiceLines = lines
+		event.InvoiceLinesComplete = true
 	}
-	for i := range lines {
-		if lines[i].Currency == "" {
-			lines[i].Currency = event.Currency
+	if needPayment {
+		intentID, chargeID, err := p.InvoiceLineClient.FetchInvoicePayment(ctx, event.InvoiceID)
+		if err != nil {
+			return err
+		}
+		if intentID != "" {
+			event.PaymentID = intentID
+		}
+		if chargeID != "" {
+			event.ChargeID = chargeID
+		}
+		if event.PaymentID == "" {
+			event.PaymentID = event.ChargeID
 		}
 	}
-	event.InvoiceLines = lines
-	event.InvoiceLinesComplete = true
 	return nil
 }
 

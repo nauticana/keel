@@ -132,6 +132,12 @@ func AsBool(v any) bool {
 	switch v := v.(type) {
 	case bool:
 		return v
+	case int64:
+		return v != 0
+	case int32:
+		return v != 0
+	case int:
+		return v != 0
 	case string:
 		return v == "1" || v == "true"
 	case []byte:

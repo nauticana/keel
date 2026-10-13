@@ -1053,6 +1053,7 @@ erDiagram
     }
     subscription_resource {
         VARCHAR id PK
+        VARCHAR caption
         VARCHAR table_name
         VARCHAR status_column
         VARCHAR status_value

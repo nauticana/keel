@@ -35,6 +35,7 @@ type Subscription struct {
 	AutoRenew        bool    `json:"autoRenew"`
 	TrialEnd         string  `json:"trialEnd"`
 	Seats            int     `json:"seats"`
+	ProviderManaged  bool    `json:"providerManaged"` // provider subscription and customer both exist
 }
 
 // Invoice is one billing invoice row (provider-issued or self-scheduled).
@@ -78,15 +79,17 @@ type PlanPrice struct {
 // UsageItem is one resource's current-period usage vs its plan limit (sail's UsageMeter).
 type UsageItem struct {
 	Resource string `json:"resource"`
+	Caption  string `json:"caption"`
 	Used     int64  `json:"used"`
 	Limit    int64  `json:"limit"`
 }
 
 // Sentinels for errors.Is mapping at the handler boundary (→ 404/400).
 var (
-	ErrNoSubscription = errors.New("no active subscription")
-	ErrPlanNotFound   = errors.New("plan not found")
-	ErrPriceNotFound  = errors.New("plan does not offer this billing interval")
+	ErrNoSubscription  = errors.New("no active subscription")
+	ErrPlanNotFound    = errors.New("plan not found")
+	ErrPriceNotFound   = errors.New("plan does not offer this billing interval")
+	ErrUnknownResource = errors.New("usage resource is not in subscription_resource")
 )
 
 const (
@@ -95,7 +98,6 @@ const (
 	qBillCancelSub       = "bill_cancel_subscription"
 	qBillGetInvoices     = "bill_get_invoices"
 	qBillGetUsage        = "bill_get_usage"
-	qBillGetQuotaLimit   = "bill_get_quota_limit"
 	qBillGetAllPlans     = "bill_get_all_plans"
 	qBillRecordInvoice   = "bill_record_invoice"
 	qBillLinkCustomer    = "bill_link_customer"
@@ -110,7 +112,9 @@ const (
 var defaultBillingQueries = map[string]string{
 	qBillGetSubscription: `
 SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.installment_minor, ps.currency,
-       ps.billing_cycle, ps.auto_renew, ps.trial_end, ps.seats, cur.exponent
+       ps.billing_cycle, ps.auto_renew, ps.trial_end, ps.seats, cur.exponent,
+       COALESCE(ps.provider_subscription_id, '') <> ''
+         AND EXISTS (SELECT 1 FROM partner_billing_customer bc WHERE bc.partner_id = ps.partner_id)
   FROM partner_plan_subscription ps
   JOIN subscription_plan sp ON sp.id = ps.plan_id
   JOIN currency cur ON cur.code = ps.currency
@@ -140,15 +144,17 @@ SELECT i.id, i.invoice_number, i.total_minor, i.currency, i.status, i.issued_at,
   JOIN currency cur ON cur.code = i.currency
  WHERE i.partner_id = ? ORDER BY i.issued_at DESC LIMIT 50`,
 
+	// Args: partner, period start, partner, resource.
 	qBillGetUsage: `
-SELECT COALESCE(SUM(amount), 0) FROM usage_ledger
- WHERE partner_id = ? AND resource_name = ? AND usage_time >= ?`,
-
-	qBillGetQuotaLimit: `
-SELECT COALESCE(MAX(sq.max_value), 0)
-  FROM subscription_quota sq, partner_plan_subscription ps
- WHERE ps.partner_id = ? AND ps.status = 'A'
-   AND sq.plan_id = ps.plan_id AND sq.resource_id = ?`,
+SELECT r.caption,
+       (SELECT COALESCE(SUM(ul.amount), 0) FROM usage_ledger ul
+         WHERE ul.partner_id = ? AND ul.resource_name = r.id AND ul.usage_time >= ?),
+       (SELECT COALESCE(MAX(sq.max_value), 0)
+          FROM subscription_quota sq
+          JOIN partner_plan_subscription ps ON ps.plan_id = sq.plan_id
+         WHERE ps.partner_id = ? AND ps.status = 'A' AND sq.resource_id = r.id)
+  FROM subscription_resource r
+ WHERE r.id = ?`,
 
 	// One row per (plan, offer); LEFT JOIN keeps plans with no price rows.
 	qBillGetAllPlans: `
@@ -258,9 +264,10 @@ func (s *AbstractBillingService) GetSubscription(ctx context.Context, partnerID 
 		Currency:         common.AsString(row[6]),
 		Exponent:         int(common.AsInt64(row[11])),
 		BillingCycle:     common.AsString(row[7]),
-		AutoRenew:        common.AsString(row[8]) == "true" || common.AsInt64(row[8]) == 1,
+		AutoRenew:        common.AsBool(row[8]),
 		TrialEnd:         common.AsString(row[9]),
 		Seats:            int(common.AsInt32(row[10])),
+		ProviderManaged:  common.AsBool(row[12]),
 	}
 	if sub.MonthlyCost, err = majorAmount(sub.InstallmentMinor, sub.Exponent); err != nil {
 		return nil, err
@@ -318,26 +325,19 @@ func (s *AbstractBillingService) GetInvoices(ctx context.Context, partnerID int6
 
 func (s *AbstractBillingService) GetUsage(ctx context.Context, partnerID int64) ([]UsageItem, error) {
 	s.init(ctx)
-	now := time.Now().UTC()
+	now := s.now()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	items := make([]UsageItem, 0, len(s.ResourceNames))
 	for _, r := range s.ResourceNames {
-		item := UsageItem{Resource: r}
-		usedRes, err := s.qs.Query(ctx, qBillGetUsage, partnerID, r, monthStart)
+		res, err := s.qs.Query(ctx, qBillGetUsage, partnerID, monthStart, partnerID, r)
 		if err != nil {
 			return nil, err
 		}
-		if len(usedRes.Rows) > 0 {
-			item.Used = common.AsInt64(usedRes.Rows[0][0])
+		if len(res.Rows) == 0 {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownResource, r)
 		}
-		limRes, err := s.qs.Query(ctx, qBillGetQuotaLimit, partnerID, r)
-		if err != nil {
-			return nil, err
-		}
-		if len(limRes.Rows) > 0 {
-			item.Limit = common.AsInt64(limRes.Rows[0][0])
-		}
-		items = append(items, item)
+		row := res.Rows[0]
+		items = append(items, UsageItem{Resource: r, Caption: common.AsString(row[0]), Used: common.AsInt64(row[1]), Limit: common.AsInt64(row[2])})
 	}
 	return items, nil
 }

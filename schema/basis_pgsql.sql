@@ -797,6 +797,7 @@ CREATE TABLE IF NOT EXISTS subscription_plan_price (
 -- Quota-tracked resources (domains, API calls, etc.)
 CREATE TABLE IF NOT EXISTS subscription_resource (
     id                                   VARCHAR(20)   NOT NULL,
+    caption                              VARCHAR(80)   NOT NULL,
     table_name                           VARCHAR(32)  ,
     status_column                        VARCHAR(32)  ,
     status_value                         VARCHAR(80)  ,

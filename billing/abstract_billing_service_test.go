@@ -308,3 +308,41 @@ func TestInvoiceIDSerializesAsString(t *testing.T) {
 		t.Fatalf("invoice json = %s", b)
 	}
 }
+
+func TestGetUsage_CaptionUsedAndLimit(t *testing.T) {
+	svc, qs := newSvc(map[string][][]any{qBillGetUsage: {{"AI credits", int64(12), int64(100)}}})
+	svc.ResourceNames = []string{"AI_CREDITS"}
+	items, err := svc.GetUsage(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0] != (UsageItem{Resource: "AI_CREDITS", Caption: "AI credits", Used: 12, Limit: 100}) {
+		t.Fatalf("items=%+v", items)
+	}
+	if args := lastCall(t, qs, qBillGetUsage).args; args[0] != int64(7) || args[2] != int64(7) || args[3] != "AI_CREDITS" {
+		t.Fatalf("args=%v", args)
+	}
+}
+
+func TestGetUsage_UnknownResource(t *testing.T) {
+	svc, _ := newSvc(nil)
+	svc.ResourceNames = []string{"MISSING"}
+	if _, err := svc.GetUsage(context.Background(), 7); !errors.Is(err, ErrUnknownResource) {
+		t.Fatalf("err=%v, want ErrUnknownResource", err)
+	}
+}
+
+func TestGetSubscription_ProviderManaged(t *testing.T) {
+	for _, managed := range []bool{true, false} {
+		svc, _ := newSvc(map[string][][]any{qBillGetSubscription: {{
+			"PRO", "Pro", "A", "2026-01-01", nil, int64(999), "USD", "M", true, nil, int32(1), int64(2), managed,
+		}}})
+		sub, err := svc.GetSubscription(context.Background(), 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sub.ProviderManaged != managed || !sub.AutoRenew {
+			t.Fatalf("managed=%v autoRenew=%v, want %v true", sub.ProviderManaged, sub.AutoRenew, managed)
+		}
+	}
+}

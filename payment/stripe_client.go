@@ -201,6 +201,56 @@ func (c *StripeCheckoutClient) FetchInvoiceLines(ctx context.Context, invoiceID 
 	}
 }
 
+// FetchInvoicePayment returns the payment intent and charge of the invoice's
+// paid payment, which API 2025-03-31.basil moved from the invoice to invoice
+// payments. Both are empty for an out-of-band or unlisted payment.
+func (c *StripeCheckoutClient) FetchInvoicePayment(ctx context.Context, invoiceID string) (paymentIntentID, chargeID string, err error) {
+	if invoiceID == "" {
+		return "", "", fmt.Errorf("stripe: invoice id is required")
+	}
+	body, err := c.Get(ctx, "/invoice_payments", url.Values{
+		"invoice": {invoiceID}, "status": {"paid"}, "limit": {"1"}, "expand[]": {"data.payment.payment_intent"},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("stripe: fetch invoice payments: %w", err)
+	}
+	var page struct {
+		Data []struct {
+			Payment struct {
+				Type          string `json:"type"`
+				Charge        string `json:"charge"`
+				PaymentIntent *struct {
+					ID           string `json:"id"`
+					LatestCharge string `json:"latest_charge"`
+				} `json:"payment_intent"`
+			} `json:"payment"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return "", "", fmt.Errorf("stripe: parse invoice payments: %w", err)
+	}
+	if page.Data == nil {
+		return "", "", fmt.Errorf("stripe: incomplete invoice-payments page")
+	}
+	if len(page.Data) == 0 {
+		return "", "", nil
+	}
+	payment := page.Data[0].Payment
+	if intent := payment.PaymentIntent; intent != nil && intent.ID != "" {
+		return intent.ID, intent.LatestCharge, nil
+	}
+	switch payment.Type {
+	case "payment_intent":
+		return "", "", fmt.Errorf("stripe: incomplete invoice payment")
+	case "charge":
+		if payment.Charge == "" {
+			return "", "", fmt.Errorf("stripe: incomplete invoice payment")
+		}
+		return "", payment.Charge, nil
+	}
+	return "", "", nil
+}
+
 // CreatePortalSession POSTs to /v1/billing_portal/sessions and returns
 // the customer-portal URL.
 func (c *StripeCheckoutClient) CreatePortalSession(ctx context.Context, customerID, returnURL string) (string, error) {

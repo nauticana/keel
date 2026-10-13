@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.115",
+   "title": "Stripe basil invoices, provider-managed subscription, resource captions, connection events",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "Stripe invoice events on API 2025-03-31.basil and later carry their subscription and payment identities; billing reports provider management and resource captions; connection changes can be announced through the outbox.",
+   "body_markdown": "### Breaking\n\n- `subscription_resource.caption` (`VARCHAR(80) NOT NULL`) is new; seed it for every resource.\n- `AbstractBillingService.GetUsage` reads one `bill_get_usage` query per resource (args: partner, period start, partner, resource; columns: caption, used, limit); `bill_get_quota_limit` is gone. A `ResourceNames` entry missing from `subscription_resource` returns `ErrUnknownResource`.\n- `bill_get_subscription` returns a 13th column, whether the subscription is provider-managed.\n- `connect.Store` adds `DisconnectConnection`.\n- `OAuthConnectHandler` API-key save failures answer with the sanitized service error.\n\n### Additive\n\n- `StripeEventParser` reads an invoice's subscription from `parent.subscription_details.subscription`. `StripeProvider.EnrichPaymentEvent` fills a paid invoice's missing charge and payment intent from `StripeCheckoutClient.FetchInvoicePayment` (`GET /v1/invoice_payments`), so payment provenance, refunds and disputes match on newer API versions.\n- `Subscription.ProviderManaged` (`providerManaged`): the active subscription has a provider subscription id and the partner a billing customer.\n- `UsageItem.Caption` from `subscription_resource.caption`.\n- `POST /api/oauth/disconnect` (gated like `apikey`) and `CredentialStoreDB.DisconnectConnection`.\n- `CredentialStoreDB.AnnounceChanges` enqueues `connect.ConnectionChangedEvent` with a `connect.ConnectionChange` payload in the transaction of each connect, status change and disconnect.\n- `common.AsBool` accepts integers."
+  },
+  {
    "version": "v1.2.114",
    "title": "API key scope policy errors, catalog-backed scope policy",
    "tags": [

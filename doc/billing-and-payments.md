@@ -8,7 +8,7 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 
 | New | What it does | Project supplies |
 |---|---|---|
-| `billing.AbstractBillingService` (+ `BillingService` interface) | `GetSubscription/CreateSubscription/CancelSubscription/GetPlans/GetInvoices/GetUsage` over the basis tables; `GetPlans` returns each plan with its `Prices[]` (one per offered billing interval); `CreateSubscription` takes the chosen interval; returns the `ErrNoSubscription`/`ErrPlanNotFound`/`ErrPriceNotFound` sentinels so a handler can `errors.Is` → 404/400 | `Queries` overrides, `ResourceNames` |
+| `billing.AbstractBillingService` (+ `BillingService` interface) | Billing reads and writes over the basis tables; plans include every offered interval, subscriptions report `ProviderManaged`, and usage includes resource captions and rejects unknown configured resources | `Queries` overrides, `ResourceNames` |
 | `billing.AbstractBillingService` provider-driven write helpers (exposed via the `ProviderBillingStore` interface): `RecordProviderInvoice` (writes the `invoice` row on a provider `invoice.paid` so `GetInvoices` isn't empty — keel otherwise writes invoices only in the SelfScheduledEngine; idempotent on `invoice_number`), `LinkCustomer`/`CustomerToken`/`PartnerByCustomer` (partner ↔ provider-customer mapping in the dedicated `partner_billing_customer` table, for the portal + recurring-invoice attribution), `ListPaymentMethods` (the partner's saved methods for sail's `listPaymentMethods()`) | — (call from your `AbstractWebhookEventHandler` hooks / billing bridges) |
 | `billing.SubscriptionLifecycle` (on `AbstractBillingService`) | the subscription verbs over `partner_plan_subscription`: `Activate(…, BillingTerms, …)`/`ChangePlan(…, BillingTerms)`/`CreateSubscription(…, BillingTerms)` take the chosen offer (billing cycle + commitment term) — they read the matching `subscription_plan_price` row and snapshot the price, set `renewal_date` (= term end), `next_charge_date`, and the per-installment `installment_minor`, `CancelByPartner`/`CancelByProviderSubID` (immediate or at-period-end), `ConvertTrial`, `SetSeats`, `Reactivate`, `SetDunningState` | per-plan `activation_mode` + `trial_days` + the `subscription_plan_price` rows; the metadata keys |
 | `payment.PaymentEvent.EventKind` + typed ids/lines | provider-agnostic event kind; `SubscriptionID`, `InvoiceID`, `ChargeID`, `DisputeID`; and canonical `InvoiceLines` with completeness, signed minor amount, currency, service period, and metadata | — |
@@ -99,7 +99,7 @@ POST /public/webhook/{provider}
   4. Idempotency check on (provider, event_id) — duplicates → return without dispatching
   5. Insert correlated log row (unique-index race guard catches concurrent retries)
   6. Parse into canonical PaymentEvent (minor-unit amount, identities, request id, metadata)
-  7. Enrich through optional PaymentEventEnricher (Stripe fetches every invoice-line page)
+  7. Enrich through optional PaymentEventEnricher (Stripe fetches every invoice-line page, and a paid invoice's payment intent and charge from its invoice payments)
   8. Call project's PaymentEventHandler.OnPaymentEvent(event)
   9. AfterHandler hook (optional, idempotent) — e.g. attach SetupIntent's PaymentMethod
  10. Update log status; when Metrics is wired, record counter + duration with a request-id exemplar

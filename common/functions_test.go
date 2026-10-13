@@ -42,3 +42,16 @@ func TestGenerateNumericCode(t *testing.T) {
 		t.Error("digits=19 should error")
 	}
 }
+
+func TestAsBool(t *testing.T) {
+	for _, v := range []any{true, "true", "1", []byte("1"), int64(1), int32(1), 1} {
+		if !AsBool(v) {
+			t.Errorf("AsBool(%#v) = false", v)
+		}
+	}
+	for _, v := range []any{nil, false, "false", "0", int64(0), 0, 1.0} {
+		if AsBool(v) {
+			t.Errorf("AsBool(%#v) = true", v)
+		}
+	}
+}

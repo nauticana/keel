@@ -83,6 +83,8 @@ sqlsmoke.Run(t, conn, map[string]map[string]string{"orders": orderQueries}) // o
 
 `client` ships `NewGoogleProvider` (and `NewGBPProvider`), `NewMetaProvider`, `NewShopifyProvider`, `NewTikTokProvider` (TikTok's `client_key` authorize and form exchange; stores the refresh token) and `NewXProvider` (PKCE, `offline.access` always requested); `NewOAuth2Provider` covers any other standard service. Scopes are the caller's. Register their refreshes with `connect.NewRefresher`: Google with `RefreshOAuth2Lib` on `google.Endpoint`, X with `connect.XRefreshSpec` (HTTP Basic, rotating refresh token), TikTok with `connect.TikTokRefreshSpec`.
 
+With `Store` set, `POST /api/oauth/disconnect` `{"provider", "entity_id"}` deletes a connection. `connect.CredentialStoreDB.AnnounceChanges` enqueues a `connect.ConnectionChangedEvent` outbox event, payload `connect.ConnectionChange{PartnerID, EntityID, Provider, Connected}`, in the transaction of each connect, status change and disconnect; it needs the `outbox` schema.
+
 `Nonce` (the `connect.NonceService`) holds the tickets; without it callbacks fail closed. `connect.CredentialStoreDB` enforces the binding through `client.WithInitiator`; an application's own `client.CredentialStore` must record the initiator at `CreateOAuthState` and compare it at `ConsumeOAuthState` the same way.
 
 ### OAuth connections record the scopes they were granted

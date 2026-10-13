@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
@@ -46,7 +47,7 @@ type OAuthConnectHandler struct {
 	// to /api/oauth/<provider>/complete to finish the connection.
 	FrontendReturnURL string
 	// Store, when set, enables POST /api/oauth/apikey for non-OAuth providers,
-	// sealing the supplied key at rest. Leave nil for OAuth-only apps.
+	// sealing the supplied key at rest, and POST /api/oauth/disconnect.
 	Store connect.Store
 	// Nonce holds callback tickets; without it every callback fails closed.
 	Nonce *connect.NonceService
@@ -74,6 +75,7 @@ func (h *OAuthConnectHandler) Routes() map[string]http.HandlerFunc {
 	}
 	if h.Store != nil {
 		routes["/api/oauth/apikey"] = h.gate(h.saveAPIKey)
+		routes["/api/oauth/disconnect"] = h.gate(h.disconnect)
 	}
 	return routes
 }
@@ -129,7 +131,36 @@ func (h *OAuthConnectHandler) saveAPIKey(w http.ResponseWriter, r *http.Request)
 		CredRef:     req.CredRef,
 		APIEndpoint: req.APIEndpoint,
 	}); err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Save Failed", err.Error())
+		h.WriteServiceError(w, r, err)
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type disconnectRequest struct {
+	Provider string `json:"provider"`
+	EntityID int64  `json:"entity_id"`
+}
+
+// disconnect removes the partner's connection to a provider.
+func (h *OAuthConnectHandler) disconnect(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	partnerID, ok := h.RequirePartner(w, r)
+	if !ok {
+		return
+	}
+	var req disconnectRequest
+	if !h.ReadStrictRequest(w, r, &req) {
+		return
+	}
+	if req.Provider == "" || req.Provider != strings.TrimSpace(req.Provider) || req.EntityID < 0 {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "provider is required and entity_id must not be negative")
+		return
+	}
+	if err := h.Store.DisconnectConnection(client.WithEntity(r.Context(), req.EntityID), partnerID, req.Provider); err != nil {
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -70,6 +70,7 @@ func TestRouteMethodGuards(t *testing.T) {
 		{"authorize", h.authorize("x", nil), http.MethodPost}, // GET-only
 		{"test", h.test("x", nil), http.MethodGet},            // POST-only
 		{"apikey", h.saveAPIKey, http.MethodGet},              // POST-only
+		{"disconnect", h.disconnect, http.MethodGet},          // POST-only
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()
@@ -144,5 +145,42 @@ func TestConnectCallbackCompletesOnlyForTheInitiator(t *testing.T) {
 	}
 	if code := complete(`x"}{"ticket":"y`, &model.UserSession{Id: 3, PartnerId: 42}); code != http.StatusBadRequest {
 		t.Fatalf("trailing JSON: %d", code)
+	}
+}
+
+type disconnectStore struct {
+	connect.Store
+	partnerID, entityID int64
+	provider            string
+}
+
+func (s *disconnectStore) DisconnectConnection(ctx context.Context, partnerID int64, provider string) error {
+	s.partnerID, s.entityID, s.provider = partnerID, client.EntityFromContext(ctx), provider
+	return nil
+}
+
+func TestDisconnectScopesToSessionPartnerAndEntity(t *testing.T) {
+	store := &disconnectStore{}
+	h := &OAuthConnectHandler{Store: store}
+	r := httptest.NewRequest("POST", "/api/oauth/disconnect", strings.NewReader(`{"provider":"gsc","entity_id":9}`))
+	stashSession(r, &model.UserSession{PartnerId: 42})
+	rec := httptest.NewRecorder()
+	h.disconnect(rec, r)
+	if rec.Code != http.StatusOK || store.partnerID != 42 || store.entityID != 9 || store.provider != "gsc" {
+		t.Fatalf("code=%d store=%+v", rec.Code, store)
+	}
+}
+
+func TestDisconnectRejectsMalformedRequests(t *testing.T) {
+	for _, body := range []string{`{}`, `{"provider":" ","entity_id":0}`, `{"provider":"gsc","entity_id":-1}`, `{"provider":"gsc","partner_id":7}`, `{"provider":"gsc"}{}`} {
+		store := &disconnectStore{}
+		h := &OAuthConnectHandler{Store: store}
+		r := httptest.NewRequest("POST", "/api/oauth/disconnect", strings.NewReader(body))
+		stashSession(r, &model.UserSession{PartnerId: 42})
+		rec := httptest.NewRecorder()
+		h.disconnect(rec, r)
+		if rec.Code != http.StatusBadRequest || store.provider != "" {
+			t.Errorf("%s: code=%d store=%+v", body, rec.Code, store)
+		}
 	}
 }
