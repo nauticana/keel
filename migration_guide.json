@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.116",
+   "title": "Read-only generic access to partner_credential",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "PARTNER_ADMIN no longer holds the generic TABLE DELETE grant on partner_credential; connections are removed only through POST /api/oauth/disconnect.",
+   "body_markdown": "### Breaking\n\n- The `oauth_connect` seed drops `[PARTNER_ADMIN, TABLE, DELETE, partner_credential]`. Generic REST access to `partner_credential` is `SELECT` only, so a removal always runs `DisconnectConnection` and its announcement. Disconnect through `POST /api/oauth/disconnect`, gated by `PARTNER_CREDENTIAL/MANAGE`, and delete the grant row from existing databases."
+  },
+  {
    "version": "v1.2.115",
    "title": "Stripe basil invoices, provider-managed subscription, resource captions, connection events",
    "tags": [

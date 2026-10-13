@@ -24,4 +24,3 @@ seeds:
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_credentials]
       - [PARTNER_ADMIN, PARTNER_CREDENTIAL, MANAGE, partner_credential]
       - [PARTNER_ADMIN, TABLE, SELECT, partner_credential]
-      - [PARTNER_ADMIN, TABLE, DELETE, partner_credential]
