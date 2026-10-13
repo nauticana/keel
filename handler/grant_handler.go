@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/nauticana/keel/common"
@@ -11,11 +12,19 @@ func init() {
 	RegisterErrorCode(authserver.ErrGrantNotFound, http.StatusNotFound, "grant_not_found")
 }
 
+// Grants is the grant behavior exposed over HTTP.
+type Grants interface {
+	List(ctx context.Context, userID int64) ([]authserver.Grant, error)
+	Revoke(ctx context.Context, userID int64, clientID string) error
+}
+
+var _ Grants = (*authserver.GrantService)(nil)
+
 // GrantHandler serves the caller's grants to clients of the local
 // authorization server.
 type GrantHandler struct {
 	AbstractHandler
-	Grants *authserver.GrantService
+	Grants Grants
 }
 
 func (h *GrantHandler) GetAuthRoutes() map[string]func(w http.ResponseWriter, r *http.Request) {

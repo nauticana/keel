@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +19,6 @@ func newAPIKeys(t *testing.T) (*APIKeyService, *quotaFakeQS) {
 	t.Helper()
 	qs := newQuotaFakeQS()
 	qs.rows[insertAPIKey] = [][]any{{int64(1)}}
-	qs.rows[insertUserAPIKey] = [][]any{{int64(1)}}
 	qs.rows[countActiveKeys] = [][]any{{int64(0)}}
 	svc := &APIKeyService{DB: &quotaFakeRepo{qs: qs, tx: &quotaFakeTx{quotaFakeQS: qs}}, KeyPrefix: "t_"}
 	svc.Init(context.Background())
@@ -54,41 +55,90 @@ func TestAPIKeyMiddlewareBindsUser(t *testing.T) {
 	}
 }
 
+func newKey(scopes, cidrs string) NewAPIKey {
+	return NewAPIKey{PartnerID: 7, UserID: 11, Name: "k", Scopes: scopes, AllowedCIDRs: cidrs}
+}
+
 func TestInsertKeyAppliesScopePolicy(t *testing.T) {
 	svc, qs := newAPIKeys(t)
 	ctx := context.Background()
-	svc.ScopePolicy = func(scopes string) error {
-		if scopes != "query" {
-			return errors.New("only query")
+	svc.ScopePolicy = func(_ context.Context, userID, partnerID int64, scopes string) (string, error) {
+		if partnerID != 7 || userID != 11 {
+			return "", fmt.Errorf("caller %d/%d", partnerID, userID)
 		}
-		return nil
+		switch scopes {
+		case "":
+			return "read", nil
+		case "read", "read,read":
+			return "read", nil
+		}
+		return "", errors.New("only read")
 	}
-	if _, _, err := svc.InsertKey(ctx, 7, 11, "k", "admin", ""); !errors.Is(err, ErrInvalidScopes) {
+	if _, _, err := svc.InsertKey(ctx, newKey("admin", "")); !errors.Is(err, ErrInvalidScopes) {
 		t.Fatalf("err = %v", err)
 	}
-	if qs.callIndex(insertUserAPIKey) >= 0 {
+	if qs.callIndex(insertAPIKey) >= 0 {
 		t.Fatal("a refused scope must not be stored")
 	}
-	if key, _, err := svc.InsertKey(ctx, 7, 11, "k", "query", ""); err != nil || key[:2] != "t_" {
-		t.Fatalf("key %q, %v", key, err)
+	for _, asked := range []string{"", "read,read"} {
+		if key, _, err := svc.InsertKey(ctx, newKey(asked, "")); err != nil || key[:2] != "t_" {
+			t.Fatalf("key %q, %v", key, err)
+		}
+		if args := qs.calls[len(qs.calls)-1].args; args[5] != "read" {
+			t.Fatalf("stored scopes %v, want the policy's", args[5])
+		}
 	}
-	// A rolled key keeps scopes the policy no longer admits.
-	qs.rows[rotateAPIKey] = [][]any{{"old", "k", "admin", nil, "10.0.0.0/8"}}
+	// A rolled key keeps scopes the policy no longer admits, and its expiry.
+	expires := time.Now().Add(time.Hour)
+	qs.rows[rotateAPIKey] = [][]any{{"old", "k", "admin", nil, "10.0.0.0/8", expires}}
 	if key, _, err := svc.RotateKey(ctx, 5, 7); err != nil || key == "" {
 		t.Fatalf("roll = %q, %v", key, err)
 	}
-	if args := qs.calls[len(qs.calls)-1].args; args[4] != "admin" || args[5] != "10.0.0.0/8" {
+	if args := qs.calls[len(qs.calls)-1].args; args[1] != nil || args[5] != "admin" || args[6] != "10.0.0.0/8" || args[7] != expires {
 		t.Fatalf("rolled key args = %v", args)
 	}
 }
 
-func TestInsertKeyWithoutUserUsesPartnerKey(t *testing.T) {
+func TestInsertKeyValidatesNameScopesAndExpiry(t *testing.T) {
 	svc, qs := newAPIKeys(t)
-	if _, _, err := svc.InsertKey(context.Background(), 7, 0, "k", "query", ""); err != nil {
+	ctx := context.Background()
+	for _, req := range []NewAPIKey{
+		{PartnerID: 7, Name: " ", Scopes: "query"},
+		{PartnerID: 7, Name: strings.Repeat("ü", apiKeyNameMax+1), Scopes: "query"},
+		{PartnerID: 7, Name: "k", Scopes: "query", ExpiresAt: time.Now().Add(-time.Second)},
+	} {
+		if _, _, err := svc.InsertKey(ctx, req); !errors.Is(err, ErrInvalidAPIKey) {
+			t.Errorf("%+v = %v", req, err)
+		}
+	}
+	for _, scopes := range []string{"", strings.Repeat("ü", apiKeyScopesMax+1)} {
+		if _, _, err := svc.InsertKey(ctx, NewAPIKey{PartnerID: 7, Name: "k", Scopes: scopes}); !errors.Is(err, ErrInvalidScopes) {
+			t.Errorf("scopes %d chars = %v", len(scopes), err)
+		}
+	}
+	if qs.callIndex(insertAPIKey) >= 0 {
+		t.Fatal("a refused key must not be stored")
+	}
+	expires := time.Now().Add(time.Hour)
+	if _, _, err := svc.InsertKey(ctx, NewAPIKey{PartnerID: 7, Name: "  " + strings.Repeat("ü", apiKeyNameMax) + "  ", Scopes: "query", ExpiresAt: expires}); err != nil {
 		t.Fatal(err)
 	}
-	if qs.callIndex(insertAPIKey) < 0 || qs.callIndex(insertUserAPIKey) >= 0 {
-		t.Fatalf("calls = %+v", qs.calls)
+	if args := qs.calls[len(qs.calls)-1].args; args[1] != nil || args[2] != strings.Repeat("ü", apiKeyNameMax) || args[7] != expires {
+		t.Fatalf("partner-only key args = %v", args)
+	}
+}
+
+func TestRotateKeyRefusesMalformedRow(t *testing.T) {
+	svc, qs := newAPIKeys(t)
+	for _, row := range [][]any{
+		{"old"},
+		{"old", "k", "query", "bad-user", nil, nil},
+		{"old", "k", "query", nil, nil, struct{}{}},
+	} {
+		qs.rows[rotateAPIKey] = [][]any{row}
+		if _, _, err := svc.RotateKey(context.Background(), 5, 7); err == nil {
+			t.Errorf("rotation row %v must fail", row)
+		}
 	}
 }
 
@@ -97,10 +147,10 @@ func TestInsertKeyCapPerPartner(t *testing.T) {
 	ctx := context.Background()
 	repo := svc.DB.(*quotaFakeRepo)
 	qs.rows[countActiveKeys] = [][]any{{int64(config.Config().APIKeyMaxPerPartner)}}
-	if _, _, err := svc.InsertKey(ctx, 7, 11, "k", "query", ""); !errors.Is(err, ErrAPIKeyLimit) {
+	if _, _, err := svc.InsertKey(ctx, newKey("query", "")); !errors.Is(err, ErrAPIKeyLimit) {
 		t.Fatalf("at the cap = %v", err)
 	}
-	if qs.callIndex(insertUserAPIKey) >= 0 || repo.tx.rollbacks != 1 {
+	if qs.callIndex(insertAPIKey) >= 0 || repo.tx.rollbacks != 1 {
 		t.Fatalf("a refused key must not be stored: calls %+v", qs.calls)
 	}
 	if qs.calls[0].name != guard.QueryLock || qs.calls[0].args[0] != "guard:api_key:partner:7" || qs.calls[1].args[0] != int64(7) {
@@ -109,11 +159,11 @@ func TestInsertKeyCapPerPartner(t *testing.T) {
 
 	qs.calls = nil
 	qs.rows[countActiveKeys] = [][]any{{int64(config.Config().APIKeyMaxPerPartner - 1)}}
-	if _, _, err := svc.InsertKey(ctx, 7, 11, "k", "query", ""); err != nil || repo.tx.commits != 1 {
+	if _, _, err := svc.InsertKey(ctx, newKey("query", "")); err != nil || repo.tx.commits != 1 {
 		t.Fatalf("under the cap = %v, commits %d", err, repo.tx.commits)
 	}
 	// Rolling replaces a key, so it is never refused by the cap.
-	qs.rows[rotateAPIKey] = [][]any{{"old", "k", "query", nil, nil}}
+	qs.rows[rotateAPIKey] = [][]any{{"old", "k", "query", nil, nil, nil}}
 	qs.rows[countActiveKeys] = [][]any{{int64(1000)}}
 	if key, _, err := svc.RotateKey(ctx, 5, 7); err != nil || key == "" {
 		t.Fatalf("roll at the cap = %q, %v", key, err)
@@ -123,14 +173,14 @@ func TestInsertKeyCapPerPartner(t *testing.T) {
 func TestKeyNetworkAllowList(t *testing.T) {
 	svc, qs := newAPIKeys(t)
 	ctx := context.Background()
-	if _, _, err := svc.InsertKey(ctx, 7, 11, "k", "query", "10.0.0.0/33"); !errors.Is(err, common.ErrInvalidCIDRList) {
+	if _, _, err := svc.InsertKey(ctx, newKey("query", "10.0.0.0/33")); !errors.Is(err, common.ErrInvalidCIDRList) {
 		t.Fatalf("bad list = %v", err)
 	}
-	if _, _, err := svc.InsertKey(ctx, 7, 11, "k", "query", " 192.0.2.9 , 10.1.0.0/16"); err != nil {
+	if _, _, err := svc.InsertKey(ctx, newKey("query", " 192.0.2.9 , 10.1.0.0/16")); err != nil {
 		t.Fatal(err)
 	}
-	if args := qs.calls[len(qs.calls)-1].args; args[5] != "192.0.2.9/32,10.1.0.0/16" {
-		t.Fatalf("stored list = %v", args[5])
+	if args := qs.calls[len(qs.calls)-1].args; args[6] != "192.0.2.9/32,10.1.0.0/16" {
+		t.Fatalf("stored list = %v", args[6])
 	}
 
 	qs.rows[validateAPIKey] = [][]any{{int64(5), int64(7), "query", time.Time{}, nil, "192.0.2.0/24"}}

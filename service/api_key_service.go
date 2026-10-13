@@ -9,15 +9,16 @@ import (
 	"fmt"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/logger"
-	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
@@ -47,9 +48,10 @@ type APIKeyService struct {
 	// Defaults to "public-api" when empty.
 	QuotaCaption string
 
-	// ScopePolicy refuses the scopes of a key to be generated; nil admits any.
+	// ScopePolicy returns the scopes a generated key carries or refuses them.
+	// userID is 0 for a partner-only key. nil keeps the request.
 	// A rolled key keeps its scopes unchecked.
-	ScopePolicy func(scopes string) error
+	ScopePolicy func(ctx context.Context, userID, partnerID int64, scopes string) (string, error)
 
 	// CacheTTL bounds how long a validated key stays trusted in memory, and
 	// therefore the worst-case lag before an is_active=FALSE revocation takes
@@ -63,7 +65,6 @@ type APIKeyService struct {
 
 const (
 	insertAPIKey      = "insert_api_key"
-	insertUserAPIKey  = "insert_user_api_key"
 	validateAPIKey    = "validate_api_key"
 	updateLastUsed    = "update_last_used"
 	rotateAPIKey      = "rotate_api_key"
@@ -74,13 +75,8 @@ const (
 
 var apiKeyQueries = map[string]string{
 	insertAPIKey: `
-INSERT INTO api_key (id, partner_id, key_name, key_prefix, key_hash, scopes, allowed_cidrs)
-VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?, ?)
-RETURNING id`,
-
-	insertUserAPIKey: `
-INSERT INTO api_key (id, partner_id, key_name, key_prefix, key_hash, scopes, allowed_cidrs, user_id)
-VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO api_key (id, partner_id, user_id, key_name, key_prefix, key_hash, scopes, allowed_cidrs, expires_at)
+VALUES (nextval('api_key_seq'), ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id`,
 
 	validateAPIKey: `
@@ -93,12 +89,15 @@ SELECT id, partner_id, scopes, expires_at, user_id, allowed_cidrs
 UPDATE api_key SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?`,
 
 	rotateAPIKey: `
-UPDATE api_key
-   SET expires_at       = CURRENT_TIMESTAMP + INTERVAL '24 hours',
+UPDATE api_key k
+   SET expires_at       = LEAST(k.expires_at, CURRENT_TIMESTAMP + INTERVAL '24 hours'),
        rotated_at       = CURRENT_TIMESTAMP,
-       grace_expires_at = CURRENT_TIMESTAMP + INTERVAL '24 hours'
- WHERE id = ? AND partner_id = ? AND is_active = TRUE
-RETURNING key_hash, key_name, scopes, user_id, allowed_cidrs`,
+       grace_expires_at = LEAST(k.expires_at, CURRENT_TIMESTAMP + INTERVAL '24 hours')
+  FROM api_key prev
+ WHERE k.id = ? AND k.partner_id = ? AND k.is_active = TRUE
+   AND (k.expires_at IS NULL OR k.expires_at > CURRENT_TIMESTAMP)
+   AND prev.id = k.id
+RETURNING k.key_hash, k.key_name, k.scopes, k.user_id, k.allowed_cidrs, prev.expires_at`,
 
 	countActiveKeys: `
 SELECT COUNT(*) FROM api_key
@@ -135,30 +134,58 @@ func (m *APIKeyService) Init(ctx context.Context) {
 	}
 }
 
+// Column widths of api_key.key_name and api_key.scopes.
+const (
+	apiKeyNameMax   = 100
+	apiKeyScopesMax = 500
+)
+
 var (
-	// ErrInvalidScopes wraps a ScopePolicy refusal.
+	// ErrInvalidScopes refuses blank or overlong scopes, or wraps a ScopePolicy refusal.
 	ErrInvalidScopes = errors.New("api key scopes refused")
+	// ErrInvalidAPIKey refuses a blank or overlong name or a past expiry.
+	ErrInvalidAPIKey = errors.New("api key name or expiry invalid")
 	// ErrAPIKeyLimit refuses a key past api_key_max_per_partner.
 	ErrAPIKeyLimit = errors.New("api key limit reached")
 )
 
-// InsertKey mints a key for the partner and, when userID is positive, the
-// user. allowedCIDRs is a CSV of networks the key may be used from; empty
-// allows any address. A partner holding api_key_max_per_partner usable keys
+// NewAPIKey describes a key to mint for the partner and, when UserID is
+// positive, the user.
+type NewAPIKey struct {
+	PartnerID, UserID int64
+	Name, Scopes      string
+	// AllowedCIDRs is a CSV of networks the key may be used from; empty allows any address.
+	AllowedCIDRs string
+	// ExpiresAt is when the key stops working; zero never.
+	ExpiresAt time.Time
+}
+
+// InsertKey mints a key. A partner holding api_key_max_per_partner usable keys
 // gets ErrAPIKeyLimit.
-func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID int64, keyName, scopes, allowedCIDRs string) (key string, prefix string, err error) {
+func (m *APIKeyService) InsertKey(ctx context.Context, req NewAPIKey) (key string, prefix string, err error) {
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || utf8.RuneCountInString(req.Name) > apiKeyNameMax {
+		return "", "", fmt.Errorf("%w: key name must be 1 to %d characters", ErrInvalidAPIKey, apiKeyNameMax)
+	}
+	if !req.ExpiresAt.IsZero() && !req.ExpiresAt.After(time.Now()) {
+		return "", "", fmt.Errorf("%w: expiry %s is not in the future", ErrInvalidAPIKey, req.ExpiresAt)
+	}
 	if m.ScopePolicy != nil {
-		if err := m.ScopePolicy(scopes); err != nil {
+		if req.Scopes, err = m.ScopePolicy(ctx, req.UserID, req.PartnerID, req.Scopes); err != nil {
 			return "", "", fmt.Errorf("%w: %v", ErrInvalidScopes, err)
 		}
 	}
-	nets, err := common.ParseCIDRList(allowedCIDRs)
+	if strings.TrimSpace(req.Scopes) == "" || utf8.RuneCountInString(req.Scopes) > apiKeyScopesMax {
+		return "", "", fmt.Errorf("%w: scopes must be 1 to %d characters", ErrInvalidScopes, apiKeyScopesMax)
+	}
+	nets, err := common.ParseCIDRList(req.AllowedCIDRs)
 	if err != nil {
 		return "", "", err
 	}
+	req.AllowedCIDRs = common.FormatCIDRList(nets)
 	limit := config.Config().APIKeyMaxPerPartner
 	if limit <= 0 {
-		return m.insertKey(ctx, m.qs, partnerID, userID, keyName, scopes, common.FormatCIDRList(nets))
+		return m.insertKey(ctx, m.qs, req)
 	}
 	tx, err := m.DB.BeginTx(ctx, apiKeyTxQueries)
 	if err != nil {
@@ -170,10 +197,10 @@ func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID i
 			err = errors.Join(err, data.RollbackDetached(tx))
 		}
 	}()
-	if err := guard.Lock(ctx, tx, apiKeyPartnerLock+strconv.FormatInt(partnerID, 10)); err != nil {
+	if err := guard.Lock(ctx, tx, apiKeyPartnerLock+strconv.FormatInt(req.PartnerID, 10)); err != nil {
 		return "", "", err
 	}
-	res, err := tx.Query(ctx, countActiveKeys, partnerID)
+	res, err := tx.Query(ctx, countActiveKeys, req.PartnerID)
 	if err != nil {
 		return "", "", err
 	}
@@ -187,7 +214,7 @@ func (m *APIKeyService) InsertKey(ctx context.Context, partnerID int64, userID i
 	if active >= int64(limit) {
 		return "", "", ErrAPIKeyLimit
 	}
-	key, prefix, err = m.insertKey(ctx, tx, partnerID, userID, keyName, scopes, common.FormatCIDRList(nets))
+	key, prefix, err = m.insertKey(ctx, tx, req)
 	if err != nil {
 		return "", "", err
 	}
@@ -213,7 +240,7 @@ func (m *APIKeyService) RestrictKey(ctx context.Context, keyID, partnerID int64,
 	return true, nil
 }
 
-func (m *APIKeyService) insertKey(ctx context.Context, qs port.QueryService, partnerID int64, userID int64, keyName, scopes, allowedCIDRs string) (string, string, error) {
+func (m *APIKeyService) insertKey(ctx context.Context, qs port.QueryService, req NewAPIKey) (string, string, error) {
 	randomBytes := make([]byte, 16)
 	if _, err := rand.Read(randomBytes); err != nil {
 		return "", "", err
@@ -225,18 +252,19 @@ func (m *APIKeyService) insertKey(ctx context.Context, qs port.QueryService, par
 	hash := sha256.Sum256([]byte(plainKey))
 	keyHash := hex.EncodeToString(hash[:])
 
-	var err error
-	var res *model.QueryResult
-	if userID <= 0 {
-		res, err = qs.Query(ctx, insertAPIKey, partnerID, keyName, prefix, keyHash, scopes, common.NullIfEmpty(allowedCIDRs))
-	} else {
-		res, err = qs.Query(ctx, insertUserAPIKey, partnerID, keyName, prefix, keyHash, scopes, common.NullIfEmpty(allowedCIDRs), userID)
+	var userID, expiresAt any
+	if req.UserID > 0 {
+		userID = req.UserID
 	}
+	if !req.ExpiresAt.IsZero() {
+		expiresAt = req.ExpiresAt
+	}
+	res, err := qs.Query(ctx, insertAPIKey, req.PartnerID, userID, req.Name, prefix, keyHash, req.Scopes, common.NullIfEmpty(req.AllowedCIDRs), expiresAt)
 	if err != nil {
 		return "", "", err
 	}
 	if len(res.Rows) == 0 {
-		return "", "", fmt.Errorf("api key insert returned no row for partner %d", partnerID)
+		return "", "", fmt.Errorf("api key insert returned no row for partner %d", req.PartnerID)
 	}
 	return plainKey, prefix, nil
 }
@@ -322,16 +350,21 @@ func (m *APIKeyService) TouchLastUsed(ctx context.Context, keyID int64) error {
 	return err
 }
 
-// RotateKey gives the existing key (keyID, owned by partnerID) a 24h grace
-// window via expires_at, then issues a fresh key inheriting its name, scopes,
-// and ownership (partner + user_id). The old key keeps working until grace
-// expiry so callers can swap without downtime; its cache entry is evicted so
-// the new expiry takes effect immediately rather than after CacheTTL.
-// It keeps the key's network allow-list and does not count toward
-// api_key_max_per_partner. Returns the new plaintext key + prefix (shown once). Zero rows — the key is
-// not owned by partnerID or already inactive — returns ("", "", nil).
-func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID int64) (string, string, error) {
-	res, err := m.qs.Query(ctx, rotateAPIKey, keyID, partnerID)
+// RotateKey gives the old key at most 24 hours of grace and atomically issues
+// a replacement with the same attributes and original expiry. It returns no
+// key when the old key is not owned by the partner, active, and unexpired.
+func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID int64) (key, prefix string, err error) {
+	tx, err := m.DB.BeginTx(ctx, apiKeyQueries)
+	if err != nil {
+		return "", "", err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			err = errors.Join(err, data.RollbackDetached(tx))
+		}
+	}()
+	res, err := tx.Query(ctx, rotateAPIKey, keyID, partnerID)
 	if err != nil {
 		return "", "", err
 	}
@@ -339,13 +372,25 @@ func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID in
 		return "", "", nil
 	}
 	row := res.Rows[0]
-	oldHash, _ := row[0].(string)
-	keyName, _ := row[1].(string)
-	scopes, _ := row[2].(string)
-	userID := int64(0)
-	if uid, ok := row[3].(int64); ok {
-		userID = uid
+	if len(row) != 6 {
+		return "", "", fmt.Errorf("api key rotation returned %d columns", len(row))
 	}
-	m.InvalidateKey(oldHash)
-	return m.insertKey(ctx, m.qs, partnerID, userID, keyName, scopes, common.AsString(row[4]))
+	userID, userOK := common.AsInt64OK(row[3])
+	expiresAt, expiresOK := common.AsTimeOK(row[5])
+	if (row[3] != nil && !userOK) || (row[5] != nil && !expiresOK) {
+		return "", "", fmt.Errorf("api key rotation returned user %T, expiry %T", row[3], row[5])
+	}
+	key, prefix, err = m.insertKey(ctx, tx, NewAPIKey{
+		PartnerID: partnerID, UserID: userID, Name: common.AsString(row[1]), Scopes: common.AsString(row[2]),
+		AllowedCIDRs: common.AsString(row[4]), ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", "", err
+	}
+	committed = true
+	m.InvalidateKey(common.AsString(row[0]))
+	return key, prefix, nil
 }

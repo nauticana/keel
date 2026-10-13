@@ -13,7 +13,6 @@ columns:
     type: CHAR(64)
   - name: scopes
     type: VARCHAR(500)
-    default: "query"
   - name: is_active
     type: BOOLEAN
     default: "TRUE"

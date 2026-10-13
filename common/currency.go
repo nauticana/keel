@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -14,6 +15,9 @@ const MaxCurrencyExponent = 6
 
 // ErrCurrencyExponent rejects an exponent outside 0..MaxCurrencyExponent.
 var ErrCurrencyExponent = errors.New("currency exponent out of range")
+
+// maxDecimalInput bounds work performed for untrusted provider values.
+const maxDecimalInput = 128
 
 // ParseMinorUnits converts a decimal amount ("19.99") to integer minor units at
 // the currency's exponent (the currency table's), without passing through
@@ -47,6 +51,68 @@ func ParseMinorUnits(amount string, exponent int) (int64, error) {
 		return -int64(minor), nil
 	}
 	return int64(minor), nil
+}
+
+// RoundMinorUnits converts a provider's decimal amount ("1234.5600000001",
+// "1e3") to minor units at exponent, rounding half away from zero where
+// ParseMinorUnits refuses the excess precision. An empty amount is zero.
+func RoundMinorUnits(amount string, exponent int) (int64, error) {
+	if exponent < 0 || exponent > MaxCurrencyExponent {
+		return 0, fmt.Errorf("%w: %d", ErrCurrencyExponent, exponent)
+	}
+	text := strings.TrimSpace(amount)
+	if text == "" {
+		return 0, nil
+	}
+	if len(text) > maxDecimalInput {
+		return 0, fmt.Errorf("amount is longer than %d bytes", maxDecimalInput)
+	}
+	mantissa, power, scientific := strings.Cut(strings.ToLower(text), "e")
+	if strings.HasPrefix(mantissa, "-") || strings.HasPrefix(mantissa, "+") {
+		mantissa = mantissa[1:]
+	}
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	valid := whole+fraction != "" && isDigits(whole) && isDigits(fraction)
+	if p, err := strconv.Atoi(power); scientific && (err != nil || p < -maxDecimalInput || p > maxDecimalInput) {
+		valid = false
+	}
+	if !valid {
+		return 0, fmt.Errorf("amount %q is not a decimal", amount)
+	}
+	r, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return 0, fmt.Errorf("amount %q is not a decimal", amount)
+	}
+	r.Mul(r, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil)))
+	num, den := new(big.Int).Abs(r.Num()), r.Denom()
+	minor := new(big.Int).Quo(new(big.Int).Add(new(big.Int).Lsh(num, 1), den), new(big.Int).Lsh(den, 1))
+	if r.Sign() < 0 {
+		minor.Neg(minor)
+	}
+	if !minor.IsInt64() {
+		return 0, fmt.Errorf("amount %q overflows int64 minor units", amount)
+	}
+	return minor.Int64(), nil
+}
+
+// DivRound divides minor units by n > 0, rounding half away from zero, without
+// the overflow of adding n/2 first.
+func DivRound(minor, n int64) int64 {
+	if n <= 0 {
+		panic("common.DivRound: divisor must be positive")
+	}
+	q, r := minor/n, minor%n
+	if r < 0 {
+		r = -r
+	}
+	if r >= n-r {
+		if minor < 0 {
+			q--
+		} else {
+			q++
+		}
+	}
+	return q
 }
 
 // FormatMinorUnits renders minor units at the currency's exponent, without the

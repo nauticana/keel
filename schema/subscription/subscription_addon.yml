@@ -16,7 +16,6 @@ columns:
     type: BIGINT
   - name: currency
     type: CHAR(3)
-    default: USD
   # billing_cycle (PERIOD_TYPE): how often charged. term_count × term_type: the
   # commitment. Same three-axis model as subscription_plan_price.
   - name: billing_cycle

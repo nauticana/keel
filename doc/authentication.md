@@ -26,11 +26,16 @@ apiKeys := &service.APIKeyService{
 apiKeys.Init(ctx)
 
 // Issuing a key (typically from a JWT-authed admin handler):
-plainKey, prefix, err := apiKeys.InsertKey(ctx, partnerID, userID, "production-key", "businesses,search", "203.0.113.0/24")
+plainKey, prefix, err := apiKeys.InsertKey(ctx, service.NewAPIKey{
+	PartnerID: partnerID, UserID: userID, Name: "production-key",
+	Scopes: "businesses,search", AllowedCIDRs: "203.0.113.0/24", ExpiresAt: expiresAt,
+})
 // plainKey is "myapp_<32-hex>"; show to user once and discard.
 ```
 
-`KeyPrefix` is required. `ScopePolicy` can refuse generated-key scopes (`ErrInvalidScopes`, returned as 400 by the `generate` action); rotation preserves existing scopes. The last argument is the key's network allow-list, a CSV of CIDRs or addresses (at most `common.MaxCIDRList`); empty allows any address, and a malformed list is `common.ErrInvalidCIDRList`. `RestrictKey(ctx, keyID, partnerID, cidrs)` replaces it on an active key of the partner and evicts the cached entry. A partner holding `api_key_max_per_partner` usable keys gets `ErrAPIKeyLimit` (409 from `generate`); the count is serialized per partner, and rolling a key never counts against it. `LookupKey` caches by SHA-256 hash for `CacheTTL` and carries `UserID` (`0` for partner-only keys). `InvalidateKey` clears an entry on rotation or revocation.
+`KeyPrefix` is required. `ScopePolicy(ctx, userID, partnerID, scopes)` returns normalized scopes or refuses them (`ErrInvalidScopes`, 400); without it, blank or overlong scopes are refused. Blank or overlong names and past expiries return `ErrInvalidAPIKey` (400); zero `ExpiresAt` never expires. `AllowedCIDRs` accepts a CSV of CIDRs or addresses; empty allows any address.
+
+Rolling preserves scopes, ownership, allow-list, and expiry without reapplying the scope policy. The old key gets at most 24 hours of grace, and expired keys cannot be rolled. `api_key_max_per_partner` limits usable keys (`0` is unbounded); rolling does not count against it. `LookupKey` caches successful lookups for `CacheTTL` and carries `UserID` (`0` for partner-only keys).
 
 ### `service.APIKeyAuthMiddleware` — the reusable factory
 
@@ -78,7 +83,7 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 | Field | `APIKeyService.KeyPrefix` | Required. Per-product user-visible prefix (e.g., `"myapp_"`). |
 | Field | `APIKeyService.QuotaResource` | Optional. Defaults to `"API_CALLS"`. The resource id passed to `QuotaService.LogUsage` and `CheckQuota`. |
 | Field | `APIKeyService.QuotaCaption` | Optional. Defaults to `"public-api"`. The caption recorded in usage rows. |
-| Field | `APIKeyService.ScopePolicy` | Optional. Refuses scopes at generation. |
+| Field | `APIKeyService.ScopePolicy` | Optional. Normalizes or refuses scopes at generation for the caller. |
 | Flag | `api_key_max_per_partner` | Usable keys a partner may hold. Default `20`; `0` is unbounded. |
 | Schema | `api_key` table + sequence | Already in keel's `schema/api_key_management/api_key.yml`. No project-side schema. |
 
@@ -86,7 +91,7 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 
 | Table | Purpose |
 |---|---|
-| `api_key` | Issued keys: `id`, `partner_id`, `user_id` (NULL for a partner-only key), `key_name`, `key_prefix` (visible), `key_hash` (SHA-256), `scopes` (CSV), `allowed_cidrs` (CSV; NULL allows any address), `is_active`, `expires_at`, `last_used_at`. Keys are minted, rolled and restricted only through the `generate` (optional `allowed_cidrs`), `roll` and `restrict` (`API_KEY`/`RESTRICT`) table actions; the seed grants no generic insert or update. |
+| `api_key` | Issued keys: `id`, `partner_id`, `user_id` (NULL for a partner-only key), `key_name`, `key_prefix` (visible), `key_hash` (SHA-256), `scopes` (CSV), `allowed_cidrs` (CSV; NULL allows any address), `is_active`, `expires_at`, `last_used_at`. Keys are minted, rolled and restricted only through the `generate` (optional `allowed_cidrs` and RFC 3339 `expires_at`), `roll` and `restrict` (`API_KEY`/`RESTRICT`) table actions; the seed grants no generic insert or update. |
 
 ### `service.HttpBackend.CORSMiddleware` — cross-origin access
 
@@ -175,7 +180,7 @@ When the login page receives `?return=`, the SPA posts `{"return": <value>}` wit
 - `Active(ctx, userID, clientID)` lets a resource server honor a revocation before the access token expires.
 - `PurgeUnauthorizedClients(ctx, olderThan)` deletes, in batches, openly registered clients that never completed an authorization.
 
-`handler.GrantHandler{Grants: setup.Grants}` serves them to the signed-in user from `GetAuthRoutes()`: `GET /api/user/oauth-grants` lists the caller's grants, and `POST /api/user/oauth-grants/revoke {"clientId"}` revokes one (204; 404 `grant_not_found`).
+`handler.GrantHandler{Grants: setup.Grants}` accepts any `handler.Grants`. Its auth routes list the caller's grants and revoke one by client ID.
 
 Dynamic registration gives every reconnect a new client, and a hosted assistant that drops its connection does not revoke it. With `oauth_replace_same_app_grant` on, redeeming a code revokes the user's grants to other clients of the same app, those sharing a non-loopback redirect host; consent alone replaces nothing, and loopback hosts, shared by every native app, never match. `oauth_max_grants_per_user` refuses an authorization past the cap with `access_denied` and an `error_description`, and rechecks it when the code is redeemed (`invalid_grant`); a reconnect of an app the user already holds is admitted. `prompt` is honored on the consent post as on the request. Direct composition sets `authserver.Config.ReplaceSameAppGrant` and `MaxGrantsPerUser`.
 

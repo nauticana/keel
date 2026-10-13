@@ -8,37 +8,29 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/authserver"
-	"github.com/nauticana/keel/port"
 )
 
-// oauthGrantDB holds one live grant, of client-a to user 5.
-type oauthGrantDB struct {
-	port.DatabaseRepository
-	args [][]any
+type fakeGrants struct{ revoked bool }
+
+func (f *fakeGrants) List(_ context.Context, userID int64) ([]authserver.Grant, error) {
+	if userID != 5 {
+		return nil, nil
+	}
+	return []authserver.Grant{{ClientID: "client-a"}}, nil
 }
 
-func (d *oauthGrantDB) GetQueryService(context.Context, map[string]string) port.QueryService {
-	return d
-}
-func (d *oauthGrantDB) BeginTx(context.Context, map[string]string) (port.TxQueryService, error) {
-	return d, nil
-}
-func (d *oauthGrantDB) GenID() int64                   { return 0 }
-func (d *oauthGrantDB) Commit(context.Context) error   { return nil }
-func (d *oauthGrantDB) Rollback(context.Context) error { return nil }
-func (d *oauthGrantDB) Query(_ context.Context, _ string, args ...any) (*model.QueryResult, error) {
-	d.args = append(d.args, args)
-	if len(args) > 0 && args[0] == int64(5) && (len(args) < 2 || args[1] != "client-b") {
-		return &model.QueryResult{Rows: [][]any{{"client-a", "Assistant", "read", nil, nil}}}, nil
+func (f *fakeGrants) Revoke(_ context.Context, userID int64, clientID string) error {
+	if userID != 5 || clientID != "client-a" {
+		return authserver.ErrGrantNotFound
 	}
-	return &model.QueryResult{}, nil
+	f.revoked = true
+	return nil
 }
 
 func TestGrantRoutes(t *testing.T) {
-	db := &oauthGrantDB{}
-	routes := (&GrantHandler{AbstractHandler: AbstractHandler{UserService: &sessionUsers{}}, Grants: &authserver.GrantService{DB: db}}).GetAuthRoutes()
+	grants := &fakeGrants{}
+	routes := (&GrantHandler{AbstractHandler: AbstractHandler{UserService: &sessionUsers{}}, Grants: grants}).GetAuthRoutes()
 	authed := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer t")
@@ -60,8 +52,8 @@ func TestGrantRoutes(t *testing.T) {
 	if rec := authed(http.MethodPost, "/api/user/oauth-grants/revoke", `{"clientId":"client-a"}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoke = %d %s", rec.Code, rec.Body.String())
 	}
-	if last := db.args[len(db.args)-1]; last[0] != int64(5) || last[1] != "client-a" {
-		t.Fatalf("revoke args = %v, want the session user's", last)
+	if !grants.revoked {
+		t.Fatal("revoke did not reach the session user's grant")
 	}
 	for _, body := range []string{`{"clientId":"client-b"}`, `{}`} {
 		if rec := authed(http.MethodPost, "/api/user/oauth-grants/revoke", body); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "grant_not_found") {

@@ -444,7 +444,7 @@ creation order for that component; table files do not declare their own order.
 
 Keel ships `currency`, `country`, `state`, and `county` as pure reference tables, seeded in [schema/seed/geo.yml](../schema/seed/geo.yml). Scope: every ISO 4217 code with a minor unit; countries for N+S America / Turkey / Europe; states for US + Canada; counties for US only (FIPS-derived).
 
-`currency` (`code`, `caption`, `exponent`) is the foreign-key target of every currency column, keel's and a consumer's alike, and is served at `/api/v1/currency`. It is the only source of minor-unit exponents: queries join it and pass `exponent` to `common.ParseMinorUnits` / `common.FormatMinorUnits`.
+`currency` (`code`, `caption`, `exponent`) is the foreign-key target of every currency column, keel's and a consumer's alike, and is served at `/api/v1/currency`. It is the only source of minor-unit exponents: queries join it and pass `exponent` to `common.ParseMinorUnits` / `common.FormatMinorUnits`, and `geo.Currencies{DB}` reads it once for Go callers (`Exponent`, `Parse`, `Format`; `geo.ErrUnknownCurrency`). `common.RoundMinorUnits` rounds a provider amount finer than the currency half away from zero, where `ParseMinorUnits` refuses it, and `common.DivRound` divides minor units the same way without overflow.
 
 Tax lives in the consumer, not in keel. Apps that charge tax define their own `tax_jurisdiction` table that FK's to keel's `country` / `state`, with their own rate/caption columns. This keeps keel provider-neutral and lets each app model its jurisdictions independently (US sales tax by county, Canadian GST/HST/PST/QST by province, EU VAT by country, etc.).
 

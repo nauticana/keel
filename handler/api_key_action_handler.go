@@ -1,32 +1,30 @@
 package handler
 
 import (
-	"errors"
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	kcommon "github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/service"
 )
 
-// APIKeyActionHandler exposes the custom table-actions for the basis api_key
-// table — generate, roll and restrict. List and Delete (revoke) are served by
-// keel's generic UserSpecific REST CRUD; only key minting needs custom logic
-// (a random key + sha256 hash, with the plaintext shown exactly once).
-//
-// Registered via the table_action framework (table_action rows +
-// API_KEY/GENERATE, ROLL and RESTRICT authorization) at the conventional URLs
-// POST /<prefix>/api_key/{generate,roll,restrict} — so the buttons
-// auto-render in sail's generic CRUD views and the auth gate flows through
-// WrapTableAction.
+func init() {
+	RegisterErrorCode(service.ErrInvalidScopes, http.StatusBadRequest, "api_key_scopes")
+	RegisterErrorCode(service.ErrInvalidAPIKey, http.StatusBadRequest, "api_key_invalid")
+	RegisterErrorCode(service.ErrAPIKeyLimit, http.StatusConflict, "api_key_limit")
+}
+
+// APIKeyActionHandler exposes generate, roll and restrict table actions.
 type APIKeyActionHandler struct {
 	AbstractHandler
 	DB   port.DatabaseRepository
 	Keys *service.APIKeyService
 }
 
-// Routes returns the table-action routes. prefix is the REST prefix
-// INCLUDING the version segment (typically "/api/v1").
+// Routes returns table-action routes under a versioned REST prefix.
 func (h *APIKeyActionHandler) Routes(prefix string) map[string]func(w http.ResponseWriter, r *http.Request) {
 	if h.Keys == nil {
 		return map[string]func(w http.ResponseWriter, r *http.Request){}
@@ -45,6 +43,7 @@ type generateKeyRequest struct {
 	KeyName      string `json:"key_name"`
 	Scopes       string `json:"scopes"`
 	AllowedCIDRs string `json:"allowed_cidrs"`
+	ExpiresAt    string `json:"expires_at"`
 }
 
 // generate mints a new key owned by (session partner, session user) and returns
@@ -58,19 +57,21 @@ func (h *APIKeyActionHandler) generate(w http.ResponseWriter, r *http.Request) {
 	if req.KeyName == "" {
 		req.KeyName = "default"
 	}
-	if req.Scopes == "" {
-		req.Scopes = "query"
+	var expiresAt time.Time
+	if text := strings.TrimSpace(req.ExpiresAt); text != "" {
+		var err error
+		expiresAt, err = time.Parse(time.RFC3339, text)
+		if err != nil {
+			h.WriteServiceError(w, r, fmt.Errorf("%w: expiry must be RFC 3339", service.ErrInvalidAPIKey))
+			return
+		}
 	}
-	key, prefix, err := h.Keys.InsertKey(r.Context(), session.PartnerId, int64(session.Id), req.KeyName, req.Scopes, req.AllowedCIDRs)
-	switch {
-	case errors.Is(err, service.ErrInvalidScopes), errors.Is(err, kcommon.ErrInvalidCIDRList):
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", err.Error())
-		return
-	case errors.Is(err, service.ErrAPIKeyLimit):
-		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
-		return
-	case err != nil:
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+	key, prefix, err := h.Keys.InsertKey(r.Context(), service.NewAPIKey{
+		PartnerID: session.PartnerId, UserID: int64(session.Id), Name: req.KeyName,
+		Scopes: req.Scopes, AllowedCIDRs: req.AllowedCIDRs, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusCreated, map[string]string{"api_key": key, "key_prefix": prefix})
@@ -80,9 +81,6 @@ type rollKeyRequest struct {
 	ID int64 `json:"id"`
 }
 
-// roll rotates the selected key (row-level action): the old key keeps a 24h
-// grace window, and a fresh key with the same name/scopes/ownership is returned
-// (plaintext once).
 func (h *APIKeyActionHandler) roll(w http.ResponseWriter, r *http.Request) {
 	var req rollKeyRequest
 	session, ok := h.ReadAuthRequest(w, r, &req)
@@ -91,11 +89,11 @@ func (h *APIKeyActionHandler) roll(w http.ResponseWriter, r *http.Request) {
 	}
 	key, prefix, err := h.Keys.RotateKey(r.Context(), req.ID, session.PartnerId)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	if key == "" {
-		h.WriteError(w, http.StatusNotFound, "Not Found", "key not found or already inactive")
+		h.WriteError(w, http.StatusNotFound, "Not Found", "key not found, inactive or expired")
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"api_key": key, "key_prefix": prefix})
@@ -116,10 +114,8 @@ func (h *APIKeyActionHandler) restrict(w http.ResponseWriter, r *http.Request) {
 	}
 	found, err := h.Keys.RestrictKey(r.Context(), req.ID, session.PartnerId, req.AllowedCIDRs)
 	switch {
-	case errors.Is(err, kcommon.ErrInvalidCIDRList):
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", err.Error())
 	case err != nil:
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 	case !found:
 		h.WriteError(w, http.StatusNotFound, "Not Found", "key not found or already inactive")
 	default:

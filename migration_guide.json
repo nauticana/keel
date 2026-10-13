@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.113",
+   "title": "API key policy and expiry, currency lookup",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "API key minting takes a request with an expiry and a caller-aware scope policy; geo.Currencies and rounding helpers read and convert money by the currency catalog; keel tables no longer default a currency.",
+   "body_markdown": "### Breaking\n\n| Before | After |\n|---|---|\n| `APIKeyService.InsertKey(ctx, partnerID, userID, name, scopes, cidrs)` | `InsertKey(ctx, service.NewAPIKey{PartnerID, UserID, Name, Scopes, AllowedCIDRs, ExpiresAt})` |\n| `ScopePolicy func(scopes string) error` | `ScopePolicy func(ctx, userID, partnerID int64, scopes string) (string, error)` |\n| blank scopes default to `query` | the product policy supplies them; otherwise they are invalid |\n| `GrantHandler.Grants *authserver.GrantService` | `handler.Grants` |\n| currency and API-key scope columns have defaults | writers supply them |\n\n```sql\nALTER TABLE subscription_plan ALTER COLUMN currency DROP DEFAULT;\nALTER TABLE subscription_plan_price ALTER COLUMN currency DROP DEFAULT;\nALTER TABLE subscription_addon ALTER COLUMN currency DROP DEFAULT;\nALTER TABLE invoice ALTER COLUMN currency DROP DEFAULT;\nALTER TABLE api_key ALTER COLUMN scopes DROP DEFAULT;\n```\n\n### Behavioral\n\n- API-key names and scopes are bounded; generation accepts an optional RFC 3339 expiry.\n- Rotation rejects expired keys, preserves the original expiry, and limits the old key's grace to 24 hours.\n- API-key actions return registered public errors without leaking internal failures.\n\n### Additive\n\n- `geo.Currencies` reads exponents from `currency` and parses or formats minor units.\n- `common.RoundMinorUnits` and `common.DivRound` round half away from zero without floating point or integer overflow."
+  },
+  {
    "version": "v1.2.112",
    "title": "OAuth grant routes",
    "tags": [

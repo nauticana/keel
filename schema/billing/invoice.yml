@@ -20,7 +20,6 @@ columns:
     comment: charge amount in minor units of currency, no default — writers must supply it
   - name: currency
     type: CHAR(3)
-    default: USD
   - name: issued_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP

@@ -20,6 +20,10 @@ seeds:
   - table: table_action_parameter
     columns: [table_name, action_name, seq, param_name, caption, data_type, required]
     rows:
+      - [api_key, generate, 1, key_name, Name, string, false]
+      - [api_key, generate, 2, scopes, Scopes, string, false]
+      - [api_key, generate, 3, allowed_cidrs, Allowed networks (CSV of CIDRs; empty allows any), string, false]
+      - [api_key, generate, 4, expires_at, Expiry (RFC 3339; empty never expires), string, false]
       - [api_key, restrict, 1, allowed_cidrs, Allowed networks (CSV of CIDRs; empty allows any), string, false]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
