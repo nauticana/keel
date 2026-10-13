@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.114",
+   "title": "API key scope policy errors, catalog-backed scope policy",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "InsertKey returns a ScopePolicy refusal unchanged; ConstantScopePolicy validates scopes against a constant_value list.",
+   "body_markdown": "### Breaking\n\n- `APIKeyService.InsertKey` no longer wraps a `ScopePolicy` error in `ErrInvalidScopes`. A policy refusing malformed or unknown scopes returns `ErrInvalidScopes` (400) itself; any other sentinel keeps its own registered status.\n\n### Additive\n\n- `service.ConstantScopePolicy{DB, Constant, Default}.Policy` allows the `constant_value` codes of `Constant`, takes `Default` for a blank request, drops duplicates, and fails closed while the catalog is unreadable, empty, or lacks `Default`. Wrap it for product rules such as a grant on some scopes."
+  },
+  {
    "version": "v1.2.113",
    "title": "API key policy and expiry, currency lookup",
    "tags": [

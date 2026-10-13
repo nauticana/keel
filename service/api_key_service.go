@@ -48,9 +48,9 @@ type APIKeyService struct {
 	// Defaults to "public-api" when empty.
 	QuotaCaption string
 
-	// ScopePolicy returns the scopes a generated key carries or refuses them.
-	// userID is 0 for a partner-only key. nil keeps the request.
-	// A rolled key keeps its scopes unchecked.
+	// ScopePolicy returns the scopes a generated key carries or refuses them;
+	// its error is returned unchanged. userID is 0 for a partner-only key. nil
+	// keeps the request. A rolled key keeps its scopes unchecked.
 	ScopePolicy func(ctx context.Context, userID, partnerID int64, scopes string) (string, error)
 
 	// CacheTTL bounds how long a validated key stays trusted in memory, and
@@ -141,7 +141,7 @@ const (
 )
 
 var (
-	// ErrInvalidScopes refuses blank or overlong scopes, or wraps a ScopePolicy refusal.
+	// ErrInvalidScopes refuses blank, overlong or unknown scopes.
 	ErrInvalidScopes = errors.New("api key scopes refused")
 	// ErrInvalidAPIKey refuses a blank or overlong name or a past expiry.
 	ErrInvalidAPIKey = errors.New("api key name or expiry invalid")
@@ -172,7 +172,7 @@ func (m *APIKeyService) InsertKey(ctx context.Context, req NewAPIKey) (key strin
 	}
 	if m.ScopePolicy != nil {
 		if req.Scopes, err = m.ScopePolicy(ctx, req.UserID, req.PartnerID, req.Scopes); err != nil {
-			return "", "", fmt.Errorf("%w: %v", ErrInvalidScopes, err)
+			return "", "", err
 		}
 	}
 	if strings.TrimSpace(req.Scopes) == "" || utf8.RuneCountInString(req.Scopes) > apiKeyScopesMax {

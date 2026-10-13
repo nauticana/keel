@@ -62,6 +62,7 @@ func newKey(scopes, cidrs string) NewAPIKey {
 func TestInsertKeyAppliesScopePolicy(t *testing.T) {
 	svc, qs := newAPIKeys(t)
 	ctx := context.Background()
+	errForbidden := errors.New("scope needs a grant")
 	svc.ScopePolicy = func(_ context.Context, userID, partnerID int64, scopes string) (string, error) {
 		if partnerID != 7 || userID != 11 {
 			return "", fmt.Errorf("caller %d/%d", partnerID, userID)
@@ -72,9 +73,10 @@ func TestInsertKeyAppliesScopePolicy(t *testing.T) {
 		case "read", "read,read":
 			return "read", nil
 		}
-		return "", errors.New("only read")
+		return "", errForbidden
 	}
-	if _, _, err := svc.InsertKey(ctx, newKey("admin", "")); !errors.Is(err, ErrInvalidScopes) {
+	// The policy's own sentinel keeps its registered status.
+	if _, _, err := svc.InsertKey(ctx, newKey("admin", "")); !errors.Is(err, errForbidden) || errors.Is(err, ErrInvalidScopes) {
 		t.Fatalf("err = %v", err)
 	}
 	if qs.callIndex(insertAPIKey) >= 0 {

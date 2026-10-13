@@ -33,7 +33,7 @@ plainKey, prefix, err := apiKeys.InsertKey(ctx, service.NewAPIKey{
 // plainKey is "myapp_<32-hex>"; show to user once and discard.
 ```
 
-`KeyPrefix` is required. `ScopePolicy(ctx, userID, partnerID, scopes)` returns normalized scopes or refuses them (`ErrInvalidScopes`, 400); without it, blank or overlong scopes are refused. Blank or overlong names and past expiries return `ErrInvalidAPIKey` (400); zero `ExpiresAt` never expires. `AllowedCIDRs` accepts a CSV of CIDRs or addresses; empty allows any address.
+`KeyPrefix` is required. `ScopePolicy(ctx, userID, partnerID, scopes)` returns normalized scopes or refuses them with an error returned unchanged, so a product sentinel keeps its registered status; `ConstantScopePolicy{DB, Constant, Default}.Policy` allows the `constant_value` codes of `Constant`, refuses others with `ErrInvalidScopes` (400), and fails closed while the catalog is unreadable. Without a policy, blank or overlong scopes are refused. Blank or overlong names and past expiries return `ErrInvalidAPIKey` (400); zero `ExpiresAt` never expires. `AllowedCIDRs` accepts a CSV of CIDRs or addresses; empty allows any address.
 
 Rolling preserves scopes, ownership, allow-list, and expiry without reapplying the scope policy. The old key gets at most 24 hours of grace, and expired keys cannot be rolled. `api_key_max_per_partner` limits usable keys (`0` is unbounded); rolling does not count against it. `LookupKey` caches successful lookups for `CacheTTL` and carries `UserID` (`0` for partner-only keys).
 
@@ -83,7 +83,7 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 | Field | `APIKeyService.KeyPrefix` | Required. Per-product user-visible prefix (e.g., `"myapp_"`). |
 | Field | `APIKeyService.QuotaResource` | Optional. Defaults to `"API_CALLS"`. The resource id passed to `QuotaService.LogUsage` and `CheckQuota`. |
 | Field | `APIKeyService.QuotaCaption` | Optional. Defaults to `"public-api"`. The caption recorded in usage rows. |
-| Field | `APIKeyService.ScopePolicy` | Optional. Normalizes or refuses scopes at generation for the caller. |
+| Field | `APIKeyService.ScopePolicy` | Optional. Normalizes or refuses scopes at generation for the caller; `ConstantScopePolicy` is the catalog-backed one. |
 | Flag | `api_key_max_per_partner` | Usable keys a partner may hold. Default `20`; `0` is unbounded. |
 | Schema | `api_key` table + sequence | Already in keel's `schema/api_key_management/api_key.yml`. No project-side schema. |
 
