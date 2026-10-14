@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
@@ -67,8 +68,13 @@ func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.D
 	}
 	defer journal.Close()
 
+	bus, err := cache.NewCacheService(ctx, secrets)
+	if err != nil {
+		return fmt.Errorf("RunOnce: cache: %w", err)
+	}
+	defer bus.Close()
 	qs := db.GetQueryService(ctx, w.GetOLTPQueries())
-	quota := &service.QuotaServiceDb{Repo: db}
+	quota := &service.QuotaServiceDb{Repo: db, Bus: bus, Journal: journal}
 	journal.Info(caption + ": running once")
 	w.ProcessQueue(ctx, journal, db, quota, qs)
 	journal.Info(caption + ": done")

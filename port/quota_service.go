@@ -15,4 +15,8 @@ type QuotaService interface {
 	GetPartnerQuota(ctx context.Context, partnerID int64, resource string, def int64) (int64, error)
 	LogUsage(ctx context.Context, partnerID int64, quotaName string, amount int64, description string) error
 	ReportAddonUsage(ctx context.Context, partnerID int64, addonID string, amount int64, notes string) error
+	// InvalidatePartner drops the partner's cached limits and add-ons after its
+	// subscription changed, here and, when the service has a bus, in every
+	// other process.
+	InvalidatePartner(ctx context.Context, partnerID int64)
 }

@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.122",
+   "title": "Plan changes apply to quotas at once",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "A subscription change drops the partner's cached limits in every process instead of leaving the old plan enforced for up to quota_cache_ttl.",
+   "body_markdown": "### Breaking\n\n- `port.QuotaService` adds `InvalidatePartner(ctx, partnerID)`.\n- `handler.ResourceExtractor.Label` is replaced by `Singular` and `Plural`; the 402 reads \"1 more domain\" and \"2 more domains\".\n- A `QuotaServiceDb` refresh replaces the partner's cached set, so a resource the new plan drops is refused instead of keeping its old limit, and add-on presence now expires with `quota_cache_ttl` (it was cached for the process lifetime).\n\n### Additive\n\n- `QuotaServiceDb.InvalidatePartner` drops the partner's limits and add-ons; a load that began before it answers its caller without being cached. `QuotaServiceDb.Bus` (a shared `cache.CacheService`) carries the partner id on `service.QuotaInvalidationChannel` to other processes, whose `Listen(ctx)` drops it; a failed publish is logged through `QuotaServiceDb.Journal`.\n- `HttpBackend.Run` and `JobExecutor` run `Listen` for their quota service. `AbstractWorker` and `RunOnce` build the bus with `cache.NewCacheService`, so keel's workers publish and listen when `valkey_url` or `redis_url` is set.\n- `billing.AbstractBillingService.Quotas` invalidates the partner after every committed change of its active plan: `Activate` (also a replay), `ChangePlan`, `CreateSubscription`, immediate cancellations, `EndDue`, `ConvertTrial`, `SetDunningState` and `Reactivate`. A `ChangePlanTx` caller invalidates after its own commit.\n\nWire the same bus-backed `QuotaServiceDb` into `AbstractBillingService.Quotas` and `HttpBackend.QuotaService` in every process that changes subscriptions or enforces quotas. A downgrade applies to new writes; rows already above the new limit stay."
+  },
+  {
    "version": "v1.2.121",
    "title": "Checkout reuses the payer's provider customer",
    "tags": [

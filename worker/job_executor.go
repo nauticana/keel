@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -112,6 +113,9 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 		}
 	}
 	quotaService := e.NewQuota(dbOLTP)
+	if l, ok := quotaService.(quotaListener); ok {
+		go e.listenQuota(ctx, l)
+	}
 	var qsOLTP port.QueryService
 	oltpQueries := e.Worker.GetOLTPQueries()
 	if len(oltpQueries) > 0 {
@@ -194,4 +198,15 @@ func (e *JobExecutor) registerService(ctx context.Context, qs port.QueryService,
 			}
 		}
 	}()
+}
+
+// quotaListener is a quota service that drops limits other processes invalidate.
+type quotaListener interface {
+	Listen(ctx context.Context) error
+}
+
+func (e *JobExecutor) listenQuota(ctx context.Context, l quotaListener) {
+	if err := l.Listen(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		e.Journal.Error(fmt.Sprintf("worker: quota invalidation listener stopped: %v", err))
+	}
 }

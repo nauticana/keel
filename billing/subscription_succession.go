@@ -139,6 +139,9 @@ func (s *AbstractBillingService) endRows(ctx context.Context, cache planModes, r
 		return 0, err
 	}
 	committed = true
+	for _, r := range rows {
+		s.quotasChanged(ctx, r.partnerID)
+	}
 	return ended, errors.Join(succession...)
 }
 
@@ -150,4 +153,12 @@ func startFree(ctx context.Context, tx port.TxQueryService, partnerID int64, pla
 		return false, err
 	}
 	return len(res.Rows) > 0, nil
+}
+
+// quotasChanged drops the partner's cached limits after a committed change of
+// its active plan, so enforcement follows the new plan at once.
+func (s *AbstractBillingService) quotasChanged(ctx context.Context, partnerID int64) {
+	if s.Quotas != nil {
+		s.Quotas.InvalidatePartner(ctx, partnerID)
+	}
 }

@@ -4,7 +4,9 @@ Runtime services, guards, notifications, recording, and realtime delivery.
 
 ## Quota Service
 
-`port.QuotaService` enforces per-partner subscription limits. `service.QuotaServiceDb` is the standard implementation: it reads caps from `subscription_quota` (joined to the partner's active `partner_plan_subscription`), caches them per partner (1-hour TTL, singleflight-collapsed), and is **fail-closed** — no active plan, or a resource absent from the plan, denies. A cap of `-1` means unlimited.
+`port.QuotaService` enforces per-partner subscription limits. `service.QuotaServiceDb` is the standard implementation: it reads caps from `subscription_quota` (joined to the partner's active `partner_plan_subscription`), caches them per partner for `quota_cache_ttl` (singleflight-collapsed; a refresh replaces the partner's whole set, and add-on presence expires the same way), and is **fail-closed** — no active plan, or a resource absent from the plan, denies. A cap of `-1` means unlimited.
+
+**A plan change applies at once.** `InvalidatePartner(ctx, partnerID)` drops the partner's limits and add-ons; a load that began before it answers its caller but is not cached. With `Bus` set to the shared cache (`cache.NewCacheService` over Valkey/Redis) it also publishes the partner on `service.QuotaInvalidationChannel`, and `Listen(ctx)` drops what other processes publish: `HttpBackend.Run` and keel's `JobExecutor` run it for their quota service, so a downstream that builds its own runs it for the process lifetime. A failed publish is logged through `Journal`, and other processes then refresh within `quota_cache_ttl`. `billing.AbstractBillingService.Quotas` calls it after every committed change of the active plan (activation, plan change, cancellation, `EndDue`, trial conversion, dunning, reactivation); a `ChangePlanTx` caller calls it after its own commit. A downgrade applies to new writes only: rows already above the new limit stay.
 
 ```go
 allowed, err := quota.CheckQuota(ctx, partnerID, "MEDIA", 1) // room for 1 more?

@@ -9,11 +9,17 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
+
+// QuotaInvalidationChannel carries the id of a partner whose subscription
+// changed, so every process drops its cached limits.
+const QuotaInvalidationChannel = "keel:quota:invalidate"
 
 const (
 	qGetPartnerSubscription = "get_partner_subscription"
@@ -101,6 +107,14 @@ type AddonMap = map[string]bool
 type QuotaServiceDb struct {
 	Repo port.DatabaseRepository
 
+	// Bus, when set to a shared cache (Valkey/Redis), carries invalidations
+	// between processes: InvalidatePartner publishes and Listen drops what
+	// others publish. Without it an invalidation is local and other
+	// processes refresh within quota_cache_ttl.
+	Bus cache.CacheService
+	// Journal records invalidations that could not be published.
+	Journal logger.ApplicationLogger
+
 	// Queries injects per-resource live-count SQL keyed by RESOURCE ID (e.g.
 	// "MEDIA"). Each query is bound with a single partnerID param and must
 	// return one row / one column = current usage. Merged over
@@ -114,9 +128,13 @@ type QuotaServiceDb struct {
 	// initialize. Replaces the broken double-checked-locking pattern.
 	initOnce sync.Once
 
-	mu         sync.RWMutex
-	quotaCache map[int64]QuotaMap
-	addonCache map[int64]AddonMap
+	mu           sync.RWMutex
+	quotaCache   map[int64]QuotaMap
+	addonCache   map[int64]AddonMap
+	addonExpires map[int64]time.Time
+	// generation counts invalidations per partner; a load that started
+	// before one does not write its result.
+	generation map[int64]uint64
 	qs         port.QueryService
 	// resourceQueries is the merged default+injected resource→count-SQL map.
 	// Its keys are the routing table CheckQuota uses to choose live-count vs
@@ -142,6 +160,8 @@ func (s *QuotaServiceDb) init(ctx context.Context) {
 	s.initOnce.Do(func() {
 		s.quotaCache = make(map[int64]QuotaMap)
 		s.addonCache = make(map[int64]AddonMap)
+		s.addonExpires = make(map[int64]time.Time)
+		s.generation = make(map[int64]uint64)
 
 		// Merge keel's default resource-count queries with any injected by the
 		// consumer (injected entries win).
@@ -178,7 +198,8 @@ func (s *QuotaServiceDb) quotaItem(ctx context.Context, partnerID int64, quotaNa
 
 	if !ok || now.After(qItem.ExpiresAt) {
 		key := strconv.FormatInt(partnerID, 10)
-		_, err, _ := s.quotaSF.Do(key, func() (any, error) {
+		loaded, err, _ := s.quotaSF.Do(key, func() (any, error) {
+			gen := s.partnerGeneration(partnerID)
 			res, err := s.qs.Query(ctx, qGetPartnerSubscription, partnerID)
 			if err != nil {
 				return nil, err
@@ -192,24 +213,86 @@ func (s *QuotaServiceDb) quotaItem(ctx context.Context, partnerID int64, quotaNa
 					ExpiresAt: now.Add(config.Config().QuotaCacheTTL),
 				}
 			}
+			// The fresh set replaces the old one, so a resource the plan
+			// dropped is gone rather than kept at its old limit.
 			s.mu.Lock()
-			if s.quotaCache[partnerID] == nil {
-				s.quotaCache[partnerID] = QuotaMap{}
-			}
-			for k, v := range fresh {
-				s.quotaCache[partnerID][k] = v
+			if s.generation[partnerID] == gen {
+				s.quotaCache[partnerID] = fresh
 			}
 			s.mu.Unlock()
-			return nil, nil
+			return fresh, nil
 		})
 		if err != nil {
 			return QuotaItem{}, false, err
 		}
-		s.mu.RLock()
-		qItem, ok = s.quotaCache[partnerID][quotaName]
-		s.mu.RUnlock()
+		qItem, ok = loaded.(QuotaMap)[quotaName]
 	}
 	return qItem, ok, nil
+}
+
+func (s *QuotaServiceDb) partnerGeneration(partnerID int64) uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.generation[partnerID]
+}
+
+// InvalidatePartner drops the partner's cached limits and add-ons in this
+// process and publishes the partner on Bus. A failed publish is logged; other
+// processes then refresh within quota_cache_ttl.
+func (s *QuotaServiceDb) InvalidatePartner(ctx context.Context, partnerID int64) {
+	s.init(ctx)
+	s.dropPartner(partnerID)
+	if s.Bus == nil {
+		return
+	}
+	if err := s.Bus.Publish(ctx, QuotaInvalidationChannel, strconv.FormatInt(partnerID, 10)); err != nil && s.Journal != nil {
+		s.Journal.Error(fmt.Sprintf("quota: publish invalidation for partner %d: %s", partnerID, err.Error()))
+	}
+}
+
+func (s *QuotaServiceDb) dropPartner(partnerID int64) {
+	s.mu.Lock()
+	delete(s.quotaCache, partnerID)
+	delete(s.addonCache, partnerID)
+	delete(s.addonExpires, partnerID)
+	s.generation[partnerID]++
+	s.mu.Unlock()
+	// A request after the invalidation must not join a load that began before it.
+	key := strconv.FormatInt(partnerID, 10)
+	s.quotaSF.Forget(key)
+	s.addonSF.Forget(key)
+}
+
+// Listen drops the partners other processes invalidate until ctx ends or the
+// subscription closes. Without Bus it returns at once. The process that owns
+// the service runs it for its lifetime.
+func (s *QuotaServiceDb) Listen(ctx context.Context) error {
+	if s.Bus == nil {
+		return nil
+	}
+	s.init(ctx)
+	messages, err := s.Bus.Subscribe(ctx, QuotaInvalidationChannel)
+	if err != nil {
+		return fmt.Errorf("quota: subscribe %s: %w", QuotaInvalidationChannel, err)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg, open := <-messages:
+			if !open {
+				return ctx.Err()
+			}
+			partnerID, err := strconv.ParseInt(msg, 10, 64)
+			if err != nil || partnerID <= 0 {
+				if s.Journal != nil {
+					s.Journal.Error(fmt.Sprintf("quota: ignoring invalidation %q", msg))
+				}
+				continue
+			}
+			s.dropPartner(partnerID)
+		}
+	}
 }
 
 // periodStart / nextReset are the UTC window boundaries for a quota period:
@@ -371,16 +454,19 @@ func (s *QuotaServiceDb) ConsumeQuota(ctx context.Context, partnerID int64, reso
 func (s *QuotaServiceDb) CheckAddon(ctx context.Context, partnerID int64, addonName string) (bool, error) {
 	s.init(ctx)
 
+	now := time.Now().UTC()
 	s.mu.RLock()
 	partnerMap, partnerKnown := s.addonCache[partnerID]
 	allowed, ok := partnerMap[addonName]
+	fresh := now.Before(s.addonExpires[partnerID])
 	s.mu.RUnlock()
-	if partnerKnown && ok {
+	if partnerKnown && ok && fresh {
 		return allowed, nil
 	}
 
 	key := strconv.FormatInt(partnerID, 10)
-	_, err, _ := s.addonSF.Do(key, func() (any, error) {
+	loaded, err, _ := s.addonSF.Do(key, func() (any, error) {
+		gen := s.partnerGeneration(partnerID)
 		res, err := s.qs.Query(ctx, qGetPartnerAddon, partnerID)
 		if err != nil {
 			return nil, err
@@ -392,32 +478,18 @@ func (s *QuotaServiceDb) CheckAddon(ctx context.Context, partnerID int64, addonN
 			fresh[resourceName] = active
 		}
 		s.mu.Lock()
-		if s.addonCache[partnerID] == nil {
-			s.addonCache[partnerID] = AddonMap{}
-		}
-		for k, v := range fresh {
-			s.addonCache[partnerID][k] = v
+		if s.generation[partnerID] == gen {
+			s.addonCache[partnerID] = fresh
+			s.addonExpires[partnerID] = now.Add(config.Config().QuotaCacheTTL)
 		}
 		s.mu.Unlock()
-		return nil, nil
+		return fresh, nil
 	})
 	if err != nil {
 		return false, err
 	}
-	s.mu.Lock()
-	// Ensure a definitive false is cached for the requested addon when
-	// the partner has no active subscription for it — otherwise every
-	// CheckAddon call would re-query the DB.
-	if s.addonCache[partnerID] == nil {
-		s.addonCache[partnerID] = AddonMap{}
-	}
-	if _, present := s.addonCache[partnerID][addonName]; !present {
-		s.addonCache[partnerID][addonName] = false
-	}
-	allowed = s.addonCache[partnerID][addonName]
-	s.mu.Unlock()
-
-	return allowed, nil
+	// The loaded set is authoritative; an add-on absent from it is inactive.
+	return loaded.(AddonMap)[addonName], nil
 }
 
 func (s *QuotaServiceDb) LogUsage(ctx context.Context, partnerID int64, quotaName string, amount int64, description string) error {

@@ -226,6 +226,10 @@ type AbstractBillingService struct {
 	// Now is the lifecycle clock; injectable for tests (default time.Now().UTC()).
 	Now func() time.Time
 
+	// Quotas, when set, drops a partner's cached limits after each change of
+	// its active plan; give it a Bus so every process drops them.
+	Quotas port.QuotaService
+
 	// FallbackPlanID is the free plan a partner moves to when a paid
 	// subscription ends without a successor; empty leaves the partner without one.
 	FallbackPlanID string
@@ -299,10 +303,13 @@ func (s *AbstractBillingService) CreateSubscription(ctx context.Context, partner
 	if err != nil {
 		return err
 	}
-	_, err = s.qs.Query(ctx, qBillCreateSub,
+	if _, err := s.qs.Query(ctx, qBillCreateSub,
 		partnerID, planID, pc.installmentMinor, pc.currency, pc.billingCycle,
-		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now)
-	return err
+		pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, now); err != nil {
+		return err
+	}
+	s.quotasChanged(ctx, partnerID)
+	return nil
 }
 
 func (s *AbstractBillingService) CancelSubscription(ctx context.Context, partnerID int64) error {

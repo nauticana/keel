@@ -367,7 +367,8 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 		case r.mode == ActivateFree:
 			free = append(free, endingRow{partnerID: partnerID, planID: r.planID, begda: r.begda})
 		case providerSubID != "" && r.providerSubID == providerSubID:
-			return nil // this checkout already activated
+			s.quotasChanged(ctx, partnerID) // a replay may follow a lost invalidation
+			return nil
 		default:
 			return fmt.Errorf("%w: partner %d holds plan %s", ErrSubscriptionActive, partnerID, r.planID)
 		}
@@ -408,6 +409,7 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 		return err
 	}
 	committed = true
+	s.quotasChanged(ctx, partnerID)
 	return nil
 }
 
@@ -439,13 +441,14 @@ func (s *AbstractBillingService) ChangePlan(ctx context.Context, partnerID int64
 		return err
 	}
 	committed = true
+	s.quotasChanged(ctx, partnerID)
 	return nil
 }
 
 // ChangePlanTx is ChangePlan on a caller-owned transaction, so an app can
 // commit its own writes atomically with the plan change. The caller owns
-// commit/rollback and must build the tx with a query map that includes
-// TxQueries() entries.
+// commit/rollback, must build the tx with a query map that includes
+// TxQueries() entries, and calls Quotas.InvalidatePartner after its commit.
 func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQueryService, partnerID int64, newPlanID string, terms BillingTerms) error {
 	s.init(ctx)
 	pol, err := s.loadPlanPolicy(ctx, newPlanID)
@@ -505,14 +508,20 @@ func (s *AbstractBillingService) TxQueries(ctx context.Context) map[string]strin
 
 func (s *AbstractBillingService) Reactivate(ctx context.Context, partnerID int64, planID string) error {
 	s.init(ctx)
-	_, err := s.qs.Query(ctx, qLcReactivate, partnerID, planID)
-	return err
+	if _, err := s.qs.Query(ctx, qLcReactivate, partnerID, planID); err != nil {
+		return err
+	}
+	s.quotasChanged(ctx, partnerID)
+	return nil
 }
 
 func (s *AbstractBillingService) ConvertTrial(ctx context.Context, partnerID int64, providerSubID string) error {
 	s.init(ctx)
-	_, err := s.qs.Query(ctx, qLcConvertTrial, partnerID, providerSubID)
-	return err
+	if _, err := s.qs.Query(ctx, qLcConvertTrial, partnerID, providerSubID); err != nil {
+		return err
+	}
+	s.quotasChanged(ctx, partnerID)
+	return nil
 }
 
 func (s *AbstractBillingService) SetSeats(ctx context.Context, partnerID int64, planID string, seats int64) error {
@@ -597,8 +606,11 @@ func (s *AbstractBillingService) EndDue(ctx context.Context, limit int) (int, er
 
 func (s *AbstractBillingService) SetDunningState(ctx context.Context, partnerID int64, providerSubID, status string) error {
 	s.init(ctx)
-	_, err := s.qs.Query(ctx, qLcSetDunning, status, partnerID, providerSubID)
-	return err
+	if _, err := s.qs.Query(ctx, qLcSetDunning, status, partnerID, providerSubID); err != nil {
+		return err
+	}
+	s.quotasChanged(ctx, partnerID)
+	return nil
 }
 
 var _ SubscriptionLifecycle = (*AbstractBillingService)(nil)

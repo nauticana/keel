@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/data"
@@ -74,6 +75,13 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 	}
 	a.Storage = objStore // expose to the concrete worker, not just the executor
 
+	// The quota bus carries plan-change invalidations between processes.
+	bus, err := cache.NewCacheService(ctx, secrets)
+	if err != nil {
+		return fmt.Errorf("worker %q: cache: %w", a.Caption, err)
+	}
+	defer bus.Close()
+
 	executor := &JobExecutor{
 		Caption:  a.Caption,
 		Interval: a.Interval,
@@ -82,7 +90,7 @@ func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
 		Storage:  objStore,
 		DB:       db,
 		NewQuota: func(db port.DatabaseRepository) port.QuotaService {
-			return &service.QuotaServiceDb{Repo: db}
+			return &service.QuotaServiceDb{Repo: db, Bus: bus, Journal: journal}
 		},
 	}
 	return executor.Run(ctx, secrets)

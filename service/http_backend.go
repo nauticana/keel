@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -150,6 +151,14 @@ func (h *HttpBackend) Run(ctx context.Context) {
 	if h.handler == nil {
 		h.Journal.Error("HTTP handlers not initialized")
 		return
+	}
+
+	if l, ok := h.QuotaService.(interface{ Listen(context.Context) error }); ok {
+		go func() {
+			if err := l.Listen(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				h.Journal.Error("quota invalidation listener stopped: " + err.Error())
+			}
+		}()
 	}
 
 	// /health is registered via Handle so the middleware stack

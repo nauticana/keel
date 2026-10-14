@@ -35,6 +35,7 @@ func (*scriptedQuota) LogUsage(context.Context, int64, string, int64, string) er
 func (*scriptedQuota) ReportAddonUsage(context.Context, int64, string, int64, string) error {
 	return nil
 }
+func (*scriptedQuota) InvalidatePartner(context.Context, int64) {}
 
 var _ port.QuotaService = (*scriptedQuota)(nil)
 

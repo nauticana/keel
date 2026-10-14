@@ -13,11 +13,20 @@ import (
 )
 
 // ResourceExtractor describes how to count the new units of one quota'd
-// resource in a request body, plus the human label used in the 402 message.
+// resource in a request body, plus the labels used in the 402 message.
 type ResourceExtractor struct {
 	ResourceID string
-	Label      string
+	Singular   string // e.g. "domain", used for one unit
+	Plural     string // e.g. "domains"
 	Count      func(body []byte) int64
+}
+
+// label names delta units of the resource.
+func (ex ResourceExtractor) label(delta int64) string {
+	if delta == 1 && ex.Singular != "" {
+		return ex.Singular
+	}
+	return ex.Plural
 }
 
 // QuotaEnforcer is HTTP middleware that pre-checks a resource-creating request
@@ -65,7 +74,7 @@ func (e *QuotaEnforcer) Enforce(next http.HandlerFunc) http.HandlerFunc {
 			}
 			if !allowed {
 				e.WriteError(w, http.StatusPaymentRequired, "Plan Limit Reached",
-					fmt.Sprintf("Your plan does not allow %d more %s. Upgrade to add more.", delta, ex.Label))
+					fmt.Sprintf("Your plan does not allow %d more %s. Upgrade to add more.", delta, ex.label(delta)))
 				return
 			}
 		}
