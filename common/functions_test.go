@@ -3,7 +3,19 @@ package common
 import (
 	"strconv"
 	"testing"
+	"time"
 )
+
+func TestAsStringTimeIsRFC3339(t *testing.T) {
+	loc := time.FixedZone("CET", 3600)
+	got := AsString(time.Date(2026, 11, 12, 1, 0, 0, 0, loc))
+	if got != "2026-11-12T00:00:00Z" {
+		t.Fatalf("want RFC 3339 UTC, got %q", got)
+	}
+	if _, ok := AsTimeOK(got); !ok {
+		t.Fatalf("AsString output must round-trip through AsTimeOK")
+	}
+}
 
 func TestNullIfEmpty(t *testing.T) {
 	if NullIfEmpty("  ") != nil || NullIfEmpty("") != nil {

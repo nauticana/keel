@@ -25,7 +25,7 @@ keel already shipped the payment *substrate* — the Stripe/LemonSqueezy webhook
 
 What stays the application's: the plan catalog and prices, the resource taxonomy and count SQL, the per-event domain mapping (or only its options with `ProviderSubscriptionEventHandler`), add-on economics, feature names and branding.
 
-`handler.BillingHandler` serves sail's billing paths. Cancel, plan change and the portal need `Subscriptions`, `DB` and a `PARTNER_PLAN_SUBSCRIPTION` grant (`CANCEL`, `CHANGE`, `PORTAL` on `partner_plan_subscription`, seeded for `PARTNER_ADMIN`); the read routes need only a session. `GET /api/billing/subscription` reports a scheduled change as `scheduledPlanId` and `scheduledAt`; `POST …/subscription/change` answers `{"status": "changed"}` or `"scheduled"`.
+`handler.BillingHandler` serves sail's billing paths. Cancel, plan change and the portal need `Subscriptions`, `DB` and a `PARTNER_PLAN_SUBSCRIPTION` grant (`CANCEL`, `CHANGE`, `PORTAL` on `partner_plan_subscription`, seeded for `PARTNER_ADMIN`); the read routes need only a session. `GET /api/billing/subscription` reports a scheduled change as `scheduledPlanId` and `scheduledAt`; `POST …/subscription/change` answers `{"status": "changed"}` or `"scheduled"`. `begda`, `endda`, `trialEnd` and `scheduledAt` are RFC 3339 UTC strings, empty when unset.
 
 ### Provider-driven vs self-scheduled
 

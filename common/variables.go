@@ -27,6 +27,8 @@ const (
 	// common.RequestID, "<token>")` before calling the next handler
 	// (P2-09).
 	RequestID ContextKey = "requestID"
+	// TimeZone carries the caller's *time.Location read from TimeZoneHeader.
+	TimeZone ContextKey = "timeZone"
 	// Subject and AuthPrincipal carry the OAuth 2.1 access-token identity
 	// injected by oauth/resource.Middleware. Subject is the `sub`
 	// string; AuthPrincipal holds the full *model.TokenPrincipal. The same

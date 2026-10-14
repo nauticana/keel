@@ -35,8 +35,8 @@ func (g *MinAgeGuard) Check(ctx context.Context, qs GuardQuerier, in GuardInput)
 	if len(res.Rows) == 0 || len(res.Rows[0]) == 0 || res.Rows[0][0] == nil {
 		return fmt.Errorf("account has no usable credential: %w", ErrGuardRejected)
 	}
-	created, perr := common.ParseDBTimestamp(common.AsString(res.Rows[0][0]))
-	if perr != nil || created.IsZero() {
+	created, ok := common.AsTimeOK(res.Rows[0][0])
+	if !ok || created.IsZero() {
 		return fmt.Errorf("could not determine account age: %w", ErrGuardRejected)
 	}
 	if in.Now.Sub(created) < g.minAge {

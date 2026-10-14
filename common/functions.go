@@ -156,6 +156,9 @@ func AsString(v any) string {
 	if b, ok := v.([]byte); ok {
 		return string(b)
 	}
+	if t, ok := v.(time.Time); ok {
+		return t.UTC().Format(time.RFC3339)
+	}
 	return fmt.Sprintf("%v", v)
 }
 

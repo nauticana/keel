@@ -14,6 +14,7 @@ This file consolidates the v0.6 deferral notes plus the downstream-consumer revi
 | A2 | Migration note for `EventParser.PeekEventMeta` | A | LOW | ✅ done |
 | A3 | Drop unused `io.Reader` param in `StripeCheckoutClient.request` | A | LOW | ✅ done |
 | A4 | LemonSqueezy no-timestamp note in README §Webhook | A | LOW | ✅ done |
+| A5 | Timestamps serialised with Go's default `time.Time` format instead of RFC 3339 | A | MED | ✅ done — v1.2.118 |
 | B1 | `payout/` package tests | B | MED | ✅ done |
 | B2 | `pgsql/` package tests | B | MED | ✅ done (bundled with A1) |
 | B3 | Commit generated DDL + `make verify-schema` | B | MED | ✅ done |

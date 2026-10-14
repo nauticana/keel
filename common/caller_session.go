@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/nauticana/keel/model"
 )
@@ -22,6 +23,8 @@ type CallerSession struct {
 	APIKeyID  int64
 	Scopes    []string
 	RequestID string
+	// Location is the client's zone for server-rendered output; UTC when the request sent none.
+	Location *time.Location
 }
 
 // CallerSessionFromContext fails closed: an unauthenticated context is an error, never an empty session.
@@ -29,7 +32,7 @@ func CallerSessionFromContext(ctx context.Context) (CallerSession, error) {
 	if ctx == nil {
 		return CallerSession{}, ErrUnauthenticated
 	}
-	s := CallerSession{RequestID: RequestIDFromContext(ctx)}
+	s := CallerSession{RequestID: RequestIDFromContext(ctx), Location: LocationFromContext(ctx)}
 	s.Principal, _ = ctx.Value(AuthPrincipal).(*model.TokenPrincipal)
 	s.Subject, _ = ctx.Value(Subject).(string)
 	s.PartnerID, _ = ctx.Value(PartnerID).(int64)
@@ -78,6 +81,7 @@ func WithCallerSession(ctx context.Context, s CallerSession) context.Context {
 	if len(s.Scopes) > 0 {
 		ctx = context.WithValue(ctx, Scopes, strings.Join(s.Scopes, " "))
 	}
+	ctx = WithLocation(ctx, s.Location)
 	return WithRequestID(ctx, s.RequestID)
 }
 

@@ -85,6 +85,18 @@ func TestMinAgeGuard_PassesOldEnough(t *testing.T) {
 	}
 }
 
+func TestMinAgeGuard_AcceptsDriverTime(t *testing.T) {
+	in := baseInput()
+	qs := fakeQuerier{rows: map[string][][]any{"qAge": {{in.Now.Add(-30 * 24 * time.Hour)}}}}
+	if err := NewMinAgeGuard("qAge", 7*24*time.Hour).Check(context.Background(), qs, in); err != nil {
+		t.Fatalf("want pass on a time.Time row, got %v", err)
+	}
+	qs = fakeQuerier{rows: map[string][][]any{"qAge": {{in.Now.Add(-2 * time.Hour)}}}}
+	if err := NewMinAgeGuard("qAge", 7*24*time.Hour).Check(context.Background(), qs, in); !errors.Is(err, ErrGuardRejected) {
+		t.Fatalf("want ErrGuardRejected on a time.Time row, got %v", err)
+	}
+}
+
 func TestGuardChain_FailsFastInOrder(t *testing.T) {
 	qs := fakeQuerier{rows: map[string][][]any{
 		"qDup":   {{int64(7)}}, // would reject

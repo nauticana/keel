@@ -129,6 +129,7 @@ func (h *HttpBackend) Handle(functions map[string]func(w http.ResponseWriter, r 
 		// SecurityHeaders wraps the outer chain so hardening headers land on
 		// every response, including short-circuited middleware errors.
 		h.handler = h.SecurityHeadersMiddleware(h.handler)
+		h.handler = h.TimeZoneMiddleware(h.handler)
 		h.handler = h.AccessLogMiddleware(h.handler)
 		h.handler = h.RequestIDMiddleware(h.handler)
 	}
@@ -295,7 +296,7 @@ func (h *HttpBackend) CORSMiddleware(next http.Handler) http.Handler {
 		if allow != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allow)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+common.TimeZoneHeader)
 			// Cache preflight for 10 minutes (P1-66). Browsers re-issue
 			// OPTIONS on every CORS request without a Max-Age, doubling
 			// our ingress traffic for any cross-origin app.
