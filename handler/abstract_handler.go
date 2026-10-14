@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
@@ -28,7 +29,13 @@ type sessionCtxKey struct{}
 // verification of a missing/invalid token.
 type sessionMissCtxKey struct{}
 
+// nilUserServiceLogged reports the missing UserService once per process.
+var nilUserServiceLogged atomic.Bool
+
 type AbstractHandler struct {
+	// UserService verifies sessions. It is optional for routes that read no
+	// session (signature-verified webhooks, guest checkout); without it every
+	// session read is a miss, so RequireSession answers 401.
 	UserService user.UserService
 	// Journal, when wired by the including handler, receives the real cause
 	// of every 5xx and every WriteServiceError 4xx, correlated by request_id,
@@ -90,13 +97,28 @@ func (h *AbstractHandler) ParseSession(r *http.Request) *model.UserSession {
 		stashSessionMiss(r)
 		return nil
 	}
-	tokenStr := strings.TrimSpace(auth[7:])
-	session, err := h.UserService.ParseJWT(tokenStr)
-	if err != nil || session == nil {
+	session := h.parseToken(strings.TrimSpace(auth[7:]))
+	if session == nil {
 		stashSessionMiss(r)
 		return nil
 	}
 	stashSession(r, session)
+	return session
+}
+
+// parseToken verifies a bearer token; nil when it is invalid or no
+// UserService is wired, which is logged once as a misconfiguration.
+func (h *AbstractHandler) parseToken(token string) *model.UserSession {
+	if h.UserService == nil {
+		if h.Journal != nil && nilUserServiceLogged.CompareAndSwap(false, true) {
+			h.Journal.Error("handler reads a session without a UserService; answering 401")
+		}
+		return nil
+	}
+	session, err := h.UserService.ParseJWT(token)
+	if err != nil {
+		return nil
+	}
 	return session
 }
 
@@ -350,19 +372,6 @@ func (h *AbstractHandler) RequireQueryInt64(w http.ResponseWriter, r *http.Reque
 	return v, true
 }
 
-// ProblemDetail is the RFC 7807 envelope returned by WriteError.
-// Hoisted to package scope so tests and downstream callers can decode
-// against a stable type instead of an anonymous struct.
-type ProblemDetail struct {
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	Status    int    `json:"status"`
-	Detail    string `json:"detail,omitempty"`
-	Code      string `json:"code,omitempty"`
-	Instance  string `json:"instance,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-}
-
 // EnsureRequestID returns a request whose context contains a correlation id.
 // Existing middleware-bound ids win; otherwise a new id is generated once and
 // reused by the handler, service, metrics exemplar, and error response.
@@ -423,22 +432,18 @@ func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, s
 			cause = detail
 		}
 		h.logProblem(r, requestID, status, title, cause)
-		// Never echo internal context to the client.
-		detail = "internal server error — see request_id in your logs"
+		detail = common.InternalErrorDetail
 	} else if cause != "" {
 		h.logProblem(r, requestID, status, title, cause)
 	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(status)
-	problem := ProblemDetail{
+	_ = common.WriteProblem(w, common.ProblemDetail{
 		Type:      "about:blank",
 		Title:     title,
 		Status:    status,
 		Detail:    detail,
 		Code:      code,
 		RequestID: requestID,
-	}
-	_ = json.NewEncoder(w).Encode(problem)
+	})
 }
 
 // ScrubAuthHeader returns a derived *http.Request with secret-bearing

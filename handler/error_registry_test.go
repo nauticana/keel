@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 )
@@ -21,7 +22,7 @@ func TestWriteServiceError_RegisteredCodeIsMachineReadable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.WriteServiceError(rec, httptest.NewRequest(http.MethodPost, "/agency/accept", nil), errNeedsBusiness)
 
-	var problem ProblemDetail
+	var problem common.ProblemDetail
 	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
 		t.Fatalf("decode problem: %v", err)
 	}
@@ -70,9 +71,9 @@ type recordingJournal struct {
 func (j *recordingJournal) Warning(msg string) { j.warnings = append(j.warnings, msg) }
 func (j *recordingJournal) Error(msg string)   { j.errors = append(j.errors, msg) }
 
-func decodeProblem(t *testing.T, rec *httptest.ResponseRecorder) ProblemDetail {
+func decodeProblem(t *testing.T, rec *httptest.ResponseRecorder) common.ProblemDetail {
 	t.Helper()
-	var problem ProblemDetail
+	var problem common.ProblemDetail
 	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
 		t.Fatalf("decode problem: %v", err)
 	}

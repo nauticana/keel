@@ -118,7 +118,8 @@ func (h *HttpBackend) Handle(functions map[string]func(w http.ResponseWriter, r 
 		h.mux = http.NewServeMux()
 	}
 	if h.handler == nil {
-		h.handler = h.APIKeyMiddleware(h.SSOMiddleware(h.mux))
+		// RecoverMiddleware sits inside CORS so a panic answer keeps its CORS headers.
+		h.handler = h.RecoverMiddleware(h.APIKeyMiddleware(h.SSOMiddleware(h.mux)))
 		if h.Origin != "" {
 			h.handler = h.CORSMiddleware(h.handler)
 		}
@@ -445,7 +446,13 @@ func (h *HttpBackend) SecurityHeadersMiddleware(next http.Handler) http.Handler 
 //
 // Bearer-prefix matching is case-insensitive per RFC 7235; a client
 // sending "bearer <tok>" should not be rejected just on case.
+//
+// Without a UserService no token can be verified: the misconfiguration is
+// logged once here and every gated request is answered 401.
 func (h *HttpBackend) SSOMiddleware(next http.Handler) http.Handler {
+	if h.UserService == nil && h.Journal != nil {
+		h.Journal.Error("HttpBackend has no UserService; " + common.RestPrefix + " requests are answered 401")
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, common.RestPrefix) {
 			next.ServeHTTP(w, r)
@@ -464,6 +471,11 @@ func (h *HttpBackend) SSOMiddleware(next http.Handler) http.Handler {
 		if bearer == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="keel"`)
 			http.Error(w, "Missing authentication header", http.StatusUnauthorized)
+			return
+		}
+		if h.UserService == nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="keel", error="invalid_token"`)
+			http.Error(w, "Invalid authentication token", http.StatusUnauthorized)
 			return
 		}
 		session, err := h.UserService.ParseJWT(bearer)

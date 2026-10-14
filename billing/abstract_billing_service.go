@@ -96,6 +96,8 @@ var (
 	ErrNotFreePlan     = errors.New("plan is not a free plan")
 	// ErrProviderSubscription: the provider holds the subscription, so it must cancel it first.
 	ErrProviderSubscription = errors.New("subscription is held by the payment provider")
+	// ErrSubscriptionActive: the partner already holds a paid subscription; upgrades go through ChangePlan.
+	ErrSubscriptionActive = errors.New("partner already has an active paid subscription")
 	// ErrUnknownSubscription: a provider event names a subscription with no live local row.
 	ErrUnknownSubscription = errors.New("provider subscription is not on file")
 	// ErrSubscriptionPending: a pending subscription blocks starting another plan.

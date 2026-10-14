@@ -9,6 +9,25 @@
  },
  "migrations": [
   {
+   "version": "v1.2.120",
+   "title": "Checkout activation without a pending row",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "Activate opens the paid subscription when no pending row exists and closes the partner's free plan, instead of reporting success with nothing activated.",
+   "body_markdown": "### Breaking\n\n- `AbstractBillingService.Activate` runs in one transaction. It flips the partner's pending row for the plan when there is one; otherwise it opens the row the plan's activation mode calls for (`A`, `F` and a `P` plan without a pending row insert an active row, `T` starts a trial). It closes the partner's live free-plan rows, so exactly one plan is active.\n- A partner holding a live paid subscription gets `ErrSubscriptionActive`, and the activation writes nothing. When that row carries the same provider subscription id, the call is a replay and returns nil without writing.\n- A pending flip that changes no row is an error, so the webhook is logged as failed and retried instead of processed. `lc_flip_pending` now ends in `RETURNING partner_id`, and the new `lc_partner_rows` query reads the partner's live and pending rows; a MySQL override replaces the `RETURNING` form.\n\n### Repairing a partner charged before this release\n\nA `checkout_completed` that activated nothing was logged as processed (`P`). After upgrading, set that `payment_webhook_log` row to `F` and run `WebhookProcessor.RetryFailed`: the stored event activates the paid plan and closes the free one."
+  },
+  {
+   "version": "v1.2.119",
+   "title": "Answered handler panics, optional UserService",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "A handler panic is answered with the sanitized 500 envelope instead of an aborted connection, and a missing UserService answers 401 instead of panicking.",
+   "body_markdown": "### Breaking\n\n- `handler.ProblemDetail` moved to `common.ProblemDetail`; `common.WriteProblem(w, p)` writes it and `common.InternalErrorDetail` is the sanitized 5xx detail.\n\n### Additive\n\n- `HttpBackend.RecoverMiddleware`, mounted by `Handle` inside `CORSMiddleware`, answers a handler panic with the sanitized 500 problem, the request id and the CORS headers, logs the stack and keeps the connection. A panic after the response began, or `http.ErrAbortHandler`, is re-raised.\n- `AbstractHandler.UserService` is optional: without it every session read is a miss (`RequireSession` answers 401) and the misconfiguration is logged once. `HttpBackend` without a `UserService` logs once at startup and answers 401 to bearer requests on `/api`."
+  },
+  {
    "version": "v1.2.118",
    "title": "RFC 3339 timestamps, UTC database session, per-request client time zone",
    "tags": [

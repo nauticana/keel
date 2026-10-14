@@ -52,7 +52,7 @@ checkout creation to `PaymentEvent.InvoiceLines[i].Metadata`.
 | Mode | Code | Activation |
 |---|---|---|
 | create-active | `A` | INSERT a fresh active row (provider already created the sub) — the default; preserves the old `CreateSubscription` behavior |
-| activate-pending | `P` | flip a pre-seeded `status='P'` row → `'A'` (register-then-pay flows) |
+| activate-pending | `P` | flip a pre-seeded `status='P'` row → `'A'` (register-then-pay flows); without one, a fresh active row is inserted |
 | trial | `T` | start `status='T'` + `trial_end` (from `subscription_plan.trial_days`); `ConvertTrial` flips `T→A` on the first paid invoice |
 | free | `F` | active immediately, no provider sub / charge |
 
@@ -94,7 +94,7 @@ A subscription that ends starts its next plan in the same transaction: the `succ
 
 *Not* activation modes (handled separately): **metered/usage** (a billing model over an already-active sub), **comp/admin grant** (set `A` via an admin path), and the transitions **change-plan / reactivate / pause** (their own verbs). Further policies — one-time/lifetime, invoice-terms (NET-x), manual/sales-approval — slot into the open dictionary when a project needs them.
 
-> **Note:** `ProviderSubscriptionEventHandler`'s `checkout_completed` always *activates* — it does not detect a plan change, so a re-checkout for a different plan creates a second active row rather than switching. Route upgrades/downgrades through `ChangePlan` (e.g. from `subscription_updated`), not a fresh checkout. Cancels (immediate or at-period-end, by partner or provider-sub-id) act on both active (`A`) and trialing (`T`) subs.
+> **Note:** `Activate` runs in one transaction. It flips the partner's pending row for the plan when there is one, otherwise opens a row per the plan's mode, and closes the partner's free plan, so a free partner upgrading through checkout ends with exactly one active plan. A partner already holding a paid subscription gets `ErrSubscriptionActive`, which fails the webhook visibly, unless the row carries the same provider subscription id (a replay, which changes nothing). Route upgrades and downgrades between paid plans through `ChangePlan`, not a fresh checkout. Cancels (immediate or at-period-end, by partner or provider-sub-id) act on both active (`A`) and trialing (`T`) subs.
 
 ## Payments (Stripe & LemonSqueezy)
 

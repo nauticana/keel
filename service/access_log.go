@@ -65,7 +65,9 @@ var (
 // status, response bytes, duration, the trusted-proxy-gated client IP and the
 // request id.
 // Outermost in the chain so rejections from inner middleware are recorded;
-// a handler panic logs 500 and re-panics. Healthy probe hits are skipped.
+// RecoverMiddleware answers handler panics, and a panic that still reaches
+// here (one after the response began) logs 500 and re-panics. Healthy probe
+// hits are skipped.
 func (h *HttpBackend) AccessLogMiddleware(next http.Handler) http.Handler {
 	if h.Journal == nil {
 		return next

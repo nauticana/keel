@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/handler"
 )
 
@@ -47,7 +48,7 @@ func TestSessionLimitErrorIsRegistered(t *testing.T) {
 		handler.ErrInvalidSessionMaxDays,
 	)
 
-	var problem handler.ProblemDetail
+	var problem common.ProblemDetail
 	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
 		t.Fatal(err)
 	}

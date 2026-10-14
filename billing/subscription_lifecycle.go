@@ -14,9 +14,12 @@ import (
 // AbstractBillingService is the default impl (SQL is the overridable Queries
 // map). Split from BillingService/ProviderBillingStore for interface segregation.
 type SubscriptionLifecycle interface {
-	// Activate opens a sub on the chosen terms per the plan's activation_mode,
-	// snapshotting the matching subscription_plan_price (ErrPriceNotFound if none),
-	// setting renewal_date = term end and next_charge_date. seats<=0 → NULL.
+	// Activate opens a sub on the chosen terms, snapshotting the matching
+	// subscription_plan_price (ErrPriceNotFound if none), in one transaction: it
+	// flips the partner's pending row for the plan when there is one, else opens
+	// a row per the plan's activation_mode, and closes the partner's free plan.
+	// A live paid subscription is ErrSubscriptionActive unless it is this
+	// provider subscription (a replay, which changes nothing). seats<=0 → NULL.
 	Activate(ctx context.Context, partnerID int64, planID string, terms BillingTerms, providerSubID string, seats int64) error
 	// ChangePlan atomically closes the current active/trial row and opens a fresh one.
 	ChangePlan(ctx context.Context, partnerID int64, newPlanID string, terms BillingTerms) error
@@ -66,6 +69,7 @@ const (
 	qLcPlanPrice              = "lc_plan_price"
 	qLcInsertActive           = "lc_insert_active"
 	qLcFlipPending            = "lc_flip_pending"
+	qLcPartnerRows            = "lc_partner_rows"
 	qLcStartTrial             = "lc_start_trial"
 	qLcConvertTrial           = "lc_convert_trial"
 	qLcChangePlanCurrent      = "lc_change_plan_current"
@@ -109,7 +113,16 @@ UPDATE partner_plan_subscription
    SET status = 'A', provider_subscription_id = ?, seats = ?, begda = CURRENT_TIMESTAMP,
        installment_minor = ?, currency = ?, billing_cycle = ?, term_count = ?, term_type = ?,
        amount_minor = ?, renewal_date = ?, next_charge_date = ?
- WHERE partner_id = ? AND plan_id = ? AND status = 'P'`,
+ WHERE partner_id = ? AND plan_id = ? AND status = 'P'
+ RETURNING partner_id`,
+
+	// Activate's view of the partner: live and pending rows with their plan's mode.
+	qLcPartnerRows: `
+SELECT ps.plan_id, ps.begda, ps.status, COALESCE(ps.provider_subscription_id, ''), sp.activation_mode
+  FROM partner_plan_subscription ps
+  JOIN subscription_plan sp ON sp.id = ps.plan_id
+ WHERE ps.partner_id = ? AND ps.status IN ('A', 'T', 'X', 'P')
+   AND (ps.endda IS NULL OR ps.endda > CURRENT_TIMESTAMP)`,
 
 	// Trial dates are anchored at trial_end (the paid term starts then).
 	qLcStartTrial: `
@@ -314,31 +327,97 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 	if err != nil {
 		return err
 	}
+	switch pol.mode {
+	case ActivateCreateActive, ActivatePending, ActivateTrial, ActivateFree:
+	default:
+		return fmt.Errorf("unknown activation_mode %q for plan %s", pol.mode, planID)
+	}
 	now := s.now()
 	pc, err := s.loadPlanCharge(ctx, planID, terms, now)
 	if err != nil {
 		return err
 	}
+	tx, err := s.Repo.BeginTx(ctx, s.allQueries)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	rows, err := tx.Query(ctx, qLcPartnerRows, partnerID)
+	if err != nil {
+		return err
+	}
+	pending := false
+	var free []endingRow
+	for _, row := range rows.Rows {
+		r := activationRow{
+			planID:        common.AsString(row[0]),
+			begda:         common.AsTime(row[1]),
+			status:        common.AsString(row[2]),
+			providerSubID: common.AsString(row[3]),
+			mode:          ActivationMode(common.AsString(row[4])),
+		}
+		switch {
+		case r.status == "P":
+			pending = pending || r.planID == planID
+		case r.mode == ActivateFree:
+			free = append(free, endingRow{partnerID: partnerID, planID: r.planID, begda: r.begda})
+		case providerSubID != "" && r.providerSubID == providerSubID:
+			return nil // this checkout already activated
+		default:
+			return fmt.Errorf("%w: partner %d holds plan %s", ErrSubscriptionActive, partnerID, r.planID)
+		}
+	}
+	for _, r := range free {
+		if _, err := tx.Query(ctx, qLcEndRow, r.partnerID, r.planID, r.begda); err != nil {
+			return err
+		}
+	}
 	nextCharge := now // first installment due at start
-	switch pol.mode {
-	case ActivateCreateActive, ActivateFree:
-		_, err = s.qs.Query(ctx, qLcInsertActive,
-			partnerID, planID, pc.installmentMinor, pc.currency, pc.billingCycle,
-			pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, nextCharge, providerSubID, seatsArg(seats))
-	case ActivatePending:
-		_, err = s.qs.Query(ctx, qLcFlipPending,
+	switch {
+	case pending:
+		res, err := tx.Query(ctx, qLcFlipPending,
 			providerSubID, seatsArg(seats), pc.installmentMinor, pc.currency, pc.billingCycle,
 			pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, nextCharge, partnerID, planID)
-	case ActivateTrial:
+		if err != nil {
+			return err
+		}
+		if len(res.Rows) == 0 {
+			return fmt.Errorf("billing: pending %s row for partner %d changed during activation", planID, partnerID)
+		}
+	case pol.mode == ActivateTrial:
 		trialEnd := now.AddDate(0, 0, int(pol.trialDays))
 		termEnd := terms.normalized().TermEnd(trialEnd) // paid term starts at trial end
-		_, err = s.qs.Query(ctx, qLcStartTrial,
+		if _, err := tx.Query(ctx, qLcStartTrial,
 			partnerID, planID, pc.installmentMinor, pc.currency, pc.billingCycle,
-			pc.termCount, pc.termType, pc.amountUnitMinor, trialEnd, termEnd, trialEnd, providerSubID, seatsArg(seats))
+			pc.termCount, pc.termType, pc.amountUnitMinor, trialEnd, termEnd, trialEnd, providerSubID, seatsArg(seats)); err != nil {
+			return err
+		}
 	default:
-		return fmt.Errorf("unknown activation_mode %q for plan %s", pol.mode, planID)
+		if _, err := tx.Query(ctx, qLcInsertActive,
+			partnerID, planID, pc.installmentMinor, pc.currency, pc.billingCycle,
+			pc.termCount, pc.termType, pc.amountUnitMinor, pc.renewalDate, nextCharge, providerSubID, seatsArg(seats)); err != nil {
+			return err
+		}
 	}
-	return err
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// activationRow is one qLcPartnerRows row.
+type activationRow struct {
+	planID        string
+	begda         time.Time
+	status        string
+	providerSubID string
+	mode          ActivationMode
 }
 
 func (s *AbstractBillingService) ChangePlan(ctx context.Context, partnerID int64, newPlanID string, terms BillingTerms) error {

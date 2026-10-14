@@ -550,7 +550,7 @@ sail with no compile-time signal, so the following are HARD constraints:
   permission set. Authorisation seeds MUST include the
   `authorization_object` + `authorization_object_action` row for every
   custom action, or sail will show the button greyed out.
-- **`ProblemDetail`** (RFC 7807) is the error envelope sail expects.
+- **`common.ProblemDetail`** (RFC 7807), written by `common.WriteProblem`, is the error envelope sail expects.
   Don't return bare strings or custom shapes.
 - **`MainMenu` / `Permissions` / `TableDefinitions`** in
   `RestService.GetClientCache` are sail's bootstrap payload. Adding a new

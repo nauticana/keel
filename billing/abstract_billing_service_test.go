@@ -56,8 +56,15 @@ func (r fakeRepo) BeginTx(context.Context, map[string]string) (port.TxQueryServi
 }
 
 func newSvc(rows map[string][][]any) (*AbstractBillingService, *fakeQS) {
+	svc, qs, _ := newTxSvc(rows, nil)
+	return svc, qs
+}
+
+// newTxSvc is newSvc whose transactions replay txRows and record their writes.
+func newTxSvc(rows, txRows map[string][][]any) (*AbstractBillingService, *fakeQS, *fakeTx) {
 	qs := &fakeQS{rows: rows}
-	return &AbstractBillingService{Repo: fakeRepo{qs: qs}}, qs
+	tx := &fakeTx{fakeQS: fakeQS{rows: txRows}}
+	return &AbstractBillingService{Repo: fakeRepo{qs: qs, tx: tx}}, qs, tx
 }
 
 func lastCall(t *testing.T, qs *fakeQS, name string) fakeCall {
@@ -162,10 +169,10 @@ const (
 
 func TestActivate_MonthlyCreateActive(t *testing.T) {
 	// policy: mode=A, trial_days=14. price row: $100/month (term_type=M, 10000 minor).
-	svc, qs := newSvc(map[string][][]any{
+	svc, qs, tx := newTxSvc(map[string][][]any{
 		qLcPlanPolicy: {{"A", int64(14)}},
 		qLcPlanPrice:  {{int64(10000), "USD"}},
-	})
+	}, nil)
 	svc.Now = fixedClock()
 	terms := BillingTerms{PeriodMonthly, PeriodMonthly, 1}
 	if err := svc.Activate(context.Background(), 7, "pro", terms, "sub_1", 3); err != nil {
@@ -176,7 +183,7 @@ func TestActivate_MonthlyCreateActive(t *testing.T) {
 	if pc.args[0] != "pro" || pc.args[1] != "M" || pc.args[2] != "M" || pc.args[3] != 1 {
 		t.Fatalf("price lookup args = %v", pc.args)
 	}
-	c := lastCall(t, qs, qLcInsertActive)
+	c := lastCall(t, &tx.fakeQS, qLcInsertActive)
 	want := map[int]any{
 		0: int64(7), 1: "pro",
 		iaCost: int64(10000), iaCurrency: "USD", iaBillingCycle: "M",
@@ -194,16 +201,16 @@ func TestActivate_MonthlyCreateActive(t *testing.T) {
 
 // The headline case: $1000/yr billed monthly → $83.33/charge, term ends +1yr.
 func TestActivate_AnnualPaidMonthly(t *testing.T) {
-	svc, qs := newSvc(map[string][][]any{
+	svc, _, tx := newTxSvc(map[string][][]any{
 		qLcPlanPolicy: {{"A", int64(14)}},
 		qLcPlanPrice:  {{int64(100000), "USD"}}, // $1000 per year (term_type=A)
-	})
+	}, nil)
 	svc.Now = fixedClock()
 	terms := BillingTerms{PeriodMonthly, PeriodAnnual, 1}
 	if err := svc.Activate(context.Background(), 7, "pro", terms, "sub_1", 0); err != nil {
 		t.Fatal(err)
 	}
-	c := lastCall(t, qs, qLcInsertActive)
+	c := lastCall(t, &tx.fakeQS, qLcInsertActive)
 	if c.args[iaBillingCycle] != "M" || c.args[iaTermType] != "A" {
 		t.Fatalf("billing M / term A expected: %v", c.args)
 	}
@@ -222,15 +229,15 @@ func TestActivate_AnnualPaidMonthly(t *testing.T) {
 }
 
 func TestActivate_TrialAnchorsTermAtTrialEnd(t *testing.T) {
-	svc, qs := newSvc(map[string][][]any{
+	svc, _, tx := newTxSvc(map[string][][]any{
 		qLcPlanPolicy: {{"T", int64(30)}},
 		qLcPlanPrice:  {{int64(100000), "USD"}},
-	})
+	}, nil)
 	svc.Now = fixedClock()
 	if err := svc.Activate(context.Background(), 7, "pro", BillingTerms{PeriodMonthly, PeriodAnnual, 1}, "sub_1", 0); err != nil {
 		t.Fatal(err)
 	}
-	c := lastCall(t, qs, qLcStartTrial)
+	c := lastCall(t, &tx.fakeQS, qLcStartTrial)
 	// trial bind order: ...,trial_end(8), renewal(9), next_charge(10)
 	trialEnd := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC) // now + 30 days
 	if c.args[8] != trialEnd {
@@ -385,5 +392,88 @@ func TestGetSubscription_ScheduledChange(t *testing.T) {
 				t.Fatalf("scheduled = %q at %q, want %q at %q", sub.ScheduledPlanID, sub.ScheduledAt, tc.wantPlan, tc.wantAt)
 			}
 		})
+	}
+}
+
+var activateBegda = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func activationSvc(mode string, txRows map[string][][]any) (*AbstractBillingService, *fakeTx) {
+	svc, _, tx := newTxSvc(map[string][][]any{
+		qLcPlanPolicy: {{mode, int64(14)}},
+		qLcPlanPrice:  {{int64(10000), "USD"}},
+	}, txRows)
+	svc.Now = fixedClock()
+	return svc, tx
+}
+
+// A free partner paying for a pending-mode plan has no pending row: the
+// checkout opens the paid row and closes the free one in one transaction.
+func TestActivate_UpgradeFromFreeWithoutPendingRow(t *testing.T) {
+	svc, tx := activationSvc("P", map[string][][]any{
+		qLcPartnerRows: {{"FREE", activateBegda, "A", "", "F"}},
+	})
+	if err := svc.Activate(context.Background(), 7, "STANDARD", BillingTerms{}, "sub_1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if tx.commits != 1 || callCount(&tx.fakeQS, qLcFlipPending) != 0 {
+		t.Fatalf("commits=%d calls=%+v", tx.commits, tx.calls)
+	}
+	end := lastCall(t, &tx.fakeQS, qLcEndRow)
+	if end.args[0] != int64(7) || end.args[1] != "FREE" || end.args[2] != activateBegda {
+		t.Fatalf("end args = %v", end.args)
+	}
+	if ins := lastCall(t, &tx.fakeQS, qLcInsertActive); ins.args[1] != "STANDARD" || ins.args[iaProviderSub] != "sub_1" {
+		t.Fatalf("insert args = %v", ins.args)
+	}
+}
+
+func TestActivate_FlipsPendingRow(t *testing.T) {
+	svc, tx := activationSvc("P", map[string][][]any{
+		qLcPartnerRows: {{"STANDARD", activateBegda, "P", "", "P"}},
+		qLcFlipPending: {{int64(7)}},
+	})
+	if err := svc.Activate(context.Background(), 7, "STANDARD", BillingTerms{}, "sub_1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if tx.commits != 1 || callCount(&tx.fakeQS, qLcInsertActive) != 0 {
+		t.Fatalf("commits=%d calls=%+v", tx.commits, tx.calls)
+	}
+	if flip := lastCall(t, &tx.fakeQS, qLcFlipPending); flip.args[0] != "sub_1" || flip.args[10] != int64(7) || flip.args[11] != "STANDARD" {
+		t.Fatalf("flip args = %v", flip.args)
+	}
+}
+
+// A write that changes nothing is an error, so the webhook is logged as failed.
+func TestActivate_PendingFlipThatChangesNothingFails(t *testing.T) {
+	svc, tx := activationSvc("P", map[string][][]any{
+		qLcPartnerRows: {{"STANDARD", activateBegda, "P", "", "P"}},
+	})
+	if err := svc.Activate(context.Background(), 7, "STANDARD", BillingTerms{}, "sub_1", 0); err == nil {
+		t.Fatal("activation that changed no row reported success")
+	}
+	if tx.commits != 0 {
+		t.Fatal("committed an activation that changed no row")
+	}
+}
+
+func TestActivate_ExistingPaidSubscription(t *testing.T) {
+	replay, replayTx := activationSvc("A", map[string][][]any{
+		qLcPartnerRows: {{"STANDARD", activateBegda, "A", "sub_1", "A"}},
+	})
+	if err := replay.Activate(context.Background(), 7, "STANDARD", BillingTerms{}, "sub_1", 0); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if replayTx.commits != 0 || callCount(&replayTx.fakeQS, qLcInsertActive) != 0 {
+		t.Fatalf("replay wrote: %+v", replayTx.calls)
+	}
+
+	second, secondTx := activationSvc("A", map[string][][]any{
+		qLcPartnerRows: {{"STANDARD", activateBegda, "A", "sub_1", "A"}},
+	})
+	if err := second.Activate(context.Background(), 7, "PRO", BillingTerms{}, "sub_2", 0); !errors.Is(err, ErrSubscriptionActive) {
+		t.Fatalf("second paid subscription: err = %v", err)
+	}
+	if secondTx.commits != 0 || callCount(&secondTx.fakeQS, qLcInsertActive) != 0 || callCount(&secondTx.fakeQS, qLcEndRow) != 0 {
+		t.Fatalf("second paid subscription wrote: %+v", secondTx.calls)
 	}
 }

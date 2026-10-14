@@ -15,10 +15,11 @@ import (
 
 type capturingLogger struct {
 	logger.ApplicationLogger
-	access []string
+	access, errors []string
 }
 
 func (l *capturingLogger) Access(log string) { l.access = append(l.access, log) }
+func (l *capturingLogger) Error(log string)  { l.errors = append(l.errors, log) }
 
 var _ logger.ApplicationLogger = (*capturingLogger)(nil)
 

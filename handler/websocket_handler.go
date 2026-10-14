@@ -27,7 +27,7 @@ func (h *WebSocketHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	session := h.ParseSession(r)
 	if session == nil {
 		if tok := r.URL.Query().Get("token"); tok != "" {
-			session, _ = h.UserService.ParseJWT(tok)
+			session = h.parseToken(tok)
 		}
 	}
 	if session == nil {
