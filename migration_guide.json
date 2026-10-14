@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.121",
+   "title": "Checkout reuses the payer's provider customer",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "A signed-in checkout passes the payer's stored provider customer, so a partner that pays again keeps one customer and its invoices resolve.",
+   "body_markdown": "### Breaking\n\n- `AbstractPaymentHandler.CustomerID` is `func(ctx, *model.UserSession) (string, error)` and `LinkCustomer` is `func(ctx, *model.UserSession, customerID string) error` (were keyed by user id). `payment.UserCustomerService.CustomerID` and `LinkCustomer` take the session the same way and refuse one without a user.\n\n### Additive\n\n- `CheckoutRequest.CustomerID` reuses a provider customer. The Stripe client sends it as `customer` and then omits `customer_email`.\n- `CreateCheckout` resolves the `CustomerID` hook for a signed-in payer (not for a guest), as `CreateSetupIntent` does; a failed lookup answers 500 and creates no session.\n- `billing.PartnerCustomerService{Store, Provider}` backs both hooks per partner over `partner_billing_customer`, failing closed on a session without a partner. Wire it when the partner pays, so checkout and the webhook mapping use the same customer.\n\n### Repairing a partner billed through a second customer\n\n`partner_billing_customer` keeps one customer per partner, so invoices of a later customer cannot resolve their partner and fail. Point the partner's row at the customer that holds the live subscription, then run `WebhookProcessor.RetryFailed` to record its failed invoices."
+  },
+  {
    "version": "v1.2.120",
    "title": "Checkout activation without a pending row",
    "tags": [

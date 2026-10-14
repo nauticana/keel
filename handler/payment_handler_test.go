@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payment"
 )
 
@@ -262,5 +264,56 @@ func TestCreateCheckout_UnknownMode_Rejected(t *testing.T) {
 	}
 	if fake.called {
 		t.Fatal("CreateCheckoutSession should not have been called")
+	}
+}
+
+// A signed-in checkout reuses the payer's stored provider customer, so a
+// second payment stays on the customer the partner is linked to.
+func TestCreateCheckout_ReusesStoredCustomer(t *testing.T) {
+	body := map[string]any{
+		"priceId":    "price_ok",
+		"email":      "payer@example.com",
+		"successUrl": "https://app.example/ok",
+		"cancelUrl":  "https://app.example/cancel",
+	}
+	signedIn := func(h *AbstractPaymentHandler) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/billing/checkout", strings.NewReader(string(raw)))
+		req.Header.Set("Authorization", "Bearer ok")
+		rec := httptest.NewRecorder()
+		h.CreateCheckout(rec, req)
+		return rec
+	}
+
+	fake := &fakeCheckout{respURL: "https://checkout.stripe.com/c/pay/sub_xyz"}
+	h := newCheckoutHandler(fake)
+	h.AllowGuestCheckout = false
+	h.UserService = intentUsers{}
+	var gotPartner int64
+	h.CustomerID = func(_ context.Context, session *model.UserSession) (string, error) {
+		gotPartner = session.PartnerId
+		return "cus_first", nil
+	}
+	if rec := signedIn(h); rec.Code != http.StatusOK || fake.last.CustomerID != "cus_first" || gotPartner != 2 {
+		t.Fatalf("status=%d customer=%q partner=%d body=%s", rec.Code, fake.last.CustomerID, gotPartner, rec.Body.String())
+	}
+
+	failing := &fakeCheckout{respURL: "https://checkout.stripe.com/c/pay/sub_xyz"}
+	h = newCheckoutHandler(failing)
+	h.AllowGuestCheckout = false
+	h.UserService = intentUsers{}
+	h.CustomerID = func(context.Context, *model.UserSession) (string, error) { return "", errors.New("db down") }
+	if rec := signedIn(h); rec.Code != http.StatusInternalServerError || failing.called {
+		t.Fatalf("lookup failure: status=%d called=%v", rec.Code, failing.called)
+	}
+
+	guest := &fakeCheckout{respURL: "https://checkout.stripe.com/c/pay/sub_xyz"}
+	h = newCheckoutHandler(guest)
+	h.CustomerID = func(context.Context, *model.UserSession) (string, error) {
+		t.Fatal("guest checkout resolved a customer")
+		return "", nil
+	}
+	if rec := postCheckout(h, body); rec.Code != http.StatusOK || guest.last.CustomerID != "" || guest.last.Email != "payer@example.com" {
+		t.Fatalf("guest: status=%d request=%+v", rec.Code, guest.last)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
@@ -44,13 +45,16 @@ func (s *UserCustomerService) queries(ctx context.Context) (port.QueryService, e
 	return s.qs, nil
 }
 
-// CustomerID returns the user's provider customer, or "" when none is linked.
-func (s *UserCustomerService) CustomerID(ctx context.Context, userID int) (string, error) {
+// CustomerID returns the session user's provider customer, or "" when none is linked.
+func (s *UserCustomerService) CustomerID(ctx context.Context, session *model.UserSession) (string, error) {
+	if session == nil || session.Id <= 0 {
+		return "", fmt.Errorf("CustomerID: no user in session")
+	}
 	qs, err := s.queries(ctx)
 	if err != nil {
 		return "", err
 	}
-	res, err := qs.Query(ctx, qUserCustomerToken, userID, s.Provider)
+	res, err := qs.Query(ctx, qUserCustomerToken, session.Id, s.Provider)
 	if err != nil {
 		return "", fmt.Errorf("user customer token: %w", err)
 	}
@@ -61,15 +65,15 @@ func (s *UserCustomerService) CustomerID(ctx context.Context, userID int) (strin
 }
 
 // LinkCustomer keeps the first customer linked to the user; later calls no-op.
-func (s *UserCustomerService) LinkCustomer(ctx context.Context, userID int, customerID string) error {
-	if userID <= 0 || customerID == "" {
-		return fmt.Errorf("LinkCustomer: userID and customerID required")
+func (s *UserCustomerService) LinkCustomer(ctx context.Context, session *model.UserSession, customerID string) error {
+	if session == nil || session.Id <= 0 || customerID == "" {
+		return fmt.Errorf("LinkCustomer: user and customerID required")
 	}
 	qs, err := s.queries(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err := qs.Query(ctx, qUserCustomerLink, userID, s.Provider, customerID); err != nil {
+	if _, err := qs.Query(ctx, qUserCustomerLink, session.Id, s.Provider, customerID); err != nil {
 		return fmt.Errorf("link user customer: %w", err)
 	}
 	return nil

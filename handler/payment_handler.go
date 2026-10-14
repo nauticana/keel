@@ -47,12 +47,14 @@ type AbstractPaymentHandler struct {
 	Handler   payment.PaymentEventHandler
 	Checkout  payment.CheckoutClient
 	Intents   payment.IntentClient // optional; enables CreateSetupIntent
-	// CustomerID returns the provider customer already stored for a user, or
-	// "" to let the provider create one. nil creates a customer per call.
-	CustomerID func(ctx context.Context, userID int) (string, error)
-	// LinkCustomer stores the customer the provider created when CustomerID
-	// returned "". payment.UserCustomerService backs both hooks.
-	LinkCustomer func(ctx context.Context, userID int, customerID string) error
+	// CustomerID returns the provider customer already stored for the
+	// session's payer, or "" to let the provider create one; checkout and
+	// setup intents reuse it. nil creates a customer per call.
+	CustomerID func(ctx context.Context, session *model.UserSession) (string, error)
+	// LinkCustomer stores the customer a setup intent created when CustomerID
+	// returned "". payment.UserCustomerService (per user) and
+	// billing.PartnerCustomerService (per partner) back both hooks.
+	LinkCustomer func(ctx context.Context, session *model.UserSession, customerID string) error
 	Journal      logger.ApplicationLogger
 
 	AllowedRedirectHosts []string
@@ -226,10 +228,15 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "cancelUrl is not allowed")
 		return
 	}
+	customerID, ok := h.resolveCustomer(w, r, session, "checkout")
+	if !ok {
+		return
+	}
 	url, err := h.Checkout.CreateCheckoutSession(r.Context(), payment.CheckoutRequest{
 		Mode:         mode,
 		PriceID:      req.PriceID,
 		Quantity:     req.Quantity,
+		CustomerID:   customerID,
 		Email:        req.Email,
 		SuccessURL:   req.SuccessURL,
 		CancelURL:    req.CancelURL,
@@ -263,15 +270,9 @@ func (h *AbstractPaymentHandler) CreateSetupIntent(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	customerID := ""
-	if h.CustomerID != nil {
-		id, err := h.CustomerID(r.Context(), session.Id)
-		if err != nil {
-			h.logError("setup intent: resolve customer: %v", err)
-			h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", "failed to resolve customer")
-			return
-		}
-		customerID = id
+	customerID, ok := h.resolveCustomer(w, r, session, "setup intent")
+	if !ok {
+		return
 	}
 	res, err := h.Intents.CreateSetupIntent(r.Context(), payment.IntentRequest{
 		CustomerID: customerID,
@@ -288,7 +289,7 @@ func (h *AbstractPaymentHandler) CreateSetupIntent(w http.ResponseWriter, r *htt
 		return
 	}
 	if customerID == "" && h.LinkCustomer != nil {
-		if err := h.LinkCustomer(r.Context(), session.Id, res.CustomerID); err != nil {
+		if err := h.LinkCustomer(r.Context(), session, res.CustomerID); err != nil {
 			h.logError("setup intent: link customer: %v", err)
 			h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", "failed to store customer")
 			return
@@ -301,6 +302,21 @@ func (h *AbstractPaymentHandler) CreateSetupIntent(w http.ResponseWriter, r *htt
 		"customerId":    res.CustomerID,
 		"ephemeralKey":  res.EphemeralKey,
 	})
+}
+
+// resolveCustomer returns the session's stored provider customer ("" for a
+// guest or when none is stored), writing a 500 when the lookup fails.
+func (h *AbstractPaymentHandler) resolveCustomer(w http.ResponseWriter, r *http.Request, session *model.UserSession, action string) (string, bool) {
+	if session == nil || h.CustomerID == nil {
+		return "", true
+	}
+	id, err := h.CustomerID(r.Context(), session)
+	if err != nil {
+		h.logError("%s: resolve customer: %v", action, err)
+		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", "failed to resolve customer")
+		return "", false
+	}
+	return id, true
 }
 
 // priceAllowed reports whether priceID is in the configured allowlist.

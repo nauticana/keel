@@ -64,7 +64,9 @@ func TestCreateSetupIntent_RequiresJWTAndInjectsUser(t *testing.T) {
 		t.Fatalf("data=%v", out.Data)
 	}
 
-	h.CustomerID = func(_ context.Context, userID int) (string, error) { return "cus_stored_" + strconv.Itoa(userID), nil }
+	h.CustomerID = func(_ context.Context, session *model.UserSession) (string, error) {
+		return "cus_stored_" + strconv.Itoa(session.Id), nil
+	}
 	req = httptest.NewRequest(http.MethodPost, "/api/billing/setup-intent", nil)
 	req.Header.Set("Authorization", "Bearer ok")
 	rec = httptest.NewRecorder()
@@ -72,7 +74,7 @@ func TestCreateSetupIntent_RequiresJWTAndInjectsUser(t *testing.T) {
 	if rec.Code != http.StatusOK || intents.got.CustomerID != "cus_stored_7" {
 		t.Fatalf("empty body with resolver: status=%d got=%+v", rec.Code, intents.got)
 	}
-	h.CustomerID = func(context.Context, int) (string, error) { return "", errors.New("db down") }
+	h.CustomerID = func(context.Context, *model.UserSession) (string, error) { return "", errors.New("db down") }
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/billing/setup-intent", nil)
 	req.Header.Set("Authorization", "Bearer ok")

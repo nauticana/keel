@@ -153,9 +153,12 @@ type PaymentEventHandler interface {
 // CheckoutRequest is what a project hands to CheckoutClient.CreateCheckoutSession
 // when it wants to redirect a user to the hosted checkout page.
 type CheckoutRequest struct {
-	Mode       string // "subscription" | "payment" | "setup"
-	PriceID    string // provider price ID (Stripe price_xxx); required except when Mode=="setup"
-	Quantity   int64
+	Mode     string // "subscription" | "payment" | "setup"
+	PriceID  string // provider price ID (Stripe price_xxx); required except when Mode=="setup"
+	Quantity int64
+	// CustomerID reuses an existing provider customer; empty lets the
+	// provider create one, prefilled from Email.
+	CustomerID string
 	Email      string
 	SuccessURL string
 	CancelURL  string

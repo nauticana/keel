@@ -373,3 +373,21 @@ func TestFetchInvoicePaymentChargeType(t *testing.T) {
 		t.Fatalf("intent=%q charge=%q err=%v", intent, charge, err)
 	}
 }
+
+// A known customer is sent as customer, and Stripe refuses customer_email beside it.
+func TestStripeCheckout_ReusesCustomer(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		json.NewEncoder(w).Encode(map[string]string{"url": "https://checkout.stripe.com/pay/xyz"})
+	}))
+	defer srv.Close()
+	c := &StripeCheckoutClient{Secrets: fakeSecrets{map[string]string{"stripe_secret_key": "sk_test"}}, BaseURL: srv.URL, HTTPClient: srv.Client()}
+	if _, err := c.CreateCheckoutSession(context.Background(), CheckoutRequest{PriceID: "price_123", CustomerID: "cus_1", Email: "foo@bar.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "customer=cus_1") || strings.Contains(body, "customer_email") {
+		t.Fatalf("body = %s", body)
+	}
+}

@@ -99,7 +99,10 @@ func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req Ch
 
 	form := url.Values{}
 	form.Set("mode", req.Mode)
-	if req.Email != "" {
+	// Stripe accepts customer or customer_email, not both.
+	if req.CustomerID != "" {
+		form.Set("customer", req.CustomerID)
+	} else if req.Email != "" {
 		form.Set("customer_email", req.Email)
 	}
 	if req.Mode != ModeSetup {
