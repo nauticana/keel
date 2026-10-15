@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.124",
+   "title": "Plan overages carry the resource caption",
+   "tags": [
+    "additive"
+   ],
+   "summary": "Each plan overage names its resource from subscription_resource.caption, in the 409 details, the change check and the error message.",
+   "body_markdown": "### Additive\n\n- `port.QuotaOverage.Caption` (`caption` in JSON) is `subscription_resource.caption`; `QuotaServiceDb.PlanOverages` reads it with the new `get_resource_caption` query and fails when a counted resource is missing from the catalog.\n- `OverTargetLimitError` names each resource by its caption, falling back to the code when empty."
+  },
+  {
    "version": "v1.2.123",
    "title": "Downgrade guard on live-counted limits, store orders reader",
    "tags": [

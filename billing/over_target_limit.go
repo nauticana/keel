@@ -21,7 +21,11 @@ type OverTargetLimitError struct {
 func (e *OverTargetLimitError) Error() string {
 	parts := make([]string, len(e.Overages))
 	for i, o := range e.Overages {
-		parts[i] = fmt.Sprintf("%s %d of %d", o.Resource, o.Count, o.Limit)
+		name := o.Caption
+		if name == "" {
+			name = o.Resource
+		}
+		parts[i] = fmt.Sprintf("%s %d of %d", name, o.Count, o.Limit)
 	}
 	return fmt.Sprintf("%s: plan %s (%s)", ErrOverTargetLimit, e.PlanID, strings.Join(parts, ", "))
 }

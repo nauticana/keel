@@ -104,7 +104,7 @@ func TestBillingHandler(t *testing.T) {
 // A downgrade below what the partner holds answers 409 with the list to
 // remove, and the preview returns the same list.
 func TestBillingHandlerOverTargetLimit(t *testing.T) {
-	overages := []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
+	overages := []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Caption: "Locations", Count: 3, Limit: 1}}
 	manager := &fakeManager{err: &billing.OverTargetLimitError{PlanID: "STANDARD", Overages: overages}}
 	db := grantDB{actions: map[string]bool{"CHANGE": true}}
 	h := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, DB: db, Subscriptions: manager}
@@ -116,7 +116,7 @@ func TestBillingHandlerOverTargetLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if code != http.StatusConflict || problem.Status != http.StatusConflict ||
-		!strings.Contains(body, `"details":[{"resource":"MAX_LOCATIONS","count":3,"limit":1}]`) {
+		!strings.Contains(body, `"details":[{"resource":"MAX_LOCATIONS","caption":"Locations","count":3,"limit":1}]`) {
 		t.Fatalf("status=%d body=%s", code, body)
 	}
 

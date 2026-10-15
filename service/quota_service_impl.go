@@ -30,6 +30,7 @@ const (
 	qAddUsage               = "add_usage"
 	qLockQuota              = "lock_quota"
 	qGetPlanLimits          = "get_plan_limits"
+	qGetResourceCaption     = "get_resource_caption"
 )
 
 var quotaQueries = map[string]string{
@@ -46,6 +47,8 @@ SELECT a.resource_id, max(a.max_value) AS limit_value, a.period_type
 `,
 
 	qGetResourceUsage: "SELECT COALESCE(SUM(amount), 0) FROM usage_ledger WHERE partner_id = ? AND resource_name = ? AND usage_time >= ?",
+
+	qGetResourceCaption: "SELECT caption FROM subscription_resource WHERE id = ?",
 
 	qGetPlanLimits: `
 SELECT resource_id, MAX(max_value)
@@ -573,7 +576,14 @@ func (s *QuotaServiceDb) PlanOverages(ctx context.Context, partnerID int64, plan
 			count = common.AsInt64(res.Rows[0][0])
 		}
 		if count > limit {
-			overages = append(overages, port.QuotaOverage{Resource: resource, Count: count, Limit: limit})
+			caption, err := s.qs.Query(ctx, qGetResourceCaption, resource)
+			if err != nil {
+				return nil, fmt.Errorf("caption %s: %w", resource, err)
+			}
+			if len(caption.Rows) == 0 {
+				return nil, fmt.Errorf("resource %s is not in subscription_resource", resource)
+			}
+			overages = append(overages, port.QuotaOverage{Resource: resource, Caption: common.AsString(caption.Rows[0][0]), Count: count, Limit: limit})
 		}
 	}
 	return overages, nil

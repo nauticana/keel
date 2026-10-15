@@ -32,6 +32,7 @@ type PlanQuotaService interface {
 // limit; Limit 0 means the plan does not offer the resource.
 type QuotaOverage struct {
 	Resource string `json:"resource"`
+	Caption  string `json:"caption"` // subscription_resource.caption
 	Count    int64  `json:"count"`
 	Limit    int64  `json:"limit"`
 }

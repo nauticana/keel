@@ -14,10 +14,18 @@ import (
 // planQS answers the partner's quota and add-on reads from mutable plan state.
 type planQS struct {
 	*quotaFakeQS
-	onLoad func()
+	onLoad   func()
+	captions map[string]string
 }
 
 func (q *planQS) Query(ctx context.Context, name string, args ...any) (*model.QueryResult, error) {
+	if name == qGetResourceCaption {
+		q.calls = append(q.calls, quotaCall{name, args})
+		if caption, ok := q.captions[args[0].(string)]; ok {
+			return &model.QueryResult{Rows: [][]any{{caption}}}, nil
+		}
+		return &model.QueryResult{}, nil
+	}
 	if name == qGetPartnerSubscription && q.onLoad != nil {
 		load := q.onLoad
 		q.onLoad = nil
@@ -164,6 +172,7 @@ func TestQuotaPlanOverages(t *testing.T) {
 	qs.rows["MAX_DOMAINS"] = [][]any{{int64(4)}}
 	qs.rows["KEYWORDS"] = [][]any{{int64(50)}}
 	qs.rows["MAX_LOCATIONS"] = [][]any{{int64(3)}}
+	qs.captions = map[string]string{"MAX_DOMAINS": "Domains", "MAX_LOCATIONS": "Locations"}
 	ctx := context.Background()
 
 	// Target lists MAX_LOCATIONS at 1 and drops MAX_DOMAINS: both are over.
@@ -172,7 +181,10 @@ func TestQuotaPlanOverages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []port.QuotaOverage{{Resource: "MAX_DOMAINS", Count: 4, Limit: 0}, {Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
+	want := []port.QuotaOverage{
+		{Resource: "MAX_DOMAINS", Caption: "Domains", Count: 4, Limit: 0},
+		{Resource: "MAX_LOCATIONS", Caption: "Locations", Count: 3, Limit: 1},
+	}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("overages = %+v, want %+v", got, want)
 	}
@@ -182,5 +194,12 @@ func TestQuotaPlanOverages(t *testing.T) {
 	qs.rows[qGetPlanLimits] = [][]any{{"MAX_LOCATIONS", int64(-1)}, {"MAX_DOMAINS", int64(4)}}
 	if got, err := s.PlanOverages(ctx, 7, "PRO"); err != nil || len(got) != 0 {
 		t.Fatalf("allowed change: %+v %v", got, err)
+	}
+
+	// A counted resource missing from the catalog fails instead of showing a code.
+	delete(qs.captions, "MAX_LOCATIONS")
+	qs.rows[qGetPlanLimits] = [][]any{{"MAX_LOCATIONS", int64(1)}, {"MAX_DOMAINS", int64(4)}}
+	if _, err := s.PlanOverages(ctx, 7, "STANDARD"); err == nil {
+		t.Fatal("overage without a catalog caption succeeded")
 	}
 }
