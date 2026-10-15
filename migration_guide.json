@@ -9,7 +9,7 @@
  },
  "migrations": [
   {
-   "version": "v1.2.124",
+   "version": "v1.2.125",
    "title": "Plan overages carry the resource caption",
    "tags": [
     "additive"
