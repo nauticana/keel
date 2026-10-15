@@ -14,6 +14,9 @@ type ProblemDetail struct {
 	Code      string `json:"code,omitempty"`
 	Instance  string `json:"instance,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
+	// Details is a machine-readable extension member, such as the items a
+	// client must change; never set on a 5xx.
+	Details any `json:"details,omitempty"`
 }
 
 // InternalErrorDetail replaces every 5xx detail so internal context never reaches a client.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 )
 
 var (
@@ -45,6 +46,8 @@ const (
 type SubscriptionManager interface {
 	CancelAtPeriodEnd(ctx context.Context, partnerID int64) error
 	ChangePlan(ctx context.Context, partnerID int64, planID string) (ChangeOutcome, error)
+	// CheckChange previews what blocks ChangePlan to planID.
+	CheckChange(ctx context.Context, partnerID int64, planID string) ([]port.QuotaOverage, error)
 	PortalURL(ctx context.Context, partnerID int64) (string, error)
 }
 
@@ -105,6 +108,14 @@ func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID 
 	if sub.ID == "" {
 		return "", ErrNoProviderSubscription
 	}
+	// Refuse before the provider is touched, so a refused downgrade bills nothing.
+	overages, err := s.Lifecycle.CheckChange(ctx, partnerID, planID)
+	if err != nil {
+		return "", err
+	}
+	if len(overages) > 0 {
+		return "", &OverTargetLimitError{PlanID: planID, Overages: overages}
+	}
 	to, err := s.Store.ProviderPriceID(ctx, planID, sub.Terms)
 	if err != nil {
 		return "", err
@@ -133,6 +144,10 @@ func (s *ProviderSubscriptionService) resumeRenewal(ctx context.Context, partner
 		}
 	}
 	return s.Lifecycle.ResumeRenewal(ctx, partnerID)
+}
+
+func (s *ProviderSubscriptionService) CheckChange(ctx context.Context, partnerID int64, planID string) ([]port.QuotaOverage, error) {
+	return s.Lifecycle.CheckChange(ctx, partnerID, planID)
 }
 
 func (s *ProviderSubscriptionService) PortalURL(ctx context.Context, partnerID int64) (string, error) {

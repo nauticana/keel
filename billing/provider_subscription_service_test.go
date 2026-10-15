@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nauticana/keel/payment"
+	"github.com/nauticana/keel/port"
 )
 
 type fakeSubStore struct {
@@ -46,6 +47,11 @@ type fakeLifecycle struct {
 	changedTo   string
 	scheduledTo string
 	resumed     bool
+	overages    []port.QuotaOverage
+}
+
+func (f *fakeLifecycle) CheckChange(context.Context, int64, string) ([]port.QuotaOverage, error) {
+	return f.overages, nil
 }
 
 func (f *fakeLifecycle) ResumeRenewal(context.Context, int64) error {
@@ -169,6 +175,26 @@ func TestProviderSubscriptionService_ReselectCurrentPlanResumesRenewal(t *testin
 	manual, manualLife, _ := newSubService(&fakeSubStore{sub: &ProviderSubscription{PlanID: "FREE"}, modes: map[string]ActivationMode{"FREE": ActivateFree}}, manualClient)
 	if _, err := manual.ChangePlan(context.Background(), 7, "FREE"); err != nil || !manualLife.resumed || manualClient.to != "" {
 		t.Fatalf("not provider-held: err=%v resumed=%v client=%+v", err, manualLife.resumed, manualClient)
+	}
+}
+
+// A downgrade below what the partner holds is refused before the provider
+// is touched, so it bills nothing.
+func TestProviderSubscriptionService_RefusesOverTargetLimit(t *testing.T) {
+	client := &fakeSubClient{}
+	store := &fakeSubStore{sub: annualSub, prices: map[string]string{"STANDARD": "price_s", "BASIC": "price_b"}}
+	s, life, _ := newSubService(store, client)
+	life.overages = []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
+	_, err := s.ChangePlan(context.Background(), 7, "BASIC")
+	var over *OverTargetLimitError
+	if !errors.As(err, &over) || !errors.Is(err, ErrOverTargetLimit) || over.Overages[0].Count != 3 {
+		t.Fatalf("err = %v", err)
+	}
+	if client.to != "" || life.changedTo != "" {
+		t.Fatalf("refused change reached provider=%q local=%q", client.to, life.changedTo)
+	}
+	if got, _ := s.CheckChange(context.Background(), 7, "BASIC"); len(got) != 1 {
+		t.Fatalf("preview = %v", got)
 	}
 }
 

@@ -20,3 +20,18 @@ type QuotaService interface {
 	// other process.
 	InvalidatePartner(ctx context.Context, partnerID int64)
 }
+
+// PlanQuotaService supports subscription changes without widening the quota
+// enforcement contract.
+type PlanQuotaService interface {
+	InvalidatePartner(ctx context.Context, partnerID int64)
+	PlanOverages(ctx context.Context, partnerID int64, planID string) ([]QuotaOverage, error)
+}
+
+// QuotaOverage is a live-counted resource a partner holds beyond a plan's
+// limit; Limit 0 means the plan does not offer the resource.
+type QuotaOverage struct {
+	Resource string `json:"resource"`
+	Count    int64  `json:"count"`
+	Limit    int64  `json:"limit"`
+}

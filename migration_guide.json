@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.123",
+   "title": "Downgrade guard on live-counted limits, store orders reader",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "A change to a paid plan below what the partner holds is refused with the list to remove, and the new commerce package reads a store's orders, with a Shopify implementation.",
+   "body_markdown": "### Breaking\n\n- `billing.SubscriptionLifecycle` and `billing.SubscriptionManager` add `CheckChange(ctx, partnerID, planID)`.\n- `AbstractBillingService.Quotas` now accepts the narrower `port.PlanQuotaService`.\n- `ChangePlan` and `ChangePlanTx` to a paid plan return `ErrOverTargetLimit` (an `*OverTargetLimitError` with the overages) when the partner holds more of a live-counted resource than the target allows. Free changes, cancellation and fallback remain allowed.\n\n### Additive\n\n- `port.PlanQuotaService`, `port.QuotaOverage` and `QuotaServiceDb.PlanOverages` compare each live-counted resource the current or target plan lists with the target; one the target omits has limit 0.\n- `BillingHandler` answers the refusal with 409 and mounts `POST /api/billing/subscription/change/check {\"planId\"}` → `{\"overages\": [...]}` under the `CHANGE` grant.\n- `common.ProblemDetail.Details` and `handler.APIError.Details` carry machine-readable 4xx details.\n- New package `commerce` provides the neutral order types and a Shopify Admin GraphQL reader with cursor paging, minor-unit money and bounded throttle waits. `Order.SubtotalMinor` is Shopify's `subtotalPriceSet`, after discounts. The connection needs `read_orders`, and `read_all_orders` for orders older than 60 days."
+  },
+  {
    "version": "v1.2.122",
    "title": "Plan changes apply to quotas at once",
    "tags": [

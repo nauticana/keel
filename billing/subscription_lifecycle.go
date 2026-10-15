@@ -31,6 +31,10 @@ type SubscriptionLifecycle interface {
 	CancelByPartner(ctx context.Context, partnerID int64, mode CancelMode) error
 	// CancelByProviderSubID is the webhook path; returns rows affected (0 → no local row).
 	CancelByProviderSubID(ctx context.Context, providerSubID string, mode CancelMode) (int, error)
+	// CheckChange lists the live-counted resources the partner holds beyond
+	// planID's limits (nil without Quotas). ChangePlan to a paid plan refuses
+	// them with ErrOverTargetLimit; a move to a free plan is never refused.
+	CheckChange(ctx context.Context, partnerID int64, planID string) ([]port.QuotaOverage, error)
 	// ScheduleChange ends the current subscription at period end and records the
 	// free plan that starts then (ErrNotFreePlan otherwise).
 	ScheduleChange(ctx context.Context, partnerID int64, planID string) error
@@ -455,6 +459,11 @@ func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQue
 	if err != nil {
 		return err
 	}
+	if pol.mode != ActivateFree {
+		if err := s.refuseOverages(ctx, partnerID, newPlanID); err != nil {
+			return err
+		}
+	}
 	if pol.mode == ActivateFree {
 		// The provider must cancel its subscription first (ProviderSubscriptionService
 		// schedules the change); closing the row here would leave it billing.
@@ -567,6 +576,35 @@ func (s *AbstractBillingService) ScheduleChange(ctx context.Context, partnerID i
 	}
 	if len(res.Rows) == 0 {
 		return ErrNoSubscription
+	}
+	return nil
+}
+
+func (s *AbstractBillingService) CheckChange(ctx context.Context, partnerID int64, planID string) ([]port.QuotaOverage, error) {
+	s.init(ctx)
+	pol, err := s.loadPlanPolicy(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	if pol.mode == ActivateFree || s.Quotas == nil {
+		return nil, nil
+	}
+	return s.Quotas.PlanOverages(ctx, partnerID, planID)
+}
+
+// refuseOverages is the downgrade guard: a paid target must hold everything
+// the partner already has. A free target and the fallback are never refused,
+// so a cancellation always goes through.
+func (s *AbstractBillingService) refuseOverages(ctx context.Context, partnerID int64, planID string) error {
+	if s.Quotas == nil {
+		return nil
+	}
+	overages, err := s.Quotas.PlanOverages(ctx, partnerID, planID)
+	if err != nil {
+		return err
+	}
+	if len(overages) > 0 {
+		return &OverTargetLimitError{PlanID: planID, Overages: overages}
 	}
 	return nil
 }

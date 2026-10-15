@@ -156,3 +156,31 @@ func withQuotaTTL(t *testing.T, ttl time.Duration) {
 	config.SetConfig(&next)
 	t.Cleanup(func() { config.SetConfig(previous) })
 }
+
+func TestQuotaPlanOverages(t *testing.T) {
+	s, qs := newPlanQuota(10)
+	s.Queries = map[string]string{"MAX_LOCATIONS": "SELECT 1", "KEYWORDS": "SELECT 1"}
+	qs.rows[qGetPartnerSubscription] = [][]any{{"MAX_DOMAINS", int64(10), "N"}, {"MAX_LOCATIONS", int64(10), "N"}}
+	qs.rows["MAX_DOMAINS"] = [][]any{{int64(4)}}
+	qs.rows["KEYWORDS"] = [][]any{{int64(50)}}
+	qs.rows["MAX_LOCATIONS"] = [][]any{{int64(3)}}
+	ctx := context.Background()
+
+	// Target lists MAX_LOCATIONS at 1 and drops MAX_DOMAINS: both are over.
+	qs.rows[qGetPlanLimits] = [][]any{{"MAX_LOCATIONS", int64(1)}, {"API_CALLS", int64(100)}}
+	got, err := s.PlanOverages(ctx, 7, "STANDARD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []port.QuotaOverage{{Resource: "MAX_DOMAINS", Count: 4, Limit: 0}, {Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("overages = %+v, want %+v", got, want)
+	}
+
+	// KEYWORDS is counted but neither plan lists it, so it limits nothing.
+	// Unlimited and sufficient limits allow the change.
+	qs.rows[qGetPlanLimits] = [][]any{{"MAX_LOCATIONS", int64(-1)}, {"MAX_DOMAINS", int64(4)}}
+	if got, err := s.PlanOverages(ctx, 7, "PRO"); err != nil || len(got) != 0 {
+		t.Fatalf("allowed change: %+v %v", got, err)
+	}
+}

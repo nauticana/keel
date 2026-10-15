@@ -14,9 +14,10 @@ import (
 // from a JSON-handler function sets the response status precisely; any
 // other error type maps to 500.
 type APIError struct {
-	Status int
-	Msg    string
-	Header http.Header // response headers the error implies, e.g. Retry-After
+	Status  int
+	Msg     string
+	Header  http.Header // response headers the error implies, e.g. Retry-After
+	Details any         // the problem body's details member on a 4xx
 }
 
 func (e *APIError) Error() string { return e.Msg }
@@ -126,7 +127,7 @@ func writeResult(h *AbstractHandler, w http.ResponseWriter, result any, err erro
 		writeErrorHeaders(w, err)
 		var ae *APIError
 		if errors.As(err, &ae) {
-			h.WriteError(w, ae.Status, http.StatusText(ae.Status), ae.Msg)
+			h.writeProblem(nil, w, ae.Status, http.StatusText(ae.Status), ae.Msg, "", "", ae.Details)
 			return
 		}
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())

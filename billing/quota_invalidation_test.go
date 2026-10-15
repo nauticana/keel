@@ -9,12 +9,15 @@ import (
 )
 
 type recordingQuotas struct {
-	port.QuotaService
 	partners []int64
 }
 
 func (q *recordingQuotas) InvalidatePartner(_ context.Context, partnerID int64) {
 	q.partners = append(q.partners, partnerID)
+}
+
+func (*recordingQuotas) PlanOverages(context.Context, int64, string) ([]port.QuotaOverage, error) {
+	return nil, nil
 }
 
 // Every committed change of the active plan drops the partner's cached
@@ -79,5 +82,62 @@ func TestRefusedActivationInvalidatesNothing(t *testing.T) {
 	}
 	if len(quotas.partners) != 0 {
 		t.Fatalf("refused activation invalidated %v", quotas.partners)
+	}
+}
+
+type overageQuotas struct {
+	recordingQuotas
+	overages []port.QuotaOverage
+}
+
+func (q *overageQuotas) PlanOverages(context.Context, int64, string) ([]port.QuotaOverage, error) {
+	return q.overages, nil
+}
+
+// A paid target below what the partner holds is refused before any write; a
+// free target is never refused, so a cancellation always goes through.
+func TestChangePlanTx_RefusesOverTargetLimit(t *testing.T) {
+	overages := []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
+	for _, tc := range []struct {
+		mode    string
+		refused bool
+	}{{"A", true}, {"F", false}} {
+		svc, _ := newSvc(map[string][][]any{
+			qLcPlanPolicy: {{tc.mode, int64(14)}},
+			qLcPlanPrice:  {{int64(10000), "USD"}},
+		})
+		svc.Quotas = &overageQuotas{overages: overages}
+		tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcInsertFree: {{"FREE"}}, qLcChangePlanCurrent: {{""}}}}}
+		err := svc.ChangePlanTx(context.Background(), tx, 7, "TARGET", BillingTerms{})
+		if tc.refused {
+			var over *OverTargetLimitError
+			if !errors.As(err, &over) || over.PlanID != "TARGET" || len(tx.calls) != 0 {
+				t.Fatalf("mode %s: err=%v calls=%+v", tc.mode, err, tx.calls)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("free target refused: %v", err)
+		}
+	}
+}
+
+func TestCheckChange(t *testing.T) {
+	svc, _ := newSvc(map[string][][]any{qLcPlanPolicy: {{"A", int64(14)}}})
+	if got, err := svc.CheckChange(context.Background(), 7, "PRO"); err != nil || got != nil {
+		t.Fatalf("without Quotas: %v %v", got, err)
+	}
+	svc.Quotas = &overageQuotas{overages: []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}}
+	if got, err := svc.CheckChange(context.Background(), 7, "PRO"); err != nil || len(got) != 1 {
+		t.Fatalf("with Quotas: %v %v", got, err)
+	}
+	free, _ := newSvc(map[string][][]any{qLcPlanPolicy: {{"F", int64(14)}}})
+	free.Quotas = svc.Quotas
+	if got, err := free.CheckChange(context.Background(), 7, "FREE"); err != nil || len(got) != 0 {
+		t.Fatalf("free plan: %v %v", got, err)
+	}
+	unknown, _ := newSvc(nil)
+	if _, err := unknown.CheckChange(context.Background(), 7, "GONE"); !errors.Is(err, ErrPlanNotFound) {
+		t.Fatalf("unknown plan: %v", err)
 	}
 }

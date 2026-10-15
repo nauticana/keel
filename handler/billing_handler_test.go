@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/nauticana/keel/billing"
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
@@ -23,8 +25,14 @@ func (d grantDB) CheckActionPermission(_ context.Context, p model.Principal, obj
 }
 
 type fakeManager struct {
-	err    error
-	planID string
+	err      error
+	planID   string
+	overages []port.QuotaOverage
+}
+
+func (f *fakeManager) CheckChange(_ context.Context, _ int64, planID string) ([]port.QuotaOverage, error) {
+	f.planID = planID
+	return f.overages, f.err
 }
 
 func (f *fakeManager) CancelAtPeriodEnd(context.Context, int64) error { return f.err }
@@ -93,13 +101,47 @@ func TestBillingHandler(t *testing.T) {
 	}
 }
 
+// A downgrade below what the partner holds answers 409 with the list to
+// remove, and the preview returns the same list.
+func TestBillingHandlerOverTargetLimit(t *testing.T) {
+	overages := []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
+	manager := &fakeManager{err: &billing.OverTargetLimitError{PlanID: "STANDARD", Overages: overages}}
+	db := grantDB{actions: map[string]bool{"CHANGE": true}}
+	h := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, DB: db, Subscriptions: manager}
+	routes := h.Routes()
+
+	code, body := billingCall(routes["/api/billing/subscription/change"], "/api/billing/subscription/change", `{"planId":"STANDARD"}`)
+	var problem common.ProblemDetail
+	if err := json.Unmarshal([]byte(body), &problem); err != nil {
+		t.Fatal(err)
+	}
+	if code != http.StatusConflict || problem.Status != http.StatusConflict ||
+		!strings.Contains(body, `"details":[{"resource":"MAX_LOCATIONS","count":3,"limit":1}]`) {
+		t.Fatalf("status=%d body=%s", code, body)
+	}
+
+	manager.err, manager.overages = nil, overages
+	code, body = billingCall(routes["/api/billing/subscription/change/check"], "/api/billing/subscription/change/check", `{"planId":"STANDARD"}`)
+	if code != http.StatusOK || manager.planID != "STANDARD" || !strings.Contains(body, `"overages":[{"resource":"MAX_LOCATIONS"`) {
+		t.Fatalf("check: status=%d body=%s", code, body)
+	}
+	manager.overages = nil
+	if code, body = billingCall(routes["/api/billing/subscription/change/check"], "/api/billing/subscription/change/check", `{"planId":"PRO"}`); code != http.StatusOK || !strings.Contains(body, `"overages":[]`) {
+		t.Fatalf("allowed check: status=%d body=%s", code, body)
+	}
+	if code := billingRequest(routes["/api/billing/subscription/change/check"], "/api/billing/subscription/change/check", `{}`); code != http.StatusBadRequest {
+		t.Fatalf("missing planId: %d", code)
+	}
+}
+
 func TestBillingHandlerRequiresSubscriptionGrant(t *testing.T) {
 	manager := &fakeManager{}
 	h := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, DB: grantDB{}, Subscriptions: manager}
 	for path, body := range map[string]string{
-		"/api/billing/subscription/cancel": "",
-		"/api/billing/subscription/change": `{"planId":"PRO"}`,
-		"/api/billing/portal":              "",
+		"/api/billing/subscription/cancel":       "",
+		"/api/billing/subscription/change":       `{"planId":"PRO"}`,
+		"/api/billing/subscription/change/check": `{"planId":"PRO"}`,
+		"/api/billing/portal":                    "",
 	} {
 		if code := billingRequest(h.Routes()[path], path, body); code != http.StatusForbidden {
 			t.Errorf("%s without grant: %d, want 403", path, code)

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ const (
 	qGetPartnerAddon        = "get_partner_addon"
 	qAddUsage               = "add_usage"
 	qLockQuota              = "lock_quota"
+	qGetPlanLimits          = "get_plan_limits"
 )
 
 var quotaQueries = map[string]string{
@@ -44,6 +46,12 @@ SELECT a.resource_id, max(a.max_value) AS limit_value, a.period_type
 `,
 
 	qGetResourceUsage: "SELECT COALESCE(SUM(amount), 0) FROM usage_ledger WHERE partner_id = ? AND resource_name = ? AND usage_time >= ?",
+
+	qGetPlanLimits: `
+SELECT resource_id, MAX(max_value)
+  FROM subscription_quota
+ WHERE plan_id = ?
+ GROUP BY resource_id`,
 
 	// Active addons for a partner. GROUP BY addon_id is essential —
 	// without it, COUNT(*) collapses every row into a single tally and
@@ -523,6 +531,54 @@ func (s *QuotaServiceDb) ReportAddonUsage(ctx context.Context, partnerID int64, 
 	return s.LogUsage(ctx, partnerID, addonID, amount, notes)
 }
 
+// PlanOverages compares each live-counted resource the target or the current
+// plan lists with planID's limit; one the target omits has limit 0. A resource
+// neither plan lists is not limited by the product.
+func (s *QuotaServiceDb) PlanOverages(ctx context.Context, partnerID int64, planID string) ([]port.QuotaOverage, error) {
+	s.init(ctx)
+	target, err := s.qs.Query(ctx, qGetPlanLimits, planID)
+	if err != nil {
+		return nil, fmt.Errorf("plan %s limits: %w", planID, err)
+	}
+	current, err := s.qs.Query(ctx, qGetPartnerSubscription, partnerID)
+	if err != nil {
+		return nil, fmt.Errorf("partner %d limits: %w", partnerID, err)
+	}
+	limits := map[string]int64{}
+	for _, row := range current.Rows {
+		limits[common.AsString(row[0])] = 0
+	}
+	for _, row := range target.Rows {
+		limits[common.AsString(row[0])] = common.AsInt64(row[1])
+	}
+	resources := make([]string, 0, len(limits))
+	for resource := range limits {
+		if _, counted := s.resourceQueries[resource]; counted {
+			resources = append(resources, resource)
+		}
+	}
+	sort.Strings(resources)
+	var overages []port.QuotaOverage
+	for _, resource := range resources {
+		limit := limits[resource]
+		if limit < 0 {
+			continue
+		}
+		res, err := s.qs.Query(ctx, resource, partnerID)
+		if err != nil {
+			return nil, fmt.Errorf("count %s for partner %d: %w", resource, partnerID, err)
+		}
+		var count int64
+		if len(res.Rows) > 0 {
+			count = common.AsInt64(res.Rows[0][0])
+		}
+		if count > limit {
+			overages = append(overages, port.QuotaOverage{Resource: resource, Count: count, Limit: limit})
+		}
+	}
+	return overages, nil
+}
+
 func (s *QuotaServiceDb) GetPartnerQuota(ctx context.Context, partnerID int64, resource string, def int64) (int64, error) {
 	s.init(ctx)
 	res, err := s.qs.Query(ctx, qGetPartnerQuota, partnerID, resource)
@@ -536,3 +592,4 @@ func (s *QuotaServiceDb) GetPartnerQuota(ctx context.Context, partnerID int64, r
 }
 
 var _ port.QuotaService = (*QuotaServiceDb)(nil)
+var _ port.PlanQuotaService = (*QuotaServiceDb)(nil)

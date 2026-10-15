@@ -36,6 +36,7 @@ func (h *BillingHandler) Routes() map[string]func(http.ResponseWriter, *http.Req
 	if h.Subscriptions != nil && h.DB != nil {
 		routes[common.RestPrefix+"/billing/subscription/cancel"] = h.authorize("CANCEL", h.Cancel())
 		routes[common.RestPrefix+"/billing/subscription/change"] = h.authorize("CHANGE", h.ChangePlan())
+		routes[common.RestPrefix+"/billing/subscription/change/check"] = h.authorize("CHANGE", h.CheckChange())
 		routes[common.RestPrefix+"/billing/portal"] = h.authorize("PORTAL", h.Portal())
 	}
 	return routes
@@ -124,6 +125,31 @@ func (h *BillingHandler) ChangePlan() http.HandlerFunc {
 	})
 }
 
+// CheckChange: POST /api/billing/subscription/change/check {"planId": "..."} →
+// {"overages": [{resource, count, limit}]}, empty when the change is allowed.
+func (h *BillingHandler) CheckChange() http.HandlerFunc {
+	return h.JSON(http.MethodPost, func(ctx context.Context, s *model.UserSession, body json.RawMessage) (any, error) {
+		partnerID, err := billingPartner(s)
+		if err != nil {
+			return nil, err
+		}
+		var req struct {
+			PlanID string `json:"planId"`
+		}
+		if json.Unmarshal(body, &req) != nil || req.PlanID == "" {
+			return nil, NewAPIError(http.StatusBadRequest, "planId is required")
+		}
+		overages, err := h.Subscriptions.CheckChange(ctx, partnerID, req.PlanID)
+		if err != nil {
+			return nil, h.subscriptionError("change check", err)
+		}
+		if overages == nil {
+			overages = []port.QuotaOverage{}
+		}
+		return map[string]any{"overages": overages}, nil
+	})
+}
+
 // Portal: POST /api/billing/portal
 func (h *BillingHandler) Portal() http.HandlerFunc {
 	return h.JSON(http.MethodPost, func(ctx context.Context, s *model.UserSession, _ json.RawMessage) (any, error) {
@@ -140,6 +166,10 @@ func (h *BillingHandler) Portal() http.HandlerFunc {
 }
 
 func (h *BillingHandler) subscriptionError(action string, err error) error {
+	var over *billing.OverTargetLimitError
+	if errors.As(err, &over) {
+		return &APIError{Status: http.StatusConflict, Msg: "remove what the plan does not allow before changing to it", Details: over.Overages}
+	}
 	switch {
 	case errors.Is(err, billing.ErrNoSubscription):
 		return NewAPIError(http.StatusConflict, "no active subscription")

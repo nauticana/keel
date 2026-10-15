@@ -226,9 +226,8 @@ type AbstractBillingService struct {
 	// Now is the lifecycle clock; injectable for tests (default time.Now().UTC()).
 	Now func() time.Time
 
-	// Quotas, when set, drops a partner's cached limits after each change of
-	// its active plan; give it a Bus so every process drops them.
-	Quotas port.QuotaService
+	// Quotas, when set, guards plan changes and drops cached limits after them.
+	Quotas port.PlanQuotaService
 
 	// FallbackPlanID is the free plan a partner moves to when a paid
 	// subscription ends without a successor; empty leaves the partner without one.

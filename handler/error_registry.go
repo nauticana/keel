@@ -95,7 +95,7 @@ func (h *AbstractHandler) WriteServiceError(w http.ResponseWriter, r *http.Reque
 	if detail == "" {
 		detail = http.StatusText(status)
 	}
-	h.writeProblem(r, w, status, http.StatusText(status), detail, code, cause)
+	h.writeProblem(r, w, status, http.StatusText(status), detail, code, cause, nil)
 }
 
 func publicText(sentinel error) string {

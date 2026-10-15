@@ -414,12 +414,12 @@ func (h *AbstractHandler) WriteRequestError(r *http.Request, w http.ResponseWrit
 }
 
 func (h *AbstractHandler) writeError(r *http.Request, w http.ResponseWriter, status int, title, detail string) {
-	h.writeProblem(r, w, status, title, detail, "", "")
+	h.writeProblem(r, w, status, title, detail, "", "", nil)
 }
 
 // writeProblem logs cause (for 5xx, detail when cause is empty) with the
 // request_id; a 4xx is logged only when a cause is given.
-func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, status int, title, detail, code, cause string) {
+func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, status int, title, detail, code, cause string, details any) {
 	requestID := ""
 	if r != nil {
 		requestID = common.RequestIDFromContext(r.Context())
@@ -433,6 +433,7 @@ func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, s
 		}
 		h.logProblem(r, requestID, status, title, cause)
 		detail = common.InternalErrorDetail
+		details = nil
 	} else if cause != "" {
 		h.logProblem(r, requestID, status, title, cause)
 	}
@@ -443,6 +444,7 @@ func (h *AbstractHandler) writeProblem(r *http.Request, w http.ResponseWriter, s
 		Detail:    detail,
 		Code:      code,
 		RequestID: requestID,
+		Details:   details,
 	})
 }
 
