@@ -96,7 +96,7 @@ SELECT CAST(? AS BIGINT), id, CURRENT_TIMESTAMP
 RETURNING role_id
 `,
 	qGetPlan: `
-SELECT currency, activation_mode FROM subscription_plan WHERE id = ? AND is_active = TRUE
+SELECT currency, activation_mode, COALESCE(trial_days, 14) FROM subscription_plan WHERE id = ? AND is_active = TRUE
 `,
 	qPlanPrices: `
 SELECT billing_cycle, term_type, term_count, amount_minor, currency, COALESCE(provider_price_id, '')
@@ -105,9 +105,9 @@ SELECT billing_cycle, term_type, term_count, amount_minor, currency, COALESCE(pr
 	qAddSubscription: `
 INSERT INTO partner_plan_subscription
  (partner_id, plan_id, begda, status, installment_minor, currency, auto_renew,
-  billing_cycle, term_count, term_type, amount_minor, renewal_date, next_charge_date)
+  billing_cycle, term_count, term_type, amount_minor, renewal_date, next_charge_date, trial_end)
 VALUES
- (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?)
+ (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?, ?)
 `,
 	qActivateSubscription: `
 UPDATE partner_plan_subscription

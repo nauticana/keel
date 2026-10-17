@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.129",
+   "title": "Trials without a card",
+   "tags": [
+    "additive"
+   ],
+   "summary": "A trial plan without a paid offer starts its trial at registration, and the trial ends on its own.",
+   "body_markdown": "### Additive\n\n- Registration on a trial-mode plan whose offer is free opens a `T` row with `trial_end = now + trial_days` and no checkout. `get_plan` also selects `COALESCE(trial_days, 14)`; `add_subscription` binds `trial_end` last.\n- `EndDue` also ends a `T` row without a provider subscription once `trial_end` passes, starting its successor or `FallbackPlanID`, or no plan.\n- `Activate` closes a trial without a provider subscription as it closes a free plan.\n- Quotas, `GetSubscription` and the usage limit read a live `A` or `T` row, so a trialing partner gets its plan's limits and `trialEnd`. An override of `get_partner_subscription`, `get_partner_quota`, `bill_get_subscription`, `bill_get_usage` or `lc_due_to_end` needs the same change."
+  },
+  {
    "version": "v1.2.128",
    "title": "Redirect hosts for open OAuth registration, purge without a worker",
    "tags": [

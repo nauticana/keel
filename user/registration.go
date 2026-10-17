@@ -402,7 +402,8 @@ func (r *RegistrationService) resolvePlan(ctx context.Context, setup *PartnerSet
 	if len(res.Rows) == 0 {
 		return nil, model.NewBadRequest(fmt.Sprintf("unknown plan %q", planID))
 	}
-	plan := &planChoice{id: planID, currency: common.AsString(res.Rows[0][0])}
+	row := res.Rows[0]
+	plan := &planChoice{id: planID, currency: common.AsString(row[0])}
 	if plan.currency == "" {
 		plan.currency = "USD"
 	}
@@ -410,7 +411,8 @@ func (r *RegistrationService) resolvePlan(ctx context.Context, setup *PartnerSet
 	if err != nil {
 		return nil, fmt.Errorf("failed to look up prices for plan %q: %w", planID, err)
 	}
-	if plan.offer, err = resolveSubscriptionOffer(prices.Rows, setup, common.AsString(res.Rows[0][1]), time.Now().UTC()); err != nil {
+	mode, trialDays := billing.ActivationMode(common.AsString(row[1])), int(common.AsInt64(row[2]))
+	if plan.offer, err = resolveSubscriptionOffer(prices.Rows, setup, mode, trialDays, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	if plan.offer.currency != "" {
@@ -484,7 +486,7 @@ func (r *RegistrationService) createPartnerTx(ctx context.Context, tx port.TxQue
 	o := plan.offer
 	if o.status != "" {
 		if _, err := tx.Query(ctx, qAddSubscription, partnerID, plan.id, o.status, o.installmentMinor, plan.currency,
-			o.billingCycle, o.termCount, o.termType, o.amountMinor, o.renewalDate, o.nextChargeDate); err != nil {
+			o.billingCycle, o.termCount, o.termType, o.amountMinor, o.renewalDate, o.nextChargeDate, o.trialEnd); err != nil {
 			return nil, fmt.Errorf("add subscription: %w", err)
 		}
 	}

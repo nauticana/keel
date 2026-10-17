@@ -24,7 +24,7 @@ type Subscription struct {
 	PartnerID        int64   `json:"partnerId"`
 	PlanID           string  `json:"planId"`
 	Caption          string  `json:"caption,omitempty"` // plan display name (from subscription_plan)
-	Status           string  `json:"status"`            // A=active, P=pending, C=cancelled
+	Status           string  `json:"status"`            // SUBSCRIPTION_STATUS: A active or T trialing
 	Begda            string  `json:"begda"`
 	Endda            string  `json:"endda,omitempty"`
 	MonthlyCost      float64 `json:"monthlyCost"` // display projection of InstallmentMinor
@@ -131,7 +131,7 @@ SELECT ps.plan_id, sp.caption, ps.status, ps.begda, ps.endda, ps.installment_min
   JOIN subscription_plan sp ON sp.id = ps.plan_id
   JOIN currency cur ON cur.code = ps.currency
  WHERE ps.partner_id = ?
-   AND ps.status = 'A'
+   AND ps.status IN ('A', 'T')
    AND (ps.endda IS NULL OR ps.endda > CURRENT_TIMESTAMP)
  ORDER BY ps.begda DESC
  LIMIT 1`,
@@ -158,7 +158,7 @@ SELECT r.caption,
        (SELECT COALESCE(MAX(sq.max_value), 0)
           FROM subscription_quota sq
           JOIN partner_plan_subscription ps ON ps.plan_id = sq.plan_id
-         WHERE ps.partner_id = ? AND ps.status = 'A' AND sq.resource_id = r.id)
+         WHERE ps.partner_id = ? AND ps.status IN ('A', 'T') AND sq.resource_id = r.id)
   FROM subscription_resource r
  WHERE r.id = ?`,
 

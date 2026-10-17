@@ -17,7 +17,8 @@ type SubscriptionLifecycle interface {
 	// Activate opens a sub on the chosen terms, snapshotting the matching
 	// subscription_plan_price (ErrPriceNotFound if none), in one transaction: it
 	// flips the partner's pending row for the plan when there is one, else opens
-	// a row per the plan's activation_mode, and closes the partner's free plan.
+	// a row per the plan's activation_mode, and closes the partner's free plan
+	// or trial without a provider subscription.
 	// A live paid subscription is ErrSubscriptionActive unless it is this
 	// provider subscription (a replay, which changes nothing). seats<=0 → NULL.
 	Activate(ctx context.Context, partnerID int64, planID string, terms BillingTerms, providerSubID string, seats int64) error
@@ -42,9 +43,9 @@ type SubscriptionLifecycle interface {
 	// ResumeRenewal undoes a period-end cancellation or scheduled change.
 	ResumeRenewal(ctx context.Context, partnerID int64) error
 	// EndDue ends up to limit subscriptions the provider does not hold whose
-	// effective_cancel_date or endda has passed, starting each one's successor or
-	// fallback plan. It continues past a row whose next plan cannot start and
-	// returns how many it ended with those failures joined.
+	// effective_cancel_date, endda or trial_end has passed, starting each one's
+	// successor or fallback plan. It continues past rows whose next plan cannot
+	// start and returns their errors with the number of rows it ended.
 	EndDue(ctx context.Context, limit int) (int, error)
 	// SetDunningState moves the CHAR(1) status (e.g. "X" past-due, "A" active).
 	SetDunningState(ctx context.Context, partnerID int64, providerSubID, status string) error
@@ -220,7 +221,8 @@ SELECT ` + endingColumns + `
   JOIN subscription_plan sp ON sp.id = ps.plan_id
  WHERE ps.status IN ('A', 'T', 'X')
    AND COALESCE(ps.provider_subscription_id, '') = ''
-   AND (ps.effective_cancel_date <= CURRENT_TIMESTAMP OR ps.endda <= CURRENT_TIMESTAMP)
+   AND (ps.effective_cancel_date <= CURRENT_TIMESTAMP OR ps.endda <= CURRENT_TIMESTAMP
+        OR (ps.status = 'T' AND ps.trial_end <= CURRENT_TIMESTAMP))
  ORDER BY ps.partner_id, ps.begda
  LIMIT ?`,
 
@@ -357,7 +359,7 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 		return err
 	}
 	pending := false
-	var free []endingRow
+	var closing []endingRow
 	for _, row := range rows.Rows {
 		r := activationRow{
 			planID:        common.AsString(row[0]),
@@ -369,8 +371,8 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 		switch {
 		case r.status == "P":
 			pending = pending || r.planID == planID
-		case r.mode == ActivateFree:
-			free = append(free, endingRow{partnerID: partnerID, planID: r.planID, begda: r.begda})
+		case r.mode == ActivateFree || r.status == "T" && r.providerSubID == "":
+			closing = append(closing, endingRow{partnerID: partnerID, planID: r.planID, begda: r.begda})
 		case providerSubID != "" && r.providerSubID == providerSubID:
 			s.quotasChanged(ctx, partnerID) // a replay may follow a lost invalidation
 			return nil
@@ -378,7 +380,7 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 			return fmt.Errorf("%w: partner %d holds plan %s", ErrSubscriptionActive, partnerID, r.planID)
 		}
 	}
-	for _, r := range free {
+	for _, r := range closing {
 		if _, err := tx.Query(ctx, qLcEndRow, r.partnerID, r.planID, r.begda); err != nil {
 			return err
 		}

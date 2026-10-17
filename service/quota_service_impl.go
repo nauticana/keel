@@ -37,7 +37,7 @@ var quotaQueries = map[string]string{
 	qGetPartnerSubscription: `
 SELECT a.resource_id, max(a.max_value) AS limit_value, a.period_type
   FROM subscription_quota a, partner_plan_subscription b
- WHERE b.status = 'A'
+ WHERE b.status IN ('A', 'T')
    AND b.partner_id = ?
    AND b.begda <= CURRENT_TIMESTAMP
    AND (b.endda IS NULL or b.endda >= CURRENT_TIMESTAMP)
@@ -81,7 +81,7 @@ VALUES (nextval('usage_ledger_seq'), ?, ?, ?, ?, ?, ?, ?)
 	qGetPartnerQuota: `
 SELECT MAX(a.max_value)
   FROM subscription_quota a, partner_plan_subscription b
- WHERE b.status = 'A'
+ WHERE b.status IN ('A', 'T')
    AND b.partner_id = ?
    AND b.begda <= CURRENT_TIMESTAMP
    AND (b.endda IS NULL OR b.endda >= CURRENT_TIMESTAMP)

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/billing"
 	"github.com/nauticana/keel/model"
 )
 
@@ -18,14 +19,14 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 	}
 
 	t.Run("free when no price rows", func(t *testing.T) {
-		off, err := resolveSubscriptionOffer(nil, &PartnerSetup{}, "P", now)
+		off, err := resolveSubscriptionOffer(nil, &PartnerSetup{}, "P", 14, now)
 		if err != nil || off.paymentRequired || off.status != "A" || off.billingCycle != nil {
 			t.Fatalf("want free offer, got %+v err %v", off, err)
 		}
 	})
 
 	t.Run("cheapest when no terms requested", func(t *testing.T) {
-		off, err := resolveSubscriptionOffer(rows, &PartnerSetup{}, "P", now)
+		off, err := resolveSubscriptionOffer(rows, &PartnerSetup{}, "P", 14, now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,7 +39,7 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 	})
 
 	t.Run("annual-billed-monthly installment + dates", func(t *testing.T) {
-		off, err := resolveSubscriptionOffer(rows, &PartnerSetup{BillingCycle: "M", TermType: "A", TermCount: 1}, "P", now)
+		off, err := resolveSubscriptionOffer(rows, &PartnerSetup{BillingCycle: "M", TermType: "A", TermCount: 1}, "P", 14, now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +59,7 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 	})
 
 	t.Run("requested terms not offered is a bad request", func(t *testing.T) {
-		_, err := resolveSubscriptionOffer(rows, &PartnerSetup{BillingCycle: "W", TermType: "W", TermCount: 1}, "P", now)
+		_, err := resolveSubscriptionOffer(rows, &PartnerSetup{BillingCycle: "W", TermType: "W", TermCount: 1}, "P", 14, now)
 		var appErr *model.AppError
 		if !errors.As(err, &appErr) || appErr.Status != 400 {
 			t.Fatalf("err = %v, want 400", err)
@@ -67,27 +68,41 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 
 	t.Run("negative price is rejected", func(t *testing.T) {
 		bad := [][]any{{"M", "M", int64(1), int64(-1), "USD", "price_bad"}}
-		if _, err := resolveSubscriptionOffer(bad, &PartnerSetup{}, "P", now); err == nil {
+		if _, err := resolveSubscriptionOffer(bad, &PartnerSetup{}, "P", 14, now); err == nil {
 			t.Fatal("negative price accepted")
+		}
+	})
+
+	t.Run("free offer on a trial plan is a trial without a card", func(t *testing.T) {
+		zero := [][]any{{"M", "M", int64(1), int64(0), "USD", ""}}
+		for _, rows := range [][][]any{nil, zero} {
+			off, err := resolveSubscriptionOffer(rows, &PartnerSetup{}, "T", 30, now)
+			if err != nil || off.paymentRequired || off.status != "T" || off.trialEnd != now.AddDate(0, 0, 30) {
+				t.Fatalf("want trial offer, got %+v err %v", off, err)
+			}
+		}
+		if off, _ := resolveSubscriptionOffer(nil, &PartnerSetup{}, "F", 30, now); off.trialEnd != nil {
+			t.Fatalf("free plan got trial_end %v", off.trialEnd)
 		}
 	})
 
 	// A priced offer follows the plan's activation mode as checkout does.
 	for _, tc := range []struct {
-		mode, status string
-		payment      bool
+		mode    billing.ActivationMode
+		status  string
+		payment bool
 	}{
 		{"P", "P", true}, // pre-seeded row that checkout flips
 		{"A", "", true},  // checkout inserts the row
 		{"T", "", true},  // checkout starts the trial
 		{"F", "A", false},
 	} {
-		off, err := resolveSubscriptionOffer(rows, &PartnerSetup{}, tc.mode, now)
+		off, err := resolveSubscriptionOffer(rows, &PartnerSetup{}, tc.mode, 14, now)
 		if err != nil || off.status != tc.status || off.paymentRequired != tc.payment {
 			t.Errorf("mode %s: status %q payment %v err %v, want %q %v", tc.mode, off.status, off.paymentRequired, err, tc.status, tc.payment)
 		}
 	}
-	if _, err := resolveSubscriptionOffer(nil, &PartnerSetup{}, "Z", now); err == nil {
+	if _, err := resolveSubscriptionOffer(nil, &PartnerSetup{}, "Z", 14, now); err == nil {
 		t.Error("an unknown activation mode must be refused")
 	}
 }

@@ -53,7 +53,7 @@ checkout creation to `PaymentEvent.InvoiceLines[i].Metadata`.
 |---|---|---|
 | create-active | `A` | INSERT a fresh active row (provider already created the sub) — the default; preserves the old `CreateSubscription` behavior |
 | activate-pending | `P` | flip a pre-seeded `status='P'` row → `'A'` (register-then-pay flows); without one, a fresh active row is inserted |
-| trial | `T` | start `status='T'` + `trial_end` (from `subscription_plan.trial_days`); `ConvertTrial` flips `T→A` on the first paid invoice |
+| trial | `T` | start `status='T'` + `trial_end` (from `subscription_plan.trial_days`); `ConvertTrial` flips `T→A` on the first paid invoice. A free offer starts the trial at registration without a card; `EndDue` ends it at `trial_end` and a checkout closes it |
 | free | `F` | active immediately, no provider sub / charge |
 
 These four are mutually-exclusive **policies**. Orthogonal to them are **modifiers** that overlay any policy, so they are *columns, not enum values*: `seats` (seat-based pricing — pairs with `AddonReconciler`), `trial_end`/start-date (scheduling), the engine choice (`ProviderSubscriptionEngine` vs `SelfScheduledEngine`), and the collection method (charge-now vs send-invoice). Putting `seats` in the mode enum would make "seat-based trial" inexpressible — keep it a modifier.
@@ -76,7 +76,7 @@ This expresses every real shape, e.g. **$1000/yr billed monthly** (`billing_cycl
 
 `subscription_addon` carries the same `billing_cycle`/`term_count`/`term_type` columns; the built-in installment pass currently covers plan subscriptions (addons via `AddonReconciler` / project closures as before). Multi-currency per term is a future extension (add `currency` to the price PK).
 
-Statuses use the `SUBSCRIPTION_STATUS` dictionary: `A` active · `P` pending payment · `T` trialing · `C` cancelled (voluntary) · `X` expired/past-due (involuntary). `SetDunningState` moves `A↔X`; cancels set `C` (immediate) or `effective_cancel_date` (at-period-end). A provider-held subscription ends on the provider's cancellation event; any other one ends when the billing worker's `EndDue` pass reaches its `effective_cancel_date` or `endda`.
+Statuses use the `SUBSCRIPTION_STATUS` dictionary: `A` active · `P` pending payment · `T` trialing · `C` cancelled (voluntary) · `X` expired/past-due (involuntary). `SetDunningState` moves `A↔X`; cancels set `C` (immediate) or `effective_cancel_date` (at-period-end). A provider-held subscription ends on the provider's cancellation event; any other one ends when the billing worker's `EndDue` pass reaches its `effective_cancel_date`, `endda` or, for a trial, `trial_end`. Quotas and `GetSubscription` read the live `A` or `T` row, so a partner left without a plan is refused by the quota check.
 
 #### Free plans and the fallback plan
 
@@ -97,7 +97,7 @@ A subscription that ends starts its next plan in the same transaction: the `succ
 
 *Not* activation modes (handled separately): **metered/usage** (a billing model over an already-active sub), **comp/admin grant** (set `A` via an admin path), and the transitions **change-plan / reactivate / pause** (their own verbs). Further policies — one-time/lifetime, invoice-terms (NET-x), manual/sales-approval — slot into the open dictionary when a project needs them.
 
-> **Note:** `Activate` runs in one transaction. It flips the partner's pending row for the plan when there is one, otherwise opens a row per the plan's mode, and closes the partner's free plan, so a free partner upgrading through checkout ends with exactly one active plan. A partner already holding a paid subscription gets `ErrSubscriptionActive`, which fails the webhook visibly, unless the row carries the same provider subscription id (a replay, which changes nothing). Route upgrades and downgrades between paid plans through `ChangePlan`, not a fresh checkout. Cancels (immediate or at-period-end, by partner or provider-sub-id) act on both active (`A`) and trialing (`T`) subs.
+> **Note:** `Activate` runs in one transaction. It flips the partner's pending row for the plan when there is one, otherwise opens a row per the plan's mode, and closes the partner's free plan or trial without a card, so a free partner upgrading through checkout ends with exactly one active plan. A partner already holding a paid subscription gets `ErrSubscriptionActive`, which fails the webhook visibly, unless the row carries the same provider subscription id (a replay, which changes nothing). Route upgrades and downgrades between paid plans through `ChangePlan`, not a fresh checkout. Cancels (immediate or at-period-end, by partner or provider-sub-id) act on both active (`A`) and trialing (`T`) subs.
 
 ## Payments (Stripe & LemonSqueezy)
 

@@ -427,6 +427,27 @@ func TestActivate_UpgradeFromFreeWithoutPendingRow(t *testing.T) {
 	}
 }
 
+// A checkout during a trial without a card closes the trial like a free plan;
+// a provider-held trial is still a live paid subscription.
+func TestActivate_ClosesTrialWithoutCard(t *testing.T) {
+	svc, tx := activationSvc("A", map[string][][]any{
+		qLcPartnerRows: {{"TRIAL", activateBegda, "T", "", "T"}},
+	})
+	if err := svc.Activate(context.Background(), 7, "STANDARD", BillingTerms{}, "sub_1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if end := lastCall(t, &tx.fakeQS, qLcEndRow); tx.commits != 1 || end.args[1] != "TRIAL" {
+		t.Fatalf("commits=%d calls=%+v", tx.commits, tx.calls)
+	}
+
+	held, heldTx := activationSvc("A", map[string][][]any{
+		qLcPartnerRows: {{"TRIAL", activateBegda, "T", "sub_0", "T"}},
+	})
+	if err := held.Activate(context.Background(), 7, "STANDARD", BillingTerms{}, "sub_1", 0); !errors.Is(err, ErrSubscriptionActive) || heldTx.commits != 0 {
+		t.Fatalf("provider trial: err = %v commits %d", err, heldTx.commits)
+	}
+}
+
 func TestActivate_FlipsPendingRow(t *testing.T) {
 	svc, tx := activationSvc("P", map[string][][]any{
 		qLcPartnerRows: {{"STANDARD", activateBegda, "P", "", "P"}},

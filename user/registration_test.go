@@ -26,6 +26,7 @@ type regStore struct {
 	domains     map[int64]string
 	roles       []string
 	subs        []string // subscription statuses
+	trialEnd    any      // last subscription's trial_end
 	evidence    []string // recorded domain verification methods
 	calls       []string
 	nextID      int64
@@ -46,7 +47,7 @@ type pendingRow struct {
 func newRegStore() *regStore {
 	return &regStore{
 		pending: map[string]*pendingRow{},
-		plans:   map[string][]any{"FREE": {"USD", "A"}, "PRO": {"USD", "P"}},
+		plans:   map[string][]any{"FREE": {"USD", "A", int64(14)}, "PRO": {"USD", "P", int64(14)}, "TRIAL": {"USD", "T", int64(30)}},
 		prices:  map[string][][]any{"PRO": {{"M", "M", int64(1), int64(1000), "USD", "price_pro"}}},
 		scoped:  map[string]bool{"PARTNER_ADMIN": true, "AGENT_ADMIN": true},
 		emails:  map[int64]string{}, members: map[int64]int64{}, domains: map[int64]string{},
@@ -129,7 +130,7 @@ func (s *regStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			out.Rows = [][]any{{args[1]}}
 		}
 	case qAddSubscription:
-		s.subs = append(s.subs, args[2].(string))
+		s.subs, s.trialEnd = append(s.subs, args[2].(string)), args[11]
 	case "dv_member":
 		if s.members[args[1].(int64)] == args[0].(int64) {
 			out.Rows = [][]any{{1}}
@@ -526,6 +527,22 @@ func TestCreatePartnerOpensCheckout(t *testing.T) {
 	writes := store.count(qAddPartner)
 	if _, err := svc.CreatePartner(context.Background(), 13, &PartnerSetup{PartnerCaption: "M", PlanID: "PRO"}, nil); err == nil || store.count(qAddPartner) != writes {
 		t.Fatalf("an offer without a provider price must fail before any write: %v", err)
+	}
+}
+
+// A trial plan without a paid offer starts the trial at registration, with no checkout.
+func TestCreatePartnerStartsTrialWithoutCard(t *testing.T) {
+	store := newRegStore()
+	svc, _, _ := newRegistration(store)
+	svc.Checkout, svc.CheckoutSuccessURL, svc.CheckoutCancelURL = &regCheckout{}, "https://app.example/ok", "https://app.example/cancel"
+	before := time.Now().UTC()
+	created, err := svc.CreatePartner(context.Background(), 11, &PartnerSetup{PartnerCaption: "K", PlanID: "TRIAL"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, _ := store.trialEnd.(time.Time)
+	if created.PaymentRequired || created.PaymentURL != "" || store.subs[0] != "T" || end.Before(before.AddDate(0, 0, 30)) || end.After(time.Now().UTC().AddDate(0, 0, 30)) {
+		t.Fatalf("created = %+v subs %v trial_end %v", created, store.subs, store.trialEnd)
 	}
 }
 
