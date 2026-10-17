@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.127",
+   "title": "Site-root files and redirect creation",
+   "tags": [
+    "additive"
+   ],
+   "summary": "content writes files served at the site root, such as robots.txt and llms.txt, and creates URL redirects.",
+   "body_markdown": "### Additive\n\n- `content.SiteFileWriter` (`ReadSiteFile`, `WriteSiteFile`) and `content.RedirectCreator` (`CreateRedirect`), with `Writers.SiteFileWriter` and `Writers.RedirectCreator`. A path is one root segment, e.g. `/llms.txt`; anything else is `ErrRejected` before a request.\n- `ShopifyWriter` writes `/robots.txt` into the main theme's `templates/robots.txt.liquid` after Shopify's default rules (`read_themes`, `write_themes`) and any other path as an uploaded file behind a redirect. Writing `\"\"` deletes that redirect. A shop with no published theme is `ErrResourceNotFound`."
+  },
+  {
    "version": "v1.2.126",
    "title": "Plan change takes the billing offer",
    "tags": [

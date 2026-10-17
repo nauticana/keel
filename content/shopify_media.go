@@ -187,6 +187,38 @@ const (
 // publish a broken image.
 func (w *ShopifyWriter) awaitFileURL(ctx context.Context, ref ResourceRef, fileID string) (string, error) {
 	const query = `query($id:ID!){node(id:$id){... on MediaImage{fileStatus image{url}} ... on GenericFile{fileStatus url}}}`
+	var url string
+	err := w.poll(ctx, "shopify file "+fileID, func() (bool, error) {
+		var data struct {
+			Node *struct {
+				FileStatus string `json:"fileStatus"`
+				URL        string `json:"url"`
+				Image      *struct {
+					URL string `json:"url"`
+				} `json:"image"`
+			} `json:"node"`
+		}
+		if _, err := shopifyGraphQL(ctx, ref, query, map[string]any{"id": fileID}, &data); err != nil {
+			return false, err
+		}
+		if data.Node == nil {
+			return false, fmt.Errorf("%w: shopify file %s", ErrResourceNotFound, fileID)
+		}
+		if data.Node.FileStatus == shopifyFileFailed {
+			return false, fmt.Errorf("%w: shopify could not process the file", ErrRejected)
+		}
+		url = data.Node.URL
+		if url == "" && data.Node.Image != nil {
+			url = data.Node.Image.URL
+		}
+		return data.Node.FileStatus == shopifyFileReady && url != "", nil
+	})
+	return url, err
+}
+
+// poll runs check up to PollAttempts times, PollInterval apart, until it is
+// done; running out is ErrThrottled, since the provider is still working.
+func (w *ShopifyWriter) poll(ctx context.Context, what string, check func() (bool, error)) error {
 	attempts, interval := w.PollAttempts, w.PollInterval
 	if attempts <= 0 {
 		attempts = defaultPollAttempts
@@ -200,35 +232,14 @@ func (w *ShopifyWriter) awaitFileURL(ctx context.Context, ref ResourceRef, fileI
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return "", ctx.Err()
+				return ctx.Err()
 			case <-timer.C:
 			}
 		}
-		var data struct {
-			Node *struct {
-				FileStatus string `json:"fileStatus"`
-				URL        string `json:"url"`
-				Image      *struct {
-					URL string `json:"url"`
-				} `json:"image"`
-			} `json:"node"`
-		}
-		if _, err := shopifyGraphQL(ctx, ref, query, map[string]any{"id": fileID}, &data); err != nil {
-			return "", err
-		}
-		if data.Node == nil {
-			return "", fmt.Errorf("%w: shopify file %s", ErrResourceNotFound, fileID)
-		}
-		if data.Node.FileStatus == shopifyFileFailed {
-			return "", fmt.Errorf("%w: shopify could not process the file", ErrRejected)
-		}
-		url := data.Node.URL
-		if url == "" && data.Node.Image != nil {
-			url = data.Node.Image.URL
-		}
-		if data.Node.FileStatus == shopifyFileReady && url != "" {
-			return url, nil
+		done, err := check()
+		if err != nil || done {
+			return err
 		}
 	}
-	return "", fmt.Errorf("%w: shopify file %s is still processing", ErrThrottled, fileID)
+	return fmt.Errorf("%w: %s is still processing", ErrThrottled, what)
 }

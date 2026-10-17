@@ -2,12 +2,16 @@ package content
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 )
 
-var _ RedirectLister = (*ShopifyWriter)(nil)
+var (
+	_ RedirectLister  = (*ShopifyWriter)(nil)
+	_ RedirectCreator = (*ShopifyWriter)(nil)
+)
 
 // Products and collections are live through the Online Store publication;
 // pages and articles carry their own isPublished.
@@ -140,21 +144,13 @@ func (w *ShopifyWriter) updateRedirect(ctx context.Context, ref ResourceRef, kin
 				return WriteResult{}, err
 			}
 		}
-		const mutation = `mutation($id:ID!){urlRedirectDelete(id:$id){deletedUrlRedirectId userErrors{field message}}}`
-		err := record(w.mutate(ctx, ref, "urlRedirectDelete", mutation, map[string]any{"id": state.redirect.ID}))
+		err := record(deleteShopifyRedirect(ctx, ref, state.redirect.ID))
 		return WriteResult{Response: strings.Join(responses, "\n")}, err
 	}
 	if !state.live && state.redirect == nil {
 		return WriteResult{}, fmt.Errorf("%w: %s %s is not live, so there is nothing to retire", ErrRejected, ref.Kind, ref.ID)
 	}
-	redirect := map[string]any{"path": state.path, "target": target}
-	if state.redirect == nil {
-		const mutation = `mutation($r:UrlRedirectInput!){urlRedirectCreate(urlRedirect:$r){urlRedirect{id} userErrors{field message}}}`
-		err = record(w.mutate(ctx, ref, "urlRedirectCreate", mutation, map[string]any{"r": redirect}))
-	} else {
-		const mutation = `mutation($id:ID!,$r:UrlRedirectInput!){urlRedirectUpdate(id:$id,urlRedirect:$r){urlRedirect{id} userErrors{field message}}}`
-		err = record(w.mutate(ctx, ref, "urlRedirectUpdate", mutation, map[string]any{"id": state.redirect.ID, "r": redirect}))
-	}
+	err = record(w.putRedirect(ctx, ref, state.redirect, state.path, target))
 	if err == nil && state.live {
 		err = record(w.setLive(ctx, ref, kind, state, false))
 	}
@@ -179,6 +175,35 @@ func (w *ShopifyWriter) setLive(ctx context.Context, ref ResourceRef, kind shopi
 	return w.mutate(ctx, ref, root, query, map[string]any{
 		"id": ref.ID, "input": []map[string]any{{"publicationId": state.publicationID}},
 	})
+}
+
+func (w *ShopifyWriter) CreateRedirect(ctx context.Context, ref ResourceRef, path, target string) (Redirect, WriteResult, error) {
+	const mutation = `mutation($r:UrlRedirectInput!){urlRedirectCreate(urlRedirect:$r){urlRedirect{id path target} userErrors{field message}}}`
+	payload, result, err := shopifyMutate(ctx, ref, "urlRedirectCreate", mutation, map[string]any{"r": map[string]any{"path": path, "target": target}})
+	if err != nil {
+		return Redirect{}, result, err
+	}
+	var made Redirect
+	if err := json.Unmarshal(payload["urlRedirect"], &made); err != nil || made.ID == "" {
+		return Redirect{}, result, fmt.Errorf("%w: shopify urlRedirectCreate returned no redirect", ErrRejected)
+	}
+	return made, result, nil
+}
+
+// putRedirect points path at target, creating the redirect or retargeting existing.
+func (w *ShopifyWriter) putRedirect(ctx context.Context, ref ResourceRef, existing *Redirect, path, target string) (WriteResult, error) {
+	if existing == nil {
+		_, result, err := w.CreateRedirect(ctx, ref, path, target)
+		return result, err
+	}
+	const mutation = `mutation($id:ID!,$r:UrlRedirectInput!){urlRedirectUpdate(id:$id,urlRedirect:$r){urlRedirect{id} userErrors{field message}}}`
+	return w.mutate(ctx, ref, "urlRedirectUpdate", mutation, map[string]any{"id": existing.ID, "r": map[string]any{"path": path, "target": target}})
+}
+
+func deleteShopifyRedirect(ctx context.Context, ref ResourceRef, id string) (WriteResult, error) {
+	const mutation = `mutation($id:ID!){urlRedirectDelete(id:$id){deletedUrlRedirectId userErrors{field message}}}`
+	_, result, err := shopifyMutate(ctx, ref, "urlRedirectDelete", mutation, map[string]any{"id": id})
+	return result, err
 }
 
 // findRedirect matches path exactly; the search filter only narrows the list.

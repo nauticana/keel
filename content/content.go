@@ -31,8 +31,7 @@ var (
 	// ErrRejected: the provider understood the request and refused the change.
 	ErrRejected = errors.New("content: provider rejected the request")
 	// ErrUnsupportedOperation: the provider's writer does not implement the
-	// operation (creating, deleting, uploading, listing or annotating images,
-	// listing redirects) the caller asked for.
+	// operation the caller asked for.
 	ErrUnsupportedOperation = errors.New("content: operation unsupported by provider")
 	// ErrMediaTooLarge: the upload exceeds the uploader's size cap.
 	ErrMediaTooLarge = errors.New("content: media exceeds the size cap")
@@ -121,6 +120,20 @@ type RedirectLister interface {
 	ListRedirects(ctx context.Context, ref ResourceRef) ([]Redirect, error)
 }
 
+// RedirectCreator adds a URL redirect; ref.Kind and ref.ID are unused.
+type RedirectCreator interface {
+	CreateRedirect(ctx context.Context, ref ResourceRef, path, target string) (Redirect, WriteResult, error)
+}
+
+// SiteFileWriter reads and writes a file served at the site root, path being
+// e.g. "/robots.txt" or "/llms.txt". A read returns what the last write sent,
+// "" when the site has no such file; writing "" removes what a write added.
+// ref.Kind and ref.ID are unused.
+type SiteFileWriter interface {
+	ReadSiteFile(ctx context.Context, ref ResourceRef, path string) (string, error)
+	WriteSiteFile(ctx context.Context, ref ResourceRef, path, content string) (WriteResult, error)
+}
+
 // FieldReader reads a live field through the partner's own connection.
 type FieldReader interface {
 	ReadField(ctx context.Context, partnerID int64, provider, kind, id, field string) (string, error)
@@ -142,8 +155,8 @@ func (w Writers) For(provider string) (ResourceWriter, error) {
 	return nil, fmt.Errorf("%w: %q", ErrUnsupportedProvider, provider)
 }
 
-// Creator, Deleter, Uploader, Lister, Annotator and RedirectLister select the provider's writer and report whether
-// it carries that capability, so a caller never type-asserts on its own.
+// The capability selectors pick the provider's writer and report whether it
+// carries that capability, so a caller never type-asserts on its own.
 func (w Writers) Creator(provider string) (ResourceCreator, error) {
 	return capability[ResourceCreator](w, provider, "create")
 }
@@ -166,6 +179,14 @@ func (w Writers) Annotator(provider string) (MediaAnnotator, error) {
 
 func (w Writers) RedirectLister(provider string) (RedirectLister, error) {
 	return capability[RedirectLister](w, provider, "list redirects")
+}
+
+func (w Writers) RedirectCreator(provider string) (RedirectCreator, error) {
+	return capability[RedirectCreator](w, provider, "create redirects")
+}
+
+func (w Writers) SiteFileWriter(provider string) (SiteFileWriter, error) {
+	return capability[SiteFileWriter](w, provider, "write site files")
 }
 
 func capability[T any](w Writers, provider, op string) (T, error) {
