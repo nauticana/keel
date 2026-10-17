@@ -109,3 +109,16 @@ func TestInstallmentMinor_RemainderOnLast(t *testing.T) {
 		t.Fatalf("last installment = %d want 8337", last)
 	}
 }
+
+func TestBillingPeriodValid(t *testing.T) {
+	for _, p := range []BillingPeriod{PeriodDaily, PeriodWeekly, PeriodMonthly, PeriodQuarterly, PeriodAnnual} {
+		if !p.Valid() {
+			t.Errorf("%q rejected", p)
+		}
+	}
+	for _, p := range []BillingPeriod{"", "a", "Y", "AA"} {
+		if p.Valid() {
+			t.Errorf("%q accepted", p)
+		}
+	}
+}

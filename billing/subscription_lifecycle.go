@@ -21,7 +21,8 @@ type SubscriptionLifecycle interface {
 	// A live paid subscription is ErrSubscriptionActive unless it is this
 	// provider subscription (a replay, which changes nothing). seats<=0 → NULL.
 	Activate(ctx context.Context, partnerID int64, planID string, terms BillingTerms, providerSubID string, seats int64) error
-	// ChangePlan atomically closes the current active/trial row and opens a fresh one.
+	// ChangePlan atomically closes the current active/trial row and opens a fresh
+	// one on terms; the target may be the current plan on other terms.
 	ChangePlan(ctx context.Context, partnerID int64, newPlanID string, terms BillingTerms) error
 	Reactivate(ctx context.Context, partnerID int64, planID string) error
 	ConvertTrial(ctx context.Context, partnerID int64, providerSubID string) error
@@ -145,7 +146,7 @@ UPDATE partner_plan_subscription
 	// Lock and read the current row before closing it. Keeping this separate
 	// from UPDATE makes the transaction portable to databases without RETURNING.
 	qLcChangePlanCurrent: `
-SELECT COALESCE(provider_subscription_id, '')
+SELECT COALESCE(provider_subscription_id, ''), plan_id
   FROM partner_plan_subscription
  WHERE partner_id = ? AND status IN ('A', 'T', 'X')
    AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
@@ -459,19 +460,19 @@ func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQue
 	if err != nil {
 		return err
 	}
-	if pol.mode != ActivateFree {
-		if err := s.refuseOverages(ctx, partnerID, newPlanID); err != nil {
-			return err
-		}
+	current, err := tx.Query(ctx, qLcChangePlanCurrent, partnerID)
+	if err != nil {
+		return err
+	}
+	providerSubID, currentPlanID := "", ""
+	if len(current.Rows) > 0 {
+		providerSubID = common.AsString(current.Rows[0][0])
+		currentPlanID = common.AsString(current.Rows[0][1])
 	}
 	if pol.mode == ActivateFree {
 		// The provider must cancel its subscription first (ProviderSubscriptionService
 		// schedules the change); closing the row here would leave it billing.
-		current, err := tx.Query(ctx, qLcChangePlanCurrent, partnerID)
-		if err != nil {
-			return err
-		}
-		if len(current.Rows) > 0 && common.AsString(current.Rows[0][0]) != "" {
+		if providerSubID != "" {
 			return ErrProviderSubscription
 		}
 		if _, err := tx.Query(ctx, qLcChangePlanClose, partnerID); err != nil {
@@ -486,18 +487,16 @@ func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQue
 		}
 		return nil
 	}
+	// A new cycle of the current plan keeps its limits.
+	if newPlanID != currentPlanID {
+		if err := s.refuseOverages(ctx, partnerID, newPlanID); err != nil {
+			return err
+		}
+	}
 	now := s.now()
 	pc, err := s.loadPlanCharge(ctx, newPlanID, terms, now)
 	if err != nil {
 		return err
-	}
-	current, err := tx.Query(ctx, qLcChangePlanCurrent, partnerID)
-	if err != nil {
-		return err
-	}
-	providerSubID := ""
-	if len(current.Rows) > 0 {
-		providerSubID = common.AsString(current.Rows[0][0])
 	}
 	if _, err := tx.Query(ctx, qLcChangePlanClose, partnerID); err != nil {
 		return err

@@ -108,7 +108,7 @@ func TestCancel_ReportsBlockedSuccessor(t *testing.T) {
 
 func TestChangePlanTx_FreePlanRefusesProviderHeldRow(t *testing.T) {
 	svc, _, _ := newSuccSvc(nil, "F", nil)
-	tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1"}}, qLcInsertFree: {{"FREE"}}}}}
+	tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1", "PRO"}}, qLcInsertFree: {{"FREE"}}}}}
 	if err := svc.ChangePlanTx(context.Background(), tx, 7, "FREE", BillingTerms{}); !errors.Is(err, ErrProviderSubscription) {
 		t.Fatalf("err = %v, want ErrProviderSubscription", err)
 	}

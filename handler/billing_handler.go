@@ -103,8 +103,9 @@ func (h *BillingHandler) Cancel() http.HandlerFunc {
 	})
 }
 
-// ChangePlan: POST /api/billing/subscription/change {"planId": "..."} →
-// {"status": "changed" | "scheduled"}
+// ChangePlan: POST /api/billing/subscription/change {"planId", "billingCycle",
+// "termType", "termCount"} → {"status": "changed" | "scheduled"}. Omitting the
+// offer keeps the current terms.
 func (h *BillingHandler) ChangePlan() http.HandlerFunc {
 	return h.JSON(http.MethodPost, func(ctx context.Context, s *model.UserSession, body json.RawMessage) (any, error) {
 		partnerID, err := billingPartner(s)
@@ -112,17 +113,37 @@ func (h *BillingHandler) ChangePlan() http.HandlerFunc {
 			return nil, err
 		}
 		var req struct {
-			PlanID string `json:"planId"`
+			PlanID       string `json:"planId"`
+			BillingCycle string `json:"billingCycle"`
+			TermType     string `json:"termType"`
+			TermCount    int    `json:"termCount"`
 		}
 		if json.Unmarshal(body, &req) != nil || req.PlanID == "" {
 			return nil, NewAPIError(http.StatusBadRequest, "planId is required")
 		}
-		outcome, err := h.Subscriptions.ChangePlan(ctx, partnerID, req.PlanID)
+		terms, err := changeTerms(req.BillingCycle, req.TermType, req.TermCount)
+		if err != nil {
+			return nil, err
+		}
+		outcome, err := h.Subscriptions.ChangePlan(ctx, partnerID, req.PlanID, terms)
 		if err != nil {
 			return nil, h.subscriptionError("plan change", err)
 		}
 		return map[string]string{"status": string(outcome)}, nil
 	})
+}
+
+// changeTerms reads an offer whose billingCycle and termType come together;
+// termCount 0 means one term. None of the three keeps the current terms.
+func changeTerms(cycle, termType string, count int) (billing.BillingTerms, error) {
+	if cycle == "" && termType == "" && count == 0 {
+		return billing.BillingTerms{}, nil
+	}
+	terms := billing.BillingTerms{BillingCycle: billing.BillingPeriod(cycle), TermType: billing.BillingPeriod(termType), TermCount: count}
+	if !terms.BillingCycle.Valid() || !terms.TermType.Valid() || count < 0 {
+		return billing.BillingTerms{}, NewAPIError(http.StatusBadRequest, "billingCycle and termType must be period codes and termCount must not be negative")
+	}
+	return terms, nil
 }
 
 // CheckChange: POST /api/billing/subscription/change/check {"planId": "..."} →
@@ -177,7 +198,7 @@ func (h *BillingHandler) subscriptionError(action string, err error) error {
 		errors.Is(err, billing.ErrSubscriptionPending), errors.Is(err, billing.ErrProviderSubscription):
 		return NewAPIError(http.StatusConflict, err.Error())
 	case errors.Is(err, billing.ErrPriceNotFound), errors.Is(err, billing.ErrPlanNotFound), errors.Is(err, billing.ErrNotFreePlan):
-		return NewAPIError(http.StatusBadRequest, "plan is not available on the current billing terms")
+		return NewAPIError(http.StatusBadRequest, "plan is not offered on these billing terms")
 	}
 	if h.Journal != nil {
 		h.Journal.Error("billing " + action + ": " + err.Error())

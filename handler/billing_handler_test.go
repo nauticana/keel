@@ -27,6 +27,7 @@ func (d grantDB) CheckActionPermission(_ context.Context, p model.Principal, obj
 type fakeManager struct {
 	err      error
 	planID   string
+	terms    billing.BillingTerms
 	overages []port.QuotaOverage
 }
 
@@ -36,8 +37,8 @@ func (f *fakeManager) CheckChange(_ context.Context, _ int64, planID string) ([]
 }
 
 func (f *fakeManager) CancelAtPeriodEnd(context.Context, int64) error { return f.err }
-func (f *fakeManager) ChangePlan(_ context.Context, _ int64, planID string) (billing.ChangeOutcome, error) {
-	f.planID = planID
+func (f *fakeManager) ChangePlan(_ context.Context, _ int64, planID string, terms billing.BillingTerms) (billing.ChangeOutcome, error) {
+	f.planID, f.terms = planID, terms
 	if planID == "FREE" {
 		return billing.ChangeScheduled, f.err
 	}
@@ -81,6 +82,25 @@ func TestBillingHandler(t *testing.T) {
 	}
 	if code, body := billingCall(change, "/api/billing/subscription/change", `{"planId":"PRO"}`); code != http.StatusOK || manager.planID != "PRO" || !strings.Contains(body, `"changed"`) {
 		t.Fatalf("change: %d plan=%q body=%s", code, manager.planID, body)
+	}
+	if manager.terms != (billing.BillingTerms{}) {
+		t.Fatalf("no offer sent terms %+v", manager.terms)
+	}
+	annual := billing.BillingTerms{BillingCycle: billing.PeriodAnnual, TermType: billing.PeriodAnnual, TermCount: 1}
+	if code := billingRequest(change, "/api/billing/subscription/change", `{"planId":"PRO","billingCycle":"A","termType":"A","termCount":1}`); code != http.StatusOK || manager.terms != annual {
+		t.Fatalf("offer: %d terms=%+v", code, manager.terms)
+	}
+	for _, body := range []string{
+		`{"planId":"PRO","billingCycle":"A"}`,
+		`{"planId":"PRO","billingCycle":"YEAR","termType":"A"}`,
+		`{"planId":"PRO","billingCycle":"a","termType":"a"}`,
+		`{"planId":"PRO","billingCycle":"A","termType":"A","termCount":-1}`,
+		`{"planId":"PRO","termCount":12}`,
+	} {
+		manager.planID = ""
+		if code := billingRequest(change, "/api/billing/subscription/change", body); code != http.StatusBadRequest || manager.planID != "" {
+			t.Errorf("%s: %d reached=%q", body, code, manager.planID)
+		}
 	}
 	if code, body := billingCall(change, "/api/billing/subscription/change", `{"planId":"FREE"}`); code != http.StatusOK || !strings.Contains(body, `"scheduled"`) {
 		t.Fatalf("scheduled change: %d body=%s", code, body)

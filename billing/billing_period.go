@@ -35,6 +35,15 @@ func ParseBillingPeriod(code string) BillingPeriod {
 	}
 }
 
+// Valid reports whether p is exactly one of the period codes.
+func (p BillingPeriod) Valid() bool {
+	switch p {
+	case PeriodDaily, PeriodWeekly, PeriodMonthly, PeriodQuarterly, PeriodAnnual:
+		return true
+	}
+	return false
+}
+
 func (p BillingPeriod) Code() string {
 	if p == "" {
 		return string(PeriodMonthly)

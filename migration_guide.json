@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.126",
+   "title": "Plan change takes the billing offer",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "A self-service plan change names the offer it moves to, so a subscriber can switch billing cycle on the same plan or move to another plan on another cycle.",
+   "body_markdown": "### Breaking\n\n- `billing.SubscriptionManager.ChangePlan(ctx, partnerID, planID)` → `ChangePlan(ctx, partnerID, planID, terms BillingTerms)`. Zero terms keep the current subscription's terms, which is the previous behavior.\n\n### Additive\n\n- `POST /api/billing/subscription/change` accepts `billingCycle`, `termType` and `termCount` beside `planId`, as one of the plan's `prices`. `billingCycle` and `termType` come together as exact PERIOD_TYPE codes; `termCount` 0 means 1, negative is 400. Omitting all three keeps the current terms.\n- `ProviderSubscriptionService.ChangePlan` to the current plan on other terms changes the provider price and opens a row on the new terms; only the same plan on the same terms resumes renewal. A plan that does not sell the offer is `ErrPriceNotFound` (400) before the provider is touched.\n- `ChangePlan` and `ChangePlanTx` apply the downgrade guard only when the plan changes. `lc_change_plan_current` also selects `plan_id`; an override of it must return `provider_subscription_id, plan_id`.\n- `billing.BillingPeriod.Valid()` reports an exact period code.\n- `CheckChange` and `…/change/check` stay keyed by plan: overages do not depend on the offer."
+  },
+  {
    "version": "v1.2.125",
    "title": "Plan overages carry the resource caption",
    "tags": [

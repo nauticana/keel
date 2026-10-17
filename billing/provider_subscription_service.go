@@ -45,8 +45,9 @@ const (
 // SubscriptionManager is the self-service contract behind an app's billing page.
 type SubscriptionManager interface {
 	CancelAtPeriodEnd(ctx context.Context, partnerID int64) error
-	ChangePlan(ctx context.Context, partnerID int64, planID string) (ChangeOutcome, error)
-	// CheckChange previews what blocks ChangePlan to planID.
+	// ChangePlan moves to planID on terms; zero terms keep the current terms.
+	ChangePlan(ctx context.Context, partnerID int64, planID string, terms BillingTerms) (ChangeOutcome, error)
+	// CheckChange previews what blocks ChangePlan to planID on any terms.
 	CheckChange(ctx context.Context, partnerID int64, planID string) ([]port.QuotaOverage, error)
 	PortalURL(ctx context.Context, partnerID int64) (string, error)
 }
@@ -79,9 +80,11 @@ func (s *ProviderSubscriptionService) CancelAtPeriodEnd(ctx context.Context, par
 
 // ChangePlan to a free plan ends a provider-held subscription at period end
 // with the free plan scheduled as its successor, and replaces any other
-// subscription at once. A paid target needs a provider-held subscription.
-// Re-selecting the current plan resumes renewal, undoing a scheduled change.
-func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID int64, planID string) (ChangeOutcome, error) {
+// subscription at once; terms do not apply to it. A paid target needs a
+// provider-held subscription and may be the current plan on other terms.
+// Re-selecting the current plan and terms resumes renewal, undoing a
+// scheduled change.
+func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID int64, planID string, terms BillingTerms) (ChangeOutcome, error) {
 	mode, err := s.Store.PlanActivationMode(ctx, planID)
 	if err != nil {
 		return "", err
@@ -93,7 +96,11 @@ func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID 
 	if err != nil {
 		return "", err
 	}
-	if planID == sub.PlanID {
+	if terms == (BillingTerms{}) {
+		terms = sub.Terms
+	}
+	samePlan := planID == sub.PlanID
+	if samePlan && (mode == ActivateFree || terms.normalized() == sub.Terms.normalized()) {
 		return ChangeApplied, s.resumeRenewal(ctx, partnerID, sub)
 	}
 	if mode == ActivateFree {
@@ -108,15 +115,18 @@ func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID 
 	if sub.ID == "" {
 		return "", ErrNoProviderSubscription
 	}
-	// Refuse before the provider is touched, so a refused downgrade bills nothing.
-	overages, err := s.Lifecycle.CheckChange(ctx, partnerID, planID)
-	if err != nil {
-		return "", err
+	// Refuse before the provider is touched, so a refused downgrade bills
+	// nothing. A new cycle of the current plan keeps its limits.
+	if !samePlan {
+		overages, err := s.Lifecycle.CheckChange(ctx, partnerID, planID)
+		if err != nil {
+			return "", err
+		}
+		if len(overages) > 0 {
+			return "", &OverTargetLimitError{PlanID: planID, Overages: overages}
+		}
 	}
-	if len(overages) > 0 {
-		return "", &OverTargetLimitError{PlanID: planID, Overages: overages}
-	}
-	to, err := s.Store.ProviderPriceID(ctx, planID, sub.Terms)
+	to, err := s.Store.ProviderPriceID(ctx, planID, terms)
 	if err != nil {
 		return "", err
 	}
@@ -128,7 +138,7 @@ func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID 
 	if err := s.Client.ChangeSubscriptionPrice(ctx, sub.ID, from, to, s.ProrationBehavior); err != nil {
 		return "", fmt.Errorf("provider plan change of %s: %w", sub.ID, err)
 	}
-	return ChangeApplied, s.Lifecycle.ChangePlan(ctx, partnerID, planID, sub.Terms)
+	return ChangeApplied, s.Lifecycle.ChangePlan(ctx, partnerID, planID, terms)
 }
 
 // resumeRenewal clears a scheduled cancellation at the provider (a price

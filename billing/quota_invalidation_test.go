@@ -57,7 +57,7 @@ func TestLifecycleInvalidatesQuotas(t *testing.T) {
 				qLcLiveByProviderSub: live,
 				qLcLiveByPartner:     live,
 				qLcDueToEnd:          live,
-			}, map[string][][]any{qLcEndRow: {{int64(7)}}, qLcChangePlanCurrent: {{""}}})
+			}, map[string][][]any{qLcEndRow: {{int64(7)}}, qLcChangePlanCurrent: {{"", "STANDARD"}}})
 			quotas := &recordingQuotas{}
 			svc.Quotas = quotas
 			if err := run(svc); err != nil {
@@ -95,29 +95,31 @@ func (q *overageQuotas) PlanOverages(context.Context, int64, string) ([]port.Quo
 }
 
 // A paid target below what the partner holds is refused before any write; a
-// free target is never refused, so a cancellation always goes through.
+// free target is never refused, so a cancellation always goes through, and
+// neither is a new cycle of the current plan.
 func TestChangePlanTx_RefusesOverTargetLimit(t *testing.T) {
 	overages := []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
 	for _, tc := range []struct {
-		mode    string
-		refused bool
-	}{{"A", true}, {"F", false}} {
+		mode, current string
+		refused       bool
+	}{{"A", "STANDARD", true}, {"F", "STANDARD", false}, {"A", "TARGET", false}} {
 		svc, _ := newSvc(map[string][][]any{
 			qLcPlanPolicy: {{tc.mode, int64(14)}},
 			qLcPlanPrice:  {{int64(10000), "USD"}},
 		})
 		svc.Quotas = &overageQuotas{overages: overages}
-		tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcInsertFree: {{"FREE"}}, qLcChangePlanCurrent: {{""}}}}}
-		err := svc.ChangePlanTx(context.Background(), tx, 7, "TARGET", BillingTerms{})
+		tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcInsertFree: {{"FREE"}}, qLcChangePlanCurrent: {{"", tc.current}}}}}
+		err := svc.ChangePlanTx(context.Background(), tx, 7, "TARGET", BillingTerms{BillingCycle: PeriodAnnual, TermType: PeriodAnnual, TermCount: 1})
+		writes := callCount(&tx.fakeQS, qLcChangePlanClose) + callCount(&tx.fakeQS, qLcInsertActive) + callCount(&tx.fakeQS, qLcInsertFree)
 		if tc.refused {
 			var over *OverTargetLimitError
-			if !errors.As(err, &over) || over.PlanID != "TARGET" || len(tx.calls) != 0 {
+			if !errors.As(err, &over) || over.PlanID != "TARGET" || writes != 0 {
 				t.Fatalf("mode %s: err=%v calls=%+v", tc.mode, err, tx.calls)
 			}
 			continue
 		}
-		if err != nil {
-			t.Fatalf("free target refused: %v", err)
+		if err != nil || writes != 2 {
+			t.Fatalf("mode %s from %s refused: err=%v calls=%+v", tc.mode, tc.current, err, tx.calls)
 		}
 	}
 }
