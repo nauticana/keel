@@ -5,8 +5,10 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nauticana/keel/guard"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
@@ -56,6 +58,92 @@ func TestClientStoreBoundsPendingClients(t *testing.T) {
 			t.Fatalf("malformed count %v must fail closed", rows)
 		}
 	}
+}
+
+// Registration deletes abandoned registrations first, under the lock and
+// before the count when bounded, so they never hold pending slots.
+func TestClientStorePurgesOnRegistration(t *testing.T) {
+	ctx := context.Background()
+	public := &port.OAuthClient{ClientID: "oc_1", TokenAuthMethod: "none", GrantTypes: registrationGrants, Registered: true}
+	for _, max := range []int{0, 2} {
+		repo := &grantRepo{rows: map[string][][]any{oauthPendingCount: {{int64(1)}}}}
+		store := &ClientStoreDB{DB: repo, MaxPending: max, PurgeAge: time.Hour}
+		store.Init(ctx)
+		if err := store.CreateClient(ctx, public); err != nil {
+			t.Fatal(err)
+		}
+		purge, insert := slices.Index(repo.calls, oauthClientPurge), slices.Index(repo.calls, oauthInsertClient)
+		if purge < 0 || insert < purge || repo.args[oauthClientPurge][0] != 3600 || repo.args[oauthClientPurge][1] != purgeBatch {
+			t.Fatalf("max %d: calls %v args %v", max, repo.calls, repo.args[oauthClientPurge])
+		}
+		if max > 0 && (slices.Index(repo.calls, guard.QueryLock) > purge || slices.Index(repo.calls, oauthPendingCount) < purge) {
+			t.Fatalf("purge must run under the lock and before the count: %v", repo.calls)
+		}
+	}
+
+	repo := &grantRepo{}
+	store := &ClientStoreDB{DB: repo}
+	store.Init(ctx)
+	if err := store.CreateClient(ctx, public); err != nil || slices.Contains(repo.calls, oauthClientPurge) {
+		t.Fatalf("zero PurgeAge keeps registrations: %v %v", err, repo.calls)
+	}
+	repo.calls = nil
+	if err := store.CreateClient(ctx, &port.OAuthClient{ClientID: "oc_2", GrantTypes: []string{"client_credentials"}}); err != nil || len(repo.calls) != 1 {
+		t.Fatalf("a provisioned client purges nothing: %v %v", err, repo.calls)
+	}
+
+	failing := &grantRepo{err: errors.New("db down")}
+	store = &ClientStoreDB{DB: failing, PurgeAge: time.Hour}
+	store.Init(ctx)
+	if err := store.CreateClient(ctx, public); err == nil || slices.Contains(failing.calls, oauthInsertClient) {
+		t.Fatalf("a failed purge must refuse: %v %v", err, failing.calls)
+	}
+}
+
+func TestSaveCodePurgesFirst(t *testing.T) {
+	ctx := context.Background()
+	repo := &grantRepo{}
+	codes := &CodeStoreDB{DB: repo}
+	codes.Init(ctx)
+	if err := codes.SaveCode(ctx, &port.AuthCode{Code: "c"}, time.Minute); err != nil ||
+		!slices.Equal(repo.calls, []string{oauthPurgeCodes, oauthInsertCode}) || repo.args[oauthPurgeCodes][0] != purgeBatch {
+		t.Fatalf("err %v calls %v args %v", err, repo.calls, repo.args[oauthPurgeCodes])
+	}
+}
+
+// PurgeExpired repeats full batches until a short one.
+func TestPurgeExpiredRepeatsBatches(t *testing.T) {
+	ctx := context.Background()
+	repo := &batchRepo{sizes: []int{purgeBatch, purgeBatch, 1}}
+	codes := &CodeStoreDB{DB: repo}
+	codes.Init(ctx)
+	if err := codes.PurgeExpired(ctx); err != nil || repo.calls != 3 {
+		t.Fatalf("err %v calls %d", err, repo.calls)
+	}
+	repo = &batchRepo{grantRepo: grantRepo{err: errors.New("db down")}}
+	codes = &CodeStoreDB{DB: repo}
+	codes.Init(ctx)
+	if err := codes.PurgeExpired(ctx); err == nil || repo.calls != 1 {
+		t.Fatalf("err %v calls %d", err, repo.calls)
+	}
+}
+
+// batchRepo answers each query with the next batch size.
+type batchRepo struct {
+	grantRepo
+	sizes []int
+	calls int
+}
+
+func (r *batchRepo) GetQueryService(context.Context, map[string]string) port.QueryService { return r }
+func (r *batchRepo) Query(context.Context, string, ...any) (*model.QueryResult, error) {
+	r.calls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	n := r.sizes[0]
+	r.sizes = r.sizes[1:]
+	return &model.QueryResult{Rows: make([][]any, n)}, nil
 }
 
 func TestRegistrationPolicy(t *testing.T) {

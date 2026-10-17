@@ -83,6 +83,7 @@ func isLocalhostPlainHTTP(r *http.Request) bool {
 // account.
 type ConsentView struct {
 	ClientName    string
+	RedirectHost  string // where an approval sends the code
 	Scopes        []string
 	Action        string
 	Fields        map[string]string
@@ -469,6 +470,9 @@ func (h *OAuthASHandler) renderConsent(w http.ResponseWriter, r *http.Request, c
 		Fields:        map[string]string{},
 		SwitchAccount: h.LoginURL != "",
 	}
+	if u, err := url.Parse(req.RedirectURI); err == nil {
+		view.RedirectHost = u.Host
+	}
 	for k, v := range consentFields(req, scopes) {
 		view.Fields[k] = v[0]
 	}
@@ -571,7 +575,7 @@ func (h *OAuthASHandler) writeOAuthError(w http.ResponseWriter, err error) {
 var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Authorize</title></head><body>
 <h1>Authorize {{.ClientName}}</h1>
-<p>{{.ClientName}} is requesting access to your account.</p>
+<p>{{.ClientName}} is requesting access to your account. Approving sends you to <strong>{{.RedirectHost}}</strong>.</p>
 {{with .Account}}<p>Signed in as <strong>{{if .Name}}{{.Name}}{{else}}{{.Email}}{{end}}</strong>{{if and .Name .Email}} ({{.Email}}){{end}}</p>{{end}}
 {{if .Scopes}}<ul>{{range .Scopes}}<li>{{.}}</li>{{end}}</ul>{{end}}
 <form method="post" action="{{.Action}}">

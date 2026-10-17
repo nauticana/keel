@@ -680,6 +680,7 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_code (
     CONSTRAINT oauth_authorization_code_client FOREIGN KEY (client_id) REFERENCES oauth_client(client_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_oauth_code_hash ON oauth_authorization_code(code_hash);
+CREATE INDEX idx_oauth_code_expires ON oauth_authorization_code(expires_at);
 
 -- OAuth 2.1 refresh tokens (hashed) with rotation family for reuse-detection; partner_id is a denormalized snapshot
 CREATE TABLE IF NOT EXISTS oauth_refresh_token (

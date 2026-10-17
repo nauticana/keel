@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
+	"net/url"
 	"strings"
 )
 
@@ -32,4 +34,18 @@ func splitSpace(s string) []string {
 		return nil
 	}
 	return strings.Fields(s)
+}
+
+// redirectHost is the lowercase host of a redirect URI, "" when unparsable.
+func redirectHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return host == "localhost" || ip != nil && ip.IsLoopback()
 }

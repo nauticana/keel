@@ -20,7 +20,7 @@ func newPolicyAS(t *testing.T, replace bool, max int) (*Local, *memTokens) {
 	as := NewLocal(signer, &memClients{m: map[string]*port.OAuthClient{}}, &memCodes{m: map[string]*port.AuthCode{}}, tokens, Config{
 		Issuer: "https://as.example", DefaultAudience: "https://rs.example", Scopes: []string{"read"},
 		AccessTTL: time.Hour, RefreshTTL: time.Hour, CodeTTL: time.Minute,
-		ReplaceSameAppGrant: replace, MaxGrantsPerUser: max,
+		ReplaceSameAppGrant: replace, MaxGrantsPerUser: max, RedirectHosts: testRedirectHosts,
 	})
 	return as, tokens
 }

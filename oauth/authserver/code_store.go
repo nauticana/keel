@@ -27,7 +27,13 @@ UPDATE oauth_authorization_code c SET consumed_at = COALESCE(prior.consumed_at, 
   FROM (SELECT id, consumed_at FROM oauth_authorization_code WHERE code_hash = ? FOR UPDATE) prior
  WHERE c.id = prior.id
 RETURNING c.client_id, c.user_id, c.partner_id, c.scopes, c.redirect_uri, c.code_challenge, c.code_challenge_method, c.resource, c.expires_at, prior.consumed_at`,
-	oauthPurgeCodes: `DELETE FROM oauth_authorization_code WHERE expires_at < CURRENT_TIMESTAMP - INTERVAL '1 day'`,
+	oauthPurgeCodes: `
+DELETE FROM oauth_authorization_code
+ WHERE id IN (SELECT id FROM oauth_authorization_code
+               WHERE expires_at < CURRENT_TIMESTAMP - INTERVAL '1 day'
+               ORDER BY expires_at
+               LIMIT ?)
+RETURNING id`,
 }
 
 // CodeStoreDB persists single-use authorization codes (hashed) in the DB.
@@ -46,7 +52,11 @@ func (s *CodeStoreDB) Init(ctx context.Context) {
 	}
 }
 
+// SaveCode first deletes a batch of codes a day past expiry.
 func (s *CodeStoreDB) SaveCode(ctx context.Context, c *port.AuthCode, ttl time.Duration) error {
+	if _, err := s.purgeCodes(ctx); err != nil {
+		return err
+	}
 	_, err := s.qs.Query(ctx, oauthInsertCode, hashToken(c.Code), c.ClientID, c.UserID, c.PartnerID,
 		joinSpace(c.Scopes), c.RedirectURI, c.CodeChallenge, c.CodeChallengeMethod, c.Resource, time.Now().Add(ttl))
 	return err
@@ -82,9 +92,21 @@ func (s *CodeStoreDB) ConsumeCode(ctx context.Context, code string) (*port.AuthC
 	}, nil
 }
 
-// PurgeExpired deletes codes a day past expiry, after which a replay is
-// refused as unknown; a worker calls it periodically.
+// PurgeExpired deletes every code a day past expiry, after which a replay is
+// refused as unknown, one batch per statement.
 func (s *CodeStoreDB) PurgeExpired(ctx context.Context) error {
-	_, err := s.qs.Query(ctx, oauthPurgeCodes)
-	return err
+	for {
+		n, err := s.purgeCodes(ctx)
+		if err != nil || n < purgeBatch {
+			return err
+		}
+	}
+}
+
+func (s *CodeStoreDB) purgeCodes(ctx context.Context) (int, error) {
+	res, err := s.qs.Query(ctx, oauthPurgeCodes, purgeBatch)
+	if err != nil {
+		return 0, err
+	}
+	return len(res.Rows), nil
 }

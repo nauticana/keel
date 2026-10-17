@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.128",
+   "title": "Redirect hosts for open OAuth registration, purge without a worker",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "Open OAuth registration and its authorizations accept only loopback redirects and listed hosts, the consent page names the redirect host, and registration and code issuance purge stale OAuth rows themselves.",
+   "body_markdown": "### Breaking\n\n- `oauth_redirect_hosts` (CSV, default empty) lists the hosts an openly registered client may redirect to besides loopback; `authserver.Config.RedirectHosts` in direct composition. Registration refuses another host with `invalid_redirect_uri`, and authorization refuses it with `invalid_request` without redirecting, including for clients registered before the upgrade. Provisioned clients are exempt. List every host your clients use before upgrading.\n\n### Additive\n\n- `ConsentView.RedirectHost`; the built-in consent page shows it.\n- Registration and code issuance purge batches at runtime, avoiding a maintenance worker. Open registration removes clients older than `oauth_client_purge_age` (seconds, default `86400`, minimum `60`) that never authorized, inside the pending bound's lock; `ClientStoreDB.PurgeAge` in direct composition, `0` keeps them. `CodeStoreDB.SaveCode` removes codes a day past expiry. `CodeStoreDB.PurgeExpired` and `GrantService.PurgeUnauthorizedClients` remain for on-demand cleanup.\n- Schema: index `idx_oauth_code_expires` on `oauth_authorization_code (expires_at)`. Reload the `core` seed for the two flags."
+  },
+  {
    "version": "v1.2.127",
    "title": "Site-root files and redirect creation",
    "tags": [

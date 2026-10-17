@@ -2,11 +2,8 @@ package authserver
 
 import (
 	"context"
-	"net"
-	"net/url"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/nauticana/keel/port"
 )
@@ -96,12 +93,8 @@ func (p *grantPolicy) capped(rest []string, code oauthErr) error {
 func appHosts(c *port.OAuthClient) []string {
 	var out []string
 	for _, raw := range c.RedirectURIs {
-		u, err := url.Parse(raw)
-		if err != nil {
-			continue
-		}
-		host := strings.ToLower(u.Hostname())
-		if host == "" || host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback() {
+		host := redirectHost(raw)
+		if host == "" || isLoopbackHost(host) {
 			continue
 		}
 		if !slices.Contains(out, host) {

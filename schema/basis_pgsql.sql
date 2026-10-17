@@ -665,6 +665,7 @@ CREATE TABLE IF NOT EXISTS oauth_authorization_code (
     CONSTRAINT oauth_authorization_code_pk PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_code_hash ON oauth_authorization_code(code_hash);
+CREATE INDEX IF NOT EXISTS idx_oauth_code_expires ON oauth_authorization_code(expires_at);
 
 CREATE SEQUENCE IF NOT EXISTS oauth_authorization_code_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('oauth_authorization_code', 'id', 'oauth_authorization_code_seq') ON CONFLICT DO NOTHING;

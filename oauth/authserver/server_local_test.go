@@ -136,9 +136,13 @@ func newTestAS(t *testing.T) (*Local, *RS256Signer) {
 	cfg := Config{
 		Issuer: "https://as.example", DefaultAudience: "https://rs.example",
 		Scopes: []string{"read", "write"}, AccessTTL: time.Hour, RefreshTTL: 24 * time.Hour, CodeTTL: time.Minute,
+		RedirectHosts: testRedirectHosts,
 	}
 	return NewLocal(signer, clients, codes, tokens, cfg), signer
 }
+
+// testRedirectHosts are the hosts the tests register on; evil.example is not one.
+var testRedirectHosts = []string{"App.Example ", "a.example", "b.example", "c.example", "assistant.example", "claude.ai", "other.example"}
 
 func pkce(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
@@ -475,7 +479,7 @@ func TestMultiResourceIntrospect(t *testing.T) {
 	cfg := Config{
 		Issuer: "https://as.example", DefaultAudience: "https://rs.example",
 		Resources: []string{"https://rs2.example"}, Scopes: []string{"read"},
-		AccessTTL: time.Hour, RefreshTTL: time.Hour, CodeTTL: time.Minute,
+		AccessTTL: time.Hour, RefreshTTL: time.Hour, CodeTTL: time.Minute, RedirectHosts: testRedirectHosts,
 	}
 	as := NewLocal(signer,
 		&memClients{m: map[string]*port.OAuthClient{}},
@@ -578,5 +582,42 @@ func TestTokenExchangeRequiresAccessTokenType(t *testing.T) {
 	}
 	if err := tx("urn:ietf:params:oauth:token-type:access_token"); err != nil {
 		t.Fatalf("access_token type should pass, got %v", err)
+	}
+}
+
+// Open registration and its authorizations stay on listed or loopback hosts;
+// an operator-provisioned client is not limited.
+func TestOpenRegistrationRedirectHosts(t *testing.T) {
+	ctx := context.Background()
+	as, signer := newTestAS(t)
+	for _, uri := range []string{"https://evil.example/cb", "https://app.example.evil/cb", "https://sub.app.example/cb"} {
+		if _, err := as.Register(ctx, port.ClientRegistration{RedirectURIs: []string{"https://app.example/cb", uri}}); !errors.Is(err, ErrOAuthInvalidRedirectURI) {
+			t.Errorf("%s: %v", uri, err)
+		}
+	}
+	for _, uri := range []string{"https://APP.example/cb", "http://127.0.0.1:5000/cb", "http://localhost/cb", "https://[::1]/cb"} {
+		if _, err := as.Register(ctx, port.ClientRegistration{RedirectURIs: []string{uri}}); err != nil {
+			t.Errorf("%s: %v", uri, err)
+		}
+	}
+	provisioned, err := as.Provision(ctx, port.ClientRegistration{RedirectURIs: []string{"https://partner.example/cb"}, GrantTypes: []string{"authorization_code"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := as.Register(ctx, port.ClientRegistration{RedirectURIs: []string{"https://app.example/cb"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The list shrinks after registration: the registered client is refused
+	// without a client, so the error is not sent to its redirect URI.
+	narrowed := NewLocal(signer, as.clients, as.codes, as.tokens, Config{Issuer: as.cfg.Issuer, DefaultAudience: as.cfg.DefaultAudience})
+	req := port.AuthorizeRequest{ClientID: registered.ClientID, RedirectURI: "https://app.example/cb", CodeChallenge: "x", CodeChallengeMethod: "S256"}
+	if client, _, err := narrowed.ValidateAuthorizeRequest(ctx, req); client != nil || !errors.Is(err, ErrOAuthInvalidRequest) {
+		t.Fatalf("delisted host: client=%v err=%v", client, err)
+	}
+	req.ClientID, req.RedirectURI = provisioned.ClientID, "https://partner.example/cb"
+	if _, _, err := narrowed.ValidateAuthorizeRequest(ctx, req); err != nil {
+		t.Fatalf("provisioned client: %v", err)
 	}
 }

@@ -32,7 +32,7 @@ func TestOAuthRegisterPolicy(t *testing.T) {
 	}
 	journal := &recordingJournal{}
 	h := &OAuthASHandler{Journal: journal, AS: authserver.NewLocal(signer, registerClients{}, nil, nil,
-		authserver.Config{Issuer: "https://as.example", DefaultAudience: "https://rs.example", Scopes: []string{"read"}})}
+		authserver.Config{Issuer: "https://as.example", DefaultAudience: "https://rs.example", Scopes: []string{"read"}, RedirectHosts: []string{"claude.ai"}})}
 	register := func(body string) (*httptest.ResponseRecorder, map[string]any) {
 		rec := httptest.NewRecorder()
 		h.register(rec, httptest.NewRequest(http.MethodPost, authserver.OAuthRegisterPath, strings.NewReader(body)))
@@ -129,7 +129,7 @@ func TestAuthorizeErrorsReturnToTheClient(t *testing.T) {
 
 	rec := authorize("response_type=code&" + valid)
 	csp := rec.Header().Get("Content-Security-Policy")
-	if rec.Code != http.StatusOK || !strings.Contains(csp, "form-action 'self' https://app.example") {
+	if rec.Code != http.StatusOK || !strings.Contains(csp, "form-action 'self' https://app.example") || !strings.Contains(rec.Body.String(), "<strong>app.example</strong>") {
 		t.Fatalf("consent page: %d csp %q", rec.Code, csp)
 	}
 }

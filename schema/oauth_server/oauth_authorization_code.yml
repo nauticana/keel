@@ -52,3 +52,5 @@ indexes:
   - name: idx_oauth_code_hash
     columns: [code_hash]
     unique: true
+  - name: idx_oauth_code_expires
+    columns: [expires_at]

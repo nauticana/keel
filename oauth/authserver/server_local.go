@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"maps"
-	"net"
 	"net/url"
 	"slices"
 	"strconv"
@@ -110,6 +109,9 @@ type Config struct {
 	// same app (a shared non-loopback redirect host) when a new one is issued.
 	ReplaceSameAppGrant bool
 	MaxGrantsPerUser    int // live grants a user may hold; 0 is unbounded
+	// RedirectHosts are the hosts an openly registered client may redirect
+	// to besides loopback; Provision is not limited.
+	RedirectHosts []string
 }
 
 // registrationGrants are the grants open registration records: the interactive
@@ -132,6 +134,10 @@ type Local struct {
 var _ port.AuthorizationServer = (*Local)(nil)
 
 func NewLocal(signer *RS256Signer, clients port.OAuthClientStore, codes port.AuthCodeStore, tokens port.OAuthTokenStore, cfg Config) *Local {
+	cfg.RedirectHosts = slices.Clone(cfg.RedirectHosts)
+	for i, h := range cfg.RedirectHosts {
+		cfg.RedirectHosts[i] = strings.ToLower(strings.TrimSpace(h))
+	}
 	resources := []string{cfg.DefaultAudience}
 	for _, r := range cfg.Resources {
 		if r != "" && !slices.Contains(resources, r) {
@@ -229,6 +235,9 @@ func (a *Local) createClient(ctx context.Context, req port.ClientRegistration, g
 		if !validRedirectURI(u) {
 			return nil, describedErr{ErrOAuthInvalidRedirectURI, "redirect_uris: must be https, or http on a loopback address, without userinfo or fragment"}
 		}
+		if registered && !a.openRedirect(u) {
+			return nil, describedErr{ErrOAuthInvalidRedirectURI, "redirect_uris: host is not open to registration"}
+		}
 	}
 	method := req.TokenAuthMethod
 	if method == "" {
@@ -280,7 +289,8 @@ func (a *Local) ValidateAuthorizeRequest(ctx context.Context, req port.Authorize
 	if client == nil {
 		return nil, nil, ErrOAuthInvalidClient
 	}
-	if !slices.Contains(client.RedirectURIs, req.RedirectURI) {
+	// No client on a refusal here, so the error never goes to the redirect URI.
+	if !slices.Contains(client.RedirectURIs, req.RedirectURI) || client.Registered && !a.openRedirect(req.RedirectURI) {
 		return nil, nil, ErrOAuthInvalidRequest
 	}
 	if req.CodeChallenge == "" || req.CodeChallengeMethod != "S256" {
@@ -449,9 +459,12 @@ func validRedirectURI(raw string) bool {
 	if err != nil || !u.IsAbs() || u.Host == "" || u.Fragment != "" || u.User != nil {
 		return false
 	}
-	if u.Scheme == "https" {
-		return true
-	}
-	ip := net.ParseIP(u.Hostname())
-	return u.Scheme == "http" && (u.Hostname() == "localhost" || ip != nil && ip.IsLoopback())
+	return u.Scheme == "https" || u.Scheme == "http" && isLoopbackHost(strings.ToLower(u.Hostname()))
+}
+
+// openRedirect reports whether an openly registered client may use raw: a
+// loopback URI or one on a listed host.
+func (a *Local) openRedirect(raw string) bool {
+	host := redirectHost(raw)
+	return isLoopbackHost(host) || host != "" && slices.Contains(a.cfg.RedirectHosts, host)
 }

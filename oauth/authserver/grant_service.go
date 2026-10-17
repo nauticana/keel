@@ -49,19 +49,7 @@ UPDATE oauth_refresh_token SET revoked_at = CURRENT_TIMESTAMP
 RETURNING id`,
 	oauthGrantActive:  `SELECT 1 FROM oauth_refresh_token WHERE user_id = ? AND client_id = ? AND ` + liveRefresh + ` LIMIT 1`,
 	oauthGrantClients: `SELECT DISTINCT client_id FROM oauth_refresh_token WHERE user_id = ? AND ` + liveRefresh + ` ORDER BY client_id`,
-	// Registered clients that never completed an authorization: no refresh
-	// token ever issued and no code in flight.
-	oauthClientPurge: `
-DELETE FROM oauth_client
- WHERE id IN (SELECT c.id FROM oauth_client c
-               WHERE c.registered = TRUE
-                 AND c.grant_types LIKE '%refresh_token%'
-                 AND c.created_at < CURRENT_TIMESTAMP - (CAST(? AS INTEGER) * INTERVAL '1 second')
-                 AND NOT EXISTS (SELECT 1 FROM oauth_refresh_token t WHERE t.client_id = c.client_id)
-                 AND NOT EXISTS (SELECT 1 FROM oauth_authorization_code a WHERE a.client_id = c.client_id)
-               ORDER BY c.id
-               LIMIT ?)
-RETURNING client_id`,
+	oauthClientPurge:  clientPurgeSQL,
 }
 
 var oauthGrantTxQueries = common.MergeMaps(oauthGrantQueries, guard.Queries)
@@ -180,7 +168,7 @@ func (s *GrantService) Clients(ctx context.Context, userID int64) ([]string, err
 
 // PurgeUnauthorizedClients deletes up to purgeBatch registered clients that
 // registered more than olderThan ago and never completed an authorization,
-// and returns how many it deleted; a worker calls it until it returns fewer.
+// and returns how many it deleted. Registration already purges a batch first.
 func (s *GrantService) PurgeUnauthorizedClients(ctx context.Context, olderThan time.Duration) (int, error) {
 	if olderThan < time.Minute {
 		return 0, fmt.Errorf("oauth: purge age must be at least a minute, got %s", olderThan)

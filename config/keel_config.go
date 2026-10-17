@@ -47,6 +47,8 @@ const (
 	oauth_max_auth_redirects      = "oauth_max_auth_redirects"
 	oauth_replace_same_app_grant  = "oauth_replace_same_app_grant"
 	oauth_max_grants_per_user     = "oauth_max_grants_per_user"
+	oauth_redirect_hosts          = "oauth_redirect_hosts"
+	oauth_client_purge_age        = "oauth_client_purge_age"
 	outbound_max_redirects        = "outbound_max_redirects"
 	outbound_max_rps              = "outbound_max_rps"
 	outbound_max_pages            = "outbound_max_pages"
@@ -200,6 +202,8 @@ type KeelConfig struct {
 	OAuthMaxAuthRedirects       int           // oauth_max_auth_redirects      2                  Max /authorize→login bounces before 508
 	OAuthReplaceSameAppGrant    bool          // oauth_replace_same_app_grant  true               A new grant revokes the user's grants to other clients sharing its redirect host
 	OAuthMaxGrantsPerUser       int           // oauth_max_grants_per_user     10                 Live OAuth grants a user may hold; 0 is unbounded
+	OAuthRedirectHosts          string        // oauth_redirect_hosts          ""                 CSV of hosts open registration may redirect to besides loopback
+	OAuthClientPurgeAge         time.Duration // oauth_client_purge_age        86400              Age after which registration deletes an open registration that never authorized (seconds, min 60; 0 = default)
 	OutboundMaxRedirects        int           // outbound_max_redirects        10                 Max redirects the shared outbound HTTP client follows
 	OutboundMaxRPS              float64       // outbound_max_rps              0                  Global rate cap on the shared outbound HTTP client (0 = unlimited)
 	OutboundMaxPages            int           // outbound_max_pages            50                 Most pages a provider API client follows in one paged read
@@ -349,6 +353,8 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OAuthMaxAuthRedirects = c.Int(m, oauth_max_auth_redirects)
 	c.OAuthReplaceSameAppGrant = c.Bool(m, oauth_replace_same_app_grant)
 	c.OAuthMaxGrantsPerUser = c.Int(m, oauth_max_grants_per_user)
+	c.OAuthRedirectHosts = c.String(m, oauth_redirect_hosts)
+	c.OAuthClientPurgeAge = c.Duration(m, oauth_client_purge_age)
 	c.OutboundMaxRedirects = c.Int(m, outbound_max_redirects)
 	c.OutboundMaxRPS = c.Float(m, outbound_max_rps)
 	c.OutboundMaxPages = c.Int(m, outbound_max_pages)
@@ -464,6 +470,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.AccessRevocationCacheTTL < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", access_revocation_cache_ttl))
+	}
+	if c.OAuthClientPurgeAge == 0 {
+		c.OAuthClientPurgeAge = 24 * time.Hour
+	} else if c.OAuthClientPurgeAge < time.Minute {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be at least 60", oauth_client_purge_age))
 	}
 	if c.OAuthAccessTokenCacheTTL < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", oauth_access_token_cache_ttl))

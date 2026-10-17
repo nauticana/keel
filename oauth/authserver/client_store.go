@@ -21,6 +21,20 @@ const (
 	oauthPendingCount = "oauth_pending_clients"
 )
 
+// clientPurgeSQL deletes registered clients that never completed an
+// authorization: no refresh token ever issued and no code in flight.
+const clientPurgeSQL = `
+DELETE FROM oauth_client
+ WHERE id IN (SELECT c.id FROM oauth_client c
+               WHERE c.registered = TRUE
+                 AND c.grant_types LIKE '%refresh_token%'
+                 AND c.created_at < CURRENT_TIMESTAMP - (CAST(? AS INTEGER) * INTERVAL '1 second')
+                 AND NOT EXISTS (SELECT 1 FROM oauth_refresh_token t WHERE t.client_id = c.client_id)
+                 AND NOT EXISTS (SELECT 1 FROM oauth_authorization_code a WHERE a.client_id = c.client_id)
+               ORDER BY c.id
+               LIMIT ?)
+RETURNING client_id`
+
 var oauthClientQueries = map[string]string{
 	oauthInsertClient: `
 INSERT INTO oauth_client (id, client_id, secret_hash, client_name, redirect_uris, grant_types, scopes, token_auth_method, registered)
@@ -32,18 +46,19 @@ SELECT client_id, secret_hash, client_name, redirect_uris, grant_types, scopes, 
 UPDATE oauth_client SET secret_hash = ?, client_name = ?, redirect_uris = ?, grant_types = ?, scopes = ?, token_auth_method = ?
  WHERE client_id = ?`,
 	oauthDeleteClient: `DELETE FROM oauth_client WHERE client_id = ?`,
-	// The clients PurgeUnauthorizedClients would delete.
+	// The clients clientPurgeSQL would delete.
 	oauthPendingCount: `
 SELECT COUNT(*) FROM oauth_client c
  WHERE c.registered = TRUE
    AND c.grant_types LIKE '%refresh_token%'
    AND NOT EXISTS (SELECT 1 FROM oauth_refresh_token t WHERE t.client_id = c.client_id)
    AND NOT EXISTS (SELECT 1 FROM oauth_authorization_code a WHERE a.client_id = c.client_id)`,
+	oauthClientPurge: clientPurgeSQL,
 }
 
 var oauthClientTxQueries = common.MergeMaps(oauthClientQueries, guard.Queries)
 
-// purgeable reports whether a client is one PurgeUnauthorizedClients covers:
+// purgeable reports whether a client is one clientPurgeSQL covers:
 // openly registered, for refresh tokens.
 func purgeable(c *port.OAuthClient) bool {
 	return c.Registered && slices.Contains(c.GrantTypes, "refresh_token")
@@ -56,7 +71,10 @@ type ClientStoreDB struct {
 	// authorization; registering one more is ErrOAuthClientLimit. 0 is
 	// unbounded.
 	MaxPending int
-	qs         port.QueryService
+	// PurgeAge is how old an abandoned registration must be before the next
+	// registration deletes it; 0 keeps them.
+	PurgeAge time.Duration
+	qs       port.QueryService
 }
 
 var _ port.OAuthClientStore = (*ClientStoreDB)(nil)
@@ -67,8 +85,16 @@ func (s *ClientStoreDB) Init(ctx context.Context) {
 	}
 }
 
+// CreateClient first deletes up to a batch of abandoned registrations, so
+// they never hold pending slots and need no scheduled purge.
 func (s *ClientStoreDB) CreateClient(ctx context.Context, c *port.OAuthClient) (err error) {
-	if s.MaxPending <= 0 || !purgeable(c) {
+	if !purgeable(c) {
+		return insertClient(ctx, s.qs, c)
+	}
+	if s.MaxPending <= 0 {
+		if err := s.purge(ctx, s.qs); err != nil {
+			return err
+		}
 		return insertClient(ctx, s.qs, c)
 	}
 	tx, err := s.DB.BeginTx(ctx, oauthClientTxQueries)
@@ -82,6 +108,9 @@ func (s *ClientStoreDB) CreateClient(ctx context.Context, c *port.OAuthClient) (
 		}
 	}()
 	if err := guard.Lock(ctx, tx, "oauth:pending-clients"); err != nil {
+		return err
+	}
+	if err := s.purge(ctx, tx); err != nil {
 		return err
 	}
 	res, err := tx.Query(ctx, oauthPendingCount)
@@ -106,6 +135,14 @@ func (s *ClientStoreDB) CreateClient(ctx context.Context, c *port.OAuthClient) (
 	}
 	committed = true
 	return nil
+}
+
+func (s *ClientStoreDB) purge(ctx context.Context, qs port.QueryService) error {
+	if s.PurgeAge <= 0 {
+		return nil
+	}
+	_, err := qs.Query(ctx, oauthClientPurge, int(s.PurgeAge/time.Second), purgeBatch)
+	return err
 }
 
 func insertClient(ctx context.Context, qs port.QueryService, c *port.OAuthClient) error {

@@ -74,7 +74,7 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 		if aud == "" {
 			aud = issuer
 		}
-		clients := &authserver.ClientStoreDB{DB: db, MaxPending: config.Config().OAuthMaxPendingClients}
+		clients := &authserver.ClientStoreDB{DB: db, MaxPending: config.Config().OAuthMaxPendingClients, PurgeAge: config.Config().OAuthClientPurgeAge}
 		clients.Init(ctx)
 		codes := &authserver.CodeStoreDB{DB: db}
 		codes.Init(ctx)
@@ -98,6 +98,7 @@ func NewOAuthFromConfig(ctx context.Context, db port.DatabaseRepository, secrets
 
 			ReplaceSameAppGrant: config.Config().OAuthReplaceSameAppGrant,
 			MaxGrantsPerUser:    config.Config().OAuthMaxGrantsPerUser,
+			RedirectHosts:       common.SplitCSV(config.Config().OAuthRedirectHosts),
 		}
 		as := authserver.NewLocal(signer, clients, codes, tokens, cfg)
 		// validator is the single-audience resource-server validator for the

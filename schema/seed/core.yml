@@ -76,6 +76,8 @@ seeds:
       - [oauth_max_auth_redirects, int, false, '2', Max authorize->login bounces before 508]
       - [oauth_replace_same_app_grant, bool, true, 'true', A new OAuth grant revokes the user's grants to other clients sharing its redirect host]
       - [oauth_max_grants_per_user, int, true, '10', 'Live OAuth grants a user may hold; 0 is unbounded']
+      - [oauth_redirect_hosts, string, true, '', CSV of hosts open OAuth registration may redirect to besides loopback]
+      - [oauth_client_purge_age, duration, true, '86400', 'Age after which registration deletes an open OAuth registration that never authorized (seconds, min 60; 0 = default)']
       - [outbound_max_redirects, int, false, '10', Max redirects the outbound HTTP client follows]
       - [outbound_max_rps, float, true, '0', Global outbound HTTP rate cap (0 = unlimited)]
       - [outbound_max_response_size, int64, false, '16777216', Response body cap for common.RequestJSON (bytes)]

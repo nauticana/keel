@@ -39,6 +39,7 @@ func TestOAuthFactoryWiresPendingClientLimit(t *testing.T) {
 		OAuthIssuer:            "https://as.example",
 		OAuthScopesSupported:   "read",
 		OAuthMaxPendingClients: 1,
+		OAuthRedirectHosts:     "app.example",
 	})
 
 	setup, err := NewOAuthFromConfig(context.Background(), &factoryDB{}, nil, nil, nil)

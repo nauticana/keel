@@ -16,7 +16,7 @@ var keelTestFlagIDs = []string{
 	oauth_issuer, oauth_jwks_url, oauth_audience, oauth_resource,
 	oauth_resources, oauth_scopes_supported, oauth_as_mode,
 	oauth_signing_key_secret, oauth_access_token_ttl, oauth_refresh_token_ttl,
-	oauth_code_ttl, oauth_max_pending_clients, oauth_max_auth_redirects, oauth_replace_same_app_grant, oauth_max_grants_per_user,
+	oauth_code_ttl, oauth_max_pending_clients, oauth_max_auth_redirects, oauth_replace_same_app_grant, oauth_max_grants_per_user, oauth_redirect_hosts, oauth_client_purge_age,
 	api_key_max_per_partner, notify_new_device_signin, stepup_new_device, max_sessions_per_user, outbound_max_redirects,
 	outbound_max_rps, outbound_max_pages, outbound_max_items, telephony_max_body_bytes, telephony_signature_tolerance, outbound_max_response_size, trusted_proxy_cidr, request_id_header, nats_url, nats_name,
 	nats_creds_secret, storage_mode, storage_bucket, s3_endpoint, storage_credential_secret, dms_max_bytes, scan_mode, scan_addr, extract_mode, extract_max_bytes, extract_ocr_max_pages,
@@ -253,5 +253,21 @@ func TestApplyKeel_OTPSendCapZeroDisablesNegativeFails(t *testing.T) {
 	m[otp_send_per_ip] = ConfigRow{Value: "-1"}
 	if err := (&KeelConfig{}).Apply(m); err == nil || !strings.Contains(err.Error(), otp_send_per_ip) {
 		t.Fatalf("negative cap: err = %v", err)
+	}
+}
+
+func TestApplyKeel_OAuthClientPurgeAge(t *testing.T) {
+	for value, want := range map[string]time.Duration{"0": 24 * time.Hour, "60": time.Minute} {
+		m := keelRows()
+		m[oauth_client_purge_age] = ConfigRow{Value: value}
+		c := &KeelConfig{}
+		if err := applyKeelForTest(c, m); err != nil || c.OAuthClientPurgeAge != want {
+			t.Errorf("%s: %s, %v", value, c.OAuthClientPurgeAge, err)
+		}
+	}
+	m := keelRows()
+	m[oauth_client_purge_age] = ConfigRow{Value: "59"}
+	if err := applyKeelForTest(&KeelConfig{}, m); err == nil || !strings.Contains(err.Error(), oauth_client_purge_age) {
+		t.Fatalf("want %s validation error, got %v", oauth_client_purge_age, err)
 	}
 }
