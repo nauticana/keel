@@ -797,6 +797,10 @@ type LocalUserService struct {
 	// records a revocation that failed. Both are optional.
 	GrantRevoker port.IdentityGrantRevoker
 	Journal      logger.ApplicationLogger
+	// OnDeleted runs inside DeleteAccount's transaction after the account is
+	// anonymized, e.g. approval.Service.WithdrawForUser; its error rolls the
+	// deletion back. Optional.
+	OnDeleted func(ctx context.Context, tx port.TxQueryService, userID int64) error
 	// SignInNotifier sends new-device notices and step-up codes; optional
 	// unless notify_new_device_signin or stepup_new_device is on.
 	SignInNotifier SignInNotifier
@@ -2905,10 +2909,10 @@ func (s *LocalUserService) recordSignupConsent(userID int, email string, sc *Sig
 // DeleteAccount anonymizes the user_account row in place (preserving FK
 // integrity for history rows that legal retention requires), revokes every
 // access and refresh token, deletes trusted devices and social-provider links,
-// revokes the provider grants those links kept, and records a
-// UserActivityDelete history entry. Refuses with ErrReasonTooLong before
-// deleting anything, and with ErrLegalHold while the user has an unreleased
-// legal hold. The deletion stands once committed; a failed history write is
+// revokes the provider grants those links kept, runs OnDeleted in the same
+// transaction, and records a UserActivityDelete history entry. Refuses with
+// ErrReasonTooLong before deleting anything, and with ErrLegalHold while the
+// user has an unreleased legal hold. The deletion stands once committed; a failed history write is
 // journaled.
 func (s *LocalUserService) DeleteAccount(userID int, reason string) error {
 	if utf8.RuneCountInString(reason) > MaxHistoryReason {
@@ -2982,6 +2986,11 @@ func (s *LocalUserService) deleteAccount(userID int) ([]identityGrant, error) {
 	for _, step := range steps {
 		if _, err := tx.Query(ctx, step.query, step.args...); err != nil {
 			return nil, fmt.Errorf("delete: %s: %w", step.what, err)
+		}
+	}
+	if s.OnDeleted != nil {
+		if err := s.OnDeleted(ctx, tx, int64(userID)); err != nil {
+			return nil, fmt.Errorf("delete: OnDeleted: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

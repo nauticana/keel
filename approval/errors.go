@@ -11,6 +11,7 @@ var (
 	ErrSameActor    = errors.New("approval: the maker cannot decide their own request")
 	ErrExpired      = errors.New("approval: request has expired")
 	ErrNotMaker     = errors.New("approval: only the maker can withdraw the request")
+	ErrTxCatalog    = errors.New("approval: transaction cannot bind the approval query catalog")
 )
 
 const (

@@ -105,3 +105,31 @@ func TestWithdrawIsTheMakersOnly(t *testing.T) {
 		t.Fatalf("a withdrawn record can be submitted again: %v", err)
 	}
 }
+
+func TestWithdrawForUserClosesTheMakersPendingRequests(t *testing.T) {
+	ctx := context.Background()
+	store := newStore()
+	svc := &Service{DB: memRepo{store: store}}
+	mine, _ := svc.Submit(ctx, 1, "order", 10, 100)
+	decided, _ := svc.Submit(ctx, 2, "order", 11, 100)
+	other, _ := svc.Submit(ctx, 1, "order", 12, 200)
+	if _, err := svc.Decide(ctx, 2, decided.ID, 300, true, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.WithdrawForUser(ctx, store, 100); !errors.Is(err, ErrTxCatalog) {
+		t.Fatalf("a transaction without a catalog: %v", err)
+	}
+	if err := svc.WithdrawForUser(ctx, catalogTx{store}, 100); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int64]string{mine.ID: StatusWithdrawn, decided.ID: StatusApproved, other.ID: StatusPending} {
+		if got, _ := svc.Get(ctx, store.requests[id][1].(int64), id); got.Status != want {
+			t.Errorf("request %d = %s, want %s", id, got.Status, want)
+		}
+	}
+	events, _ := svc.Events(ctx, 1, mine.ID)
+	if last := events[len(events)-1]; last.EventType != EventWithdrawn || last.ActorID != 0 || last.Note != "account deleted" {
+		t.Fatalf("withdraw event = %+v", last)
+	}
+}

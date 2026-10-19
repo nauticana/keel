@@ -20,7 +20,7 @@ import (
 // Caption / Interval / HCPort, implement GetOLTPQueries and JobWorker or
 // QueueWorker, then call w.Run(ctx, w) from main.
 type AbstractWorker struct {
-	Caption  string                // journal/log caption
+	Caption  string                // journal caption and service_registry name, at most MaxServiceNameLen
 	Interval int                   // poll interval, seconds
 	HCPort   int                   // /health port
 	Secret   secret.SecretProvider // set by Run before the loop; for AI/OAuth workers
@@ -35,6 +35,9 @@ func (a *AbstractWorker) GetHealthcheckPort() int { return a.HCPort }
 // Run is the worker entry point; self is the embedding worker, which the base
 // cannot reach otherwise.
 func (a *AbstractWorker) Run(ctx context.Context, self Worker) error {
+	if err := checkCaption(a.Caption); err != nil {
+		return err
+	}
 	journal, err := logger.NewApplicationLogger(a.Caption)
 	if err != nil {
 		return fmt.Errorf("worker %q: logger: %w", a.Caption, err)

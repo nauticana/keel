@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.130",
+   "title": "Worker captions, signing check, approvals on account deletion",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "Workers refuse a caption that cannot register, storage can check signing at start-up, and account deletion can withdraw the user's pending approval requests.",
+   "body_markdown": "### Breaking\n\n- `JobExecutor.Run` and `AbstractWorker.Run` return `worker.ErrCaption` for a `Caption` that is empty or longer than `worker.MaxServiceNameLen` (16, the `service_registry.service_name` width), and `JobExecutor.Run` returns the error when the registry insert fails instead of running without a registry row.\n\n### Additive\n\n- `storage.CheckSigning(ctx, store)` mints a throwaway signed URL; call it at start-up or from a health check when the app serves signed URLs. The GCS signing error names `roles/iam.serviceAccountTokenCreator`.\n- `approval.Service.WithdrawForUser(ctx, tx, userID)` withdraws the user's pending requests in the caller's transaction (system actor, note `account deleted`); the transaction must implement `port.TxQueryCatalog` (`approval.ErrTxCatalog`). New partial index `idx_approval_request_maker_open` on `approval_request(maker_id) WHERE status = 'P'`.\n- `LocalUserService.OnDeleted(ctx, tx, userID)` runs inside `DeleteAccount`'s transaction; its error rolls the deletion back. Set it to an `approval.Service`'s `WithdrawForUser`."
+  },
+  {
    "version": "v1.2.129",
    "title": "Trials without a card",
    "tags": [

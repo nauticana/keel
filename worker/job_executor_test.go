@@ -2,11 +2,15 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/schema"
 )
 
 // --- worker test doubles (reuse fakeQS / fakeLogger / qr / anyContains) ------
@@ -86,5 +90,47 @@ func TestJobExecutor_runTick_neitherContractLogs(t *testing.T) {
 
 	if !anyContains(lg.errs, "neither QueueWorker nor JobWorker") {
 		t.Fatalf("expected neither-contract log, got %v", lg.errs)
+	}
+}
+
+// --- caption and registration ----------------------------------------------
+
+func TestJobExecutor_Run_refusesCaptionThatCannotRegister(t *testing.T) {
+	for _, caption := range []string{"", strings.Repeat("a", MaxServiceNameLen+1)} {
+		e := &JobExecutor{Caption: caption, Journal: &fakeLogger{}, Worker: minimalWorker{}}
+		if err := e.Run(context.Background(), nil); !errors.Is(err, ErrCaption) {
+			t.Errorf("caption %q: err = %v, want ErrCaption", caption, err)
+		}
+		w := &AbstractWorker{Caption: caption}
+		if err := w.Run(context.Background(), minimalWorker{}); !errors.Is(err, ErrCaption) {
+			t.Errorf("AbstractWorker caption %q: err = %v, want ErrCaption", caption, err)
+		}
+	}
+	if err := checkCaption(strings.Repeat("é", MaxServiceNameLen)); err != nil {
+		t.Errorf("caption of %d characters: %v", MaxServiceNameLen, err)
+	}
+}
+
+func TestMaxServiceNameLenMatchesSchema(t *testing.T) {
+	table, err := schema.ParseFile("../schema/worker/service_registry.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range table.Columns {
+		if c.Name == "service_name" {
+			if want := fmt.Sprintf("VARCHAR(%d)", MaxServiceNameLen); c.Type != want {
+				t.Fatalf("service_name is %s, want %s", c.Type, want)
+			}
+			return
+		}
+	}
+	t.Fatal("service_registry has no service_name column")
+}
+
+func TestJobExecutor_registerService_failureIsReturned(t *testing.T) {
+	qs := &fakeQS{errs: map[string]error{qRegisterService: errors.New("value too long")}}
+	e := &JobExecutor{Journal: &fakeLogger{}}
+	if err := e.registerService(context.Background(), qs, "svc"); err == nil || !strings.Contains(err.Error(), "value too long") {
+		t.Fatalf("err = %v, want the insert error", err)
 	}
 }

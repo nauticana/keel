@@ -109,6 +109,12 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 				out.Rows = append(out.Rows, []any{id})
 			}
 		}
+	case qPendingBy:
+		for id := int64(1); id <= m.nextID; id++ {
+			if r, ok := m.requests[id]; ok && r[5] == args[0] && r[4] == StatusPending {
+				out.Rows = append(out.Rows, []any{id})
+			}
+		}
 	case qEvents:
 		for _, e := range m.events {
 			if e[1] == args[0] {
@@ -130,3 +136,10 @@ func (r memRepo) GetQueryService(context.Context, map[string]string) port.QueryS
 func (r memRepo) BeginTx(context.Context, map[string]string) (port.TxQueryService, error) {
 	return r.store, nil
 }
+
+// catalogTx is a transaction that binds other query catalogs to the same store.
+type catalogTx struct{ *memStore }
+
+func (c catalogTx) QueryService(string, map[string]string) port.QueryService { return c.memStore }
+
+var _ port.TxQueryCatalog = catalogTx{}

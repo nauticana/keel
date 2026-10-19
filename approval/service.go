@@ -112,7 +112,7 @@ func (s *Service) SubmitUntil(ctx context.Context, partnerID int64, objectType s
 
 // close ends a pending request without a checker and records the event. An
 // actor of 0 is the system.
-func (s *Service) close(ctx context.Context, tx port.TxQueryService, id int64, status, event string, actorID int64, note string) error {
+func (s *Service) close(ctx context.Context, tx port.QueryService, id int64, status, event string, actorID int64, note string) error {
 	if _, err := tx.Query(ctx, qClose, status, nullableNote(note), id); err != nil {
 		return err
 	}
@@ -150,6 +150,28 @@ func (s *Service) Withdraw(ctx context.Context, partnerID, id, makerID int64, no
 		return nil, err
 	}
 	return s.Get(ctx, partnerID, id)
+}
+
+// WithdrawForUser withdraws, in the caller's transaction, every pending request
+// the user made, as the system with the note "account deleted". The
+// transaction must implement port.TxQueryCatalog (ErrTxCatalog otherwise);
+// user.LocalUserService.OnDeleted can be set to it.
+func (s *Service) WithdrawForUser(ctx context.Context, tx port.TxQueryService, userID int64) error {
+	catalog, ok := tx.(port.TxQueryCatalog)
+	if !ok {
+		return ErrTxCatalog
+	}
+	q := catalog.QueryService("approval", queries)
+	res, err := q.Query(ctx, qPendingBy, userID)
+	if err != nil {
+		return err
+	}
+	for _, row := range res.Rows {
+		if err := s.close(ctx, q, common.AsInt64(row[0]), StatusWithdrawn, EventWithdrawn, 0, "account deleted"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ExpireDue closes up to expireBatch pending requests past their expiry and

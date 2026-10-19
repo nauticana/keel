@@ -2,7 +2,7 @@ table: approval_event
 comment: |
   Append-only audit of an approval request. event_type S=submitted,
   A=approved, R=rejected, W=withdrawn, E=expired; actor_id is the user who
-  acted, NULL for an expiry.
+  acted, NULL for the system (an expiry, a withdrawal on account deletion).
 columns:
   - name: id
     type: BIGINT

@@ -12,6 +12,7 @@ const (
 	qSetDecision   = "set_decision"
 	qClose         = "close"
 	qDue           = "due"
+	qPendingBy     = "pending_by"
 	qEvents        = "events"
 )
 
@@ -44,5 +45,6 @@ SELECT id FROM approval_request
  ORDER BY expires_at, id
  LIMIT ?
    FOR UPDATE SKIP LOCKED`,
-	qEvents: `SELECT id, request_id, event_type, actor_id, note, created_at FROM approval_event WHERE request_id = ? ORDER BY id`,
+	qPendingBy: `SELECT id FROM approval_request WHERE maker_id = ? AND status = 'P' ORDER BY id FOR UPDATE`,
+	qEvents:    `SELECT id, request_id, event_type, actor_id, note, created_at FROM approval_event WHERE request_id = ? ORDER BY id`,
 }

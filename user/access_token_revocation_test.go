@@ -1,10 +1,13 @@
 package user
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nauticana/keel/port"
 )
 
 func token(t *testing.T, s *LocalUserService, userID int, issuedAt time.Time) string {
@@ -113,5 +116,30 @@ func TestDeleteAccountJournalsFailedHistory(t *testing.T) {
 	}
 	if !store.deleted[13] || len(journal.errors) != 1 || !strings.Contains(journal.errors[0], "write history") {
 		t.Fatalf("deleted and journaled: deleted=%v journal=%v", store.deleted[13], journal.errors)
+	}
+}
+
+func TestDeleteAccountRunsOnDeletedInTheTransaction(t *testing.T) {
+	store := newMemStore(14, 15)
+	s := newLocalUserService(t, store)
+	var got int64
+	s.OnDeleted = func(_ context.Context, tx port.TxQueryService, userID int64) error {
+		if tx == nil {
+			t.Error("OnDeleted runs without the deletion transaction")
+		}
+		got = userID
+		if userID == 15 {
+			return errDatabaseDown
+		}
+		return nil
+	}
+	if err := s.DeleteAccount(14, "requested"); err != nil || got != 14 || store.commits != 1 {
+		t.Fatalf("err=%v user=%d commits=%d", err, got, store.commits)
+	}
+	if err := s.DeleteAccount(15, "requested"); !errors.Is(err, errDatabaseDown) {
+		t.Fatalf("want the hook's error, got %v", err)
+	}
+	if store.commits != 1 || store.rollbacks != 1 {
+		t.Errorf("a failed hook rolls the deletion back: %+v", store)
 	}
 }

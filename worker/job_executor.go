@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/logger"
@@ -21,6 +22,19 @@ const (
 	qUpdateHeartBeat    = "update_heart_beat"
 	qPruneStaleRegistry = "prune_stale_registry"
 )
+
+// MaxServiceNameLen is the service_registry.service_name width a Caption must fit.
+const MaxServiceNameLen = 16
+
+// ErrCaption is a worker Caption that is empty or longer than MaxServiceNameLen.
+var ErrCaption = fmt.Errorf("worker: caption must be 1 to %d characters", MaxServiceNameLen)
+
+func checkCaption(caption string) error {
+	if n := utf8.RuneCountInString(caption); n == 0 || n > MaxServiceNameLen {
+		return fmt.Errorf("%w: %q", ErrCaption, caption)
+	}
+	return nil
+}
 
 var ServiceQueries = map[string]string{
 	qRegisterService: `
@@ -36,12 +50,7 @@ UPDATE service_registry
    AND hostname = ?
    AND started_at = (SELECT MAX(started_at) FROM service_registry WHERE service_name = ? AND hostname = ?)
 `,
-	// Drop registry rows for the same service whose last heartbeat is more
-	// than 5 minutes old. Heartbeats fire every 30 s, so anything that hasn't
-	// heartbeat'd in 5 minutes is a dead worker (crashed, OOM-killed, lost to
-	// a deploy restart). Without this prune, the table accumulates one row
-	// per worker startup forever, and §7 of the diagnosis report grows
-	// unbounded across deploys.
+	// Heartbeats fire every 30 s, so a row silent for 5 minutes is a dead worker.
 	qPruneStaleRegistry: `
 DELETE FROM service_registry
  WHERE service_name = ?
@@ -71,12 +80,12 @@ type JobExecutor struct {
 	Storage storage.ObjectStorage
 }
 
+// Run refuses a Caption that cannot register (ErrCaption) and a failed
+// registration, so a running worker always has a registry row and heartbeat.
 func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvider) error {
-	// Start the health-check listener with explicit Server (not the
-	// http.ListenAndServe convenience function) so we can call
-	// Shutdown on graceful exit and free the port (P1-56). Bind
-	// errors are surfaced through the journal — previously they
-	// were silently dropped (P1-55).
+	if err := checkCaption(e.Caption); err != nil {
+		return err
+	}
 	hcPort := e.Worker.GetHealthcheckPort()
 	if config.Config().HCPort > 0 {
 		hcPort = config.Config().HCPort
@@ -121,7 +130,9 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 	if len(oltpQueries) > 0 {
 		qsOLTP = dbOLTP.GetQueryService(ctx, oltpQueries)
 	}
-	e.registerService(ctx, dbOLTP.GetQueryService(ctx, ServiceQueries), e.Caption)
+	if err := e.registerService(ctx, dbOLTP.GetQueryService(ctx, ServiceQueries), e.Caption); err != nil {
+		return err
+	}
 
 	// QueueWorker drains via a JobLoop the framework owns; build it once (QS +
 	// query names are static) and reuse it each tick.
@@ -165,23 +176,19 @@ func (e *JobExecutor) runTick(ctx context.Context, dbOLTP port.DatabaseRepositor
 	}
 }
 
-func (e *JobExecutor) registerService(ctx context.Context, qs port.QueryService, serviceName string) {
+func (e *JobExecutor) registerService(ctx context.Context, qs port.QueryService, serviceName string) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
 	}
 	pid := int64(os.Getpid())
-	// Prune stale rows for this service first — anything not heartbeat'd
-	// in the last 5 minutes is a dead worker. Failure here is non-fatal:
-	// log and continue; the worst outcome is registry table growth.
+	// A failed prune only grows the table.
 	if _, pruneErr := qs.Query(ctx, qPruneStaleRegistry, serviceName); pruneErr != nil {
 		log.Printf("failed to prune stale service_registry for %s: %v", serviceName, pruneErr)
 	}
 	e.Journal.Info("registering service " + serviceName + " on " + hostname + " PID " + fmt.Sprint(pid))
-	_, err = qs.Query(ctx, qRegisterService, serviceName, hostname, pid)
-	if err != nil {
-		log.Printf("failed to register service: %v", err)
-		return
+	if _, err := qs.Query(ctx, qRegisterService, serviceName, hostname, pid); err != nil {
+		return fmt.Errorf("worker %q: register service: %w", serviceName, err)
 	}
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -198,6 +205,7 @@ func (e *JobExecutor) registerService(ctx context.Context, qs port.QueryService,
 			}
 		}
 	}()
+	return nil
 }
 
 // quotaListener is a quota service that drops limits other processes invalidate.

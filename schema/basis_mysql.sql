@@ -1799,8 +1799,8 @@ CREATE TABLE IF NOT EXISTS approval_policy (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Maker-checker decision on an application record (object_type, object_id).
--- status P=pending, A=approved, R=rejected, W=withdrawn by the maker,
--- E=expired. A closed request is final; the record is resubmitted as a new
+-- status P=pending, A=approved, R=rejected, W=withdrawn by the maker or on
+-- the maker's account deletion, E=expired. A closed request is final; the record is resubmitted as a new
 -- request. A pending request past expires_at can no longer be decided.
 CREATE TABLE IF NOT EXISTS approval_request (
     id                                   BIGINT        NOT NULL,
@@ -1824,11 +1824,13 @@ CREATE TABLE IF NOT EXISTS approval_request (
 CREATE INDEX approval_request_open_uq ON approval_request(partner_id, object_type, object_id);
 -- idx_approval_request_due is a partial index on PostgreSQL (WHERE status = 'P' AND expires_at IS NOT NULL); MySQL cannot enforce it — service-enforced
 CREATE INDEX idx_approval_request_due ON approval_request(expires_at);
+-- idx_approval_request_maker_open is a partial index on PostgreSQL (WHERE status = 'P'); MySQL cannot enforce it — service-enforced
+CREATE INDEX idx_approval_request_maker_open ON approval_request(maker_id);
 CREATE INDEX idx_approval_request_object ON approval_request(partner_id, object_type, object_id, submitted_at);
 
 -- Append-only audit of an approval request. event_type S=submitted,
 -- A=approved, R=rejected, W=withdrawn, E=expired; actor_id is the user who
--- acted, NULL for an expiry.
+-- acted, NULL for the system (an expiry, a withdrawal on account deletion).
 CREATE TABLE IF NOT EXISTS approval_event (
     id                                   BIGINT        NOT NULL,
     request_id                           BIGINT        NOT NULL,

@@ -1760,8 +1760,8 @@ CREATE TABLE IF NOT EXISTS approval_policy (
 );
 
 -- Maker-checker decision on an application record (object_type, object_id).
--- status P=pending, A=approved, R=rejected, W=withdrawn by the maker,
--- E=expired. A closed request is final; the record is resubmitted as a new
+-- status P=pending, A=approved, R=rejected, W=withdrawn by the maker or on
+-- the maker's account deletion, E=expired. A closed request is final; the record is resubmitted as a new
 -- request. A pending request past expires_at can no longer be decided.
 CREATE TABLE IF NOT EXISTS approval_request (
     id                                   BIGINT        NOT NULL,
@@ -1780,6 +1780,7 @@ CREATE TABLE IF NOT EXISTS approval_request (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS approval_request_open_uq ON approval_request(partner_id, object_type, object_id) WHERE status = 'P';
 CREATE INDEX IF NOT EXISTS idx_approval_request_due ON approval_request(expires_at) WHERE status = 'P' AND expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_approval_request_maker_open ON approval_request(maker_id) WHERE status = 'P';
 CREATE INDEX IF NOT EXISTS idx_approval_request_object ON approval_request(partner_id, object_type, object_id, submitted_at);
 
 CREATE SEQUENCE IF NOT EXISTS approval_request_seq INCREMENT BY 1 START WITH 1;
@@ -1787,7 +1788,7 @@ INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES
 
 -- Append-only audit of an approval request. event_type S=submitted,
 -- A=approved, R=rejected, W=withdrawn, E=expired; actor_id is the user who
--- acted, NULL for an expiry.
+-- acted, NULL for the system (an expiry, a withdrawal on account deletion).
 CREATE TABLE IF NOT EXISTS approval_event (
     id                                   BIGINT        NOT NULL,
     request_id                           BIGINT        NOT NULL,

@@ -18,12 +18,6 @@ import (
 )
 
 // StorageGCS is the Google Cloud Storage adapter.
-//
-// Signed-URL caveat: SignedURL requires the runtime to hold an RSA private key
-// (a service-account JSON credential) OR iam.serviceAccountTokenCreator on its
-// own service account so the SDK can call IAM SignBlob. On GKE / Cloud Run /
-// Compute Engine with the default service account this works only if the SA
-// has been granted that role on itself.
 type StorageGCS struct {
 	client *storage.Client
 	bucket *storage.BucketHandle
@@ -264,9 +258,9 @@ func (s *StorageGCS) GetObjectAttributes(ctx context.Context, key string) (map[s
 	return nonNil(attrs.Metadata), nil
 }
 
-// GetSignedURL returns a V4-signed URL valid for expirySeconds. The runtime
-// needs either a private key in the credentials JSON OR
-// iam.serviceAccountTokenCreator on its own service account (IAM SignBlob).
+// GetSignedURL returns a V4-signed URL valid for expirySeconds. Without a
+// private key in the credential, the runtime account signs through IAM
+// signBlob, which needs roles/iam.serviceAccountTokenCreator on itself.
 func (s *StorageGCS) GetSignedURL(ctx context.Context, key string, expirySeconds int) (string, error) {
 	url, err := s.bucket.SignedURL(key, &storage.SignedURLOptions{
 		Method:  http.MethodGet,
@@ -274,7 +268,7 @@ func (s *StorageGCS) GetSignedURL(ctx context.Context, key string, expirySeconds
 		Scheme:  storage.SigningSchemeV4,
 	})
 	if err != nil {
-		return "", fmt.Errorf("gcs: sign URL for %s (runtime needs IAM SignBlob permission or a private key): %w", key, err)
+		return "", fmt.Errorf("gcs: sign URL for %s (the runtime account needs roles/iam.serviceAccountTokenCreator on itself, or a credential with a private key): %w", key, err)
 	}
 	return url, nil
 }
