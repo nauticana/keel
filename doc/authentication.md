@@ -366,7 +366,7 @@ srv.Handle(publicHandler.GetPublicRoutes())
 |--------|-------|---------|-------------|
 | POST | `/public/login/local` | `LoginLocal` | Username / password login |
 | POST | `/public/login/gmail` | `LoginGoogle` | Google OAuth code login |
-| POST | `/public/register` | `AddRegistrationRequest` | Start registration, emails the confirmation code |
+| POST | `/public/register` | `AddRegistrationRequest` | Start registration, emails the confirmation code; `challengeToken` is checked when `PublicHandler.Human` is set (see [Human verification](#human-verification)) |
 | POST | `/public/register/confirm` | `ConfirmRegistration` | `?email=&code=` completes registration and returns the session tokens |
 | POST | `/public/register/exchange` | `ExchangeHandoff` | `{code}` from `HandoffCode`; mounted when `Handoff` is set |
 | GET | `/public/password/policy` | `GetPasswordPolicy` | Password rules for pre-submit validation |
@@ -427,28 +427,47 @@ Keel includes OTP-based authentication for mobile-first applications. Users can 
 ```
 1. POST /public/otp/send
      { "contact": "(416) 555-1234", "purpose": "register", "defaultRegion": "CA",
+       "challengeToken": "<human verifier token>",
        "policyVersion": "v1", "consents": {"privacy_policy": true, "cross_border": true} }
-   → server normalizes contact to "+14165551234", creates user with passtext=NULL
-     (purpose=register only), records consent if ConsentService is registered.
-   Response: { "otpToken": "<32-byte base64>" }
+   → server normalizes contact to "+14165551234", checks the challenge when a
+     verifier is wired, and holds the signup (contact, secondary contact, consent)
+     in Cache behind the token. No user_account row exists yet.
+   Response: { "otpToken": "<32-byte base64>", "resendCountdownSec": 300 }
 
-2. Backend generates 6-digit code, stores with 2-minute expiry, sends via NotificationService.
+2. Backend generates a 6-digit code (otp_ttl_seconds), sends it via NotificationService
+   to the contact itself (the request carries `To`, not a user id).
 
 3. POST /public/otp/verify    { "otpToken": "<from step 1>", "code": "847291" }
-   Response: { "token": "jwt...", "userId": 42, "partnerId": 1 }
+   → on a match the account is created with passtext=NULL, consent is recorded
+     when a ConsentService is registered, and an email contact is marked verified.
+   Response: { "token": "jwt...", "refreshToken": "...", "userId": 42, "partnerId": 1, "isNewUser": true }
 ```
 
-`purpose` values: `login` (lookup-or-noop on unknown phone), `register` (lookup-or-create via `GetOrCreateUserByPhone`), `verify` (explicit contact verification). `defaultRegion` is the ISO country code used as a hint when parsing local-format numbers — defaults to `"US"`.
+`purpose` values: `login` (lookup-or-noop on unknown contact), `register` (a known contact is coded as a sign-in; an unknown one becomes a pending signup), `verify` (explicit contact verification). `defaultRegion` is the ISO country code used as a hint when parsing local-format numbers — defaults to `"US"`.
 
-The `otpToken` is a server-issued opaque value (32 random bytes, base64-URL) bound in `Cache` to the user_id for `OTPTokenTTL` (5 minutes). Verify and Resend require the token; an attacker who guesses arbitrary user_ids cannot reach the verify path because the cache lookup fails. The login path returns the same response shape on unknown phone (no SMS dispatched), so an attacker cannot enumerate registered numbers by comparing 200 vs 404.
+The `otpToken` is a server-issued opaque value (32 random bytes, base64-URL) bound in `Cache` for `otp_token_ttl` (5 minutes) to either the user_id or the pending signup. Verify and Resend require the token; an attacker who guesses arbitrary user_ids cannot reach the verify path because the cache lookup fails. The login path returns the same response shape on an unknown contact (nothing dispatched), so an attacker cannot enumerate registered numbers by comparing 200 vs 404.
+
+A pending signup stores only the SHA-256 of its code. Guesses are counted against `max_registration_attempts`; reaching the cap drops the signup, and a token or code that expires leaves nothing behind, so an automated or abandoned registration never creates an account, consent event or history row. The cache is the only store of a pending signup: losing it means the user starts the send again.
+
+### Human verification
+
+`port.HumanVerifier` (`Verify(ctx, token, remoteIP) error`) proves a browser challenge before any registration code is sent. `human.NewFromConfig(ctx, secrets)` builds it from `human_verifier_mode`; set it on `OTPHandler.Human` and `PublicHandler.Human`. The register send of `/public/otp/send` and `/public/register` then require a `challengeToken`; `login` and `verify` sends, resends and every signed-in route are unchanged. A `nil` verifier skips the check.
+
+| Flag | Meaning |
+|---|---|
+| `human_verifier_mode` | `noop` (default, no check), `turnstile` (Cloudflare Turnstile), `hcaptcha` or `recaptcha`. All three answer the same `siteverify` contract, so `human.SiteVerify` serves each with its endpoint. |
+| `human_verifier_secret` | Name of the secret holding the provider's secret key (default `human_verifier`). The site key is public and belongs to the frontend's configuration. |
+| `human_verifier_timeout` | Deadline of the provider call in seconds (default 5, minimum 1; 0 takes the default). |
+
+Refusals: no token is 403 `challengeToken is required`; a token the provider rejects is 403 `human verification failed`; a provider that is down, slow or answers unexpectedly is 503 and the cause is journaled. The check fails closed. The send caps remain in force so a solver farm that passes the challenge still pays the per-contact and per-IP limits. Each provider token is accepted once, so the client renders a fresh challenge after a refusal.
 
 ### OTP Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/public/otp/send` | Generate and send OTP. Rate limited per `otp_send_window` (default 10 min): `otp_send_per_contact` (default 3, keyed on the E.164 form so unnormalized variants share the quota) AND `otp_send_per_ip` (default 10, mitigates SMS-pumping across enumerated numbers). A cap of 0 disables it and journals a warning on every send. |
-| POST | `/public/otp/verify` | Verify OTP code, returns JWT on success (max 5 attempts) |
-| POST | `/public/otp/resend` | Clear and regenerate OTP for an existing session |
+| POST | `/public/otp/send` | Generate and send OTP. Rate limited per `otp_send_window` (default 10 min): `otp_send_per_contact` (default 3, keyed on the E.164 form so unnormalized variants share the quota) AND `otp_send_per_ip` (default 10, mitigates SMS-pumping across enumerated numbers). A cap of 0 disables it and journals a warning on every send. `purpose=register` also requires `challengeToken` when a `Human` verifier is set. |
+| POST | `/public/otp/verify` | Verify OTP code, returns the session tokens and `isNewUser` on success (max 5 attempts for an account, `max_registration_attempts` for a pending signup) |
+| POST | `/public/otp/resend` | Regenerate the code behind a token, for an account or a pending signup, and send it again; counted against the send caps |
 | POST | `/api/user/reauth/send` | Signed in: send a `reauthCode` to the email (default) or phone on file. Body `{"channel": "email"\|"phone"}`; returns `{channel, resendCountdownSec}`. Shares the per-contact and per-IP caps. |
 
 ### Registering OTP Routes
@@ -459,6 +478,7 @@ otpHandler := handler.OTPHandler{
     NotificationSvc: notificationSvc,
     Cache:           cacheService,
     Brand:           "Acme", // shown in the OTP SMS/email; empty = brand-less
+    Human:           humanVerifier, // from human.NewFromConfig; nil = no challenge
     // Optional overrides ("{code}" → the OTP). The SMS default already carries
     // "Reply STOP to opt out, HELP for help." for 10DLC; register that exact
     // string with your campaign, or pin it explicitly:

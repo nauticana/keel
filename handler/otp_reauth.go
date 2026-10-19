@@ -77,7 +77,7 @@ func (h *OTPHandler) SendReauthOTP(w http.ResponseWriter, r *http.Request) {
 	if channel == otpChannelEmail {
 		h.dispatchOTPEmail(r, session.Id, contact, otp)
 	} else {
-		h.dispatchOTPSMS(r, session.Id, otp)
+		h.dispatchOTPSMS(r, session.Id, contact, otp)
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]any{
 		"channel":            channel,

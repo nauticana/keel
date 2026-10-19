@@ -10,6 +10,7 @@ import (
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/connect"
 	"github.com/nauticana/keel/oauth/oidc"
+	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/rest"
 	"github.com/nauticana/keel/secret"
 	"github.com/nauticana/keel/user"
@@ -25,6 +26,8 @@ type PublicHandler struct {
 	Handoff *connect.NonceService
 	// GoogleCode redeems LoginGoogle's code; nil uses Google's endpoints.
 	GoogleCode *oidc.GoogleCode
+	// Human, when set, checks the challengeToken of a registration request.
+	Human port.HumanVerifier
 }
 
 // GetPublicRoutes returns the unauthenticated routes served by PublicHandler.
@@ -438,11 +441,17 @@ func (h *PublicHandler) AddRegistrationRequest(w http.ResponseWriter, r *http.Re
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var req user.PartnerRegistration
+	var req struct {
+		user.PartnerRegistration
+		ChallengeToken string `json:"challengeToken"`
+	}
 	if !h.ReadRequest(w, r, &req) {
 		return
 	}
-	if err := h.RegisterService.SendConfirmation(r.Context(), &req); err != nil {
+	if !h.requireHuman(w, r, h.Human, req.ChallengeToken) {
+		return
+	}
+	if err := h.RegisterService.SendConfirmation(r.Context(), &req.PartnerRegistration); err != nil {
 		h.WriteServiceError(w, r, err)
 		return
 	}

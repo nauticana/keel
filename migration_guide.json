@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.132",
+   "title": "Human verification and pending OTP signups",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "Registration sends can require a browser challenge, and an OTP registration creates the account when the code is proven instead of when it is sent.",
+   "body_markdown": "### Additive\n\n- `port.HumanVerifier` (`Verify(ctx, token, remoteIP) error`) with the sentinels `ErrChallengeRequired`, `ErrChallengeFailed` and `ErrChallengeUnavailable`. `human.SiteVerify` implements it against Cloudflare Turnstile, hCaptcha or reCAPTCHA; `human.New(mode, secret, timeout)` and `human.NewFromConfig(ctx, secrets)` select the endpoint.\n- Flags `human_verifier_mode` (string, default `noop`), `human_verifier_secret` (secret name, default `human_verifier`) and `human_verifier_timeout` (duration seconds, default 5, minimum 1; 0 takes the default). The rows are required: config load fails without them. Existing databases insert them into `application_config_flag` from `schema/seed/core.yml`.\n- `OTPHandler.Human` and `PublicHandler.Human`: when set, `POST /public/otp/send` with `purpose=register` and `POST /public/register` require a `challengeToken` field. A missing or rejected token is 403; an unreachable provider is 503. Nil keeps both routes as before.\n- `POST /public/otp/verify` answers with `isNewUser`.\n- `user.NewOTPCode()` returns a six-digit code; `GenerateOTP` uses it.\n\n### Breaking\n\n- An OTP register send for an unknown contact no longer creates the `user_account`, consent and history rows. The signup is held in `Cache` behind the `otpToken` (code hash, contact, secondary contact, consent) for `otp_token_ttl`, and `VerifyOTP` creates the account on a match. Guesses count against `max_registration_attempts`. A client that read the account from the send response must read it from the verify response.\n- The OTP for a pending signup is dispatched with `NotificationRequest.To` set to the contact and `UserID` 0; a `NotificationService` that resolves recipients only by user id must honour `To`. `OTPHandler.dispatchOTPSMS` takes the phone number.\n- `POST /public/otp/resend` is counted against `otp_send_per_contact` and `otp_send_per_ip`; it used to be uncapped. It codes the purpose bound to the token and no longer takes a `purpose` field, which is refused as unknown.\n- `GetUserByPhone` returns `ErrNoAccount` for an unknown number and the database error otherwise, as `GetUserByEmail` does. An OTP send whose lookup fails is 500 rather than a pending signup or a fake token."
+  },
+  {
    "version": "v1.2.131",
    "title": "Money columns declare their currency",
    "tags": [

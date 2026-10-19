@@ -34,6 +34,7 @@ var keelTestFlagIDs = []string{
 	oauth_connect_lease_seconds, oauth_access_token_cache_ttl, otp_token_ttl, social_nonce_ttl,
 	registration_confirmation_ttl, max_registration_attempts,
 	verify_2fa_window, verify_2fa_per_ip, otp_send_window, otp_send_per_contact, otp_send_per_ip,
+	human_verifier_mode, human_verifier_secret, human_verifier_timeout,
 	max_list_page_size,
 	default_list_page_size, post_write_timeout, stripe_webhook_tolerance,
 	stripe_max_retries, webhook_claim_lease_seconds,
@@ -253,6 +254,18 @@ func TestApplyKeel_OTPSendCapZeroDisablesNegativeFails(t *testing.T) {
 	m[otp_send_per_ip] = ConfigRow{Value: "-1"}
 	if err := (&KeelConfig{}).Apply(m); err == nil || !strings.Contains(err.Error(), otp_send_per_ip) {
 		t.Fatalf("negative cap: err = %v", err)
+	}
+}
+
+func TestApplyKeel_HumanVerifierTimeout(t *testing.T) {
+	m := keelRows()
+	c := &KeelConfig{}
+	if err := c.Apply(m); err != nil || c.HumanVerifierTimeout != 5*time.Second {
+		t.Fatalf("zero timeout: %v, got %v", err, c.HumanVerifierTimeout)
+	}
+	m[human_verifier_timeout] = ConfigRow{Value: "-1"}
+	if err := (&KeelConfig{}).Apply(m); err == nil || !strings.Contains(err.Error(), human_verifier_timeout) {
+		t.Fatalf("negative timeout: err = %v", err)
 	}
 }
 

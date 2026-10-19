@@ -129,6 +129,9 @@ const (
 	otp_send_window               = "otp_send_window"
 	otp_send_per_contact          = "otp_send_per_contact"
 	otp_send_per_ip               = "otp_send_per_ip"
+	human_verifier_mode           = "human_verifier_mode"
+	human_verifier_secret         = "human_verifier_secret"
+	human_verifier_timeout        = "human_verifier_timeout"
 	max_list_page_size            = "max_list_page_size"
 	default_list_page_size        = "default_list_page_size"
 	post_write_timeout            = "post_write_timeout"
@@ -284,6 +287,9 @@ type KeelConfig struct {
 	OTPSendWindow               time.Duration // otp_send_window               600                OTP send rate-limit window
 	OTPSendPerContact           int           // otp_send_per_contact          3                  OTP sends per phone/email per window; 0 disables
 	OTPSendPerIP                int           // otp_send_per_ip               10                 OTP sends per client IP per window; 0 disables
+	HumanVerifierMode           string        // human_verifier_mode           noop               Human check on registration sends: noop | turnstile | hcaptcha | recaptcha
+	HumanVerifierSecret         string        // human_verifier_secret         human_verifier     Secret name holding the provider secret key
+	HumanVerifierTimeout        time.Duration // human_verifier_timeout        5                  Provider siteverify call deadline (seconds); 0 = default
 	MaxListPageSize             int           // max_list_page_size            1000               List page-size clamp
 	DefaultListPageSize         int           // default_list_page_size        100                Default list page size
 	PostWriteTimeout            time.Duration // post_write_timeout            10                 Post-response write timeout
@@ -435,6 +441,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OTPSendWindow = c.Duration(m, otp_send_window)
 	c.OTPSendPerContact = c.Int(m, otp_send_per_contact)
 	c.OTPSendPerIP = c.Int(m, otp_send_per_ip)
+	c.HumanVerifierMode = c.String(m, human_verifier_mode)
+	c.HumanVerifierSecret = c.String(m, human_verifier_secret)
+	c.HumanVerifierTimeout = c.Duration(m, human_verifier_timeout)
 	c.MaxListPageSize = c.Int(m, max_list_page_size)
 	c.DefaultListPageSize = c.Int(m, default_list_page_size)
 	c.PostWriteTimeout = c.Duration(m, post_write_timeout)
@@ -502,6 +511,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.OTPSendWindow <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", otp_send_window))
+	}
+	if c.HumanVerifierTimeout == 0 {
+		c.HumanVerifierTimeout = 5 * time.Second
+	} else if c.HumanVerifierTimeout < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", human_verifier_timeout))
 	}
 	if c.OTPSendPerContact < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", otp_send_per_contact))

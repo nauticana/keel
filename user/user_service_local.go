@@ -2229,8 +2229,11 @@ func (s *LocalUserService) RevokeTrustedDevice(userID int, deviceID int64) error
 
 func (s *LocalUserService) GetUserByPhone(phone string) (*model.UserSession, error) {
 	res, err := s.queryService.Query(s.ctx(), qUserByPhone, phone)
-	if err != nil || len(res.Rows) == 0 {
-		return nil, fmt.Errorf("user not found")
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Rows) == 0 {
+		return nil, ErrNoAccount
 	}
 	row := res.Rows[0]
 	session := s.newSession(
@@ -2248,13 +2251,11 @@ func (s *LocalUserService) GetUserByPhone(phone string) (*model.UserSession, err
 }
 
 func (s *LocalUserService) GenerateOTP(userId int, purpose string) (string, error) {
-	code, err := crand.Int(crand.Reader, big.NewInt(900000))
+	otp, err := NewOTPCode()
 	if err != nil {
-		return "", fmt.Errorf("generate otp: %w", err)
+		return "", err
 	}
-	otp := fmt.Sprintf("%06d", code.Int64()+100000)
-	_, err = s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose, config.Config().OTPTTLSeconds)
-	if err != nil {
+	if _, err = s.queryService.Query(s.ctx(), qGenerateOTP, userId, otp, purpose, config.Config().OTPTTLSeconds); err != nil {
 		return "", err
 	}
 	return otp, nil

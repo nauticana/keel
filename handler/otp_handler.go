@@ -1,8 +1,7 @@
 package handler
 
 import (
-	crand "crypto/rand"
-	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -53,6 +52,9 @@ type OTPHandler struct {
 	OTPSMSTemplate   string
 	OTPEmailTemplate string
 	OTPEmailSubject  string
+	// Human, when set, checks the challengeToken of a register send before any
+	// code is sent; nil skips the check.
+	Human port.HumanVerifier
 }
 
 // otpSMSBody: OTPSMSTemplate with {code} filled, else the brand-aware default.
@@ -110,25 +112,16 @@ func makeOtpSendResponse(token string) otpSendResponse {
 // otpTokenPrefix is the cache-key namespace for SendOTP-issued tokens.
 const otpTokenPrefix = "otp_token:"
 
-// mintOTPToken generates a fresh opaque token, stores it in the cache
-// keyed to the userID + channel, and returns the token string. Callers
-// send the token to the client; clients echo it back on Verify / Resend.
-// A brute-forcer who guesses arbitrary userIDs cannot get into Verify
-// because the cache lookup fails — only token-holders can verify.
-//
-// The cache value is "<userID>:<channel>" so Resend can dispatch on the
-// same channel SendOTP used. Older single-int values are still parsed
-// as legacy phone-OTP for backward compatibility with in-flight tokens
-// minted before the email-OTP feature shipped.
+// mintOTPToken stores a fresh opaque token bound to "<userID>:<channel>:<purpose>"
+// and returns it; only a token holder reaches Verify and Resend.
 func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel, purpose string) (string, error) {
 	if h.Cache == nil {
 		return "", fmt.Errorf("OTPHandler: Cache must be set")
 	}
-	var raw [32]byte
-	if _, err := crand.Read(raw[:]); err != nil {
-		return "", fmt.Errorf("otp: rng: %w", err)
+	token, err := newOTPToken()
+	if err != nil {
+		return "", err
 	}
-	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	value := strconv.Itoa(userID) + ":" + channel + ":" + purpose
 	if err := h.Cache.Set(r.Context(), otpTokenPrefix+token, value, config.Config().OTPTokenTTL); err != nil {
 		return "", fmt.Errorf("otp: cache set: %w", err)
@@ -136,14 +129,9 @@ func (h *OTPHandler) mintOTPToken(r *http.Request, userID int, channel, purpose 
 	return token, nil
 }
 
-// resolveOTPToken returns (userID, channel) bound to an opaque token,
-// or (0, "") when the token is missing/expired/never-issued. Returns the
-// same "zero" result for every failure mode so the caller cannot
-// distinguish them — preserves the anti-enumeration property.
-//
-// Legacy values without a ":channel" suffix (minted before email-OTP
-// support) are interpreted as phone-channel so in-flight tokens
-// continue working through the rolling deploy window.
+// resolveOTPToken returns the user, channel and purpose bound to a token, or
+// zero for a missing, expired or fake token so the failure modes look alike.
+// A value without a channel or purpose is read as phone and "any purpose".
 func (h *OTPHandler) resolveOTPToken(r *http.Request, token string) (userID int, channel, purpose string) {
 	if h.Cache == nil || token == "" {
 		return 0, "", ""
@@ -152,8 +140,6 @@ func (h *OTPHandler) resolveOTPToken(r *http.Request, token string) (userID int,
 	if err != nil || v == "" {
 		return 0, "", ""
 	}
-	// Value is "userID:channel[:purpose]". A missing purpose (legacy in-flight
-	// token) resolves to "" — VerifyOTP treats that as "any purpose".
 	parts := strings.SplitN(v, ":", 3)
 	idStr, ch, pp := parts[0], otpChannelPhone, ""
 	if len(parts) >= 2 {
@@ -208,6 +194,9 @@ type otpSendRequest struct {
 	PolicyLanguage   string          `json:"policyLanguage,omitempty"`
 	Region           string          `json:"region,omitempty"`
 	Consents         map[string]bool `json:"consents,omitempty"`
+	// ChallengeToken is the human verifier's token; required on register
+	// sends when the handler has a Human verifier.
+	ChallengeToken string `json:"challengeToken,omitempty"`
 }
 
 // buildOTPSignupConsent mirrors buildSignupConsent for the OTP register
@@ -235,11 +224,10 @@ func buildOTPSignupConsent(r *http.Request, req *otpSendRequest) *user.SignupCon
 	}
 }
 
-// SendOTP generates and sends an OTP to the user's phone or email.
-// On purpose="register" a new user_account row is created with passtext=NULL;
-// the E.164-normalized phone (using defaultRegion as a hint) is stored.
-// Optional consent fields are recorded against the new user when a
-// ConsentService is registered on the underlying UserService.
+// SendOTP generates and sends an OTP to the user's phone or email. On
+// purpose="register" an unknown contact is held as a pending signup behind
+// the token and the account, with its consent, is created when VerifyOTP
+// proves the contact.
 func (h *OTPHandler) SendOTP(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -328,8 +316,6 @@ func (h *OTPHandler) rateLimitUnavailable(w http.ResponseWriter, r *http.Request
 	return false
 }
 
-// sendOTPPhone is the original SMS-channel path, factored out so
-// SendOTP can branch on contactType cleanly.
 func (h *OTPHandler) sendOTPPhone(w http.ResponseWriter, r *http.Request, req *otpSendRequest) {
 	normalized, err := h.UserService.NormalizePhone(req.Contact, req.DefaultRegion)
 	if err != nil {
@@ -339,57 +325,13 @@ func (h *OTPHandler) sendOTPPhone(w http.ResponseWriter, r *http.Request, req *o
 	if !h.rateLimitOTP(w, r, normalized) {
 		return
 	}
-
-	// Lookup-or-create based on purpose. To avoid leaking which phone
-	// numbers are registered, the LOGIN path responds with the same
-	// shape on success-and-not-found: a fresh opaque token with no
-	// SMS dispatch. An attacker probing arbitrary numbers can no
-	// longer distinguish 200(known) from 404(unknown).
-	var session *model.UserSession
 	if req.Purpose == "register" {
-		var orcreateErr error
-		consent := buildOTPSignupConsent(r, req)
-		// SecondaryContact carries the email the user typed alongside
-		// the phone on the signup form. The user-service handles
-		// normalization (lowercase + trim) and silently drops the
-		// email on collision with another user's account so the
-		// phone-OTP signup still completes.
-		session, _, orcreateErr = h.UserService.GetOrCreateUserByPhone(normalized, req.DefaultRegion, req.SecondaryContact, consent)
-		if orcreateErr != nil {
-			if session != nil {
-				h.WriteError(w, http.StatusFailedDependency, "Consent Not Recorded", orcreateErr.Error())
-				return
-			}
-			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create user")
-			return
-		}
-	} else {
-		session, _ = h.UserService.GetUserByPhone(normalized)
-		if session == nil {
-			fakeToken, _ := h.mintFakeOTPToken(r, otpChannelPhone)
-			common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(fakeToken))
-			return
-		}
-	}
-
-	otp, err := h.UserService.GenerateOTP(session.Id, req.Purpose)
-	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate OTP")
+		h.sendOTPRegister(w, r, req, otpChannelPhone, normalized)
 		return
 	}
-	token, err := h.mintOTPToken(r, session.Id, otpChannelPhone, req.Purpose)
-	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue OTP token")
-		return
-	}
-	h.dispatchOTPSMS(r, session.Id, otp)
-
-	common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(token))
+	h.sendOTPLogin(w, r, req, otpChannelPhone, normalized)
 }
 
-// sendOTPEmail is the email-channel twin of sendOTPPhone. Mirrors the
-// rate-limit, lookup-or-create, and anti-enumeration semantics; only
-// the dispatch transport differs.
 func (h *OTPHandler) sendOTPEmail(w http.ResponseWriter, r *http.Request, req *otpSendRequest) {
 	email := strings.ToLower(strings.TrimSpace(req.Contact))
 	if email == "" || !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\n\r") {
@@ -399,75 +341,143 @@ func (h *OTPHandler) sendOTPEmail(w http.ResponseWriter, r *http.Request, req *o
 	if !h.rateLimitOTP(w, r, email) {
 		return
 	}
-
-	var session *model.UserSession
 	if req.Purpose == "register" {
-		var orcreateErr error
-		consent := buildOTPSignupConsent(r, req)
-		// SecondaryContact carries the phone the user typed on the
-		// signup form (alongside the email). Normalize to E.164 so
-		// phone columns stay consistent across phone-OTP and email-
-		// OTP signup paths — a phone-OTP user is stored as
-		// "+14165551234", and an email-OTP user with the same number
-		// must be stored the same way for future lookups to match.
-		// On invalid format we silently drop it: the email is what's
-		// being verified, and a typo'd secondary phone shouldn't
-		// fail the whole signup. The user can fix it later.
-		secondaryPhone := ""
-		if raw := strings.TrimSpace(req.SecondaryContact); raw != "" {
-			if e164, err := h.UserService.NormalizePhone(raw, req.DefaultRegion); err == nil {
-				secondaryPhone = e164
-			}
-		}
-		session, _, orcreateErr = h.UserService.GetOrCreateUserByEmail(email, secondaryPhone, consent)
-		if orcreateErr != nil {
-			if session != nil {
-				h.WriteError(w, http.StatusFailedDependency, "Consent Not Recorded", orcreateErr.Error())
-				return
-			}
-			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to create user")
-			return
-		}
-	} else {
-		session, _ = h.UserService.GetUserByEmail(email)
-		if session == nil {
-			// Same anti-enumeration shape as the phone fall-through.
-			fakeToken, _ := h.mintFakeOTPToken(r, otpChannelEmail)
-			common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(fakeToken))
-			return
-		}
+		h.sendOTPRegister(w, r, req, otpChannelEmail, email)
+		return
 	}
+	h.sendOTPLogin(w, r, req, otpChannelEmail, email)
+}
 
-	otp, err := h.UserService.GenerateOTP(session.Id, req.Purpose)
+// lookupContact finds the account behind a contact; none is (nil, nil).
+func (h *OTPHandler) lookupContact(channel, contact string) (*model.UserSession, error) {
+	var session *model.UserSession
+	var err error
+	if channel == otpChannelEmail {
+		session, err = h.UserService.GetUserByEmail(contact)
+	} else {
+		session, err = h.UserService.GetUserByPhone(contact)
+	}
+	if errors.Is(err, user.ErrNoAccount) {
+		return nil, nil
+	}
+	return session, err
+}
+
+// sendOTPLogin answers an unknown contact with the same shape as a known one,
+// without a dispatch, so contacts cannot be enumerated.
+func (h *OTPHandler) sendOTPLogin(w http.ResponseWriter, r *http.Request, req *otpSendRequest, channel, contact string) {
+	session, err := h.lookupContact(channel, contact)
+	if err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to look up user")
+		return
+	}
+	if session == nil {
+		fakeToken, _ := h.mintFakeOTPToken(r, channel)
+		common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(fakeToken))
+		return
+	}
+	h.sendOTPUser(w, r, session, channel, req.Purpose, contact)
+}
+
+// sendOTPUser issues a code to an existing account over channel.
+func (h *OTPHandler) sendOTPUser(w http.ResponseWriter, r *http.Request, session *model.UserSession, channel, purpose, contact string) {
+	otp, err := h.UserService.GenerateOTP(session.Id, purpose)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate OTP")
 		return
 	}
-	token, err := h.mintOTPToken(r, session.Id, otpChannelEmail, req.Purpose)
+	token, err := h.mintOTPToken(r, session.Id, channel, purpose)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue OTP token")
 		return
 	}
-	h.dispatchOTPEmail(r, session.Id, email, otp)
-
+	h.dispatchOTP(r, session.Id, channel, contact, otp)
 	common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(token))
+}
+
+// sendOTPRegister runs the human check, then either codes an existing account
+// (a registration of a known contact is a sign-in) or holds the signup as
+// pending until the code proves the contact.
+func (h *OTPHandler) sendOTPRegister(w http.ResponseWriter, r *http.Request, req *otpSendRequest, channel, contact string) {
+	if !h.requireHuman(w, r, h.Human, req.ChallengeToken) {
+		return
+	}
+	consent := buildOTPSignupConsent(r, req)
+	// The other channel's contact is the user's unverified claim. A phone typed
+	// beside an email is normalized so both signup paths store the same form;
+	// an unparseable one is dropped rather than failing the signup.
+	secondary := strings.TrimSpace(req.SecondaryContact)
+	if channel == otpChannelEmail && secondary != "" {
+		if e164, err := h.UserService.NormalizePhone(secondary, req.DefaultRegion); err == nil {
+			secondary = e164
+		} else {
+			secondary = ""
+		}
+	}
+	existing, err := h.lookupContact(channel, contact)
+	if existing != nil {
+		if channel == otpChannelEmail {
+			existing, _, err = h.UserService.GetOrCreateUserByEmail(contact, secondary, consent)
+		} else {
+			existing, _, err = h.UserService.GetOrCreateUserByPhone(contact, req.DefaultRegion, secondary, consent)
+		}
+	}
+	if err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to look up user")
+		return
+	}
+	if existing != nil {
+		h.sendOTPUser(w, r, existing, channel, req.Purpose, contact)
+		return
+	}
+	pending := &otpPendingSignup{Channel: channel, Contact: contact, SecondaryContact: secondary, DefaultRegion: req.DefaultRegion, Consent: consent}
+	otp, err := user.NewOTPCode()
+	if err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate OTP")
+		return
+	}
+	pending.setCode(otp)
+	token, err := newOTPToken()
+	if err == nil {
+		err = h.storePending(r, token, pending)
+	}
+	if err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue OTP token")
+		return
+	}
+	h.dispatchOTP(r, 0, channel, contact, otp)
+	common.WriteJSON(w, http.StatusOK, makeOtpSendResponse(token))
+}
+
+// dispatchOTP sends the code over channel. userID 0 is a pending signup with
+// no account yet, so the address is given to the notification service directly.
+func (h *OTPHandler) dispatchOTP(r *http.Request, userID int, channel, contact, otp string) {
+	if channel == otpChannelEmail {
+		h.dispatchOTPEmail(r, userID, contact, otp)
+		return
+	}
+	h.dispatchOTPSMS(r, userID, contact, otp)
 }
 
 // dispatchOTPSMS pushes the SMS code through the consumer's notification
 // service. The error doesn't propagate to the client — the OTP row
 // already exists in user_otp so the user can resend — but it IS logged
 // so a silently-failing SMS config surfaces in the journal.
-func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, otp string) {
+func (h *OTPHandler) dispatchOTPSMS(r *http.Request, userID int, phone, otp string) {
 	if h.NotificationSvc == nil {
 		return
 	}
-	if err := h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
+	req := port.NotificationRequest{
 		UserID:  userID,
 		Type:    port.NotificationTypeOTP,
 		Channel: dispatcher.SMSChannel,
 		Title:   "Verification Code",
 		Body:    h.otpSMSBody(otp),
-	}); err != nil {
+	}
+	if userID == 0 {
+		req.To = phone
+	}
+	if err := h.NotificationSvc.Send(r.Context(), req); err != nil {
 		h.logDispatchFailure("otp-sms", userID, err)
 	}
 }
@@ -491,13 +501,17 @@ func (h *OTPHandler) dispatchOTPEmail(r *http.Request, userID int, email, otp st
 		return
 	}
 	if h.NotificationSvc != nil {
-		if err := h.NotificationSvc.Send(r.Context(), port.NotificationRequest{
+		req := port.NotificationRequest{
 			UserID:  userID,
 			Type:    port.NotificationTypeOTP,
 			Channel: dispatcher.EmailChannel,
 			Title:   subject,
 			Body:    body,
-		}); err != nil {
+		}
+		if userID == 0 {
+			req.To = email
+		}
+		if err := h.NotificationSvc.Send(r.Context(), req); err != nil {
 			h.logDispatchFailure("otp-email-async", userID, err)
 		}
 	}
@@ -524,11 +538,10 @@ func (h *OTPHandler) logDispatchFailure(channel string, userID int, err error) {
 // enumeration. The channel suffix matches the legitimate code path so
 // a Resend on a fake token produces the same cache-shape as a real one.
 func (h *OTPHandler) mintFakeOTPToken(r *http.Request, channel string) (string, error) {
-	var raw [32]byte
-	if _, err := crand.Read(raw[:]); err != nil {
+	token, err := newOTPToken()
+	if err != nil {
 		return "", err
 	}
-	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	if h.Cache != nil {
 		// userID=0 is intentional: VerifyOTP rejects it.
 		_ = h.Cache.Set(r.Context(), otpTokenPrefix+token, "0:"+channel, config.Config().OTPTokenTTL)
@@ -536,14 +549,9 @@ func (h *OTPHandler) mintFakeOTPToken(r *http.Request, channel string) (string, 
 	return token, nil
 }
 
-// VerifyOTP verifies the OTP code and returns a JWT token on success.
-//
-// Accepts the opaque `otpToken` from SendOTP — NOT a raw user_id. The
-// token resolves through the cache to a userID; an attacker who guessed
-// arbitrary userIDs has no way past this binding. The pre-v0.5 API
-// accepted `sessionId` (= raw user_id) directly, which made user-id
-// brute-forcing the only barrier between an attacker and 5 OTP-attempt
-// windows per victim.
+// VerifyOTP checks the code behind an otpToken and answers with the session
+// tokens: for an account through user_otp, for a pending signup by creating
+// the account.
 func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -568,34 +576,49 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 
 	userID, channel, purpose := h.resolveOTPToken(r, req.OTPToken)
 	if userID <= 0 {
-		// Either the token never existed, or it's a fake-token from
-		// the login fall-through (userID=0). Generic 401 — same shape
-		// as a wrong code so the caller can't distinguish.
+		if pending, raw := h.loadPending(r, req.OTPToken); pending != nil {
+			h.verifyPendingSignup(w, r, req.OTPToken, raw, pending, req.Code, maxAge)
+			return
+		}
+		// An unknown token and the login fall-through's fake token answer like
+		// a wrong code, so a caller cannot tell them apart.
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired code")
 		return
 	}
 
-	// VerifyOTP now atomically increments attempts on mismatch and consumes
-	// the row on match — callers no longer need to bracket it with explicit
-	// IncrementOTPAttempts / ClearOTP calls. We still keep the response
-	// detail generic to avoid distinguishing "wrong code" from "expired"
-	// from "max attempts exceeded".
+	// The service claims the attempt under the cap and consumes the row on a
+	// match; the refusal stays generic across wrong, expired and exhausted.
 	if err := h.UserService.VerifyOTP(userID, purpose, req.Code); err != nil {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired code")
 		return
 	}
-
-	// Consume the token after a successful verify so a stolen token
-	// can't be replayed even within its TTL.
 	h.consumeOTPToken(r, req.OTPToken)
+	h.finishOTPSignIn(w, r, userID, channel, false, maxAge)
+}
 
+// verifyPendingSignup checks the code of a pending registration and creates
+// the account on a match.
+func (h *OTPHandler) verifyPendingSignup(w http.ResponseWriter, r *http.Request, token, raw string, pending *otpPendingSignup, code string, maxAge time.Duration) {
+	if !h.claimPendingAttempt(r, token) || !pending.matches(code) || !h.consumePending(r, token, raw) {
+		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid or expired code")
+		return
+	}
+	session, ok := h.createPendingUser(w, pending)
+	if !ok {
+		h.restorePending(r, token, raw, pending)
+		return
+	}
+	h.finishOTPSignIn(w, r, session.Id, pending.Channel, true, maxAge)
+}
+
+// finishOTPSignIn records the proven channel and answers with the session tokens.
+func (h *OTPHandler) finishOTPSignIn(w http.ResponseWriter, r *http.Request, userID int, channel string, isNewUser bool, maxAge time.Duration) {
 	if channel == otpChannelEmail {
 		if err := h.UserService.MarkEmailVerified(userID, user.EmailVerifiedByCode); err != nil {
 			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to record verification")
 			return
 		}
 	}
-
 	session, err := h.UserService.GetUserById(userID)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to load user")
@@ -607,27 +630,24 @@ func (h *OTPHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	session.SignInMethod = user.SignInOTP
 	session.SessionMaxAge = maxAge
-
 	resp, err := h.SessionTokens(w, r, session)
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
 	}
+	resp["isNewUser"] = isNewUser
 	common.WriteJSON(w, http.StatusOK, resp)
 }
 
-// ResendOTP regenerates the OTP for an existing send-flow.
-//
-// Like VerifyOTP, the request is keyed on the opaque otpToken from
-// SendOTP. The token's lifetime is reset on resend so the user gets
-// the full Verify window after a slow-typing retry.
+// ResendOTP regenerates the code behind an otpToken and sends it over the
+// channel SendOTP used. The token's lifetime restarts so the user has the full
+// window after a retry. Resends count against the send caps.
 func (h *OTPHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req struct {
 		OTPToken string `json:"otpToken"`
-		Purpose  string `json:"purpose"`
 	}
 	if !h.ReadRequest(w, r, &req) {
 		return
@@ -636,46 +656,74 @@ func (h *OTPHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "otpToken is required")
 		return
 	}
-	if req.Purpose == "" {
-		req.Purpose = "login"
-	}
-
 	userID, channel, purpose := h.resolveOTPToken(r, req.OTPToken)
 	if userID <= 0 {
-		// Same anti-enumeration shape as the login fall-through:
-		// pretend success without dispatching.
+		if pending, _ := h.loadPending(r, req.OTPToken); pending != nil {
+			h.resendPendingSignup(w, r, req.OTPToken, pending)
+			return
+		}
+		// Same anti-enumeration shape as the login fall-through: pretend
+		// success without dispatching.
 		common.WriteJSON(w, http.StatusOK, map[string]string{"status": "otp_sent"})
 		return
 	}
+	if purpose == "" {
+		purpose = "login"
+	}
 
-	_ = h.UserService.ClearOTP(userID)
+	session, err := h.UserService.GetUserById(userID)
+	if err != nil || session == nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to load user")
+		return
+	}
+	contact := session.PhoneNumber
+	if channel == otpChannelEmail {
+		contact = session.Email
+	}
+	if contact == "" {
+		contact = "user:" + strconv.Itoa(userID)
+	}
+	if !h.rateLimitOTP(w, r, contact) {
+		return
+	}
 
-	otp, err := h.UserService.GenerateOTP(userID, req.Purpose)
+	if err := h.UserService.ClearOTP(userID); err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to reset OTP")
+		return
+	}
+	otp, err := h.UserService.GenerateOTP(userID, purpose)
 	if err != nil {
 		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate OTP")
 		return
 	}
-
-	// Refresh the token TTL (preserving the channel suffix) so the
-	// legitimate user has the full Verify window after a resend.
 	if h.Cache != nil {
 		_ = h.Cache.Set(r.Context(), otpTokenPrefix+req.OTPToken, strconv.Itoa(userID)+":"+channel+":"+purpose, config.Config().OTPTokenTTL)
 	}
-
-	// Resend on the same channel SendOTP used. Channel was stored
-	// alongside the userID at mint-time, so a phone-OTP user retries
-	// over SMS and an email-OTP user over email — never a silent
-	// channel-switch.
 	if channel == otpChannelEmail {
-		// Look up the email from the user's session record so we know
-		// where to send. Failures fall through silently (consistent
-		// with the SMS path's "best-effort, the user can retry" stance).
-		if session, err := h.UserService.GetUserById(userID); err == nil && session != nil && session.Email != "" {
+		if session.Email != "" {
 			h.dispatchOTPEmail(r, userID, session.Email, otp)
 		}
 	} else {
-		h.dispatchOTPSMS(r, userID, otp)
+		h.dispatchOTPSMS(r, userID, session.PhoneNumber, otp)
 	}
+	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "otp_sent"})
+}
 
+// resendPendingSignup issues a fresh code for a pending registration.
+func (h *OTPHandler) resendPendingSignup(w http.ResponseWriter, r *http.Request, token string, pending *otpPendingSignup) {
+	if !h.rateLimitOTP(w, r, pending.Contact) {
+		return
+	}
+	otp, err := user.NewOTPCode()
+	if err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to generate OTP")
+		return
+	}
+	pending.setCode(otp)
+	if err := h.storePending(r, token, pending); err != nil {
+		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "failed to issue OTP token")
+		return
+	}
+	h.dispatchOTP(r, 0, pending.Channel, pending.Contact, otp)
 	common.WriteJSON(w, http.StatusOK, map[string]string{"status": "otp_sent"})
 }
