@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -92,17 +93,23 @@ func GenerateSeedSQL(seeds []*SeedFile, s *Schema) string {
 		Columns []string
 		Rows    [][]any
 	}
-	grouped := make(map[string]*tableInsert)
+	// Blocks of one table may name different columns; rows join the block with
+	// the same column list.
+	grouped := make(map[string][]*tableInsert)
 	var tableOrder []string // tracks first-seen order as fallback
 	for _, sf := range seeds {
 		for _, st := range sf.Seeds {
-			ti, exists := grouped[st.Table]
-			if !exists {
-				ti = &tableInsert{Columns: st.Columns}
-				grouped[st.Table] = ti
+			blocks := grouped[st.Table]
+			if blocks == nil {
 				tableOrder = append(tableOrder, st.Table)
 			}
-			ti.Rows = append(ti.Rows, st.Rows...)
+			i := slices.IndexFunc(blocks, func(b *tableInsert) bool { return slices.Equal(b.Columns, st.Columns) })
+			if i < 0 {
+				blocks = append(blocks, &tableInsert{Columns: st.Columns})
+				i = len(blocks) - 1
+				grouped[st.Table] = blocks
+			}
+			blocks[i].Rows = append(blocks[i].Rows, st.Rows...)
 		}
 	}
 
@@ -136,15 +143,16 @@ func GenerateSeedSQL(seeds []*SeedFile, s *Schema) string {
 	sb.WriteString("BEGIN;\n\n")
 
 	for _, tableName := range orderedNames {
-		ti := grouped[tableName]
-		cols := strings.Join(ti.Columns, ", ")
-		for _, row := range ti.Rows {
-			vals := make([]string, len(row))
-			for i, v := range row {
-				vals[i] = formatSeedValue(v)
+		for _, ti := range grouped[tableName] {
+			cols := strings.Join(ti.Columns, ", ")
+			for _, row := range ti.Rows {
+				vals := make([]string, len(row))
+				for i, v := range row {
+					vals[i] = formatSeedValue(v)
+				}
+				sb.WriteString(fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING;\n",
+					tableName, cols, strings.Join(vals, ", ")))
 			}
-			sb.WriteString(fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING;\n",
-				tableName, cols, strings.Join(vals, ", ")))
 		}
 		sb.WriteString("\n")
 	}

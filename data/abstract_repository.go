@@ -180,8 +180,6 @@ func (r *AbstractRepository) Init(ctx context.Context) error {
 		r.TableDefinitions[tableName] = table
 	}
 
-	r.applyColumnDisplay(ctx)
-
 	primaryKeys, err := r.LoadPrimaryKeys(ctx)
 	if err != nil {
 		return err
@@ -213,6 +211,9 @@ func (r *AbstractRepository) Init(ctx context.Context) error {
 		// to silently continue with a partial FK graph. Surface it
 		// so misconfigured schemas fail fast at boot.
 		return fmt.Errorf("load foreign keys: %w", err)
+	}
+	if err := r.applyColumnDisplay(ctx); err != nil {
+		return err
 	}
 
 	// Mark the user-account table for partner_user-mediated row scoping.
@@ -292,32 +293,64 @@ func (r *AbstractRepository) loadFkLookupStyles(ctx context.Context) (map[string
 	return styles, nil
 }
 
-// applyColumnDisplay overlays per-column UI overrides (read_only, display_width,
-// display_rows) from the column_display_attribute table onto the loaded column
-// definitions. Non-fatal if the table is absent — downstream schemas that
-// predate it simply get no overrides.
-func (r *AbstractRepository) applyColumnDisplay(ctx context.Context) {
+// applyColumnDisplay overlays column_display_attribute rows onto the loaded
+// columns. It runs after the foreign keys are loaded because a currency_path
+// is resolved through them.
+func (r *AbstractRepository) applyColumnDisplay(ctx context.Context) error {
 	res, err := r.QuerySvc.Query(ctx, QGetColumnDisplay)
 	if err != nil {
-		return // table missing or unreadable: no overrides
+		return fmt.Errorf("load column display attributes: %w", err)
 	}
 	for _, rec := range res.Rows {
-		table := strings.ToLower(common.AsString(rec[0]))
-		column := strings.ToLower(common.AsString(rec[1]))
-		def := r.TableDefinitions[table]
-		if def == nil {
+		table := r.TableDefinitions[strings.ToLower(common.AsString(rec[0]))]
+		if table == nil {
 			continue
 		}
-		for _, col := range def.Columns {
-			if col.ColumnName != column {
-				continue
+		col := table.Column(strings.ToLower(common.AsString(rec[1])))
+		if col == nil {
+			continue
+		}
+		col.DisplayMode = strings.ToUpper(strings.TrimSpace(common.AsString(rec[2])))
+		col.DisplayWidth = int(common.AsInt32(rec[3]))
+		col.DisplayRows = int(common.AsInt32(rec[4]))
+		col.CurrencyPath = strings.TrimSpace(common.AsString(rec[5]))
+		if col.CurrencyPath != "" {
+			if err := r.checkCurrencyPath(table, col); err != nil {
+				return fmt.Errorf("column_display_attribute %s.%s currency_path %q: %w", table.TableName, col.ColumnName, col.CurrencyPath, err)
 			}
-			col.DisplayMode = strings.ToUpper(strings.TrimSpace(common.AsString(rec[2])))
-			col.DisplayWidth = int(common.AsInt32(rec[3]))
-			col.DisplayRows = int(common.AsInt32(rec[4]))
-			break
 		}
 	}
+	return nil
+}
+
+// checkCurrencyPath follows the path's parent-table segments from the money
+// column's table, each through the one foreign key to that parent, to the
+// table whose last segment names the currency column.
+func (r *AbstractRepository) checkCurrencyPath(table *model.TableDefinition, col *model.TableColumn) error {
+	if col.DataType != model.DT_INT {
+		return fmt.Errorf("money column is %s, not %s", col.DataType, model.DT_INT)
+	}
+	parts := strings.Split(col.CurrencyPath, ".")
+	for _, name := range parts[:len(parts)-1] {
+		var parent *model.TableDefinition
+		for _, fk := range table.Parents {
+			if fk.ParentTable != name {
+				continue
+			}
+			if parent != nil {
+				return fmt.Errorf("%s has more than one foreign key to %s", table.TableName, name)
+			}
+			parent = fk.Parent
+		}
+		if parent == nil {
+			return fmt.Errorf("%s has no foreign key to %s", table.TableName, name)
+		}
+		table = parent
+	}
+	if table.Column(parts[len(parts)-1]) == nil {
+		return fmt.Errorf("%s has no column %s", table.TableName, parts[len(parts)-1])
+	}
+	return nil
 }
 
 func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.QueryResult, lookupStyles map[string]string) error {

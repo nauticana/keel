@@ -55,6 +55,10 @@ type TableColumn struct {
 	DisplayMode  string // one of Display* ("" = editable default)
 	DisplayWidth int
 	DisplayRows  int
+	// CurrencyPath marks a BIGINT minor-units money column and locates its
+	// currency: a sibling column ("currency") or the parent tables, each
+	// reached by its one foreign key, to the row holding it ("invoice.currency").
+	CurrencyPath string
 }
 
 func (f *TableColumn) GetTypeScriptDecorator() string {

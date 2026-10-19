@@ -61,5 +61,5 @@ func ValidateSeeds(seeds []*SeedFile, s *Schema) error {
 			}
 		}
 	}
-	return errors.Join(append(errs, ValidateConstantChecks(seeds, s))...)
+	return errors.Join(append(errs, ValidateConstantChecks(seeds, s), ValidateCurrencyPaths(seeds, s))...)
 }

@@ -54,6 +54,16 @@ type TableDefinition struct {
 	Actions []*TableAction
 }
 
+// Column returns the column named name, or nil.
+func (t *TableDefinition) Column(name string) *TableColumn {
+	for _, c := range t.Columns {
+		if c.ColumnName == name {
+			return c
+		}
+	}
+	return nil
+}
+
 // UnsequencedSurrogateKey returns the sole integer key column the database
 // does not generate (no table_sequence_usage row, no DB default), else nil.
 // Inserts fill it from the repository's id generator.

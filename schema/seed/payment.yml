@@ -103,3 +103,10 @@ seeds:
       - [PAYMENT_ADMIN, PAGE, ACCESS, refund_balances]
       - [PAYMENT_ADMIN, TABLE, SELECT, refund_balance]
       - [PAYMENT_ADMIN, TABLE, SELECT, refund_request]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [refund_balance, captured_minor, currency]
+      - [refund_balance, refunded_minor, currency]
+      - [refund_request, amount_minor, refund_balance.currency]
+      - [refund_request, provider_amount_minor, refund_balance.currency]

@@ -31,3 +31,13 @@ seeds:
       - [PAYMENT_ADMIN, TABLE, SELECT, payment_record]
       - [PAYMENT_ADMIN, PAGE, ACCESS, invoice_line_payments]
       - [PAYMENT_ADMIN, TABLE, SELECT, invoice_line_payment]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [invoice, subtotal_minor, currency]
+      - [invoice, tax_minor, currency]
+      - [invoice, total_minor, currency]
+      - [invoice_line, unit_price_minor, invoice.currency]
+      - [invoice_line, amount_minor, invoice.currency]
+      - [invoice_line_payment, amount_minor, payment_record.currency]
+      - [payment_record, amount_minor, currency]

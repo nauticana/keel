@@ -205,3 +205,12 @@ seeds:
       - [PARTNER_ADMIN, TABLE, SELECT, subscription_addon]
       - [PARTNER_ADMIN, TABLE, SELECT, subscription_resource]
       - [PARTNER_ADMIN, TABLE, SELECT, subscription_quota]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [subscription_plan_price, amount_minor, currency]
+      - [subscription_addon, amount_minor, currency]
+      - [partner_plan_subscription, installment_minor, currency]
+      - [partner_plan_subscription, amount_minor, currency]
+      - [partner_addon_subscription, installment_minor, currency]
+      - [partner_addon_subscription, amount_minor, currency]

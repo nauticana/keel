@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.131",
+   "title": "Money columns declare their currency",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "column_display_attribute.currency_path marks a BIGINT minor-units column as money and says where its currency is; the client reads it as TableColumn.CurrencyPath.",
+   "body_markdown": "### Additive\n\n- `column_display_attribute.currency_path VARCHAR(255) NULL`: `currency` for a sibling column, or the parent tables from the table to the row holding it, joined with dots (`payout_instruction_leg.payout_instruction.currency`); each hop needs exactly one foreign key to that parent. Served as `TableColumn.CurrencyPath`; the exponent is the `currency` catalog's. keel seeds its billing, payment, payout, subscription and agency money columns; seed yours in a `column_display_attribute` block with columns `[table_name, column_name, currency_path]`.\n- `schemagen` (`ValidateSeeds`) refuses a seeded path that does not resolve or a column that is not `BIGINT`. `GenerateSeedSQL` now keeps the column list of each seed block of a table instead of applying the first block's list to all rows.\n- `model.TableDefinition.Column(name)` and `schema.Table.Column(name)` look a column up by name.\n\n### Breaking\n\n- Repository `Init` fails when `column_display_attribute` cannot be read or a `currency_path` does not resolve or names a non-integer column; it used to skip the table silently. Rebuild the schema (`make gen-schema`) so the column exists.\n- The column display overlay now runs after the foreign keys are loaded; nothing between the two reads display attributes."
+  },
+  {
    "version": "v1.2.130",
    "title": "Worker captions, signing check, approvals on account deletion",
    "tags": [

@@ -120,13 +120,18 @@ CREATE TABLE IF NOT EXISTS rest_report_param (
     CONSTRAINT rest_report_param_pk PRIMARY KEY (report_id, seq)
 );
 
--- Per-column UI/CRUD display overrides (mode, field width, textarea rows)
+-- Per-column UI/CRUD display overrides (mode, field width, textarea rows) and
+-- the currency of a money column: currency_path is a sibling column name, or
+-- the parent tables from this table to the row holding it, each reached by
+-- its one foreign key, joined with dots ("invoice.currency"). Repository Init
+-- refuses a path that does not resolve.
 CREATE TABLE IF NOT EXISTS column_display_attribute (
     table_name                           VARCHAR(63)   NOT NULL,
     column_name                          VARCHAR(63)   NOT NULL,
     display_mode                         CHAR(1)      ,
     display_width                        INTEGER      ,
     display_rows                         INTEGER      ,
+    currency_path                        VARCHAR(255) ,
     CONSTRAINT column_display_attribute_pk PRIMARY KEY (table_name, column_name)
 );
 

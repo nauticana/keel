@@ -56,6 +56,8 @@ Override via the `table_action.method_name` column when two tables need to route
 
 An action that needs values besides the key declares them in `table_action_parameter` (`seq`, `param_name`, `caption`, `data_type`, `required`, `lookup_table`); they reach the client as `TableAction.parameters` and are posted merged with the key. `lookup_table` offers that table's rows as choices. A `param_name` equal to a key column or repeated within the action fails REST boot. The handler validates the values.
 
+A money column is a `BIGINT` in minor units. `column_display_attribute.currency_path` says where its currency is — `currency` for a sibling column, or the parent tables from the table to the row holding it, joined with dots (`payout_instruction_leg.payout_instruction.currency`); each hop must have exactly one foreign key to that parent — and reaches the client as `TableColumn.CurrencyPath`; the exponent comes from the `currency` catalog. Repository `Init` refuses a path that does not resolve or a column that is not an integer, and `schemagen` checks seeded paths against the YAML. keel seeds its own billing, payment, payout, subscription and agency money columns.
+
 ```yaml
 - table: table_action_parameter
   columns: [table_name, action_name, seq, param_name, caption, data_type, required]
@@ -496,7 +498,7 @@ this summary can be checked directly against the generated schema.
 | `partner_domain` | Domains owned or verified by partners |
 | `partner_domain_verification` | How a partner proved a domain, one row per verification, current until lapsed or cancelled |
 | `partner_domain_challenge` | Open hashed challenge of a challenge-based domain verification |
-| `column_display_attribute` | UI display and edit behavior for table columns |
+| `column_display_attribute` | UI display and edit behavior for table columns; the currency path of money columns |
 | `user_refresh_token` | Rotatable and revocable login refresh tokens |
 | `user_trusted_device` | Server-minted trusted-device credentials |
 | `api_key` | Partner-scoped API key lifecycle and scopes |

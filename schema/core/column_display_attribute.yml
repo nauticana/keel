@@ -1,5 +1,10 @@
 table: column_display_attribute
-comment: Per-column UI/CRUD display overrides (mode, field width, textarea rows)
+comment: |
+  Per-column UI/CRUD display overrides (mode, field width, textarea rows) and
+  the currency of a money column: currency_path is a sibling column name, or
+  the parent tables from this table to the row holding it, each reached by
+  its one foreign key, joined with dots ("invoice.currency"). Repository Init
+  refuses a path that does not resolve.
 columns:
   - name: table_name
     type: VARCHAR(63)
@@ -15,5 +20,8 @@ columns:
     nullable: true
   - name: display_rows
     type: INTEGER
+    nullable: true
+  - name: currency_path
+    type: VARCHAR(255)
     nullable: true
 primary_key: [table_name, column_name]

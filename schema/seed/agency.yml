@@ -144,3 +144,10 @@ seeds:
       - [APP_ADMIN, TABLE, SELECT, agency_profile]
       - [APP_ADMIN, TABLE, UPDATE, agency_profile]
       - [APP_ADMIN, AGENCY_PROFILE, APPROVE, agency_profile]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [agency_commission, gross_amount_minor, currency]
+      - [agency_commission, commission_amount_minor, currency]
+      - [agency_payout, amount_minor, currency]
+      - [agency_payout_line, amount_minor, agency_payout.currency]

@@ -353,6 +353,7 @@ erDiagram
         CHAR display_mode
         INTEGER display_width
         INTEGER display_rows
+        VARCHAR currency_path
     }
 ```
 

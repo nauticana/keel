@@ -139,3 +139,12 @@ seeds:
       - [PAYMENT_ADMIN, PAYOUT_INSTRUCTION, CANCEL, payout_instruction]
       - [PAYMENT_ADMIN, PAYOUT_INSTRUCTION, EXECUTE, payout_instruction]
       - [PAYMENT_ADMIN, PAYOUT_INSTRUCTION, RESOLVE, payout_instruction]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [payout_instruction, amount_minor, currency]
+      - [payout_instruction_leg, amount_minor, payout_instruction.currency]
+      - [payout_instruction_leg, reversed_minor, payout_instruction.currency]
+      - [payout_instruction_event, amount_minor, payout_instruction_leg.payout_instruction.currency]
+      - [payout_instruction_event, amount_reversed_minor, payout_instruction_leg.payout_instruction.currency]
+      - [payout_instruction_resolution, reversed_minor, payout_instruction_leg.payout_instruction.currency]
