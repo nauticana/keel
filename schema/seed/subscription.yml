@@ -107,7 +107,6 @@ seeds:
       - [PARTNER_ADMIN, PAGE, ACCESS, subscription_plans]
       - [PARTNER_ADMIN, PAGE, ACCESS, usage_ledger]
       # Geo tables
-      - [PARTNER_ADMIN, TABLE, SELECT, currency]
       - [PARTNER_ADMIN, TABLE, SELECT, country]
       - [PARTNER_ADMIN, TABLE, SELECT, state]
       - [PARTNER_ADMIN, TABLE, SELECT, county]

@@ -3471,6 +3471,14 @@ seeds:
     rows:
       - [currency, currency]
       - [country, country]
+  # Money columns resolve their exponent from currency, so every role that reads a money table reads it too.
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [APP_ADMIN, TABLE, SELECT, currency]
+      - [BUSINESS_ADMIN, TABLE, SELECT, currency]
+      - [PARTNER_ADMIN, TABLE, SELECT, currency]
+      - [PAYMENT_ADMIN, TABLE, SELECT, currency]
   - table: rest_api_child
     columns: [api_id, seq, parent_seq, constraint_name]
     rows:

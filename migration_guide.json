@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.133",
+   "title": "reCAPTCHA v3 scores and currency grants",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "human_verifier_mode=recaptcha_v3 checks the score, action and hostname of a token, and schemagen requires a role that reads a money table to read its currency path.",
+   "body_markdown": "### Additive\n\n- `human_verifier_mode=recaptcha_v3`: `SiteVerify` refuses a token (`ErrChallengeFailed`) whose `score` is below `human_verifier_min_score` (float 0–1, default 0.5; 0 takes the default, out of range fails config load) or whose `action` differs from `human_verifier_action` (default `signup`). `recaptcha` keeps the v2 `success`-only contract.\n- `human_verifier_hostnames` (CSV, default empty = any) refuses a token of any mode whose reported `hostname` is not listed. The three rows are required: existing databases insert them into `application_config_flag` from `schema/seed/core.yml`.\n- `SiteVerify.MinScore`, `Action` and `Hostnames` carry the checks for a verifier built by hand.\n- keel grants `TABLE SELECT currency` to `APP_ADMIN`, `BUSINESS_ADMIN`, `PARTNER_ADMIN` and `PAYMENT_ADMIN` in `schema/seed/geo.yml`; the `PARTNER_ADMIN` grant moved there from the subscription seed. A downstream seed that added the same grant must drop it.\n\n### Breaking\n\n- `human.New(mode, secret, timeout)` is `human.New(mode, secret, human.Settings{Timeout, MinScore, Action, Hostnames})`.\n- `schemagen` (`ValidateSeeds`) refuses a seed in which a role holds `TABLE SELECT` on a money table without holding it on each table of the column's `currency_path` and on `currency`; a wildcard `*` grant satisfies it. Grant the missing tables or drop the money-table grant."
+  },
+  {
    "version": "v1.2.132",
    "title": "Human verification and pending OTP signups",
    "tags": [

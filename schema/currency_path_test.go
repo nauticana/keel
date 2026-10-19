@@ -34,6 +34,28 @@ func TestValidateCurrencyPaths(t *testing.T) {
 	}
 }
 
+func TestValidateCurrencyPathsRequiresSelectAlongThePath(t *testing.T) {
+	grant := func(table string) []any { return []any{"R", "TABLE", "SELECT", table} }
+	for name, tc := range map[string]struct {
+		grants  [][]any
+		wantErr string
+	}{
+		"reads line, parent and currency": {[][]any{grant("invoice_line"), grant("invoice"), grant("currency")}, ""},
+		"wildcard":                        {[][]any{grant("invoice_line"), grant("*")}, ""},
+		"no parent":                       {[][]any{grant("invoice_line"), grant("currency")}, "R reads money table invoice_line but has no TABLE SELECT on invoice"},
+		"no currency":                     {[][]any{grant("invoice_line"), grant("invoice")}, "no TABLE SELECT on currency"},
+	} {
+		seeds := []*SeedFile{{Seeds: []*SeedTable{
+			{Table: "column_display_attribute", Columns: []string{"table_name", "column_name", "currency_path"}, Rows: [][]any{{"invoice_line", "amount_minor", "invoice.currency"}}},
+			{Table: "authorization_role_permission", Columns: []string{"role_id", "authorization_object_id", "action", "low_limit"}, Rows: tc.grants},
+		}}}
+		err := ValidateCurrencyPaths(seeds, moneySchema())
+		if (tc.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.wantErr)
+		}
+	}
+}
+
 // The shipped seeds must load against the shipped schema.
 func TestSeedsMatchSchema(t *testing.T) {
 	s, err := ParseDir(".")

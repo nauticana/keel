@@ -132,6 +132,9 @@ const (
 	human_verifier_mode           = "human_verifier_mode"
 	human_verifier_secret         = "human_verifier_secret"
 	human_verifier_timeout        = "human_verifier_timeout"
+	human_verifier_min_score      = "human_verifier_min_score"
+	human_verifier_action         = "human_verifier_action"
+	human_verifier_hostnames      = "human_verifier_hostnames"
 	max_list_page_size            = "max_list_page_size"
 	default_list_page_size        = "default_list_page_size"
 	post_write_timeout            = "post_write_timeout"
@@ -287,9 +290,12 @@ type KeelConfig struct {
 	OTPSendWindow               time.Duration // otp_send_window               600                OTP send rate-limit window
 	OTPSendPerContact           int           // otp_send_per_contact          3                  OTP sends per phone/email per window; 0 disables
 	OTPSendPerIP                int           // otp_send_per_ip               10                 OTP sends per client IP per window; 0 disables
-	HumanVerifierMode           string        // human_verifier_mode           noop               Human check on registration sends: noop | turnstile | hcaptcha | recaptcha
+	HumanVerifierMode           string        // human_verifier_mode           noop               Human check on registration sends: noop | turnstile | hcaptcha | recaptcha | recaptcha_v3
 	HumanVerifierSecret         string        // human_verifier_secret         human_verifier     Secret name holding the provider secret key
 	HumanVerifierTimeout        time.Duration // human_verifier_timeout        5                  Provider siteverify call deadline (seconds); 0 = default
+	HumanVerifierMinScore       float64       // human_verifier_min_score      0.5                reCAPTCHA v3 lowest passing score (0-1]; 0 = default
+	HumanVerifierAction         string        // human_verifier_action         signup             reCAPTCHA v3 action the sign-up client executes
+	HumanVerifierHostnames      string        // human_verifier_hostnames      ""                 CSV of hostnames a challenge token may come from (empty = any)
 	MaxListPageSize             int           // max_list_page_size            1000               List page-size clamp
 	DefaultListPageSize         int           // default_list_page_size        100                Default list page size
 	PostWriteTimeout            time.Duration // post_write_timeout            10                 Post-response write timeout
@@ -444,6 +450,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.HumanVerifierMode = c.String(m, human_verifier_mode)
 	c.HumanVerifierSecret = c.String(m, human_verifier_secret)
 	c.HumanVerifierTimeout = c.Duration(m, human_verifier_timeout)
+	c.HumanVerifierMinScore = c.Float(m, human_verifier_min_score)
+	c.HumanVerifierAction = c.String(m, human_verifier_action)
+	c.HumanVerifierHostnames = c.String(m, human_verifier_hostnames)
 	c.MaxListPageSize = c.Int(m, max_list_page_size)
 	c.DefaultListPageSize = c.Int(m, default_list_page_size)
 	c.PostWriteTimeout = c.Duration(m, post_write_timeout)
@@ -516,6 +525,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 		c.HumanVerifierTimeout = 5 * time.Second
 	} else if c.HumanVerifierTimeout < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", human_verifier_timeout))
+	}
+	if c.HumanVerifierMinScore == 0 {
+		c.HumanVerifierMinScore = 0.5
+	} else if !(c.HumanVerifierMinScore > 0 && c.HumanVerifierMinScore <= 1) {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be within 0 and 1", human_verifier_min_score))
 	}
 	if c.OTPSendPerContact < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", otp_send_per_contact))

@@ -455,11 +455,14 @@ A pending signup stores only the SHA-256 of its code. Guesses are counted agains
 
 | Flag | Meaning |
 |---|---|
-| `human_verifier_mode` | `noop` (default, no check), `turnstile` (Cloudflare Turnstile), `hcaptcha` or `recaptcha`. All three answer the same `siteverify` contract, so `human.SiteVerify` serves each with its endpoint. |
+| `human_verifier_mode` | `noop` (default, no check), `turnstile` (Cloudflare Turnstile), `hcaptcha`, `recaptcha` (v2) or `recaptcha_v3`. All answer the same `siteverify` contract, so `human.SiteVerify` serves each with its endpoint. |
 | `human_verifier_secret` | Name of the secret holding the provider's secret key (default `human_verifier`). The site key is public and belongs to the frontend's configuration. |
 | `human_verifier_timeout` | Deadline of the provider call in seconds (default 5, minimum 1; 0 takes the default). |
+| `human_verifier_min_score` | `recaptcha_v3` only: lowest passing score, 0 to 1 (default 0.5; 0 takes the default). v3 marks any well-formed token `success`, so the score is the check. |
+| `human_verifier_action` | `recaptcha_v3` only: the action the sign-up client passes to `grecaptcha.execute` (default `signup`); a token minted for another action is refused. |
+| `human_verifier_hostnames` | CSV of hostnames the provider may report the token was solved on; empty (default) accepts any. |
 
-Refusals: no token is 403 `challengeToken is required`; a token the provider rejects is 403 `human verification failed`; a provider that is down, slow or answers unexpectedly is 503 and the cause is journaled. The check fails closed. The send caps remain in force so a solver farm that passes the challenge still pays the per-contact and per-IP limits. Each provider token is accepted once, so the client renders a fresh challenge after a refusal.
+Refusals: no token is 403 `challengeToken is required`; a token the provider rejects, or one whose score, action or hostname is not accepted, is 403 `human verification failed`; a provider that is down, slow or answers unexpectedly is 503 and the cause is journaled. The check fails closed. The send caps remain in force so a solver farm that passes the challenge still pays the per-contact and per-IP limits. Each provider token is accepted once, so the client renders a fresh challenge after a refusal.
 
 ### OTP Endpoints
 
