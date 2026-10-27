@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -347,12 +348,7 @@ func parseCORSAllowlist(s string) []string {
 }
 
 func containsString(xs []string, target string) bool {
-	for _, x := range xs {
-		if x == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(xs, target)
 }
 
 // tlsPolicy is the parsed view of max_tls_version.

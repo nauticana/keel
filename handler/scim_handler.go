@@ -336,8 +336,7 @@ func (h *SCIMHandler) url(path string) string {
 
 func (h *SCIMHandler) scimRead(w http.ResponseWriter, r *http.Request, v any) bool {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, config.Config().MaxRequestSize))
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	if tooLarge, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		h.scimWrite(w, http.StatusRequestEntityTooLarge, "", fmt.Sprintf("the body exceeds %d bytes", tooLarge.Limit))
 		return false
 	}

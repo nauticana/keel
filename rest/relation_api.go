@@ -3,6 +3,7 @@ package rest
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 
 	"github.com/nauticana/keel/common"
@@ -68,9 +69,7 @@ func (s *RelationAPI) Get(ctx context.Context, partnerID int64, userID int, wher
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range children {
-			m[k] = v
-		}
+		maps.Copy(m, children)
 	}
 	s.maskSecrets(records)
 	return records, nil
@@ -264,7 +263,7 @@ func (s *RelationAPI) propogateKeys(parent any) {
 				for i := 0; i < childField.Len(); i++ {
 					child := childField.Index(i)
 					var childElem reflect.Value
-					if child.Kind() == reflect.Ptr {
+					if child.Kind() == reflect.Pointer {
 						childElem = child.Elem()
 					} else {
 						childElem = child
@@ -273,7 +272,7 @@ func (s *RelationAPI) propogateKeys(parent any) {
 						idVal := parentVal.FieldByName(parentCol.PascalName)
 						fkCol := fk.ChildColumns[idx]
 						target := childElem
-						if target.Kind() == reflect.Ptr {
+						if target.Kind() == reflect.Pointer {
 							target = target.Elem()
 						}
 						fkField := target.FieldByName(fkCol.PascalName)

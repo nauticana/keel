@@ -125,8 +125,7 @@ func readJSONBody(h *AbstractHandler, w http.ResponseWriter, r *http.Request) (j
 func writeResult(h *AbstractHandler, w http.ResponseWriter, result any, err error) {
 	if err != nil {
 		writeErrorHeaders(w, err)
-		var ae *APIError
-		if errors.As(err, &ae) {
+		if ae, ok := errors.AsType[*APIError](err); ok {
 			h.writeProblem(nil, w, ae.Status, http.StatusText(ae.Status), ae.Msg, "", "", ae.Details)
 			return
 		}

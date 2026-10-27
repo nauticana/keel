@@ -3,6 +3,7 @@ package dms
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/nauticana/keel/secret"
@@ -25,12 +26,7 @@ type ContentRepositoryService struct {
 }
 
 func (s *ContentRepositoryService) IsReserved(docKey string) bool {
-	for _, r := range s.Reserved {
-		if r == docKey {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.Reserved, docKey)
 }
 
 func (s *ContentRepositoryService) ensureLoaded(ctx context.Context) error {

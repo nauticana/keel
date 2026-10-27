@@ -24,7 +24,7 @@ func (u *membershipUsers) EndMembership(partnerID int64, userID int, _ string) e
 
 func TestMembershipEndUsesTheSessionPartner(t *testing.T) {
 	users := &membershipUsers{}
-	h := &MembershipHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &MembershipHandler{UserService: users}
 	call := func(body string, session *model.UserSession) int {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/partner_user/end", strings.NewReader(body))
 		if session != nil {

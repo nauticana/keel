@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 
@@ -262,13 +263,11 @@ func (s *Service) connection(ctx context.Context, partnerID, id int64) (*connect
 
 func connectionFromRow(row []any) *connection {
 	return &connection{
-		IdentityConnection: port.IdentityConnection{
-			ID: common.AsInt64(row[0]), PartnerID: common.AsInt64(row[1]), Protocol: common.AsString(row[2]),
-			Issuer: common.AsString(row[3]), SubjectClaim: common.AsString(row[4]), EmailClaim: common.AsString(row[5]),
-			RequireMFA: common.AsBool(row[6]),
-		},
-		Status: common.AsString(row[7]),
-		Tested: common.AsBool(row[8]),
+		ID: common.AsInt64(row[0]), PartnerID: common.AsInt64(row[1]), Protocol: common.AsString(row[2]),
+		Issuer: common.AsString(row[3]), SubjectClaim: common.AsString(row[4]), EmailClaim: common.AsString(row[5]),
+		RequireMFA: common.AsBool(row[6]),
+		Status:     common.AsString(row[7]),
+		Tested:     common.AsBool(row[8]),
 	}
 }
 
@@ -287,12 +286,7 @@ func (s *Service) query(ctx context.Context) port.QueryService {
 
 // hasMFA reads RFC 8176 authentication method references.
 func hasMFA(methods []string) bool {
-	for _, m := range methods {
-		if m == "mfa" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(methods, "mfa")
 }
 
 func normalizeEmail(email string) string { return strings.ToLower(strings.TrimSpace(email)) }

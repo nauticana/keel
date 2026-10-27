@@ -75,7 +75,7 @@ func loadSession(ctx context.Context, qs port.QueryService, query string, args .
 		return nil, ErrNotFound
 	}
 	row := res.Rows[0]
-	session := &sessionRow{Session: Session{
+	session := &sessionRow{
 		ID:          common.AsInt64(row[0]),
 		PartnerID:   common.AsInt64(row[1]),
 		ContextRef:  common.AsString(row[2]),
@@ -83,8 +83,7 @@ func loadSession(ctx context.Context, qs port.QueryService, query string, args .
 		Status:      common.AsString(row[4]),
 		PolicyID:    common.AsInt64(row[7]),
 		Attempt:     int(common.AsInt64(row[8])),
-		CreatedAt:   common.AsTime(row[9]),
-	}, captureHash: common.AsString(row[5])}
+		CreatedAt:   common.AsTime(row[9]), captureHash: common.AsString(row[5])}
 	if t, ok := row[6].(time.Time); ok {
 		session.CaptureExpiresAt = t
 	}

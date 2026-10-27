@@ -297,7 +297,7 @@ func originAllowed(r *http.Request) bool {
 		parsed, err := url.Parse(origin)
 		return err == nil && strings.EqualFold(parsed.Host, r.Host)
 	}
-	for _, a := range strings.Split(allowed, ",") {
+	for a := range strings.SplitSeq(allowed, ",") {
 		if strings.TrimSpace(a) == origin {
 			return true
 		}

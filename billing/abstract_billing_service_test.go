@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,15 +64,15 @@ func newSvc(rows map[string][][]any) (*AbstractBillingService, *fakeQS) {
 // newTxSvc is newSvc whose transactions replay txRows and record their writes.
 func newTxSvc(rows, txRows map[string][][]any) (*AbstractBillingService, *fakeQS, *fakeTx) {
 	qs := &fakeQS{rows: rows}
-	tx := &fakeTx{fakeQS: fakeQS{rows: txRows}}
+	tx := &fakeTx{rows: txRows}
 	return &AbstractBillingService{Repo: fakeRepo{qs: qs, tx: tx}}, qs, tx
 }
 
 func lastCall(t *testing.T, qs *fakeQS, name string) fakeCall {
 	t.Helper()
-	for i := len(qs.calls) - 1; i >= 0; i-- {
-		if qs.calls[i].name == name {
-			return qs.calls[i]
+	for _, v := range slices.Backward(qs.calls) {
+		if v.name == name {
+			return v
 		}
 	}
 	t.Fatalf("query %q was not executed; calls=%+v", name, qs.calls)

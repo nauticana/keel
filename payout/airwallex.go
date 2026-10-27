@@ -55,11 +55,9 @@ func NewAirwallexProvider(apiKey, webhookSecret string, journal logger.Applicati
 		return nil, fmt.Errorf("airwallex: API key is required")
 	}
 	return &AirwallexProvider{
-		AbstractProvider: AbstractProvider{
-			apiKey:        apiKey,
-			webhookSecret: webhookSecret,
-			journal:       journal,
-		},
+		apiKey:         apiKey,
+		webhookSecret:  webhookSecret,
+		journal:        journal,
 		apiBase:        config.Config().AirwallexAPIBase,
 		httpClient:     &http.Client{Timeout: 15 * time.Second},
 		transferMethod: firstNonEmpty(config.Config().AirwallexXferMethod, airwallexDefaultMethod),
@@ -139,10 +137,10 @@ func (p *AirwallexProvider) StartOnboarding(ctx context.Context, in StartOnboard
 }
 
 type airwallexWebhookEvent struct {
-	ID        string                 `json:"id"`
-	Name      string                 `json:"name"` // e.g. "account.created", "account.activated"
-	AccountID string                 `json:"account_id"`
-	Data      map[string]interface{} `json:"data"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"` // e.g. "account.created", "account.activated"
+	AccountID string         `json:"account_id"`
+	Data      map[string]any `json:"data"`
 }
 
 // VerifyAndParseWebhook validates the x-signature header — HMAC-SHA256
@@ -185,7 +183,7 @@ func (p *AirwallexProvider) VerifyAndParseWebhook(headers map[string][]string, r
 		// the wrong field would emit a paid/ignored event for a clawback.
 		status, _ := ev.Data["status"].(string)
 		if strings.Contains(ev.Name, ".funding.") {
-			if funding, ok := ev.Data["funding"].(map[string]interface{}); ok {
+			if funding, ok := ev.Data["funding"].(map[string]any); ok {
 				if fs, ok := funding["status"].(string); ok {
 					status = fs
 				}

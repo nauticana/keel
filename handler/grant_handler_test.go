@@ -30,7 +30,7 @@ func (f *fakeGrants) Revoke(_ context.Context, userID int64, clientID string) er
 
 func TestGrantRoutes(t *testing.T) {
 	grants := &fakeGrants{}
-	routes := (&GrantHandler{AbstractHandler: AbstractHandler{UserService: &sessionUsers{}}, Grants: grants}).GetAuthRoutes()
+	routes := (&GrantHandler{UserService: &sessionUsers{}, Grants: grants}).GetAuthRoutes()
 	authed := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer t")

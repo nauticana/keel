@@ -346,12 +346,7 @@ func (h *AbstractPaymentHandler) priceAllowed(priceID string) bool {
 	if priceID == "" {
 		return false
 	}
-	for _, p := range h.AllowedPriceIDs {
-		if p == priceID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(h.AllowedPriceIDs, priceID)
 }
 
 // redirectAllowed parses the URL and checks its host against the

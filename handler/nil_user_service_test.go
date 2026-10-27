@@ -27,7 +27,7 @@ func TestNilUserServiceAnswers401(t *testing.T) {
 		t.Fatalf("errors = %q, want one", journal.errors)
 	}
 
-	ws := &WebSocketHandler{AbstractHandler: AbstractHandler{Journal: journal}}
+	ws := &WebSocketHandler{Journal: journal}
 	rec := httptest.NewRecorder()
 	ws.Connect(rec, httptest.NewRequest(http.MethodGet, "/public/ws?token=abc", nil))
 	if rec.Code != http.StatusUnauthorized {

@@ -38,7 +38,7 @@ func (s *stateStore) UpsertConnection(ctx context.Context, _ int64, conn Connect
 }
 
 func newStateStore() *stateStore {
-	return &stateStore{fakeStore: fakeStore{secrets: map[string]string{"tiktok_secret": "shh"}, state: "STATE123"}}
+	return &stateStore{secrets: map[string]string{"tiktok_secret": "shh"}, state: "STATE123"}
 }
 
 func TestTikTokAuthURLUsesClientKey(t *testing.T) {

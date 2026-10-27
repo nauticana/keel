@@ -88,8 +88,7 @@ func (l *LoggerAWS) Initialize(root string, destination string) error {
 		LogStreamName: &logStream,
 	})
 	if err != nil {
-		var alreadyExists *cwltypes.ResourceAlreadyExistsException
-		if !errors.As(err, &alreadyExists) {
+		if _, ok := errors.AsType[*cwltypes.ResourceAlreadyExistsException](err); !ok {
 			return fmt.Errorf("failed to create CloudWatch log stream: %w", err)
 		}
 	}

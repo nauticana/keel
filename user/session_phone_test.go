@@ -20,7 +20,7 @@ func selectColumns(t *testing.T, sql string) []string {
 		t.Fatalf("no FROM in %q", sql)
 	}
 	var cols []string
-	for _, c := range strings.Split(rest[:end], ",") {
+	for c := range strings.SplitSeq(rest[:end], ",") {
 		c = strings.TrimSpace(c)
 		if i := strings.LastIndex(c, "."); i >= 0 {
 			c = c[i+1:]

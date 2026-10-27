@@ -136,8 +136,7 @@ func TestHub_CanSubscribeAndOnMessage(t *testing.T) {
 
 func TestHub_RelayAcrossHubs(t *testing.T) {
 	c := cache.NewMemoryCacheService()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	allow := func(context.Context, int, string) (bool, error) { return true, nil }
 	a, b := &Hub{Cache: c, CanSubscribe: allow}, &Hub{Cache: c, CanSubscribe: allow}
 	for _, h := range []*Hub{a, b} {

@@ -3,6 +3,7 @@ package payout
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -225,9 +226,7 @@ func (s *memInstructionStore) InTx(ctx context.Context, fn func(InstructionTx) e
 		snapshotInstructions[id] = cloneInstruction(instr)
 	}
 	snapshotEvents := make(map[string]bool, len(s.events))
-	for k, v := range s.events {
-		snapshotEvents[k] = v
-	}
+	maps.Copy(snapshotEvents, s.events)
 	snapshotResolutions := append([]ReviewResolutionRecord(nil), s.resolutions...)
 	snapshotNext := s.nextID
 	s.inTx = true

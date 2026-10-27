@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 )
 
@@ -99,12 +98,10 @@ func (q *pageQuerier) record(sql string, args []any) {
 func newPagedService(t *testing.T, table *model.TableDefinition, q *pageQuerier) *TableServicePgsql {
 	t.Helper()
 	s := &TableServicePgsql{
-		AbstractTableService: data.AbstractTableService{
-			Table:     table,
-			AuthQuery: &stubAuthQuery{permRows: wildcardSelectGrant()},
-		},
-		Client: q,
-		Schema: "public",
+		Table:     table,
+		AuthQuery: &stubAuthQuery{permRows: wildcardSelectGrant()},
+		Client:    q,
+		Schema:    "public",
 	}
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)

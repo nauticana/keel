@@ -94,7 +94,7 @@ func newOTPHandler(t *testing.T, human port.HumanVerifier) (*OTPHandler, *otpUse
 	t.Cleanup(func() { mem.Close() })
 	users := &otpUsers{byEmail: map[string]*model.UserSession{}}
 	sent := &sentOTPs{}
-	return &OTPHandler{AbstractHandler: AbstractHandler{UserService: users}, NotificationSvc: sent, Cache: mem, Human: human}, users, sent
+	return &OTPHandler{UserService: users, NotificationSvc: sent, Cache: mem, Human: human}, users, sent
 }
 
 func postOTP(h http.HandlerFunc, path, body string) *httptest.ResponseRecorder {
@@ -184,7 +184,7 @@ func TestOTPRegisterGuessCapDropsThePendingSignup(t *testing.T) {
 	h, users, sent := newOTPHandler(t, humanStub{})
 	token, _ := sendRegister(t, h, "ada@acme.example", "tok")
 	code := otpCodeRE.FindString(sent.sent[0].Body)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		postOTP(h.VerifyOTP, "/public/otp/verify", `{"otpToken":"`+token+`","code":"000000"}`)
 	}
 	if w := postOTP(h.VerifyOTP, "/public/otp/verify", `{"otpToken":"`+token+`","code":"`+code+`"}`); w.Code != http.StatusUnauthorized {
@@ -199,7 +199,7 @@ func TestResendOTPPendingSignupIsCapped(t *testing.T) {
 	h, _, sent := newOTPHandler(t, humanStub{})
 	token, _ := sendRegister(t, h, "ada@acme.example", "tok")
 	first := otpCodeRE.FindString(sent.sent[0].Body)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if w := postOTP(h.ResendOTP, "/public/otp/resend", `{"otpToken":"`+token+`"}`); w.Code != http.StatusOK {
 			t.Fatalf("resend %d = %d %s", i, w.Code, w.Body.String())
 		}

@@ -41,7 +41,7 @@ func (p *ConstantScopePolicy) Policy(ctx context.Context, _, _ int64, scopes str
 		scopes = p.Default
 	}
 	var out []string
-	for _, scope := range strings.Split(scopes, ",") {
+	for scope := range strings.SplitSeq(scopes, ",") {
 		scope = strings.TrimSpace(scope)
 		if !catalog[scope] {
 			return "", fmt.Errorf("%w: unknown scope %q", ErrInvalidScopes, scope)

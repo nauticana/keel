@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -44,8 +45,8 @@ func newStore() *memStore {
 func (m *memStore) GenID() int64                 { m.nextID++; return m.nextID }
 func (m *memStore) Commit(context.Context) error { m.pending = nil; return nil }
 func (m *memStore) Rollback(context.Context) error {
-	for i := len(m.pending) - 1; i >= 0; i-- {
-		m.pending[i]()
+	for _, v := range slices.Backward(m.pending) {
+		v()
 	}
 	m.pending = nil
 	return nil

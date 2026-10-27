@@ -45,13 +45,11 @@ func NewStripeConnectProvider(apiKey, webhookSecret string, journal logger.Appli
 		return nil, fmt.Errorf("stripe connect: API key is required")
 	}
 	return &StripeConnectProvider{
-		AbstractProvider: AbstractProvider{
-			apiKey:        apiKey,
-			webhookSecret: webhookSecret,
-			journal:       journal,
-		},
-		apiBase:    stripeConnectAPIBase,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		apiKey:        apiKey,
+		webhookSecret: webhookSecret,
+		journal:       journal,
+		apiBase:       stripeConnectAPIBase,
+		httpClient:    &http.Client{Timeout: 15 * time.Second},
 	}, nil
 }
 
@@ -627,7 +625,7 @@ func (p *StripeConnectProvider) VerifyAndParseWebhook(headers map[string][]strin
 }
 
 func parseStripeSignature(header string) (ts string, sigs []string, err error) {
-	for _, part := range strings.Split(header, ",") {
+	for part := range strings.SplitSeq(header, ",") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
 			continue

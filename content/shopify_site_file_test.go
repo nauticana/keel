@@ -26,7 +26,8 @@ func themeReply(t *testing.T, body *string) string {
 	return string(raw)
 }
 
-func ptr(s string) *string { return &s }
+//go:fix inline
+func ptr(s string) *string { return new(s) }
 
 const (
 	aiRules     = "User-agent: GPTBot\nDisallow: /\n"
@@ -75,9 +76,9 @@ func TestShopifyRobotsRoundTrip(t *testing.T) {
 		current       *string
 		content, want string
 	}{
-		"own template":      {ptr("User-agent: *\n"), "User-agent: *\n" + aiRules, "User-agent: *\n" + aiRules},
+		"own template":      {new("User-agent: *\n"), "User-agent: *\n" + aiRules, "User-agent: *\n" + aiRules},
 		"iterates defaults": {nil, "{% for group in robots.default_groups %}{% endfor %}", "{% for group in robots.default_groups %}{% endfor %}"},
-		"defaults only":     {ptr(shopifyRobotsDefaults), "", shopifyRobotsDefaults},
+		"defaults only":     {new(shopifyRobotsDefaults), "", shopifyRobotsDefaults},
 	} {
 		reply := `{"data":{"themeFilesUpsert":{"job":null,"userErrors":[]}}}`
 		stub := &shopifyStub{t: t, responses: []string{themeReply(t, c.current), reply}}

@@ -24,7 +24,7 @@ type publicRouteSecrets struct{ secret.SecretProvider }
 var _ secret.SecretProvider = publicRouteSecrets{}
 
 func TestPublicRoutesGatedByDependencies(t *testing.T) {
-	bare := (&PublicHandler{AbstractHandler: AbstractHandler{UserService: publicRouteUsers{}}}).GetPublicRoutes()
+	bare := (&PublicHandler{UserService: publicRouteUsers{}}).GetPublicRoutes()
 	for _, path := range []string{"/public/login/gmail", "/public/register", "/public/plans", "/public/password/forgot"} {
 		if _, ok := bare[path]; ok {
 			t.Errorf("%s mounted without its dependency", path)
@@ -37,7 +37,7 @@ func TestPublicRoutesGatedByDependencies(t *testing.T) {
 }
 
 func TestPublicPasswordRoutes(t *testing.T) {
-	h := &PublicHandler{AbstractHandler: AbstractHandler{UserService: publicRouteUsers{}}, RegisterService: &user.RegistrationService{}}
+	h := &PublicHandler{UserService: publicRouteUsers{}, RegisterService: &user.RegistrationService{}}
 	mux := http.NewServeMux()
 	for path, fn := range h.GetPublicRoutes() {
 		if !strings.HasPrefix(path, "/public/") {

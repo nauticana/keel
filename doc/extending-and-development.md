@@ -131,6 +131,12 @@ for _, row := range res.Rows {
 }
 ```
 
+Positional `res.Rows[i][j]` with `common.As*` stays the fastest read. For typed reads with errors, `res.Row(i)` with `row.At[T](j)` (by position) or `row.Get[T](name)` (by name, a linear lookup per call), and `res.Col[T](i, name)`, convert through `model.Coerce[T]`, and `res.Scan[T](func(model.Row) (T, error))` maps every row. `T` is `int64`, `int32`, `int`, `float64`, `bool`, `string`, `time.Time`, `[]byte`, `any`, or a pointer to one for a nullable column. Failures are `model.ErrColumnNotFound`, `ErrRowOutOfRange`, `ErrNullValue` or `ErrCoercion` (a fractional float into an integer, an overflow, an unconvertible type); `common.As*` are the same converters with lenient sentinels.
+
+```go
+ids, err := res.Scan[int64](func(r model.Row) (int64, error) { return r.Get[int64]("id") })
+```
+
 Cells arrive as Go primitives: NUMERIC as `float64` (a NaN or infinite value fails the query with `pgsql.ErrNonFiniteNumeric`) and TIME as `"HH:MM:SS"`. Money is never NUMERIC; it is `BIGINT` minor units.
 
 ## Directory Structure

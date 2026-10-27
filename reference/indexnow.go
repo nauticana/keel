@@ -121,8 +121,7 @@ func (c *IndexNowClient) keyFileURL(host, key string) (string, error) {
 
 // withoutRequestURL keeps the key, part of the default key file URL, out of error text.
 func withoutRequestURL(err error) error {
-	var requestErr *url.Error
-	if errors.As(err, &requestErr) {
+	if requestErr, ok := errors.AsType[*url.Error](err); ok {
 		return requestErr.Err
 	}
 	return err

@@ -46,7 +46,7 @@ func (d RepositoryDefinition) validate() error {
 	if strings.TrimSpace(d.Storage.Bucket) == "" {
 		return fmt.Errorf("%w: %s has no bucket", ErrInvalidDefinition, d.ID)
 	}
-	for _, segment := range strings.Split(strings.TrimSuffix(d.Prefix(), "/"), "/") {
+	for segment := range strings.SplitSeq(strings.TrimSuffix(d.Prefix(), "/"), "/") {
 		if segment == "" || segment == "." || segment == ".." {
 			return fmt.Errorf("%w: prefix %q of %s", ErrInvalidDefinition, d.Prefix(), d.ID)
 		}

@@ -113,7 +113,7 @@ func TestLoginSocialContract(t *testing.T) {
 	nonces := cache.NewMemoryCacheService()
 	defer nonces.Close()
 	users := &contractUsers{}
-	h := &SocialLoginHandler{AbstractHandler: AbstractHandler{UserService: users}, NonceCache: nonces, Verifier: keys.verifier()}
+	h := &SocialLoginHandler{UserService: users, NonceCache: nonces, Verifier: keys.verifier()}
 	exp := time.Now().Add(time.Hour).Unix()
 
 	nonce := issueNonce(t, h)
@@ -180,7 +180,7 @@ func TestLoginGoogleContract(t *testing.T) {
 	t.Cleanup(func() { c.OutboundMaxResponseSize = size })
 
 	users := &contractUsers{}
-	h := &PublicHandler{AbstractHandler: AbstractHandler{UserService: users}, Secrets: contractSecrets{},
+	h := &PublicHandler{UserService: users, Secrets: contractSecrets{},
 		GoogleCode: &oidc.GoogleCode{TokenURL: srv.URL + "/token", UserInfoURL: srv.URL + "/userinfo", HTTP: srv.Client()}}
 	login := func() *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()

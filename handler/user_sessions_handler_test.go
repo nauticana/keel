@@ -86,7 +86,7 @@ func passwordLogin(h *PublicHandler) *httptest.ResponseRecorder {
 
 func TestNewDeviceStepUp(t *testing.T) {
 	users := &sessionUsers{}
-	h := &PublicHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &PublicHandler{UserService: users}
 	if rec := passwordLogin(h); users.refreshed != 1 || !strings.Contains(rec.Body.String(), `"twoFactorRequired":false`) {
 		t.Fatalf("step-up off: %s", rec.Body.String())
 	}
@@ -101,7 +101,7 @@ func TestNewDeviceStepUp(t *testing.T) {
 		t.Fatal("a known device signs in without a code")
 	}
 
-	sec := &SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	sec := &SecurityHandler{UserService: users}
 	verify := func(code string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		sec.Verify2FA(rec, httptest.NewRequest(http.MethodPost, "/public/2fa/verify", strings.NewReader(`{"loginToken":"login-token","code":"`+code+`"}`)))
@@ -118,7 +118,7 @@ func TestNewDeviceStepUp(t *testing.T) {
 func TestStepUpUnavailableFailsClosed(t *testing.T) {
 	withStepUp(t)
 	users := &stepUpless{sessionUsers: sessionUsers{}}
-	rec := passwordLogin(&PublicHandler{AbstractHandler: AbstractHandler{UserService: users}})
+	rec := passwordLogin(&PublicHandler{UserService: users})
 	if rec.Code != http.StatusServiceUnavailable || users.refreshed != 0 {
 		t.Fatalf("no way to send a code: %d %s", rec.Code, rec.Body.String())
 	}
@@ -130,7 +130,7 @@ func (*stepUpless) SendStepUpCode(int) error { return user.ErrStepUpUnavailable 
 
 func TestSignInOutsideNetworksIsForbidden(t *testing.T) {
 	users := &sessionUsers{network: user.ErrSignInNetwork}
-	rec := passwordLogin(&PublicHandler{AbstractHandler: AbstractHandler{UserService: users}})
+	rec := passwordLogin(&PublicHandler{UserService: users})
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "signin_network") {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -138,7 +138,7 @@ func TestSignInOutsideNetworksIsForbidden(t *testing.T) {
 
 func TestListAndRevokeSessions(t *testing.T) {
 	users := &sessionUsers{}
-	h := &SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &SecurityHandler{UserService: users}
 	routes := h.GetAuthRoutes()
 	authed := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))

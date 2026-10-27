@@ -72,11 +72,9 @@ func (s *SecretProviderAWS) PutSecret(ctx context.Context, path string, value st
 		return err
 	}
 	err := putValue()
-	var notFound *types.ResourceNotFoundException
-	if errors.As(err, &notFound) {
+	if _, ok := errors.AsType[*types.ResourceNotFoundException](err); ok {
 		_, err = s.client.CreateSecret(ctx, &secretsmanager.CreateSecretInput{Name: &path, SecretString: &value})
-		var exists *types.ResourceExistsException
-		if errors.As(err, &exists) {
+		if _, ok := errors.AsType[*types.ResourceExistsException](err); ok {
 			err = putValue()
 		}
 	}

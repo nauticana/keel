@@ -208,8 +208,8 @@ func (s *Service) claim(ctx context.Context, query string, args ...any) (Claim, 
 		return Claim{}, false, errors.New("actiontoken: database returned a malformed claim")
 	}
 	return Claim{
-		ID:      common.AsInt64(row[0]),
-		User:    port.UserRef{UserID: common.AsInt64(row[1]), PartnerID: common.AsInt64(row[2])},
-		Binding: Binding{Action: common.AsString(row[3]), ResourceKey: common.AsString(row[4]), Digest: common.AsString(row[5])},
+		ID:     common.AsInt64(row[0]),
+		User:   port.UserRef{UserID: common.AsInt64(row[1]), PartnerID: common.AsInt64(row[2])},
+		Action: common.AsString(row[3]), ResourceKey: common.AsString(row[4]), Digest: common.AsString(row[5]),
 	}, true, nil
 }

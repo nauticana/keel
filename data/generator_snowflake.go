@@ -206,12 +206,10 @@ func (s *SnowflakeGenerator) NextID() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	nowMs := s.now().UnixMilli()
-	if nowMs < s.lastMs {
+	nowMs := max(s.now().UnixMilli(),
 		// Clock drift backwards: hold the line at lastMs to preserve
 		// monotonicity rather than risk collision.
-		nowMs = s.lastMs
-	}
+		s.lastMs)
 
 	if nowMs == s.lastMs {
 		s.seq = (s.seq + 1) & maxSeq
@@ -226,10 +224,7 @@ func (s *SnowflakeGenerator) NextID() int64 {
 			// lower latency under contention (P2-18).
 			for nowMs <= s.lastMs {
 				runtime.Gosched()
-				nowMs = s.now().UnixMilli()
-				if nowMs < s.lastMs {
-					nowMs = s.lastMs
-				}
+				nowMs = max(s.now().UnixMilli(), s.lastMs)
 			}
 		}
 	} else {
@@ -246,10 +241,7 @@ func (s *SnowflakeGenerator) NextID() int64 {
 	}
 	s.lastMs = nowMs
 
-	delta := nowMs - s.epochMs
-	if delta < 0 {
-		delta = 0
-	}
+	delta := max(nowMs-s.epochMs, 0)
 	return (delta << timeShift) | (s.nodeID << nodeShift) | s.seq
 }
 

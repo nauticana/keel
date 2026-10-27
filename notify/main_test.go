@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"testing"
 
@@ -86,7 +87,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 				ids = append(ids, id)
 			}
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		slices.Sort(ids)
 		for _, id := range ids {
 			out.Rows = append(out.Rows, []any{id})
 		}

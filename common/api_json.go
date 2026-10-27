@@ -18,10 +18,10 @@ import (
 var apiJSON = jsonv2.JoinOptions(
 	json.DefaultOptionsV1(),
 	jsonv2.WithMarshalers(jsonv2.JoinMarshalers(
-		marshalInteger(func(v int64) string { return strconv.FormatInt(v, 10) }),
-		marshalInteger(func(v int) string { return strconv.Itoa(v) }),
-		marshalInteger(func(v uint64) string { return strconv.FormatUint(v, 10) }),
-		marshalInteger(func(v uint) string { return strconv.FormatUint(uint64(v), 10) }),
+		jsonv2.MarshalToFunc(func(enc *jsontext.Encoder, v int64) error { return writeQuotedInt(enc, v) }),
+		jsonv2.MarshalToFunc(func(enc *jsontext.Encoder, v int) error { return writeQuotedInt(enc, int64(v)) }),
+		jsonv2.MarshalToFunc(func(enc *jsontext.Encoder, v uint64) error { return writeQuotedUint(enc, v) }),
+		jsonv2.MarshalToFunc(func(enc *jsontext.Encoder, v uint) error { return writeQuotedUint(enc, uint64(v)) }),
 	)),
 	jsonv2.WithUnmarshalers(jsonv2.JoinUnmarshalers(
 		unmarshalInteger(func(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }),
@@ -48,10 +48,15 @@ var apiJSON = jsonv2.JoinOptions(
 	)),
 )
 
-func marshalInteger[T int | int64 | uint | uint64](format func(T) string) *jsonv2.Marshalers {
-	return jsonv2.MarshalToFunc(func(enc *jsontext.Encoder, v T) error {
-		return enc.WriteToken(jsontext.String(format(v)))
-	})
+// writeQuotedInt and writeQuotedUint write the quoted digits without a string allocation.
+func writeQuotedInt(enc *jsontext.Encoder, v int64) error {
+	var buf [24]byte
+	return enc.WriteValue(append(strconv.AppendInt(append(buf[:0], '"'), v, 10), '"'))
+}
+
+func writeQuotedUint(enc *jsontext.Encoder, v uint64) error {
+	var buf [24]byte
+	return enc.WriteValue(append(strconv.AppendUint(append(buf[:0], '"'), v, 10), '"'))
 }
 
 // unmarshalInteger accepts a string or a number; null leaves the value

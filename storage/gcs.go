@@ -104,8 +104,7 @@ func (s *StorageGCS) Close() error {
 }
 
 func gcsCode(err error) int {
-	var apiErr *googleapi.Error
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*googleapi.Error](err); ok {
 		return apiErr.Code
 	}
 	return 0

@@ -13,7 +13,7 @@ import (
 
 func TestMemoryLedgerStatesAndFencedReclaim(t *testing.T) {
 	fake := clock.NewFake(time.Time{})
-	l := &MemoryLedger{AbstractLedger: AbstractLedger{Lease: time.Minute}, Clock: fake}
+	l := &MemoryLedger{Lease: time.Minute, Clock: fake}
 	ctx := context.Background()
 
 	first, err := l.Begin(ctx, "k")
@@ -181,9 +181,9 @@ func TestPgsqlLedgerBeginPaths(t *testing.T) {
 }
 
 func TestPgsqlLedgerWritesAreFencedAndSurviveCancellation(t *testing.T) {
-	db := &failingDB{scriptedDB: scriptedDB{rows: map[string][][]any{
+	db := &failingDB{rows: map[string][][]any{
 		qComplete: {{"k"}}, qUnknown: {{"k"}}, qRelease: {{"k"}}, qRenew: {{"k"}},
-	}}}
+	}}
 	l := NewPgsqlLedger(db, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -244,7 +244,7 @@ func (db *failingDB) Query(ctx context.Context, name string, args ...any) (*mode
 
 func TestPgsqlLedgerErrorsNeverGrantAClaim(t *testing.T) {
 	for _, failOn := range []string{qClaim, qFind, qReclaim} {
-		db := &failingDB{scriptedDB: scriptedDB{rows: map[string][][]any{qFind: {{"I", nil}}}}, failOn: failOn}
+		db := &failingDB{rows: map[string][][]any{qFind: {{"I", nil}}}, failOn: failOn}
 		e, err := NewPgsqlLedger(db, time.Minute).Begin(context.Background(), "k")
 		if err == nil || e.State != "" || e.Result != nil || e.Fence != "" {
 			t.Fatalf("failure at %s returned %+v, %v; want an empty entry and an error", failOn, e, err)
@@ -263,7 +263,7 @@ func TestPgsqlLedgerErrorsNeverGrantAClaim(t *testing.T) {
 }
 
 func TestPgsqlLedgerRenewHonorsCancellation(t *testing.T) {
-	db := &failingDB{scriptedDB: scriptedDB{rows: map[string][][]any{qRenew: {{"k"}}}}}
+	db := &failingDB{rows: map[string][][]any{qRenew: {{"k"}}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := NewPgsqlLedger(db, time.Minute).Renew(ctx, "k", "f1"); !errors.Is(err, context.Canceled) {

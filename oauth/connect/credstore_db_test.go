@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -57,9 +58,9 @@ func (f *fakeQS) count(name string) int {
 }
 
 func (f *fakeQS) last(name string) (qcall, bool) {
-	for i := len(f.calls) - 1; i >= 0; i-- {
-		if f.calls[i].name == name {
-			return f.calls[i], true
+	for _, v := range slices.Backward(f.calls) {
+		if v.name == name {
+			return v, true
 		}
 	}
 	return qcall{}, false

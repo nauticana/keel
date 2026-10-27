@@ -77,8 +77,7 @@ func (h *DocumentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+multipartFramingAllowance)
 	file, header, err := r.FormFile("file")
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		h.WriteError(w, http.StatusRequestEntityTooLarge, "Payload Too Large", "upload exceeds the size limit")
 		return
 	}

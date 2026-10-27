@@ -23,14 +23,14 @@ type APIMeta struct {
 }
 
 // WriteJSON emits `{data, meta}` for non-paginated responses.
-func WriteJSON(w http.ResponseWriter, status int, data interface{}) {
+func WriteJSON(w http.ResponseWriter, status int, data any) {
 	writeEnvelope(w, status, data, nil)
 }
 
 // WriteJSONPaged emits `{data, pagination, meta}` for list responses.
 // `pagination` is typically a struct with limit/offset/total/has_more/
 // next_offset fields, but any JSON-marshallable value is accepted.
-func WriteJSONPaged(w http.ResponseWriter, status int, data interface{}, pagination interface{}) {
+func WriteJSONPaged(w http.ResponseWriter, status int, data any, pagination any) {
 	writeEnvelope(w, status, data, pagination)
 }
 
@@ -43,7 +43,7 @@ func WriteJSONError(w http.ResponseWriter, status int, msg string) {
 	EncodeJSON(w, map[string]string{"error": msg})
 }
 
-func writeEnvelope(w http.ResponseWriter, status int, data interface{}, pagination interface{}) {
+func writeEnvelope(w http.ResponseWriter, status int, data any, pagination any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	resp := APIResponse{

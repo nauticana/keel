@@ -31,7 +31,7 @@ func uniqueKeyRelation() (*RelationAPI, *whereTableService) {
 		ParentColumns: []*model.TableColumn{partner, id}, ChildColumns: []*model.TableColumn{childPartner, childProvider}}
 	parent.Children = []*model.ForeignKey{fk}
 
-	childSvc := &whereTableService{legacyTableService: legacyTableService{table: child}}
+	childSvc := &whereTableService{table: child}
 	api := &RelationAPI{
 		DataService:   &legacyTableService{table: parent, rows: []any{map[string]any{"Id": int64(42), "PartnerId": int64(7)}}},
 		ChildServices: map[string]RelationAPI{"ProviderOidc": {DataService: childSvc, ParentRelation: fk}},

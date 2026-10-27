@@ -114,7 +114,7 @@ func TestRecentAuthAcceptsEachProof(t *testing.T) {
 		`{"password":"wrong","reauthCode":"x"}`: http.StatusUnauthorized,
 	} {
 		users := &reauthUsers{}
-		if got := deleteAccount(&SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}, body); got != want || users.deleted != (want == http.StatusNoContent) {
+		if got := deleteAccount(&SecurityHandler{UserService: users}, body); got != want || users.deleted != (want == http.StatusNoContent) {
 			t.Errorf("%s = %d deleted=%v, want %d", body, got, users.deleted, want)
 		}
 	}
@@ -123,14 +123,14 @@ func TestRecentAuthAcceptsEachProof(t *testing.T) {
 func TestReauthCodeDeletesAccountWithoutPasswordOr2FA(t *testing.T) {
 	users := &reauthUsers{email: "a@acme.com"}
 	notes := &sentNotifications{}
-	otp := &OTPHandler{AbstractHandler: AbstractHandler{UserService: users}, Cache: &countingCache{}, NotificationSvc: notes}
+	otp := &OTPHandler{UserService: users, Cache: &countingCache{}, NotificationSvc: notes}
 	if w := sendReauth(otp, `{}`); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"channel":"email"`) {
 		t.Fatalf("send = %d %s", w.Code, w.Body.String())
 	}
 	if users.purpose != user.OTPPurposeReauth || len(notes.channels) != 1 {
 		t.Fatalf("purpose %q, sends %v", users.purpose, notes.channels)
 	}
-	sec := &SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	sec := &SecurityHandler{UserService: users}
 	if got := deleteAccount(sec, `{"reauthCode":"000000"}`); got != http.StatusUnauthorized || users.deleted {
 		t.Fatalf("wrong code = %d deleted=%v", got, users.deleted)
 	}
@@ -145,12 +145,12 @@ func TestReauthCodeDeletesAccountWithoutPasswordOr2FA(t *testing.T) {
 
 func TestReauthCodeRefusedWhereSSOIsRequired(t *testing.T) {
 	users := &reauthUsers{email: "a@acme.com", ssoOnly: true}
-	otp := &OTPHandler{AbstractHandler: AbstractHandler{UserService: users}, Cache: &countingCache{}}
+	otp := &OTPHandler{UserService: users, Cache: &countingCache{}}
 	if w := sendReauth(otp, `{}`); w.Code != http.StatusForbidden || users.code != "" {
 		t.Fatalf("send under SSO = %d, code generated %q", w.Code, users.code)
 	}
 	users.purpose, users.code = user.OTPPurposeReauth, "654321"
-	sec := &SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	sec := &SecurityHandler{UserService: users}
 	if got := deleteAccount(sec, `{"reauthCode":"654321"}`); got != http.StatusForbidden || users.deleted || len(users.verified) != 0 {
 		t.Fatalf("code under SSO = %d deleted=%v verified=%v", got, users.deleted, users.verified)
 	}
@@ -170,20 +170,20 @@ func TestSendReauthOTPChannel(t *testing.T) {
 	for _, c := range cases {
 		users := &reauthUsers{email: c.email, phone: c.phone}
 		notes := &sentNotifications{}
-		otp := &OTPHandler{AbstractHandler: AbstractHandler{UserService: users}, Cache: &countingCache{}, NotificationSvc: notes}
+		otp := &OTPHandler{UserService: users, Cache: &countingCache{}, NotificationSvc: notes}
 		w := sendReauth(otp, c.body)
 		if w.Code != c.want || strings.Join(notes.channels, ",") != c.sent {
 			t.Errorf("%+v = %d sends %v", c, w.Code, notes.channels)
 		}
 	}
-	if w := sendReauth(&OTPHandler{AbstractHandler: AbstractHandler{UserService: &reauthUsers{email: "a@acme.com"}}}, `{}`); w.Code != http.StatusServiceUnavailable {
+	if w := sendReauth(&OTPHandler{UserService: &reauthUsers{email: "a@acme.com"}}, `{}`); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no cache = %d, want 503", w.Code)
 	}
 }
 
 func TestDeleteAccountRejectsLongReasonBeforeReauth(t *testing.T) {
 	users := &reauthUsers{}
-	h := &SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &SecurityHandler{UserService: users}
 	body := `{"reauthCode":"x","reason":"` + strings.Repeat("a", user.MaxHistoryReason+1) + `"}`
 	if got := deleteAccount(h, body); got != http.StatusBadRequest || users.deleted || len(users.verified) != 0 {
 		t.Fatalf("status %d deleted=%v verified=%v; want 400 with the proof unspent", got, users.deleted, users.verified)

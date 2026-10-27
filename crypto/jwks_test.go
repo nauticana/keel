@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -54,9 +55,7 @@ func signRS256(t *testing.T, kid string, key *rsa.PrivateKey, claims jwt.MapClai
 	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = kid
-	for k, v := range header {
-		tok.Header[k] = v
-	}
+	maps.Copy(tok.Header, header)
 	s, err := tok.SignedString(key)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +95,7 @@ func TestKeyForKidUnknownKidRefreshIsRateLimited(t *testing.T) {
 	if _, err := p.KeyForKid(ctx, "known"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if _, err := p.KeyForKid(ctx, "attacker-kid"); err == nil {
 			t.Fatal("an unknown kid must not resolve")
 		}

@@ -74,7 +74,7 @@ func TestFakeTickerRepeatsAndStops(t *testing.T) {
 	c := NewFake(time.Time{})
 	ticker := c.NewTicker(time.Second)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		c.Advance(time.Second)
 		select {
 		case <-ticker.C():
@@ -113,11 +113,9 @@ func TestFakeConcurrentAdvancesAreNotLost(t *testing.T) {
 	start := c.Now()
 	var wg sync.WaitGroup
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			c.Advance(time.Second)
-		}()
+		})
 	}
 	wg.Wait()
 	if got := c.Since(start); got != 100*time.Second {

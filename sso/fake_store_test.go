@@ -101,7 +101,7 @@ func (q *storeQS) Query(_ context.Context, name string, args ...any) (*model.Que
 	case qInsertConnection:
 		s.inserted = args
 		id := int64(len(s.connections) + 100)
-		s.connections[id] = &connection{IdentityConnection: port.IdentityConnection{ID: id, PartnerID: args[0].(int64), Protocol: args[2].(string), Issuer: args[3].(string)}, Status: StatusDraft}
+		s.connections[id] = &connection{ID: id, PartnerID: args[0].(int64), Protocol: args[2].(string), Issuer: args[3].(string), Status: StatusDraft}
 		return rows([]any{id})
 	case qInsertOIDC, qUpdateOIDC:
 		s.oidcRow = args
@@ -394,7 +394,7 @@ func newFixture(t *testing.T) *fixture {
 	s := newStore()
 	s.holders["acme.example"] = acme
 	s.holders["other.example"] = 99
-	s.connections[connID] = &connection{IdentityConnection: port.IdentityConnection{ID: connID, PartnerID: acme, Protocol: "O", Issuer: issuer}, Status: StatusActive, Tested: true}
+	s.connections[connID] = &connection{ID: connID, PartnerID: acme, Protocol: "O", Issuer: issuer, Status: StatusActive, Tested: true}
 	db := &storeDB{s: s}
 	nonces := &connect.NonceService{DB: db}
 	nonces.Init(context.Background())

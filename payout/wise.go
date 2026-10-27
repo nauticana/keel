@@ -68,15 +68,13 @@ func NewWiseProvider(apiKey, webhookSecret string, journal logger.ApplicationLog
 		profileNum = n
 	}
 	return &WiseProvider{
-		AbstractProvider: AbstractProvider{
-			apiKey:        apiKey,
-			webhookSecret: webhookSecret,
-			journal:       journal,
-		},
-		apiBase:    config.Config().WiseAPIBase,
-		profileID:  profileID,
-		profileNum: profileNum,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		apiKey:        apiKey,
+		webhookSecret: webhookSecret,
+		journal:       journal,
+		apiBase:       config.Config().WiseAPIBase,
+		profileID:     profileID,
+		profileNum:    profileNum,
+		httpClient:    &http.Client{Timeout: 15 * time.Second},
 	}, nil
 }
 

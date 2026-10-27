@@ -400,7 +400,7 @@ func (s *TableServicePgsql) orderTerms(orderby string) ([]orderTerm, error) {
 		return nil, nil
 	}
 	var terms []orderTerm
-	for _, raw := range strings.Split(orderby, ",") {
+	for raw := range strings.SplitSeq(orderby, ",") {
 		fields := strings.Fields(raw)
 		if len(fields) == 0 {
 			continue
@@ -487,10 +487,7 @@ func (s *TableServicePgsql) GetPage(ctx context.Context, partnerID int64, userID
 		}
 		return page.Slice(items), len(items), nil
 	}
-	offset := page.Offset
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(page.Offset, 0)
 	sqlText := plan.text + orderSQL(s.stableOrder(terms))
 	vals := append([]any(nil), plan.vals...)
 	if page.Limit > 0 {

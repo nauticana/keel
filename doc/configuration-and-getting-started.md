@@ -93,24 +93,24 @@ queries the catalog once, applies every section, and publishes each one only
 after all of them succeeded:
 
 ```go
-// package seo
-type SeoConfig struct {
+// package app
+type AppConfig struct {
     config.AbstractConfig
     FeatureX string
     MaxFoo   int
 }
 
-func (c *SeoConfig) Apply(rows config.ConfigRows) error {
+func (c *AppConfig) Apply(rows config.ConfigRows) error {
     c.FeatureX = c.String(rows, "feature_x")
     c.MaxFoo = c.Int(rows, "max_foo")
     return c.ParseErr()
 }
 
-var activeConfig atomic.Pointer[SeoConfig]
+var activeConfig atomic.Pointer[AppConfig]
 
-func init() { activeConfig.Store(&SeoConfig{}) }
+func init() { activeConfig.Store(&AppConfig{}) }
 
-func Config() *SeoConfig { return activeConfig.Load() }
+func Config() *AppConfig { return activeConfig.Load() }
 
 func LoadConfig(ctx context.Context, db port.DatabaseRepository) error {
     rows, err := config.LoadRows(ctx, db, *common.NodeId)
@@ -119,7 +119,7 @@ func LoadConfig(ctx context.Context, db port.DatabaseRepository) error {
     }
     kc := &config.KeelConfig{}
     sc := &scout.ScoutConfig{}
-    ec := &SeoConfig{}
+    ec := &AppConfig{}
     for _, ac := range []config.ApplicationConfig{kc, sc, ec} {
         if err := ac.Apply(rows); err != nil {
             return err
@@ -132,8 +132,8 @@ func LoadConfig(ctx context.Context, db port.DatabaseRepository) error {
 }
 ```
 
-Keel code reads `config.Config()`, scout code `scout.Config()`, seo code
-`seo.Config()`. Seed every repository's owned flags into
+Keel code reads `config.Config()`, scout code `scout.Config()`, application code
+`app.Config()`. Seed every repository's owned flags into
 `application_config_flag` alongside keel's.
 
 **Runtime reload.** `application_config_flag` is exposed as a REST resource
@@ -144,7 +144,7 @@ database is available:
 
 ```go
 config.ReloadFunc = func(ctx context.Context) error {
-    return seo.LoadConfig(ctx, db)
+    return app.LoadConfig(ctx, db)
 }
 ```
 

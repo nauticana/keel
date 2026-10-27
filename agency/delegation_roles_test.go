@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -48,9 +49,7 @@ func newRoleStore() *roleStore {
 func (f *roleStore) begin() {
 	active, events := f.active, append([][]any(nil), f.events...)
 	roles := make(map[string]*time.Time, len(f.roles))
-	for k, v := range f.roles {
-		roles[k] = v
-	}
+	maps.Copy(roles, f.roles)
 	f.snapshot = func() { f.active, f.events, f.roles = active, events, roles }
 }
 
@@ -157,7 +156,8 @@ func newRoleService(store *roleStore) *BaseAgencyService {
 	})
 }
 
-func at(t time.Time) *time.Time { return &t }
+//go:fix inline
+func at(t time.Time) *time.Time { return new(t) }
 
 func eventSummary(events [][]any) []string {
 	out := make([]string, 0, len(events))

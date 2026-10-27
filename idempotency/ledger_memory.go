@@ -55,7 +55,7 @@ func (l *MemoryLedger) Begin(_ context.Context, key string) (model.LedgerEntry, 
 	if err != nil {
 		return model.LedgerEntry{}, err
 	}
-	l.entries[key] = memoryEntry{LedgerEntry: model.LedgerEntry{State: model.LedgerInFlight, Fence: fence}, at: now}
+	l.entries[key] = memoryEntry{State: model.LedgerInFlight, Fence: fence, at: now}
 	return model.LedgerEntry{State: model.LedgerNew, Fence: fence}, nil
 }
 
@@ -158,6 +158,6 @@ func (l *MemoryLedger) transition(key, fence string, state model.LedgerState, re
 	if e.State != model.LedgerInFlight && e.State != model.LedgerUnknown {
 		return ErrInvalidTransition
 	}
-	l.entries[key] = memoryEntry{LedgerEntry: model.LedgerEntry{State: state, Result: cloneBytes(result), Fence: fence}, at: l.now()}
+	l.entries[key] = memoryEntry{State: state, Result: cloneBytes(result), Fence: fence, at: l.now()}
 	return nil
 }

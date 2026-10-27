@@ -41,6 +41,39 @@ func (qr *QueryResult) Indexes(names ...string) ([]int, error) {
 	return out, nil
 }
 
+// Row returns row i, or ErrRowOutOfRange.
+func (qr *QueryResult) Row(i int) (Row, error) {
+	if qr == nil || i < 0 || i >= len(qr.Rows) {
+		return Row{}, fmt.Errorf("%w: %d", ErrRowOutOfRange, i)
+	}
+	return Row{columns: qr.Columns, values: qr.Rows[i]}, nil
+}
+
+// Col returns the named column of row i converted by Coerce.
+func (qr *QueryResult) Col[T any](i int, name string) (T, error) {
+	r, err := qr.Row(i)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return r.Get[T](name)
+}
+
+// Scan maps every row through into, stopping at the first error.
+func (qr *QueryResult) Scan[T any](into func(Row) (T, error)) ([]T, error) {
+	if qr == nil {
+		return nil, nil
+	}
+	out := make([]T, len(qr.Rows))
+	for i, values := range qr.Rows {
+		var err error
+		if out[i], err = into(Row{columns: qr.Columns, values: values}); err != nil {
+			return nil, fmt.Errorf("row %d: %w", i, err)
+		}
+	}
+	return out, nil
+}
+
 // AsMaps projects Rows into []map[string]any keyed by Columns, for JSON-encoding
 // an ad-hoc query. Returns an empty slice (not nil) when there are no rows; each
 // row is a fresh map.

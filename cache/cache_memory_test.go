@@ -108,14 +108,12 @@ func TestMemoryCache_IncrementAtomicity(t *testing.T) {
 
 	var wg sync.WaitGroup
 	const G, N = 50, 200
-	for i := 0; i < G; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < N; j++ {
+	for range G {
+		wg.Go(func() {
+			for range N {
 				_, _ = c.Increment(ctx, "ctr")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -175,8 +173,7 @@ func TestMemoryCache_RPushLPopAllOrdering(t *testing.T) {
 func TestMemoryCache_PublishSubscribeFanOut(t *testing.T) {
 	c := NewMemoryCacheService()
 	defer c.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	a, err := c.Subscribe(ctx, "topic")
 	if err != nil {

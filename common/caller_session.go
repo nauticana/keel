@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,10 +87,5 @@ func WithCallerSession(ctx context.Context, s CallerSession) context.Context {
 }
 
 func (s CallerSession) HasScope(scope string) bool {
-	for _, granted := range s.Scopes {
-		if granted == scope {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.Scopes, scope)
 }

@@ -344,7 +344,7 @@ func (m *MailClient) postMailAPI(ctx context.Context, subject string, body strin
 			}
 		}
 	}
-	payloadMap := map[string]interface{}{
+	payloadMap := map[string]any{
 		"from":    config.Config().SmtpFrom,
 		"to":      recipients,
 		"subject": subject,

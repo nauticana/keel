@@ -22,7 +22,7 @@ type PageRequest struct {
 // documented for ?order=.
 func (p PageRequest) StableOrderBy(keys []string) string {
 	named := make(map[string]bool, len(keys))
-	for _, term := range strings.Split(p.OrderBy, ",") {
+	for term := range strings.SplitSeq(p.OrderBy, ",") {
 		if fields := strings.Fields(term); len(fields) > 0 {
 			named[strings.ToLower(fields[0])] = true
 		}
@@ -42,10 +42,7 @@ func (p PageRequest) StableOrderBy(keys []string) string {
 // Slice applies the bounds in memory, for fallback paths that could not push
 // them into the query.
 func (p PageRequest) Slice(items []any) []any {
-	start := p.Offset
-	if start < 0 {
-		start = 0
-	}
+	start := max(p.Offset, 0)
 	if start >= len(items) {
 		return []any{}
 	}

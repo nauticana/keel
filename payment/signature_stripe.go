@@ -73,7 +73,7 @@ func (v *StripeSignatureVerifier) Verify(ctx context.Context, sigHeader string, 
 
 	var timestamp string
 	var signatures []string
-	for _, part := range strings.Split(sigHeader, ",") {
+	for part := range strings.SplitSeq(sigHeader, ",") {
 		// Tolerate stray whitespace introduced by proxies / curl-by-
 		// hand replays (Stripe's spec is comma-only, but real wire
 		// traffic occasionally includes spaces).

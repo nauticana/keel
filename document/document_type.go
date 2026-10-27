@@ -21,7 +21,7 @@ type DocumentType struct {
 
 func documentTypeFromRow(id string, r []any) *DocumentType {
 	var media []string
-	for _, m := range strings.Split(common.AsString(r[2]), ",") {
+	for m := range strings.SplitSeq(common.AsString(r[2]), ",") {
 		if m = strings.TrimSpace(m); m != "" {
 			media = append(media, m)
 		}

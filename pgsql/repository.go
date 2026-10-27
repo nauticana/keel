@@ -390,14 +390,12 @@ func (r *RepositoryPgsql) CreateTableService(ctx context.Context, table *model.T
 		return r.TableServices[table.TableName]
 	}
 	return &TableServicePgsql{
-		AbstractTableService: data.AbstractTableService{
-			Table:       table,
-			AuthQuery:   r.GetQueryService(ctx, r.Grants().Queries()),
-			IdGenerator: r.IdGenerator,
-			Grants:      r.Grants(),
-		},
-		Schema: *common.DBschema,
-		Client: r.Client,
+		Table:       table,
+		AuthQuery:   r.GetQueryService(ctx, r.Grants().Queries()),
+		IdGenerator: r.IdGenerator,
+		Grants:      r.Grants(),
+		Schema:      *common.DBschema,
+		Client:      r.Client,
 	}
 }
 

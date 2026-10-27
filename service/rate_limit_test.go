@@ -15,12 +15,12 @@ func TestRateLimitMiddleware(t *testing.T) {
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
 
 	var codes []int
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
 		codes = append(codes, rec.Code)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if codes[i] != http.StatusOK {
 			t.Fatalf("req %d = %d, want 200", i, codes[i])
 		}
@@ -33,7 +33,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 func TestRateLimitMiddlewareFailsOpenWithoutCache(t *testing.T) {
 	mw := RateLimitMiddleware(nil, 1, time.Minute, nil, nil)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
 		if rec.Code != http.StatusOK {

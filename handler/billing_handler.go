@@ -187,8 +187,7 @@ func (h *BillingHandler) Portal() http.HandlerFunc {
 }
 
 func (h *BillingHandler) subscriptionError(action string, err error) error {
-	var over *billing.OverTargetLimitError
-	if errors.As(err, &over) {
+	if over, ok := errors.AsType[*billing.OverTargetLimitError](err); ok {
 		return &APIError{Status: http.StatusConflict, Msg: "remove what the plan does not allow before changing to it", Details: over.Overages}
 	}
 	switch {

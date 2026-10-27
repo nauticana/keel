@@ -641,14 +641,12 @@ func (s *CredentialStoreDB) ConnectionsByShopDomain(ctx context.Context, provide
 	out := make([]ShopConnection, 0, len(res.Rows))
 	for _, row := range res.Rows {
 		out = append(out, ShopConnection{
-			ActiveCredential: ActiveCredential{
-				PartnerID:      common.AsInt64(row[0]),
-				EntityID:       common.AsInt64(row[1]),
-				Provider:       common.AsString(row[2]),
-				ConnectionType: common.AsString(row[3]),
-				Rev:            int(common.AsInt64(row[5])),
-			},
-			Status: common.AsString(row[4]),
+			PartnerID:      common.AsInt64(row[0]),
+			EntityID:       common.AsInt64(row[1]),
+			Provider:       common.AsString(row[2]),
+			ConnectionType: common.AsString(row[3]),
+			Rev:            int(common.AsInt64(row[5])),
+			Status:         common.AsString(row[4]),
 		})
 	}
 	return out, nil

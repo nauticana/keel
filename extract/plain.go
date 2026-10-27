@@ -17,13 +17,13 @@ func extractPlain(raw []byte, markdown bool) Extracted {
 		}
 	}
 	offset := 0
-	for _, block := range strings.Split(text, "\n\n") {
+	for block := range strings.SplitSeq(text, "\n\n") {
 		end := offset + len(block)
 		if !markdown {
 			add(Paragraph, 0, offset, end)
 		} else {
 			paraStart, lineStart := offset, offset
-			for _, line := range strings.Split(block, "\n") {
+			for line := range strings.SplitSeq(block, "\n") {
 				if level := headingLevel(line); level > 0 {
 					add(Paragraph, 0, paraStart, max(paraStart, lineStart-1))
 					add(Heading, level, lineStart, lineStart+len(line))

@@ -68,7 +68,6 @@ type OAuthConnectHandler struct {
 func (h *OAuthConnectHandler) Routes() map[string]http.HandlerFunc {
 	routes := make(map[string]http.HandlerFunc, len(h.Providers)*3)
 	for name, p := range h.Providers {
-		name, p := name, p
 		routes["/api/oauth/"+name+"/authorize"] = h.gate(h.authorize(name, p))
 		routes["/api/oauth/"+name+"/callback"] = h.callback(name, p)
 		routes["/api/oauth/"+name+"/complete"] = h.gate(h.complete(name, p))

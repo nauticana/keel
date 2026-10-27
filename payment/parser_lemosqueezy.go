@@ -3,6 +3,7 @@ package payment
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 )
@@ -64,9 +65,7 @@ func (p *LemonSqueezyEventParser) Parse(body []byte) (*PaymentEvent, error) {
 		RawPayload:      string(body),
 		Metadata:        map[string]string{},
 	}
-	for k, v := range raw.Meta.CustomData {
-		event.Metadata[k] = v
-	}
+	maps.Copy(event.Metadata, raw.Meta.CustomData)
 
 	event.EventKind = lemonSqueezyEventKind(raw.Meta.EventName)
 	switch {

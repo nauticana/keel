@@ -120,7 +120,7 @@ func TestPurgeExpiredRepeatsBatches(t *testing.T) {
 	if err := codes.PurgeExpired(ctx); err != nil || repo.calls != 3 {
 		t.Fatalf("err %v calls %d", err, repo.calls)
 	}
-	repo = &batchRepo{grantRepo: grantRepo{err: errors.New("db down")}}
+	repo = &batchRepo{err: errors.New("db down")}
 	codes = &CodeStoreDB{DB: repo}
 	codes.Init(ctx)
 	if err := codes.PurgeExpired(ctx); err == nil || repo.calls != 1 {

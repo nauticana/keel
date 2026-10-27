@@ -3,6 +3,7 @@ package document
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -43,9 +44,7 @@ func (m *memStore) Commit(context.Context) error {
 	return nil
 }
 func (m *memStore) Rollback(context.Context) error {
-	for id, original := range m.updated {
-		m.rows[id] = original
-	}
+	maps.Copy(m.rows, m.updated)
 	for _, id := range m.inserted {
 		delete(m.rows, id)
 	}

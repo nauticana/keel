@@ -161,7 +161,7 @@ func (s *StorageAzure) PutObject(ctx context.Context, key string, data io.Reader
 
 func (s *StorageAzure) PutObjectIfAbsent(ctx context.Context, key string, data io.Reader, contentType string, attributes map[string]string) error {
 	err := s.put(ctx, key, data, contentType, attributes, &blob.AccessConditions{
-		ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfNoneMatch: to(azcore.ETagAny)},
+		ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfNoneMatch: new(azcore.ETagAny)},
 	})
 	if err != nil && bloberror.HasCode(err, bloberror.BlobAlreadyExists, bloberror.ConditionNotMet) {
 		return fmt.Errorf("azure: put %s: %w", key, ErrExists)
@@ -204,7 +204,7 @@ func azureMax(limit int) *int32 {
 	if limit <= 0 {
 		return nil
 	}
-	return to(int32(min(limit, 5000)))
+	return new(int32(min(limit, 5000)))
 }
 
 func (s *StorageAzure) ListObjects(ctx context.Context, prefix string, limit int) ([]string, error) {
@@ -307,8 +307,8 @@ func (s *StorageAzure) GetSignedURL(ctx context.Context, key string, expirySecon
 	} else {
 		var udc *azservice.UserDelegationCredential
 		udc, err = s.client.ServiceClient().GetUserDelegationCredential(ctx, azservice.KeyInfo{
-			Start:  to(start.Format(sas.TimeFormat)),
-			Expiry: to(expiry.Format(sas.TimeFormat)),
+			Start:  new(start.Format(sas.TimeFormat)),
+			Expiry: new(expiry.Format(sas.TimeFormat)),
 		}, nil)
 		if err != nil {
 			return "", fmt.Errorf("azure: failed to get delegation credential for %s: %w", key, err)
@@ -320,7 +320,5 @@ func (s *StorageAzure) GetSignedURL(ctx context.Context, key string, expirySecon
 	}
 	return s.blobURL(key) + "?" + query.Encode(), nil
 }
-
-func to[T any](v T) *T { return &v }
 
 var _ ObjectStorage = (*StorageAzure)(nil)

@@ -55,7 +55,7 @@ func (s *StorageFile) folder(key string) (string, error) {
 	if rel == "" || !filepath.IsLocal(filepath.FromSlash(rel)) {
 		return "", fmt.Errorf("file: %q: %w", key, ErrInvalidKey)
 	}
-	for _, segment := range strings.Split(filepath.ToSlash(filepath.FromSlash(rel)), "/") {
+	for segment := range strings.SplitSeq(filepath.ToSlash(filepath.FromSlash(rel)), "/") {
 		if segment == "" || segment == "." || segment == ".." ||
 			strings.EqualFold(segment, fileData) || strings.EqualFold(segment, fileAttributes) {
 			return "", fmt.Errorf("file: %q: %w", key, ErrInvalidKey)

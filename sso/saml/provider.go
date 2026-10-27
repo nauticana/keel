@@ -186,8 +186,7 @@ func parseResponse(sp *crewjam.ServiceProvider, raw []byte, requestID string) (a
 	}()
 	as, err = sp.ParseXMLResponse(raw, []string{requestID}, sp.AcsURL)
 	if err != nil {
-		var invalid *crewjam.InvalidResponseError
-		if errors.As(err, &invalid) {
+		if invalid, ok := errors.AsType[*crewjam.InvalidResponseError](err); ok {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, invalid.PrivateErr)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)

@@ -1339,7 +1339,7 @@ func (s *LocalUserService) CreateJWT(u *model.UserSession) (string, error) {
 // validates RegisteredClaims.ExpiresAt automatically once the embedded
 // claim is populated (UserSession.SyncTimestamps does this on issuance).
 func (s *LocalUserService) ParseJWT(tokenString string) (*model.UserSession, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &model.UserSession{}, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &model.UserSession{}, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -1846,7 +1846,7 @@ func (s *LocalUserService) Setup2FA(userID int) (string, string, []string, error
 	// the security trade-off rationale.
 	backupCodes := make([]string, 10)
 	hashedCodes := make([]string, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		code, err := generateRandomCode(8)
 		if err != nil {
 			return "", "", nil, err

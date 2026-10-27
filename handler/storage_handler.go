@@ -45,8 +45,7 @@ func (h *StorageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, h.Uploads.MaxBytes+multipartFramingAllowance)
 	file, header, err := r.FormFile("file")
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		h.WriteServiceError(w, r, storage.ErrObjectTooLarge)
 		return
 	}

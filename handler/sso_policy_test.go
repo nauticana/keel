@@ -37,7 +37,7 @@ func (u *ssoUsers) CreateJWT(*model.UserSession) (string, error) { u.minted++; r
 
 func TestPasswordLoginHonorsSSORequired(t *testing.T) {
 	users := &ssoUsers{}
-	h := &PublicHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &PublicHandler{UserService: users}
 	w := httptest.NewRecorder()
 	h.LoginLocal(w, httptest.NewRequest(http.MethodPost, "/public/login/local", strings.NewReader(`{"username":"u","password":"p"}`)))
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "sso_required") {
@@ -62,7 +62,7 @@ func TestSocialLoginRefusesDisabledProvider(t *testing.T) {
 // SSO turned on between the password step and the 2FA step still refuses.
 func TestTwoFactorCompletionRechecksSSO(t *testing.T) {
 	users := &ssoUsers{}
-	h := &SecurityHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &SecurityHandler{UserService: users}
 	for name, call := range map[string]func(http.ResponseWriter, *http.Request){"totp": h.Verify2FA, "backup code": h.VerifyBackupCode} {
 		w := httptest.NewRecorder()
 		call(w, httptest.NewRequest(http.MethodPost, "/public/2fa/verify", strings.NewReader(`{"loginToken":"3-12345678","code":"123456"}`)))

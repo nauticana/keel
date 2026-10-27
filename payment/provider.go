@@ -41,12 +41,10 @@ type StripeProvider struct {
 
 func NewStripeProvider(secrets secret.SecretProvider) *StripeProvider {
 	return &StripeProvider{
-		AbstractProvider: AbstractProvider{
-			ProviderName: ProviderStripe,
-			SigHeader:    "Stripe-Signature",
-			Verifier:     NewStripeSignatureVerifier(secrets),
-			Parser:       NewStripeEventParser(),
-		},
+		ProviderName:      ProviderStripe,
+		SigHeader:         "Stripe-Signature",
+		Verifier:          NewStripeSignatureVerifier(secrets),
+		Parser:            NewStripeEventParser(),
 		InvoiceLineClient: NewStripeCheckoutClient(secrets),
 	}
 }
@@ -100,12 +98,10 @@ type LemonSqueezyProvider struct{ AbstractProvider }
 
 func NewLemonSqueezyProvider(secrets secret.SecretProvider) *LemonSqueezyProvider {
 	return &LemonSqueezyProvider{
-		AbstractProvider: AbstractProvider{
-			ProviderName: ProviderLemonSqueezy,
-			SigHeader:    "X-Signature",
-			Verifier:     NewLemonSqueezySignatureVerifier(secrets),
-			Parser:       NewLemonSqueezyEventParser(),
-		},
+		ProviderName: ProviderLemonSqueezy,
+		SigHeader:    "X-Signature",
+		Verifier:     NewLemonSqueezySignatureVerifier(secrets),
+		Parser:       NewLemonSqueezyEventParser(),
 	}
 }
 

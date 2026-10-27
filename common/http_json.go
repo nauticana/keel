@@ -52,8 +52,7 @@ func (e *HTTPStatusError) Permanent() bool { return !e.Transient() }
 
 // HTTPStatus returns the status carried by err, or 0 when err holds no HTTPStatusError.
 func HTTPStatus(err error) int {
-	var se *HTTPStatusError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*HTTPStatusError](err); ok {
 		return se.Status
 	}
 	return 0

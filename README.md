@@ -42,11 +42,15 @@ Add a pinned release to the consuming module:
 go get github.com/nauticana/keel@<version>
 ```
 
-Then follow [Configuration and Getting Started](doc/configuration-and-getting-started.md) for runtime configuration, application bootstrap, REST wiring, and workers.
+Keel requires Go 1.27.3. Then follow [Configuration and Getting Started](doc/configuration-and-getting-started.md) for runtime configuration, application bootstrap, REST wiring, and workers.
 
 ## API JSON
 
 Keel's own HTTP API writes every 64-bit integer (`int`, `int64`, `uint`, `uint64`) as a JSON string, so ids above 2^53 reach JavaScript clients intact (RFC 7493 §2.2), and accepts a string or a number for those types on input. Snowflake ids and money are 64-bit; bounded values such as display orders, sizes and exponents use `int16` or `int32`, matching their columns, and stay numbers. Numbers decoded into untyped values keep every digit (RFC 8259 §6), and JWT claims are parsed exactly. Errors are RFC 9457 problem details. Standards-defined bodies such as OAuth and SCIM keep their specified number types. See [API data format](doc/authentication.md#api-data-format).
+
+## Query results
+
+A named query returns a `model.QueryResult` (`Columns`, `Rows [][]any`). Positional `res.Rows[i][j]` with `common.As*` is the fastest read and stays the default where the SQL fixes the column order. For typed values with errors, `res.Row(i)` gives `At[T](j)` by position and `Get[T](name)` by name, and `res.Scan[T]` maps every row; all convert through `model.Coerce[T]` and fail with `ErrColumnNotFound`, `ErrRowOutOfRange`, `ErrNullValue` or `ErrCoercion`. These generic methods need Go 1.27.3, keel's minimum. See [Extending and Developing Keel](doc/extending-and-development.md).
 
 ## Standards
 

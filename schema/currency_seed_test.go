@@ -33,7 +33,7 @@ func TestCurrencySeed(t *testing.T) {
 	}
 	want := map[string]string{"USD": "2", "EUR": "2", "JPY": "0", "KRW": "0", "CLP": "0", "ISK": "0",
 		"COP": "2", "IDR": "2", "BHD": "3", "KWD": "3", "IQD": "3", "CLF": "4"}
-	for _, c := range strings.Fields("ALL ARS AUD BAM BGN BOB BRL BYN CAD CHF CLP COP CZK DKK EUR GBP GYD HUF " +
+	for c := range strings.FieldsSeq("ALL ARS AUD BAM BGN BOB BRL BYN CAD CHF CLP COP CZK DKK EUR GBP GYD HUF " +
 		"ISK MDL MKD MXN NOK PEN PLN PYG RON RSD SEK SRD TRY UAH USD UYU VES CNY INR JPY KRW BHD KWD") {
 		if exponents[c] == "" {
 			t.Errorf("currency %s missing from the seed", c)

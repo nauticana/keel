@@ -186,8 +186,7 @@ func envelopeJSON(e Event) ([]byte, error) {
 // transportError drops the *url.Error wrapper: its message carries the full
 // URL, whose path or query may hold a receiver token, into outbox_event.last_error.
 func transportError(host string, err error) error {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
 		err = urlErr.Err
 	}
 	err = fmt.Errorf("outbox webhook %s: %w", host, err)

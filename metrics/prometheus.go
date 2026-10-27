@@ -139,8 +139,7 @@ func (r *PrometheusRecorder) collector(measurement port.MetricMeasurement, label
 		return nil, fmt.Errorf("metrics: unsupported metric kind %q", measurement.Kind)
 	}
 	if err := r.registerer.Register(prometheusCollector); err != nil {
-		var alreadyRegistered prometheus.AlreadyRegisteredError
-		if errors.As(err, &alreadyRegistered) {
+		if _, ok := errors.AsType[prometheus.AlreadyRegisteredError](err); ok {
 			return nil, fmt.Errorf("metrics: %s is already registered outside this recorder", measurement.Name)
 		}
 		return nil, fmt.Errorf("metrics: register %s: %w", measurement.Name, err)

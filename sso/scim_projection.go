@@ -22,7 +22,7 @@ func NewSCIMProjection(schemaURN, attributes, excludedAttributes string) SCIMPro
 		}
 		out := map[string]map[string]bool{}
 		prefix := strings.ToLower(schemaURN) + ":"
-		for _, name := range strings.Split(list, ",") {
+		for name := range strings.SplitSeq(list, ",") {
 			name = strings.ToLower(strings.TrimSpace(name))
 			if strings.HasPrefix(name, prefix) {
 				name = name[len(prefix):]

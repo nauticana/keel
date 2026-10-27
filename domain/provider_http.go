@@ -29,8 +29,7 @@ func getProviderJSON(ctx context.Context, rawURL, accessToken string, out any, h
 	}
 	body, _, err := common.RequestJSON(ctx, http.MethodGet, rawURL, h, nil)
 	if err != nil {
-		var requestErr *url.Error
-		if errors.As(err, &requestErr) {
+		if requestErr, ok := errors.AsType[*url.Error](err); ok {
 			return fmt.Errorf("domain verification: provider request: %w", requestErr.Err)
 		}
 		return fmt.Errorf("domain verification: provider request: %w", err)

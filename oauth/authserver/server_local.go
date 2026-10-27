@@ -65,8 +65,7 @@ func (e describedErr) Unwrap() error { return e.code }
 // ProtocolErrorDescription reports the client-safe error_description of a
 // protocol error, or "" when it has none.
 func ProtocolErrorDescription(err error) string {
-	var de describedErr
-	if errors.As(err, &de) {
+	if de, ok := errors.AsType[describedErr](err); ok {
 		return de.desc
 	}
 	return ""
@@ -76,8 +75,7 @@ func ProtocolErrorDescription(err error) string {
 // Anything else is internal (DB/signer/rand) — the caller logs it and returns a
 // generic server_error rather than leaking detail.
 func ProtocolErrorCode(err error) (string, bool) {
-	var oe oauthErr
-	if errors.As(err, &oe) {
+	if oe, ok := errors.AsType[oauthErr](err); ok {
 		return string(oe), true
 	}
 	return "", false

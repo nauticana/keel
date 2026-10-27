@@ -148,8 +148,7 @@ func (l *DistributedRateLimiter) Allow(ctx context.Context, lane string, subject
 		return l.fallback.allow(lane, subject.PartnerID, now)
 	}
 	err := l.allowShared(ctx, lane, subject.PartnerID, limits, now)
-	var outage *storeOutage
-	if errors.As(err, &outage) {
+	if _, ok := errors.AsType[*storeOutage](err); ok {
 		l.markOutage(ctx, lane, now)
 		return l.fallback.allow(lane, subject.PartnerID, now)
 	}
@@ -426,7 +425,7 @@ func (c *sharedAdmitter) charge(ctx context.Context, request admission, n int64)
 	if n == 1 {
 		return 0, c.markExhausted(request, result.RejectedKey), nil
 	}
-	for admitted := int64(0); admitted < n; admitted++ {
+	for admitted := range n {
 		result, err := c.call(ctx, request, 1)
 		if err != nil {
 			return admitted, nil, err

@@ -45,11 +45,10 @@ var _ port.ReconciliationLedger = (*PgsqlLedger)(nil)
 
 // NewPgsqlLedger binds the PostgreSQL implementation to a database repository; lease 0 never takes over a claim.
 func NewPgsqlLedger(db port.DatabaseRepository, lease time.Duration) *PgsqlLedger {
-	return &PgsqlLedger{AbstractDatabaseLedger: AbstractDatabaseLedger{
-		AbstractLedger: AbstractLedger{Lease: lease},
-		db:             db,
-		queryProvider:  pgsqlLedgerQueries{},
-	}}
+	return &PgsqlLedger{
+		Lease:         lease,
+		db:            db,
+		queryProvider: pgsqlLedgerQueries{}}
 }
 
 func (l *PgsqlLedger) Begin(ctx context.Context, key string) (model.LedgerEntry, error) {

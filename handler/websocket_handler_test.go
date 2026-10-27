@@ -33,7 +33,7 @@ var _ port.WebSocketHub = (*recordingHub)(nil)
 
 func TestWebSocketHandler_AuthFromHeaderOrQuery(t *testing.T) {
 	hub := &recordingHub{}
-	h := &WebSocketHandler{AbstractHandler: AbstractHandler{UserService: wsUsers{}}, Hub: hub}
+	h := &WebSocketHandler{UserService: wsUsers{}, Hub: hub}
 	for _, tc := range []struct {
 		name   string
 		header string
@@ -59,7 +59,7 @@ func TestWebSocketHandler_AuthFromHeaderOrQuery(t *testing.T) {
 		t.Fatalf("upgraded=%v", hub.upgraded)
 	}
 	rec := httptest.NewRecorder()
-	(&WebSocketHandler{AbstractHandler: AbstractHandler{UserService: wsUsers{}}}).Connect(rec, httptest.NewRequest(http.MethodGet, "/public/ws?token=ok", nil))
+	(&WebSocketHandler{UserService: wsUsers{}}).Connect(rec, httptest.NewRequest(http.MethodGet, "/public/ws?token=ok", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no hub status=%d", rec.Code)
 	}

@@ -134,8 +134,8 @@ func TestListPage_FallbackWithoutTableDefinition(t *testing.T) {
 // total comes back from it, with no in-memory slicing on top.
 func TestListPage_UsesCapabilityWhenAvailable(t *testing.T) {
 	svc := &pagedTableService{
-		legacyTableService: legacyTableService{table: pageTable(), rows: records(10)},
-		total:              137,
+		table: pageTable(), rows: records(10),
+		total: 137,
 	}
 	api := &RelationAPI{DataService: svc}
 

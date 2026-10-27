@@ -118,8 +118,7 @@ func (s *StorageS3) PublicURL(key string) string {
 }
 
 func s3Code(err error) string {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		return apiErr.ErrorCode()
 	}
 	return ""

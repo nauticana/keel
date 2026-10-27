@@ -32,7 +32,7 @@ func (u *linkUsers) LinkExternalIdentity(int, user.ExternalIdentity) error {
 
 func TestLinkSocialRequiresRecentAuthentication(t *testing.T) {
 	users := &linkUsers{}
-	h := &SocialLoginHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &SocialLoginHandler{UserService: users}
 	for body, want := range map[string]int{
 		`{"provider":"google","token":"t"}`:                         http.StatusUnauthorized,
 		`{"provider":"google","token":"t","password":"wrong"}`:      http.StatusUnauthorized,

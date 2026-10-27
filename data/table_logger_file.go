@@ -32,7 +32,7 @@ type TableLoggerFile struct {
 	// fallbackSeq is used only when IDs is nil, to give a sane id
 	// progression even in dev tests that didn't wire the generator.
 	// Real deployments must supply IDs — see Init().
-	fallbackSeq int64
+	fallbackSeq atomic.Int64
 }
 
 func (l *TableLoggerFile) Init() error {
@@ -54,7 +54,7 @@ func (l *TableLoggerFile) nextID() int64 {
 		return l.IDs.NextID()
 	}
 	now := time.Now().Unix()
-	seq := atomic.AddInt64(&l.fallbackSeq, 1)
+	seq := l.fallbackSeq.Add(1)
 	return now<<16 | (seq & 0xffff)
 }
 

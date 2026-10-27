@@ -19,7 +19,7 @@ func TestChangePlanTx_RunsOnCallerTx(t *testing.T) {
 		qLcPlanPolicy: {{"A", int64(14)}},
 		qLcPlanPrice:  {{int64(9900), "USD"}},
 	})
-	tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1", "STANDARD"}}}}}
+	tx := &fakeTx{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1", "STANDARD"}}}}
 	err := svc.ChangePlanTx(context.Background(), tx, 7, "PRO", BillingTerms{BillingCycle: PeriodAnnual, TermType: PeriodAnnual, TermCount: 1})
 	if err != nil {
 		t.Fatal(err)

@@ -82,7 +82,7 @@ func TestSessionTokens_MintsPair(t *testing.T) {
 
 func TestRefreshToken_RotatesAndRejectsReuse(t *testing.T) {
 	users := &refreshUsers{}
-	h := &PublicHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &PublicHandler{UserService: users}
 	for _, tc := range []struct {
 		body   string
 		status int
@@ -118,7 +118,7 @@ func TestRefreshToken_RotatesAndRejectsReuse(t *testing.T) {
 
 func TestLogout_RevokesPresentedToken(t *testing.T) {
 	users := &refreshUsers{}
-	h := &PublicHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &PublicHandler{UserService: users}
 	rec := httptest.NewRecorder()
 	h.Logout(rec, httptest.NewRequest(http.MethodPost, "/public/logout", strings.NewReader(`{"refreshToken":"refresh-old"}`)))
 	if rec.Code != 200 || len(users.revoked) != 1 || users.revoked[0] != "refresh-old" {

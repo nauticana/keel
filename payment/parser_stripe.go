@@ -3,6 +3,7 @@ package payment
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 )
@@ -69,9 +70,7 @@ func (p *StripeEventParser) Parse(body []byte) (*PaymentEvent, error) {
 	event.MinorUnits = cents
 	event.Amount = float64(cents) / 100.0
 	event.Currency = stripeCurrency(obj)
-	for k, v := range stripeMetadata(obj) {
-		event.Metadata[k] = v
-	}
+	maps.Copy(event.Metadata, stripeMetadata(obj))
 
 	// v0.5.1-D: pre-extract setup-mode-relevant typed fields so domain
 	// handlers can `if e.Mode == "setup"` instead of re-parsing the

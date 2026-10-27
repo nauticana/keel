@@ -74,8 +74,7 @@ func (h *AbstractHandler) WriteServiceError(w http.ResponseWriter, r *http.Reque
 		detail = publicText(sentinel)
 	}
 	cause := err.Error()
-	var appErr *model.AppError
-	if errors.As(err, &appErr) {
+	if appErr, ok := errors.AsType[*model.AppError](err); ok {
 		if status == 0 {
 			status = appErr.Status
 		}
@@ -99,8 +98,7 @@ func (h *AbstractHandler) WriteServiceError(w http.ResponseWriter, r *http.Reque
 }
 
 func publicText(sentinel error) string {
-	var appErr *model.AppError
-	if errors.As(sentinel, &appErr) {
+	if appErr, ok := errors.AsType[*model.AppError](sentinel); ok {
 		return appErr.Message
 	}
 	if sentinel == nil {

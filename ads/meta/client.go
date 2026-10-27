@@ -153,16 +153,14 @@ func graphID(kind, id string) (string, error) {
 // wrapError maps a RequestJSON failure without letting the token out: a
 // status error becomes an *APIError, and a transport error loses the query.
 func wrapError(op string, err error) error {
-	var se *common.HTTPStatusError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*common.HTTPStatusError](err); ok {
 		apiErr := newAPIError(se)
 		if errors.Is(err, common.ErrResponseTooLarge) {
 			return fmt.Errorf("meta: %s: %w", op, errors.Join(apiErr, common.ErrResponseTooLarge))
 		}
 		return fmt.Errorf("meta: %s: %w", op, apiErr)
 	}
-	var ue *url.Error
-	if errors.As(err, &ue) {
+	if ue, ok := errors.AsType[*url.Error](err); ok {
 		return fmt.Errorf("meta: %s: %w", op, &url.Error{Op: ue.Op, URL: redactURL(ue.URL), Err: ue.Err})
 	}
 	return fmt.Errorf("meta: %s: %w", op, err)

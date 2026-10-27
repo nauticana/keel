@@ -80,7 +80,7 @@ func main() {
 		// Append seed data if requested
 		if *seedPaths != "" {
 			var allSeeds []*schema.SeedFile
-			for _, sp := range strings.Split(*seedPaths, ",") {
+			for sp := range strings.SplitSeq(*seedPaths, ",") {
 				seeds, err := schema.ParseSeedPath(strings.TrimSpace(sp))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "seed error: %v\n", err)

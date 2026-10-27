@@ -90,12 +90,10 @@ func newService(t *testing.T, table *model.TableDefinition, auth *stubAuthQuery)
 	t.Helper()
 	qc := &captureQuerier{}
 	s := &TableServicePgsql{
-		AbstractTableService: data.AbstractTableService{
-			Table:     table,
-			AuthQuery: auth,
-		},
-		Client: qc,
-		Schema: "public",
+		Table:     table,
+		AuthQuery: auth,
+		Client:    qc,
+		Schema:    "public",
 	}
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)

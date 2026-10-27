@@ -62,19 +62,19 @@ func billingCall(h http.HandlerFunc, path, body string) (int, string) {
 }
 
 func TestBillingHandler(t *testing.T) {
-	readOnly := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}}
+	readOnly := &BillingHandler{UserService: intentUsers{}}
 	if _, ok := readOnly.Routes()["/api/billing/subscription/cancel"]; ok {
 		t.Fatal("cancel mounted without a subscription manager")
 	}
 
 	manager := &fakeManager{}
-	unwired := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, Subscriptions: manager}
+	unwired := &BillingHandler{UserService: intentUsers{}, Subscriptions: manager}
 	if _, ok := unwired.Routes()["/api/billing/subscription/cancel"]; ok {
 		t.Fatal("cancel mounted without a database to authorize it")
 	}
 
 	db := grantDB{actions: map[string]bool{"CHANGE": true, "CANCEL": true, "PORTAL": true}}
-	h := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, DB: db, Subscriptions: manager}
+	h := &BillingHandler{UserService: intentUsers{}, DB: db, Subscriptions: manager}
 	routes := h.Routes()
 	change, cancel := routes["/api/billing/subscription/change"], routes["/api/billing/subscription/cancel"]
 	if code := billingRequest(change, "/api/billing/subscription/change", `{}`); code != http.StatusBadRequest {
@@ -127,7 +127,7 @@ func TestBillingHandlerOverTargetLimit(t *testing.T) {
 	overages := []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Caption: "Locations", Count: 3, Limit: 1}}
 	manager := &fakeManager{err: &billing.OverTargetLimitError{PlanID: "STANDARD", Overages: overages}}
 	db := grantDB{actions: map[string]bool{"CHANGE": true}}
-	h := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, DB: db, Subscriptions: manager}
+	h := &BillingHandler{UserService: intentUsers{}, DB: db, Subscriptions: manager}
 	routes := h.Routes()
 
 	code, body := billingCall(routes["/api/billing/subscription/change"], "/api/billing/subscription/change", `{"planId":"STANDARD"}`)
@@ -156,7 +156,7 @@ func TestBillingHandlerOverTargetLimit(t *testing.T) {
 
 func TestBillingHandlerRequiresSubscriptionGrant(t *testing.T) {
 	manager := &fakeManager{}
-	h := &BillingHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, DB: grantDB{}, Subscriptions: manager}
+	h := &BillingHandler{UserService: intentUsers{}, DB: grantDB{}, Subscriptions: manager}
 	for path, body := range map[string]string{
 		"/api/billing/subscription/cancel":       "",
 		"/api/billing/subscription/change":       `{"planId":"PRO"}`,

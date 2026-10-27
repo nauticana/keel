@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"sync"
@@ -177,23 +178,15 @@ func (s *QuotaServiceDb) init(ctx context.Context) {
 		// Merge keel's default resource-count queries with any injected by the
 		// consumer (injected entries win).
 		s.resourceQueries = make(map[string]string, len(defaultResourceCountQueries)+len(s.Queries))
-		for k, v := range defaultResourceCountQueries {
-			s.resourceQueries[k] = v
-		}
-		for k, v := range s.Queries {
-			s.resourceQueries[k] = v
-		}
+		maps.Copy(s.resourceQueries, defaultResourceCountQueries)
+		maps.Copy(s.resourceQueries, s.Queries)
 
 		// The query service spans the infra queries (quotaQueries) plus every
 		// resource-count query, keyed by resource id — these never collide with
 		// the infra query names.
 		all := make(map[string]string, len(quotaQueries)+len(s.resourceQueries))
-		for k, v := range quotaQueries {
-			all[k] = v
-		}
-		for k, v := range s.resourceQueries {
-			all[k] = v
-		}
+		maps.Copy(all, quotaQueries)
+		maps.Copy(all, s.resourceQueries)
 		s.qs = s.Repo.GetQueryService(ctx, all)
 		s.txQueries = all
 	})

@@ -753,7 +753,7 @@ func TestProcess_UnknownProvider(t *testing.T) {
 // so a non-atomic counter would race the test itself (and the race
 // detector would flag it before the assertion fired).
 type countingHandler struct {
-	calls int64
+	calls atomic.Int64
 	pre   func() // optional: held under no lock, used to widen the race window
 }
 
@@ -761,7 +761,7 @@ func (h *countingHandler) OnPaymentEvent(_ context.Context, _ *PaymentEvent) err
 	if h.pre != nil {
 		h.pre()
 	}
-	atomic.AddInt64(&h.calls, 1)
+	h.calls.Add(1)
 	return nil
 }
 
@@ -809,7 +809,7 @@ func TestProcess_ConcurrentDeliveriesChargeOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	errs := make([]error, goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -825,7 +825,7 @@ func TestProcess_ConcurrentDeliveriesChargeOnce(t *testing.T) {
 			t.Fatalf("goroutine %d returned %v; the unique-violation race guard must swallow duplicates", i, err)
 		}
 	}
-	if got := atomic.LoadInt64(&handler.calls); got != 1 {
+	if got := handler.calls.Load(); got != 1 {
 		t.Fatalf("handler called %d times, want exactly 1 (charge-twice prevention)", got)
 	}
 

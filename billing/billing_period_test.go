@@ -72,7 +72,7 @@ func TestBillingTerms_UserCases(t *testing.T) {
 			}
 			// Exactness: installments must sum to the contract total.
 			var sum int64
-			for k := 0; k < n; k++ {
+			for k := range n {
 				sum += InstallmentMinor(total, n, k)
 			}
 			if sum != c.wantTotal {

@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -9,8 +8,7 @@ import (
 
 func TestRedisSubscribeDropsWhenFull(t *testing.T) {
 	c, _ := redisAdmitter(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	ch, err := c.Subscribe(ctx, "topic")
 	if err != nil {
 		t.Fatal(err)

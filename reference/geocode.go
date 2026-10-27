@@ -172,7 +172,7 @@ func (c *GoogleGeocodeClient) query(ctx context.Context, params url.Values) (Geo
 	}
 	top := resp.Results[0]
 	out := GeocodeResult{
-		Coordinates:      Coordinates{Latitude: top.Geometry.Location.Lat, Longitude: top.Geometry.Location.Lng},
+		Latitude: top.Geometry.Location.Lat, Longitude: top.Geometry.Location.Lng,
 		Precision:        top.Geometry.LocationType,
 		FormattedAddress: top.FormattedAddress,
 		PlaceID:          top.PlaceID,

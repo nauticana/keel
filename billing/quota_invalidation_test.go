@@ -108,7 +108,7 @@ func TestChangePlanTx_RefusesOverTargetLimit(t *testing.T) {
 			qLcPlanPrice:  {{int64(10000), "USD"}},
 		})
 		svc.Quotas = &overageQuotas{overages: overages}
-		tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcInsertFree: {{"FREE"}}, qLcChangePlanCurrent: {{"", tc.current}}}}}
+		tx := &fakeTx{rows: map[string][][]any{qLcInsertFree: {{"FREE"}}, qLcChangePlanCurrent: {{"", tc.current}}}}
 		err := svc.ChangePlanTx(context.Background(), tx, 7, "TARGET", BillingTerms{BillingCycle: PeriodAnnual, TermType: PeriodAnnual, TermCount: 1})
 		writes := callCount(&tx.fakeQS, qLcChangePlanClose) + callCount(&tx.fakeQS, qLcInsertActive) + callCount(&tx.fakeQS, qLcInsertFree)
 		if tc.refused {

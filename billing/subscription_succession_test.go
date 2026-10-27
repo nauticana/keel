@@ -19,7 +19,7 @@ func newSuccSvc(rows map[string][][]any, mode string, txRows map[string][][]any)
 	}
 	rows[qLcPlanPolicy] = [][]any{{mode, int64(14)}}
 	qs := &fakeQS{rows: rows}
-	tx := &fakeTx{fakeQS: fakeQS{rows: txRows}}
+	tx := &fakeTx{rows: txRows}
 	return &AbstractBillingService{Repo: fakeRepo{qs: qs, tx: tx}, FallbackPlanID: "FREE"}, qs, tx
 }
 
@@ -108,7 +108,7 @@ func TestCancel_ReportsBlockedSuccessor(t *testing.T) {
 
 func TestChangePlanTx_FreePlanRefusesProviderHeldRow(t *testing.T) {
 	svc, _, _ := newSuccSvc(nil, "F", nil)
-	tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1", "PRO"}}, qLcInsertFree: {{"FREE"}}}}}
+	tx := &fakeTx{rows: map[string][][]any{qLcChangePlanCurrent: {{"sub_1", "PRO"}}, qLcInsertFree: {{"FREE"}}}}
 	if err := svc.ChangePlanTx(context.Background(), tx, 7, "FREE", BillingTerms{}); !errors.Is(err, ErrProviderSubscription) {
 		t.Fatalf("err = %v, want ErrProviderSubscription", err)
 	}
@@ -214,7 +214,7 @@ func TestScheduleChange(t *testing.T) {
 
 func TestChangePlanTx_FreePlan(t *testing.T) {
 	svc, qs, _ := newSuccSvc(nil, "F", nil)
-	tx := &fakeTx{fakeQS: fakeQS{rows: map[string][][]any{qLcInsertFree: {{"FREE"}}}}}
+	tx := &fakeTx{rows: map[string][][]any{qLcInsertFree: {{"FREE"}}}}
 	if err := svc.ChangePlanTx(context.Background(), tx, 7, "FREE", BillingTerms{}); err != nil {
 		t.Fatal(err)
 	}

@@ -31,19 +31,17 @@ var _ Provider = (*MetaProvider)(nil)
 // (TestHealthcheck).
 func NewMetaProvider(svc CredentialStore, name, callbackURL, appID, appSecretName string, scopes []string) *MetaProvider {
 	p := &MetaProvider{
-		BaseProvider: BaseProvider{
-			Service:      svc,
-			CallbackURL:  callbackURL,
-			ProviderName: name,
-			ClientID:     appID,
-			SecretName:   appSecretName,
-			Scopes:       scopes,
-			// The persisted credential is a long-lived (60-day) token, not a refreshable
-			// one — Test exercises it directly rather than forcing a refresh.
-			SkipRefreshOnTest: true,
-			NoImpliedScopes:   true,
-		},
-		GraphVersion: DefaultMetaGraphVersion,
+		Service:      svc,
+		CallbackURL:  callbackURL,
+		ProviderName: name,
+		ClientID:     appID,
+		SecretName:   appSecretName,
+		Scopes:       scopes,
+		// The persisted credential is a long-lived (60-day) token, not a refreshable
+		// one — Test exercises it directly rather than forcing a refresh.
+		SkipRefreshOnTest: true,
+		NoImpliedScopes:   true,
+		GraphVersion:      DefaultMetaGraphVersion,
 	}
 	p.DeriveEndpoint = func() oauth2.Endpoint {
 		return oauth2.Endpoint{

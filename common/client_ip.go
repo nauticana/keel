@@ -21,8 +21,8 @@ func TrustedClientIP(r *http.Request) string {
 	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// leftmost entry is the original client
-		if comma := strings.IndexByte(xff, ','); comma >= 0 {
-			return strings.TrimSpace(xff[:comma])
+		if before, _, ok := strings.Cut(xff, ","); ok {
+			return strings.TrimSpace(before)
 		}
 		return strings.TrimSpace(xff)
 	}
@@ -106,7 +106,7 @@ func getTrustedProxyNets(cfg string) []*net.IPNet {
 		return trustedProxyNets
 	}
 	var nets []*net.IPNet
-	for _, raw := range strings.Split(cfg, ",") {
+	for raw := range strings.SplitSeq(cfg, ",") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue

@@ -114,10 +114,9 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 	if w.Dispatcher == nil {
 		return fmt.Errorf("outbox: no Dispatcher configured")
 	}
-	partnerID := common.AsInt64(row[1])
-	if partnerID < 0 {
-		partnerID = 0 // NULL partner_id (not partner-scoped)
-	}
+	partnerID := max(common.AsInt64(row[1]),
+		// NULL partner_id (not partner-scoped)
+		0)
 	e := Event{
 		Id:            jobID,
 		PartnerID:     partnerID,

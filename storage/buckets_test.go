@@ -30,15 +30,13 @@ func TestBucketsBuildsEachBucketOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	stores := make([]ObjectStorage, 16)
 	for i := range stores {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			st, err := b.Get(context.Background(), "public")
 			if err != nil {
 				t.Error(err)
 			}
 			stores[i] = st
-		}()
+		})
 	}
 	wg.Wait()
 	if n := builds.Load(); n != 1 {

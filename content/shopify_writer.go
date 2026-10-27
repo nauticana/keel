@@ -405,8 +405,7 @@ func shopifyGraphQL(ctx context.Context, ref ResourceRef, query string, vars map
 		map[string]string{"X-Shopify-Access-Token": ref.Token},
 		map[string]any{"query": query, "variables": vars})
 	if err != nil {
-		var status *common.HTTPStatusError
-		if errors.As(err, &status) {
+		if status, ok := errors.AsType[*common.HTTPStatusError](err); ok {
 			switch {
 			case status.Unauthorized():
 				return nil, fmt.Errorf("%w: %w", ErrAccessDenied, err)

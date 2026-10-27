@@ -241,7 +241,7 @@ func verify(ctx context.Context, p *JWKSProvider, tokenStr, expectedAud, expecte
 	if expectedIss != "" {
 		opts = append(opts, jwt.WithIssuer(expectedIss))
 	}
-	tok, err := jwt.NewParser(opts...).ParseWithClaims(tokenStr, jwt.MapClaims{}, func(t *jwt.Token) (interface{}, error) {
+	tok, err := jwt.NewParser(opts...).ParseWithClaims(tokenStr, jwt.MapClaims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Header["crit"]; ok {
 			return nil, fmt.Errorf("jwks: unsupported critical header parameters")
 		}

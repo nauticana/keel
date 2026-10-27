@@ -38,7 +38,7 @@ var _ payment.IntentClient = (*fakeIntents)(nil)
 
 func TestCreateSetupIntent_RequiresJWTAndInjectsUser(t *testing.T) {
 	intents := &fakeIntents{}
-	h := &AbstractPaymentHandler{AbstractHandler: AbstractHandler{UserService: intentUsers{}}, Intents: intents}
+	h := &AbstractPaymentHandler{UserService: intentUsers{}, Intents: intents}
 
 	rec := httptest.NewRecorder()
 	h.CreateSetupIntent(rec, httptest.NewRequest(http.MethodPost, "/api/billing/setup-intent", strings.NewReader(`{}`)))

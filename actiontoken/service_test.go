@@ -172,7 +172,7 @@ func TestRedeemRunsOnceAndReplaysTheResult(t *testing.T) {
 	runs := 0
 	var got Claim
 	run := func(_ context.Context, c Claim) ([]byte, error) { runs++; got = c; return []byte("approved"), nil }
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		result, err := s.Redeem(ctx, token, decision, run)
 		if err != nil || string(result) != "approved" {
 			t.Fatalf("redeem %d = %q, %v", i, result, err)
@@ -244,7 +244,7 @@ func TestFailureIsRecorded(t *testing.T) {
 	ctx := context.Background()
 	token := mint(t, s)
 	runs := 0
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		_, err := s.Redeem(ctx, token, decision, counting(&runs, nil, &Failure{Reason: "forbidden"}))
 		var f *Failure
 		if !errors.As(err, &f) || f.Reason != "forbidden" {

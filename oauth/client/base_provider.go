@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 
 	"github.com/nauticana/keel/common"
@@ -98,9 +99,7 @@ func (b *BaseProvider) AuthURL(ctx context.Context, partnerID int64, params map[
 		}
 		// copy so we don't mutate the caller's map
 		merged := make(map[string]string, len(params)+1)
-		for k, v := range params {
-			merged[k] = v
-		}
+		maps.Copy(merged, params)
 		merged[StatePKCEKey] = verifier
 		params = merged
 		opts = append(append([]oauth2.AuthCodeOption{}, opts...),

@@ -72,7 +72,7 @@ func newSignInHandoff(t *testing.T, users *handoffSignIn) *PublicHandler {
 	t.Helper()
 	nonces := &connect.NonceService{DB: &nonceDB{rows: map[string][2]string{}}}
 	nonces.Init(context.Background())
-	return &PublicHandler{AbstractHandler: AbstractHandler{UserService: users}, RegisterService: &user.RegistrationService{}, Handoff: nonces}
+	return &PublicHandler{UserService: users, RegisterService: &user.RegistrationService{}, Handoff: nonces}
 }
 
 func exchange(h *PublicHandler, code string) *httptest.ResponseRecorder {
@@ -172,7 +172,7 @@ func TestRegistrationRoutes(t *testing.T) {
 
 func TestCheckoutFailureKeepsRegistration(t *testing.T) {
 	journal := &recordingJournal{}
-	h := &PublicHandler{AbstractHandler: AbstractHandler{Journal: journal}}
+	h := &PublicHandler{Journal: journal}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/register/partner", nil)
 	rec := httptest.NewRecorder()
 	if !h.checkoutTolerated(rec, r, fmt.Errorf("%w: provider down", user.ErrCheckout)) || len(journal.errors) != 1 || rec.Body.Len() != 0 {
@@ -200,7 +200,7 @@ func (u *twoFactorUsers) GetUserMenu(int) ([]model.UserMenu, error) { return nil
 // Password login must stop at the 2FA step unless the device is trusted.
 func TestPasswordLoginRequiresSecondFactor(t *testing.T) {
 	users := &twoFactorUsers{}
-	h := &PublicHandler{AbstractHandler: AbstractHandler{UserService: users}}
+	h := &PublicHandler{UserService: users}
 	login := func(cookie bool) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, "/public/login/local", strings.NewReader(`{"username":"u","password":"p"}`))
 		if cookie {

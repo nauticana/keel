@@ -68,7 +68,7 @@ func VerifyWebhookSignature(secret, id, timestamp string, body []byte, signature
 		return ErrWebhookTimestamp
 	}
 	want := []byte(signWebhook(key, id, timestamp, body))
-	for _, candidate := range strings.Fields(signatureHeader) {
+	for candidate := range strings.FieldsSeq(signatureHeader) {
 		if hmac.Equal([]byte(candidate), want) {
 			return nil
 		}

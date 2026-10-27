@@ -69,7 +69,7 @@ func NewFromConfig(ctx context.Context, secrets secret.SecretProvider) (port.Hum
 		return nil, fmt.Errorf("human: read secret %s: %w", cfg.HumanVerifierSecret, err)
 	}
 	var hosts []string
-	for _, h := range strings.Split(cfg.HumanVerifierHostnames, ",") {
+	for h := range strings.SplitSeq(cfg.HumanVerifierHostnames, ",") {
 		if h = strings.TrimSpace(h); h != "" {
 			hosts = append(hosts, h)
 		}

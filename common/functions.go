@@ -4,228 +4,71 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	maps0 "maps"
 	"math"
 	"math/big"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/nauticana/keel/model"
 )
 
-// AsFloat64 returns -1 sentinel on nil / unrecognized types. Use
-// AsFloat64OK when the domain treats -1 as a meaningful value
-// (e.g. "unlimited" sentinels in quota tables) and "did the column
-// hold an actual -1 vs. was it NULL" needs to be distinguishable.
+// The As* helpers are model's converters with lenient sentinels: -1 for a
+// number, false, "" or the zero time when v is NULL or does not convert. The
+// OK forms tell a NULL from a real -1.
+
 func AsFloat64(v any) float64 {
-	if out, ok := AsFloat64OK(v); ok {
-		return out
+	if f, ok := model.Float64Of(v); ok {
+		return f
 	}
 	return -1
 }
 
-// AsFloat64OK is the explicit-result sibling; integer inputs must be exactly
-// representable. Prefer it when -1 is a real value rather than a NULL sentinel.
-func AsFloat64OK(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case uint:
-		return float64(n), true
-	case uint8:
-		return float64(n), true
-	case uint16:
-		return float64(n), true
-	case uint32:
-		return float64(n), true
-	case uint64:
-		f := float64(n)
-		return f, f < math.Exp2(64) && uint64(f) == n
-	case json.Number:
-		if !strings.ContainsAny(string(n), ".eE") {
-			if i, err := n.Int64(); err == nil {
-				return AsFloat64OK(i)
-			}
-			if u, err := strconv.ParseUint(string(n), 10, 64); err == nil {
-				return AsFloat64OK(u)
-			}
-			return 0, false
-		}
-		f, err := n.Float64()
-		return f, err == nil
-	}
-	if i, ok := asInt64(v); ok {
-		f := float64(i)
-		return f, f >= -math.Exp2(63) && f < math.Exp2(63) && int64(f) == i
-	}
-	return 0, false
-}
+func AsFloat64OK(v any) (float64, bool) { return model.Float64Of(v) }
 
 func AsInt32(v any) int32 {
-	if v, ok := AsInt32OK(v); ok {
-		return v
+	if n, ok := AsInt32OK(v); ok {
+		return n
 	}
 	return -1
 }
 
-// AsInt32OK is the explicit-result sibling of AsInt32. Same
-// motivation as AsFloat64OK: distinguish "NULL" from "actual -1".
 func AsInt32OK(v any) (int32, bool) {
-	if i, ok := AsInt64OK(v); ok && i >= math.MinInt32 && i <= math.MaxInt32 {
-		return int32(i), true
+	if n, ok := model.Int64Of(v); ok && n >= math.MinInt32 && n <= math.MaxInt32 {
+		return int32(n), true
 	}
 	return 0, false
 }
 
 func AsInt64(v any) int64 {
-	if v, ok := AsInt64OK(v); ok {
-		return v
+	if n, ok := model.Int64Of(v); ok {
+		return n
 	}
 	return -1
 }
 
-// AsInt64OK is the explicit-result sibling of AsInt64. Returns
-// ok=false on nil / unrecognized types so callers can distinguish
-// NULL columns from actual -1 values (relevant in quota /
-// "unlimited" sentinels). A json.Number or decimal string converts
-// exactly; a float converts only when it is a whole number below 2^53,
-// since a larger one has already lost digits.
-func AsInt64OK(v any) (int64, bool) {
-	if i, ok := asInt64(v); ok {
-		return i, true
-	}
-	switch n := v.(type) {
-	case string:
-		i, err := strconv.ParseInt(n, 10, 64)
-		return i, err == nil
-	case json.Number:
-		i, err := strconv.ParseInt(string(n), 10, 64)
-		return i, err == nil
-	case float64:
-		return exactInt64(n)
-	case float32:
-		return exactInt64(float64(n))
-	}
-	return 0, false
-}
-
-func exactInt64(f float64) (int64, bool) {
-	if f != math.Trunc(f) || math.Abs(f) >= 1<<53 {
-		return 0, false
-	}
-	return int64(f), true
-}
-
-// asInt64 covers every Go integer width; pgx scans SMALLINT as int16.
-func asInt64(v any) (int64, bool) {
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case int8:
-		return int64(n), true
-	case int16:
-		return int64(n), true
-	case int32:
-		return int64(n), true
-	case int64:
-		return n, true
-	case uint:
-		if uint64(n) > uint64(1<<63-1) {
-			return 0, false
-		}
-		return int64(n), true
-	case uint8:
-		return int64(n), true
-	case uint16:
-		return int64(n), true
-	case uint32:
-		return int64(n), true
-	case uint64:
-		if n > uint64(1<<63-1) {
-			return 0, false
-		}
-		return int64(n), true
-	}
-	return 0, false
-}
+func AsInt64OK(v any) (int64, bool) { return model.Int64Of(v) }
 
 func AsBool(v any) bool {
-	if v == nil {
-		return false
-	}
-	switch v := v.(type) {
-	case bool:
-		return v
-	case int64:
-		return v != 0
-	case int32:
-		return v != 0
-	case int:
-		return v != 0
-	case string:
-		return v == "1" || v == "true"
-	case []byte:
-		return string(v) == "1"
-	}
-	return false
+	b, _ := model.BoolOf(v)
+	return b
 }
 
 func AsString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	if b, ok := v.([]byte); ok {
-		return string(b)
-	}
-	if t, ok := v.(time.Time); ok {
-		return t.UTC().Format(time.RFC3339)
-	}
-	return fmt.Sprintf("%v", v)
+	s, _ := model.StringOf(v)
+	return s
 }
 
-// AsTime extracts a time.Time from a value of unknown type. Returns
-// the zero Time when v is nil, isn't a time/string, or doesn't parse
-// against the RFC3339 / "2006-01-02 15:04:05" formats.
-//
-// CAUTION (P2-06): the zero return is ambiguous — it conflates "no
-// value" with "couldn't parse the value we got". Code that needs to
-// distinguish the two should call AsTimeOK.
+// AsTime returns the zero time when v is NULL or does not parse; AsTimeOK tells them apart.
 func AsTime(v any) time.Time {
-	t, _ := AsTimeOK(v)
+	t, _ := model.TimeOf(v)
 	return t
 }
 
-// AsTimeOK is the explicit-result sibling of AsTime: it returns
-// ok=true only when v was non-nil AND parsed successfully. Use this
-// when "no value" needs to be distinguishable from "we got a value
-// but it didn't parse" — e.g. when the zero time would be a valid
-// observation in the domain (a deleted-at column where the row IS
-// supposed to be epoch-0 to mark a tombstone).
-func AsTimeOK(v any) (time.Time, bool) {
-	if v == nil {
-		return time.Time{}, false
-	}
-	if t, ok := v.(time.Time); ok {
-		return t, true
-	}
-	if s, ok := v.(string); ok {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			return t, true
-		}
-		if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
+func AsTimeOK(v any) (time.Time, bool) { return model.TimeOf(v) }
 
 func PascalCase(s string) string {
 	words := strings.Split(s, "_")
@@ -285,7 +128,7 @@ func ParseDBTimestamp(s string) (time.Time, error) {
 
 // NullIfEmpty returns nil for a blank string so COALESCE-style UPSERTs preserve
 // existing non-NULL values instead of overwriting them with empty data.
-func NullIfEmpty(s string) interface{} {
+func NullIfEmpty(s string) any {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}

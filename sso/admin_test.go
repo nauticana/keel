@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/model"
-	"github.com/nauticana/keel/port"
 )
 
 func validConfig() Configuration {
@@ -164,7 +163,7 @@ func TestTestSignInAsksEntraForDomainProof(t *testing.T) {
 func TestActivateAndDisable(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	draft := &connection{IdentityConnection: port.IdentityConnection{ID: 8, PartnerID: acme, Protocol: "O", Issuer: issuer}, Status: StatusDraft}
+	draft := &connection{ID: 8, PartnerID: acme, Protocol: "O", Issuer: issuer, Status: StatusDraft}
 	f.store.connections[8] = draft
 	if err := f.svc.Activate(ctx, acme, 5, 8); !errors.Is(err, ErrNotTested) {
 		t.Fatalf("untested = %v", err)

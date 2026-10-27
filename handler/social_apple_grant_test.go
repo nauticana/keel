@@ -75,7 +75,7 @@ func TestLoginSocialKeepsAppleGrantWhenWired(t *testing.T) {
 	withSocialClients(t)
 	keys := newSocialKeys(t)
 	users := &contractUsers{}
-	h := &SocialLoginHandler{AbstractHandler: AbstractHandler{UserService: users}, Verifier: keys.verifier(), Apple: appleGrants(t, keys)}
+	h := &SocialLoginHandler{UserService: users, Verifier: keys.verifier(), Apple: appleGrants(t, keys)}
 	exp := time.Now().Add(time.Hour).Unix()
 	appleToken := keys.token(t, jwt.MapClaims{"iss": user.AppleIssuer, "aud": "apple-client", "sub": "a-1", "exp": exp})
 	post := func(body string) *httptest.ResponseRecorder {

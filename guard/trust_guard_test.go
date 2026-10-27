@@ -107,8 +107,7 @@ func TestGuardChain_FailsFastInOrder(t *testing.T) {
 		NewDuplicateGuard("qDup", time.Minute),
 	)
 	err := chain.Check(context.Background(), qs, baseInput())
-	var dup *DuplicateError
-	if !errors.As(err, &dup) {
+	if _, ok := errors.AsType[*DuplicateError](err); !ok {
 		t.Fatalf("chain should surface the duplicate error, got %v", err)
 	}
 }

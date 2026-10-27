@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -344,9 +345,7 @@ func TestCreateCheckoutValidatesCurrencyAndMethods(t *testing.T) {
 	h := newCheckoutHandler(fake)
 	base := func(extra map[string]any) map[string]any {
 		body := map[string]any{"mode": "setup", "successUrl": "https://app.example/ok", "cancelUrl": "https://app.example/cancel"}
-		for k, v := range extra {
-			body[k] = v
-		}
+		maps.Copy(body, extra)
 		return body
 	}
 	if rec := postCheckout(h, base(map[string]any{"currency": "usd", "paymentMethodTypes": []string{"card"}})); rec.Code != http.StatusOK ||

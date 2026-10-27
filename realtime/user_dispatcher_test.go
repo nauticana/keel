@@ -1,7 +1,6 @@
 package realtime
 
 import (
-	"context"
 	"testing"
 
 	"github.com/nauticana/keel/cache"
@@ -9,8 +8,7 @@ import (
 
 func TestUserDispatcher_DeliversNotificationFrame(t *testing.T) {
 	c := cache.NewMemoryCacheService()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	h := &Hub{Cache: c}
 	if err := h.Run(ctx); err != nil {
 		t.Fatal(err)

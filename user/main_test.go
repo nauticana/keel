@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -245,12 +246,8 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			}
 		}
 		effective := map[string]int{}
-		for policy, value := range m.policies[0] {
-			effective[policy] = value
-		}
-		for policy, value := range m.policies[partner] {
-			effective[policy] = value
-		}
+		maps.Copy(effective, m.policies[0])
+		maps.Copy(effective, m.policies[partner])
 		for policy, value := range effective {
 			out.Rows = append(out.Rows, []any{policy, int32(value)})
 		}

@@ -44,7 +44,7 @@ var _ Provider = (*ShopifyProvider)(nil)
 // NewShopifyProvider builds a Shopify connection provider.
 func NewShopifyProvider(svc CredentialStore, name, callbackURL, apiKey, secretName, apiVersion, scopes string, requiredScopes []string) *ShopifyProvider {
 	p := &ShopifyProvider{
-		BaseProvider:   BaseProvider{Service: svc, CallbackURL: callbackURL, ProviderName: name},
+		Service: svc, CallbackURL: callbackURL, ProviderName: name,
 		APIKey:         apiKey,
 		SecretName:     secretName,
 		APIVersion:     apiVersion,

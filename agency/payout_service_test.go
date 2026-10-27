@@ -10,7 +10,6 @@ import (
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/payout"
 	"github.com/nauticana/keel/port"
-	"github.com/nauticana/keel/service"
 )
 
 func TestMonthStartUsesUTC(t *testing.T) {
@@ -59,7 +58,7 @@ func TestDispatchOutsideIdempotencyWindowParksManual(t *testing.T) {
 	qs := &payoutServiceQueryStub{now: now}
 	provider := &payoutProviderStub{}
 	svc := &BaseAgencyPayoutService{
-		AbstractService:      service.AbstractService{QS: qs},
+		QS:                   qs,
 		Provider:             provider,
 		now:                  func() time.Time { return now },
 		maxDispatchAttempts:  3,

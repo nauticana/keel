@@ -254,8 +254,8 @@ func TestRegisterCreatesAccountAndPartner(t *testing.T) {
 	svc, _, mail := newRegistration(store)
 	ctx := context.Background()
 	reg := &PartnerRegistration{
-		AccountRegistration: AccountRegistration{FirstName: "Ada", Email: " Ada@Example.com ", Password: "longenough"},
-		PartnerSetup:        PartnerSetup{PartnerCaption: "Example", DomainURL: "https://www.Example.com/about"},
+		FirstName: "Ada", Email: " Ada@Example.com ", Password: "longenough",
+		PartnerCaption: "Example", DomainURL: "https://www.Example.com/about",
 	}
 	if err := svc.SendConfirmation(ctx, reg); err != nil {
 		t.Fatal(err)
@@ -299,7 +299,7 @@ func TestRegisterAccountOnlyThenCreatePartner(t *testing.T) {
 	store := newRegStore()
 	svc, _, _ := newRegistration(store)
 	ctx := context.Background()
-	if err := svc.SendConfirmation(ctx, &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "bo@shop.example"}}); err != nil {
+	if err := svc.SendConfirmation(ctx, &PartnerRegistration{Email: "bo@shop.example"}); err != nil {
 		t.Fatal(err)
 	}
 	session, created, err := svc.Register(ctx, "bo@shop.example", pendingCode(t, store, "bo@shop.example"))
@@ -325,7 +325,7 @@ func TestRegisterWrongCodeExpiresAtLimit(t *testing.T) {
 	store := newRegStore()
 	svc, _, _ := newRegistration(store)
 	ctx := context.Background()
-	if err := svc.SendConfirmation(ctx, &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "c@example.org"}}); err != nil {
+	if err := svc.SendConfirmation(ctx, &PartnerRegistration{Email: "c@example.org"}); err != nil {
 		t.Fatal(err)
 	}
 	code := pendingCode(t, store, "c@example.org")
@@ -359,12 +359,12 @@ func TestSendConfirmationValidates(t *testing.T) {
 		reg  PartnerRegistration
 		want func(error) bool
 	}{
-		"public mailbox": {PartnerRegistration{AccountRegistration: AccountRegistration{Email: "dee@gmail.com"}},
+		"public mailbox": {PartnerRegistration{Email: "dee@gmail.com"},
 			func(err error) bool { return errors.Is(err, ErrPublicEmail) }},
-		"weak password":           {PartnerRegistration{AccountRegistration: AccountRegistration{Email: "dee@corp.example", Password: "short"}}, isBadRequest},
-		"partner without caption": {PartnerRegistration{AccountRegistration: account, PartnerSetup: PartnerSetup{PlanID: "PRO"}}, isBadRequest},
-		"bad domain":              {PartnerRegistration{AccountRegistration: account, PartnerSetup: PartnerSetup{PartnerCaption: "C", DomainURL: "://"}}, isBadRequest},
-		"domain the email cannot prove": {PartnerRegistration{AccountRegistration: account, PartnerSetup: PartnerSetup{PartnerCaption: "C", DomainURL: "other.example"}},
+		"weak password":           {PartnerRegistration{Email: "dee@corp.example", Password: "short"}, isBadRequest},
+		"partner without caption": {PartnerRegistration{AccountRegistration: account, PlanID: "PRO"}, isBadRequest},
+		"bad domain":              {PartnerRegistration{AccountRegistration: account, PartnerCaption: "C", DomainURL: "://"}, isBadRequest},
+		"domain the email cannot prove": {PartnerRegistration{AccountRegistration: account, PartnerCaption: "C", DomainURL: "other.example"},
 			func(err error) bool { return errors.Is(err, domain.ErrDomainNotProven) }},
 	}
 	for name, tc := range cases {
@@ -417,7 +417,7 @@ func TestPartnerSetupRefusesUnknownRegion(t *testing.T) {
 		if _, err := svc.CreatePartner(ctx, 7, &setup, nil); !isBadRequest(err) {
 			t.Errorf("%s: CreatePartner err = %v", name, err)
 		}
-		reg := &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "dee@corp.example"}, PartnerSetup: setup}
+		reg := &PartnerRegistration{Email: "dee@corp.example", PartnerSetup: setup}
 		if err := svc.SendConfirmation(ctx, reg); !isBadRequest(err) {
 			t.Errorf("%s: SendConfirmation err = %v", name, err)
 		}
@@ -605,7 +605,7 @@ func TestRequireDomainProofNeedsADomain(t *testing.T) {
 	svc, _, _ := newRegistration(store)
 	svc.RequireDomainProof = true
 	ctx := context.Background()
-	reg := &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "ivy@corp.example"}, PartnerSetup: PartnerSetup{PartnerCaption: "S"}}
+	reg := &PartnerRegistration{Email: "ivy@corp.example", PartnerCaption: "S"}
 	if err := svc.SendConfirmation(ctx, reg); !isBadRequest(err) {
 		t.Fatalf("SendConfirmation err = %v, want 400", err)
 	}
@@ -660,7 +660,7 @@ func TestCodeSignupHonorsGlobalSSO(t *testing.T) {
 	store := newRegStore()
 	svc, users, mail := newRegistration(store)
 	ctx := context.Background()
-	reg := &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "jo@corp.example"}}
+	reg := &PartnerRegistration{Email: "jo@corp.example"}
 	if err := svc.SendConfirmation(ctx, reg); err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +683,7 @@ func TestCodeSignupHonorsGlobalSSO(t *testing.T) {
 func TestUserNameCannotShadowAnotherEmail(t *testing.T) {
 	store := newRegStore()
 	svc, _, _ := newRegistration(store)
-	reg := &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "kim@corp.example", UserName: "victim@corp.example"}}
+	reg := &PartnerRegistration{Email: "kim@corp.example", UserName: "victim@corp.example"}
 	if err := svc.SendConfirmation(context.Background(), reg); !isBadRequest(err) {
 		t.Fatalf("err = %v, want 400", err)
 	}
@@ -711,7 +711,7 @@ func TestPasswordResetRefusesRegistrationCode(t *testing.T) {
 	store := newRegStore()
 	svc, _, _ := newRegistration(store)
 	ctx := context.Background()
-	if err := svc.SendConfirmation(ctx, &PartnerRegistration{AccountRegistration: AccountRegistration{Email: "lee@corp.example"}}); err != nil {
+	if err := svc.SendConfirmation(ctx, &PartnerRegistration{Email: "lee@corp.example"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.ConfirmPasswordChange(ctx, "lee@corp.example", pendingCode(t, store, "lee@corp.example")); !errors.Is(err, ErrInvalidConfirmation) {

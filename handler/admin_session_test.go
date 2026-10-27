@@ -42,7 +42,7 @@ func TestAdminSessionExpiry(t *testing.T) {
 func TestAdminSessionUniqueness(t *testing.T) {
 	s := NewAdminSessionStore(time.Hour, 1000)
 	seen := make(map[string]struct{}, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		tok, _ := s.Create()
 		if _, dup := seen[tok]; dup {
 			t.Fatalf("duplicate token on iteration %d", i)

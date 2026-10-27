@@ -52,7 +52,7 @@ func TestBuildMessagePlain(t *testing.T) {
 		t.Errorf("headers = %v", h)
 	}
 	body, _ := io.ReadAll(msg.Body)
-	for _, line := range strings.Split(string(body), "\r\n") {
+	for line := range strings.SplitSeq(string(body), "\r\n") {
 		if len(line) > 76 {
 			t.Errorf("body line of %d octets", len(line))
 		}

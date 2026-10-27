@@ -21,7 +21,7 @@ func TestCumulativeReversalShareCarriesRoundingForward(t *testing.T) {
 
 func TestCumulativeReversalShareReachesExactOriginal(t *testing.T) {
 	already := int64(0)
-	for before := int64(0); before < 3; before++ {
+	for before := range int64(3) {
 		share, err := cumulativeReversalShare(10, already, before, 1, 3)
 		if err != nil {
 			t.Fatalf("share %d: %v", before, err)

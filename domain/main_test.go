@@ -65,8 +65,8 @@ type memStore struct {
 
 func newStore() *memStore {
 	return &memStore{
-		state: state{domains: map[string]bool{}, members: map[[2]int64]bool{}, challenges: map[string]*chrow{}},
-		now:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		domains: map[string]bool{}, members: map[[2]int64]bool{}, challenges: map[string]*chrow{},
+		now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -210,8 +210,8 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			}
 		}
 	case qHistory:
-		for i := len(m.rows) - 1; i >= 0; i-- {
-			if r := m.rows[i]; r.partner == args[0] && r.url == args[1] && len(out.Rows) < args[2].(int) {
+		for _, r := range slices.Backward(m.rows) {
+			if r.partner == args[0] && r.url == args[1] && len(out.Rows) < args[2].(int) {
 				out.Rows = append(out.Rows, r.fields())
 			}
 		}

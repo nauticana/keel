@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -276,15 +277,10 @@ func (h *AbstractHandler) HasScope(r *http.Request, scope string) bool {
 		return false
 	}
 	if p, ok := r.Context().Value(common.AuthPrincipal).(*model.TokenPrincipal); ok && p != nil {
-		for _, s := range p.Scopes {
-			if s == scope {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(p.Scopes, scope)
 	}
 	raw, _ := r.Context().Value(common.Scopes).(string)
-	for _, s := range strings.Split(raw, ",") {
+	for s := range strings.SplitSeq(raw, ",") {
 		if strings.TrimSpace(s) == scope {
 			return true
 		}
@@ -337,10 +333,8 @@ func (h *AbstractHandler) RequireFields(w http.ResponseWriter, fields map[string
 //
 //	if !h.RequireMethod(w, r, http.MethodPost, http.MethodDelete) { return }
 func (h *AbstractHandler) RequireMethod(w http.ResponseWriter, r *http.Request, methods ...string) bool {
-	for _, m := range methods {
-		if r.Method == m {
-			return true
-		}
+	if slices.Contains(methods, r.Method) {
+		return true
 	}
 	w.Header().Set("Allow", strings.Join(methods, ", "))
 	h.WriteError(w, http.StatusMethodNotAllowed, "Method Not Allowed",
