@@ -44,8 +44,9 @@ const (
 )
 
 var (
-	ErrDocumentExists    = errors.New("dms: document already exists")
-	ErrInvalidKey        = errors.New("dms: invalid document or component id")
+	ErrDocumentExists = errors.New("dms: document already exists")
+	// ErrInvalidKey is storage.ErrInvalidKey, so a key a backend refuses maps the same way.
+	ErrInvalidKey        = storage.ErrInvalidKey
 	ErrComponentTooLarge = errors.New("dms: component exceeds the size limit")
 	// ErrObserver and ErrHeaderStale are soft: the operation succeeded and the
 	// error is for logging. See Succeeded.

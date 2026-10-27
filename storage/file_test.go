@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -185,5 +186,29 @@ func TestFileStorageServesNoURLs(t *testing.T) {
 	}
 	if u := s.PublicURL("k"); u != "" {
 		t.Errorf("public URL: %q", u)
+	}
+}
+
+func TestFileStorageKeepsRootWithTrailingSlash(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewStorageFile(Spec{Bucket: root + "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, s, "a/b", "x", nil)
+	if err := s.DeleteObject(context.Background(), "a/b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("root removed: %v", err)
+	}
+}
+
+func TestFileStorageRefusesReservedSegments(t *testing.T) {
+	s := newFileStore(t)
+	for _, key := range []string{"a/DATA.bin", "ATTR.txt/b", "a/data.BIN", "../x", ".", "a/.", ""} {
+		if err := s.PutObject(context.Background(), key, strings.NewReader("x"), "", nil); !errors.Is(err, ErrInvalidKey) {
+			t.Errorf("%q: %v, want ErrInvalidKey", key, err)
+		}
 	}
 }

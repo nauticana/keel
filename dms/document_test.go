@@ -198,7 +198,7 @@ func TestInvalidAndReservedKeys(t *testing.T) {
 			t.Errorf("document key %q: %v", key, err)
 		}
 	}
-	for _, id := range []string{"a/b", HeaderComponent, ""} {
+	for _, id := range []string{"a/b", HeaderComponent, "", "DATA.bin"} { // DATA.bin: the file backend refuses it
 		if err := s.Create(ctx, "K1", "D1", "", []ComponentInput{comp(id, "x")}); !errors.Is(err, ErrInvalidKey) {
 			t.Errorf("component id %q: %v", id, err)
 		}

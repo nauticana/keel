@@ -95,7 +95,9 @@ func TestAddVerifiesBucket(t *testing.T) {
 	if _, err := repos.Add(ctx, fileDef("K9", t.TempDir())); !errors.Is(err, ErrRepositoryExists) {
 		t.Errorf("duplicate add: %v", err)
 	}
-	for _, def := range []RepositoryDefinition{{ID: "a/b"}, {ID: ""}, {ID: "x", Storage: storage.Spec{Mode: "file"}}} {
+	dir := t.TempDir()
+	for _, def := range []RepositoryDefinition{{ID: "a/b"}, {ID: ""}, {ID: "x", Storage: storage.Spec{Mode: "file"}}, {ID: ".", Storage: storage.Spec{Mode: "file", Bucket: dir}},
+		{ID: "x", PathPrefix: "a/../b", Storage: storage.Spec{Mode: "file", Bucket: dir}}, {ID: "x", PathPrefix: "a//b", Storage: storage.Spec{Mode: "file", Bucket: dir}}} {
 		if _, err := repos.Add(ctx, def); !errors.Is(err, ErrInvalidDefinition) {
 			t.Errorf("definition %+v: %v", def, err)
 		}

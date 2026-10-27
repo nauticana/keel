@@ -262,9 +262,13 @@ func (s *StorageGCS) GetObjectAttributes(ctx context.Context, key string) (map[s
 // private key in the credential, the runtime account signs through IAM
 // signBlob, which needs roles/iam.serviceAccountTokenCreator on itself.
 func (s *StorageGCS) GetSignedURL(ctx context.Context, key string, expirySeconds int) (string, error) {
+	expiry, err := signedURLExpiry(expirySeconds)
+	if err != nil {
+		return "", err
+	}
 	url, err := s.bucket.SignedURL(key, &storage.SignedURLOptions{
 		Method:  http.MethodGet,
-		Expires: time.Now().Add(time.Duration(expirySeconds) * time.Second),
+		Expires: time.Now().Add(expiry),
 		Scheme:  storage.SigningSchemeV4,
 	})
 	if err != nil {

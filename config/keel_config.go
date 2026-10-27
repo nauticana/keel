@@ -78,6 +78,7 @@ const (
 	storage_public_base_url       = "storage_public_base_url"
 	storage_account_url           = "storage_account_url"
 	storage_region                = "storage_region"
+	storage_clock_skew            = "storage_clock_skew"
 	messaging_mode                = "messaging_mode"
 	max_request_size              = "max_request_size"
 	http_read_timeout             = "http_read_timeout"
@@ -294,6 +295,7 @@ type KeelConfig struct {
 	OTPSendPerIP                int           // otp_send_per_ip               10                 OTP sends per client IP per window; 0 disables
 	HumanVerifierMode           string        // human_verifier_mode           noop               Human check on registration sends: noop | turnstile | hcaptcha | recaptcha | recaptcha_v3
 	HumanVerifierSecret         string        // human_verifier_secret         human_verifier     Secret name holding the provider secret key
+	StorageClockSkew            time.Duration // storage_clock_skew            300                Azure SAS start backdate for clock skew (seconds, 0-3600); 0 = default
 	HumanVerifierTimeout        time.Duration // human_verifier_timeout        5                  Provider siteverify call deadline (seconds); 0 = default
 	HumanVerifierMinScore       float64       // human_verifier_min_score      0.5                reCAPTCHA v3 lowest passing score (0-1]; 0 = default
 	HumanVerifierAction         string        // human_verifier_action         signup             reCAPTCHA v3 action the sign-up client executes
@@ -452,6 +454,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.OTPSendPerIP = c.Int(m, otp_send_per_ip)
 	c.HumanVerifierMode = c.String(m, human_verifier_mode)
 	c.HumanVerifierSecret = c.String(m, human_verifier_secret)
+	c.StorageClockSkew = c.Duration(m, storage_clock_skew)
 	c.HumanVerifierTimeout = c.Duration(m, human_verifier_timeout)
 	c.HumanVerifierMinScore = c.Float(m, human_verifier_min_score)
 	c.HumanVerifierAction = c.String(m, human_verifier_action)
@@ -528,6 +531,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.OTPSendWindow <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", otp_send_window))
+	}
+	if c.StorageClockSkew == 0 {
+		c.StorageClockSkew = 300 * time.Second
+	} else if c.StorageClockSkew < 0 || c.StorageClockSkew > time.Hour {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 0 and 3600 seconds", storage_clock_skew))
 	}
 	if c.HumanVerifierTimeout == 0 {
 		c.HumanVerifierTimeout = 5 * time.Second

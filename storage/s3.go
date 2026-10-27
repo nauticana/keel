@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/nauticana/keel/secret"
 
@@ -280,7 +279,11 @@ func (s *StorageS3) GetObjectAttributes(ctx context.Context, key string) (map[st
 }
 
 func (s *StorageS3) GetSignedURL(ctx context.Context, key string, expirySeconds int) (string, error) {
-	result, err := s.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key}, s3.WithPresignExpires(time.Duration(expirySeconds)*time.Second))
+	expiry, err := signedURLExpiry(expirySeconds)
+	if err != nil {
+		return "", err
+	}
+	result, err := s.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key}, s3.WithPresignExpires(expiry))
 	if err != nil {
 		return "", s3Err("sign URL", key, err)
 	}

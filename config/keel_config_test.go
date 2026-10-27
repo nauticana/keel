@@ -20,7 +20,7 @@ var keelTestFlagIDs = []string{
 	api_key_max_per_partner, notify_new_device_signin, stepup_new_device, max_sessions_per_user, outbound_max_redirects,
 	outbound_max_rps, outbound_max_pages, outbound_max_items, telephony_max_body_bytes, telephony_signature_tolerance, outbound_max_response_size, trusted_proxy_cidr, request_id_header, nats_url, nats_name,
 	nats_creds_secret, storage_mode, storage_bucket, s3_endpoint, storage_credential_secret, dms_max_bytes, scan_mode, scan_addr, extract_mode, extract_max_bytes, extract_ocr_max_pages,
-	storage_public_base_url, storage_account_url, storage_region, messaging_mode,
+	storage_public_base_url, storage_account_url, storage_region, storage_clock_skew, messaging_mode,
 	max_request_size, http_read_timeout, http_write_timeout, http_max_header_values,
 	http_idle_timeout, hc_port, push_mode, apns_key_id, apns_team_id,
 	apns_bundle_id, apns_key_secret, apns_sandbox, apns_token_ttl, redis_url, valkey_url,

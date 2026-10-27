@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
 	azservice "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
+	"github.com/nauticana/keel/config"
 )
 
 type StorageAzure struct {
@@ -280,25 +281,33 @@ func (s *StorageAzure) blobURL(key string) string {
 	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(s.url, "/"), url.PathEscape(s.name), escapeKeyPath(key))
 }
 
+// GetSignedURL starts the SAS storage_clock_skew in the past, so a server clock
+// behind ours still accepts it.
 func (s *StorageAzure) GetSignedURL(ctx context.Context, key string, expirySeconds int) (string, error) {
+	validity, err := signedURLExpiry(expirySeconds)
+	if err != nil {
+		return "", err
+	}
 	now := time.Now().UTC()
-	expiry := now.Add(time.Duration(expirySeconds) * time.Second)
+	start, expiry := now.Add(-config.Config().StorageClockSkew), now.Add(validity)
+	if maxExpiry := start.Add(MaxSignedURLSeconds * time.Second); expiry.After(maxExpiry) {
+		expiry = maxExpiry
+	}
 	values := sas.BlobSignatureValues{
 		Protocol:      sas.ProtocolHTTPS,
-		StartTime:     now,
+		StartTime:     start,
 		ExpiryTime:    expiry,
 		Permissions:   (&sas.BlobPermissions{Read: true}).String(),
 		ContainerName: s.name,
 		BlobName:      key,
 	}
 	var query sas.QueryParameters
-	var err error
 	if s.sharedKey != nil {
 		query, err = values.SignWithSharedKey(s.sharedKey)
 	} else {
 		var udc *azservice.UserDelegationCredential
 		udc, err = s.client.ServiceClient().GetUserDelegationCredential(ctx, azservice.KeyInfo{
-			Start:  to(now.Format(sas.TimeFormat)),
+			Start:  to(start.Format(sas.TimeFormat)),
 			Expiry: to(expiry.Format(sas.TimeFormat)),
 		}, nil)
 		if err != nil {

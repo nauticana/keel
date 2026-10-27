@@ -3,8 +3,22 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"time"
 )
+
+// MaxSignedURLSeconds is the providers' ceiling: S3 and GCS V4 signatures and
+// Azure user delegation keys last at most 7 days.
+const MaxSignedURLSeconds = 7 * 24 * 60 * 60
+
+// signedURLExpiry validates expirySeconds and returns it as a duration.
+func signedURLExpiry(expirySeconds int) (time.Duration, error) {
+	if expirySeconds < 1 || expirySeconds > MaxSignedURLSeconds {
+		return 0, fmt.Errorf("%w: %d seconds", ErrInvalidExpiry, expirySeconds)
+	}
+	return time.Duration(expirySeconds) * time.Second, nil
+}
 
 var (
 	ErrNotFound           = errors.New("storage: object not found")
@@ -13,6 +27,8 @@ var (
 	ErrBucketNotFound     = errors.New("storage: bucket not found")
 	ErrUnsupported        = errors.New("storage: operation not supported by this backend")
 	ErrEmptyPrefix        = errors.New("storage: refusing to delete under an empty prefix")
+	ErrInvalidKey         = errors.New("storage: invalid object key")
+	ErrInvalidExpiry      = errors.New("storage: signed URL expiry must be 1 second to 7 days")
 )
 
 // ObjectStorage is one bucket (container, or root folder for the file backend).
@@ -36,6 +52,7 @@ type ObjectStorage interface {
 	SetObjectAttributes(ctx context.Context, key string, attributes map[string]string) error
 	GetObjectAttributes(ctx context.Context, key string) (map[string]string, error)
 	GetObjectAndAttributes(ctx context.Context, key string) (*Component, error)
+	// GetSignedURL refuses an expiry outside 1..MaxSignedURLSeconds with ErrInvalidExpiry.
 	GetSignedURL(ctx context.Context, key string, expirySeconds int) (string, error)
 
 	// PublicURL returns the stable, non-expiring URL at which an object is

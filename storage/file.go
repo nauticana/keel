@@ -36,7 +36,7 @@ func NewStorageFile(spec Spec) (*StorageFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("file: root %s: %w", spec.Bucket, err)
 	}
-	return &StorageFile{root: spec.Bucket}, nil
+	return &StorageFile{root: filepath.Clean(spec.Bucket)}, nil
 }
 
 func createBucketFile(spec Spec) error {
@@ -48,11 +48,18 @@ func createBucketFile(spec Spec) error {
 
 func (s *StorageFile) Bucket() string { return s.root }
 
-// folder maps a key to its object folder, refusing keys that escape the root.
+// folder maps a key to its object folder, refusing keys that escape the root
+// or name an object's own content or attributes file.
 func (s *StorageFile) folder(key string) (string, error) {
 	rel := strings.Trim(key, "/")
 	if rel == "" || !filepath.IsLocal(filepath.FromSlash(rel)) {
-		return "", fmt.Errorf("file: invalid key %q", key)
+		return "", fmt.Errorf("file: %q: %w", key, ErrInvalidKey)
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(filepath.FromSlash(rel)), "/") {
+		if segment == "" || segment == "." || segment == ".." ||
+			strings.EqualFold(segment, fileData) || strings.EqualFold(segment, fileAttributes) {
+			return "", fmt.Errorf("file: %q: %w", key, ErrInvalidKey)
+		}
 	}
 	return filepath.Join(s.root, filepath.FromSlash(rel)), nil
 }

@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.139",
+   "title": "Signed URL expiry, file storage keys, repository prefixes",
+   "tags": [
+    "behavioral"
+   ],
+   "summary": "GetSignedURL refuses an expiry outside 1 second to 7 days, Azure SAS URLs start storage_clock_skew in the past, the file backend refuses its reserved names and never deletes its root, and a dms prefix with a dot or empty segment is refused.",
+   "body_markdown": "### Behavioral\n\n- `ObjectStorage.GetSignedURL` refuses an expiry outside 1 second to `storage.MaxSignedURLSeconds` (7 days, the providers' limit) with `storage.ErrInvalidExpiry` on S3, GCS and Azure. S3 used to turn 0 into 15 minutes; GCS and Azure signed an already-expired URL.\n- Azure SAS URLs start `storage_clock_skew` (duration seconds, default 300, 0 takes the default, 0–3600) in the past and expire at most 7 days after that start, Azure's user delegation limit. Existing databases insert its `application_config_flag` row from `schema/seed/core.yml`.\n- The file backend refuses a key with a `.`, `..`, empty, `DATA.bin` or `ATTR.txt` segment (any case, split on `/` and the platform separator), with `storage.ErrInvalidKey`, and cleans its root, so a bucket path with a trailing slash no longer lets a delete remove the root folder. `dms.ErrInvalidKey` is now `storage.ErrInvalidKey`, so such a document or component id answers as an invalid key.\n- A dms repository whose prefix has a `.`, `..` or empty segment is refused with `ErrInvalidDefinition`."
+  },
+  {
    "version": "v1.2.138",
    "title": "Webhook secrets, checkout user and currency, invite authority, invoice overflow",
    "tags": [
