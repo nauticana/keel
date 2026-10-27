@@ -320,10 +320,10 @@ func (c *MemoryCacheService) LPopAll(ctx context.Context, key string) ([]string,
 // stalling Publish — to match the "lossy real-time" semantics of the
 // Redis pub/sub channel and avoid one stuck consumer wedging others.
 func (c *MemoryCacheService) Publish(ctx context.Context, channel, message string) error {
+	// Sent under the lock: cancel and Close close subscriber channels under it.
 	c.mu.Lock()
-	subs := append([]chan string(nil), c.pubsub[channel]...)
-	c.mu.Unlock()
-	for _, ch := range subs {
+	defer c.mu.Unlock()
+	for _, ch := range c.pubsub[channel] {
 		select {
 		case ch <- message:
 		default:

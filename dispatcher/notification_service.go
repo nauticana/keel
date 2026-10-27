@@ -182,7 +182,11 @@ func (s *LocalNotificationService) deduped(ctx context.Context, req port.Notific
 	if err != nil {
 		return fmt.Errorf("notification: dedupe %q: %w", req.DedupeKey, err)
 	}
-	if entry.State != model.LedgerNew {
+	switch entry.State {
+	case model.LedgerNew:
+	case model.LedgerInFlight:
+		return fmt.Errorf("%w: %s", port.ErrNotificationInFlight, req.DedupeKey)
+	default:
 		return fmt.Errorf("%w: %s", port.ErrNotificationDuplicate, req.DedupeKey)
 	}
 	if err := send(); err != nil {

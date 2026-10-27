@@ -168,11 +168,10 @@ func (s *CacheServiceImpl) Publish(ctx context.Context, channel string, message 
 	return s.client.Publish(ctx, channel, message).Err()
 }
 
-// Subscribe opens a Redis pub/sub subscription on channel. The
-// returned channel closes when ctx cancels or the subscription
-// errors. The underlying *PubSub is also closed in the same path —
-// without that, every Subscribe call would leak a server-side
-// subscription record (P1-15).
+// Subscribe opens a Redis pub/sub subscription on channel. The returned
+// channel closes, and the *PubSub with it, when ctx cancels or the
+// subscription errors. A message is dropped when the buffer is full, so a slow
+// reader cannot stall the connection.
 func (s *CacheServiceImpl) Subscribe(ctx context.Context, channel string) (<-chan string, error) {
 	sub := s.client.Subscribe(ctx, channel)
 	ch := make(chan string, 100)
@@ -187,7 +186,10 @@ func (s *CacheServiceImpl) Subscribe(ctx context.Context, channel string) (<-cha
 			if err != nil {
 				return
 			}
-			ch <- msg.Payload
+			select {
+			case ch <- msg.Payload:
+			default:
+			}
 		}
 	}()
 	return ch, nil

@@ -260,6 +260,17 @@ Each row records what keel implements of an IETF or OASIS specification, what it
 | RFC 7642 SCIM concepts | Informational; keel is the service provider, and the partner's directory is the client. |
 | SCIM authentication | Bearer tokens issued per partner (RFC 6750), stored as SHA-256. Mutual TLS (RFC 8705) is not implemented. |
 
+### Email
+
+| Specification | Status |
+|---|---|
+| RFC 5321 SMTP, RFC 3207 STARTTLS, RFC 4954 AUTH | `MailClient` sends only after STARTTLS, then `AUTH PLAIN`; a server without STARTTLS is refused. The envelope carries only the mailboxes of `smtp_from` and each recipient. Delivery counts once the server accepts the body. Cancelling `ctx` or `smtp_deadline` aborts the exchange. |
+| RFC 5322 Internet Message Format | Every message carries `Date` and a `Message-ID` in the `smtp_from` domain. CR/LF in the subject and recipients is stripped; a caller header must be a valid field name, not one keel sets, and at most 998 octets. |
+| RFC 2045 / 2046 MIME | Bodies are quoted-printable UTF-8; an attachment is a base64 part of `multipart/mixed`. |
+| RFC 2047 encoded-words | A non-ASCII subject or `From` display name is encoded. |
+| RFC 2231 parameters | A non-ASCII attachment filename uses `filename*=utf-8''…`. |
+| RFC 2369 / RFC 8058 List-Unsubscribe | Passed through as caller headers; keel does not generate them. |
+
 ## Two-Factor Authentication (2FA) & Trusted Devices
 
 Keel includes built-in TOTP-based 2FA with trusted device management. The login endpoints (`LoginLocal`, `LoginGmail`) automatically check `TwoFactorEnabled` on the user session and return a conditional response.

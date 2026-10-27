@@ -28,7 +28,7 @@ type uniqueLookupDB struct {
 	svc *legacyTableService
 }
 
-func (d uniqueLookupDB) GetForeignKey(string) *model.ForeignKey { return d.fk }
+func (d uniqueLookupDB) GetForeignKey(string) *model.ForeignKey   { return d.fk }
 func (d uniqueLookupDB) GetTableService(string) port.TableService { return d.svc }
 
 type uniqueLookupQS struct{}

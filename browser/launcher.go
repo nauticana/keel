@@ -6,6 +6,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -56,11 +57,25 @@ func (l *Launcher) NewAllocator(ctx context.Context) (context.Context, context.C
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, l.allocatorOptions(profileDir)...)
 	return allocCtx, func() {
 		cancel()
-		// chromedp only removes profile dirs it created itself.
-		if err := os.RemoveAll(profileDir); err != nil {
-			l.warn("remove profile dir " + profileDir + ": " + err.Error())
-		}
+		l.removeProfile(profileDir) // chromedp only removes profile dirs it created itself
 	}, nil
+}
+
+// removeProfile deletes dir until it stays gone: Chrome's helper processes can
+// still write into it for a moment after the browser exits.
+func (l *Launcher) removeProfile(dir string) {
+	err := errors.New("recreated after removal")
+	for delay := 50 * time.Millisecond; delay <= 800*time.Millisecond; delay *= 2 {
+		removeErr := os.RemoveAll(dir)
+		time.Sleep(delay)
+		if _, statErr := os.Lstat(dir); removeErr == nil && os.IsNotExist(statErr) {
+			return
+		}
+		if removeErr != nil {
+			err = removeErr
+		}
+	}
+	l.warn("remove profile dir " + dir + ": " + err.Error())
 }
 
 // allocatorOptions deliberately omits chromedp.DefaultExecAllocatorOptions:

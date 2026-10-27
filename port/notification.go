@@ -27,8 +27,9 @@ type NotificationRequest struct {
 	Title   string
 	Body    string
 	Data    map[string]string
-	// DedupeKey collapses repeats: the first Send under a key is delivered and
-	// every later one is ErrNotificationDuplicate until the ledger forgets it.
+	// DedupeKey collapses repeats: the first Send under a key is delivered, a
+	// Send while it is in flight is ErrNotificationInFlight, and a later one is
+	// ErrNotificationDuplicate until the ledger forgets it.
 	// Ignored unless the service has a ledger.
 	DedupeKey string
 }
@@ -55,6 +56,8 @@ var (
 	ErrNotificationSuppressed = errors.New("notification: recipient is suppressed")
 	// ErrNotificationDuplicate: another Send already carried this DedupeKey.
 	ErrNotificationDuplicate = errors.New("notification: duplicate of an already-sent notification")
+	// ErrNotificationInFlight: another Send still holds this DedupeKey; retry later.
+	ErrNotificationInFlight = errors.New("notification: another send holds this dedupe key")
 	// ErrNotificationChannel: no dispatcher is registered for the request's channel.
 	ErrNotificationChannel = errors.New("notification: channel not configured")
 	// ErrNotificationNoAddress: the recipient has no address on the request's channel.

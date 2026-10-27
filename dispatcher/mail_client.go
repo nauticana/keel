@@ -3,14 +3,19 @@ package dispatcher
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/textproto"
 	"net/url"
@@ -22,6 +27,9 @@ import (
 	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/secret"
 )
+
+// ErrMailAttachmentUnsupported: mail_mode=api has no attachment field.
+var ErrMailAttachmentUnsupported = errors.New("mail: mail_mode=api cannot send attachments")
 
 type MailClient struct {
 	Secrets secret.SecretProvider
@@ -37,12 +45,21 @@ func (m *MailClient) SendEmail(ctx context.Context, subject string, body string,
 	if err := validateHeaders(headers); err != nil {
 		return err
 	}
-	switch config.Config().MailMode {
-	case "api":
-		return m.sendViaAPI(ctx, subject, body, recipients, headers)
-	default:
-		return m.sendViaSMTP(ctx, subject, body, recipients, headers)
+	if config.Config().MailMode == "api" {
+		return m.postMailAPI(ctx, subject, body, recipients, false, headers)
 	}
+	return m.sendSMTP(ctx, subject, recipients, headers, "text/plain", body, "", nil)
+}
+
+// SendEmailHTML sends an HTML message with an optional PDF attachment.
+func (m *MailClient) SendEmailHTML(ctx context.Context, subject string, htmlBody string, recipients []string, attachmentName string, attachmentData []byte) error {
+	if config.Config().MailMode == "api" {
+		if len(attachmentData) > 0 {
+			return ErrMailAttachmentUnsupported
+		}
+		return m.postMailAPI(ctx, subject, htmlBody, recipients, true, nil)
+	}
+	return m.sendSMTP(ctx, subject, recipients, nil, "text/html", htmlBody, attachmentName, attachmentData)
 }
 
 // protectedHeaders are names keel sets itself or that are structurally/security
@@ -86,15 +103,6 @@ func validateHeaders(headers map[string]string) error {
 	return nil
 }
 
-func (m *MailClient) SendEmailHTML(ctx context.Context, subject string, htmlBody string, recipients []string, attachmentName string, attachmentData []byte) error {
-	switch config.Config().MailMode {
-	case "api":
-		return m.sendHTMLViaAPI(ctx, subject, htmlBody, recipients)
-	default:
-		return m.sendHTMLViaSMTP(ctx, subject, htmlBody, recipients, attachmentName, attachmentData)
-	}
-}
-
 // --- SMTP mode (default) ---
 
 // scrubMailHeader strips CR/LF (and stray null bytes) from a value
@@ -129,60 +137,132 @@ func scrubRecipients(in []string) []string {
 	return out
 }
 
-func (m *MailClient) sendViaSMTP(ctx context.Context, subject string, body string, recipients []string, headers map[string]string) error {
-	if len(recipients) == 0 {
-		return fmt.Errorf("smtp: no recipients")
+func (m *MailClient) sendSMTP(ctx context.Context, subject string, recipients []string, headers map[string]string, contentType, body, attachmentName string, attachment []byte) error {
+	sender, err := mail.ParseAddress(config.Config().SmtpFrom)
+	if err != nil {
+		return fmt.Errorf("smtp: smtp_from: %w", err)
 	}
-	smtpPass, err := m.Secrets.GetSecret(ctx, "smtp_pass")
+	to, envelope, err := smtpRecipients(recipients)
+	if err != nil {
+		return err
+	}
+	msg, err := buildMessage(sender, to, subject, headers, contentType, body, attachmentName, attachment)
+	if err != nil {
+		return err
+	}
+	pass, err := m.Secrets.GetSecret(ctx, "smtp_pass")
 	if err != nil {
 		return fmt.Errorf("failed to get SMTP password: %w", err)
 	}
-	from := scrubMailHeader(config.Config().SmtpFrom)
 	host := config.Config().SmtpHost
-	port := config.Config().SmtpPort
-	addr := host + ":" + strconv.Itoa(port)
-
-	cleanRcpts := scrubRecipients(recipients)
-	if len(cleanRcpts) == 0 {
-		return fmt.Errorf("smtp: no valid recipients")
-	}
-	cleanSubject := scrubMailHeader(subject)
-	// Header names + values are scrubbed; the body is left intact (CRLF inside
-	// the body is part of the RFC 5322 wire format and must NOT be
-	// stripped) but separated from the headers by an explicit blank
-	// line. SMTP envelope recipients use cleanRcpts so spoofed RCPT TO
-	// values are rejected before the server accepts the message.
-	var hdr strings.Builder
-	fmt.Fprintf(&hdr, "From: %s\r\nTo: %s\r\nSubject: %s\r\n", from, strings.Join(cleanRcpts, ", "), cleanSubject)
-	for k, v := range headers {
-		if k = scrubMailHeader(k); k != "" {
-			fmt.Fprintf(&hdr, "%s: %s\r\n", k, scrubMailHeader(v))
-		}
-	}
-	msg := hdr.String() + "\r\n" + body
-	pass := strings.TrimSpace(smtpPass)
-	return sendSMTPWithStartTLS(addr, host, config.Config().SmtpUser, pass, from, cleanRcpts, []byte(msg))
+	return sendSMTPWithStartTLS(ctx, host+":"+strconv.Itoa(config.Config().SmtpPort), host, config.Config().SmtpUser,
+		strings.TrimSpace(pass), sender.Address, envelope, msg)
 }
 
-// sendSMTPWithStartTLS dials the server, opportunistically upgrades
-// to TLS via STARTTLS, and FAILS if the server doesn't advertise it
-// (P1-61). The previous code path used smtp.SendMail, which uses
-// STARTTLS when available but happily falls back to plaintext —
-// against a misconfigured / hostile server, that meant PlainAuth
-// credentials could leak.
-//
-// Submission ports (587, 465) always require TLS in any modern
-// deployment; port 25 between MTAs sometimes doesn't. Keel is a
-// MUA-style sender, so we hold the strict line.
-func sendSMTPWithStartTLS(addr, host, user, pass, from string, recipients []string, msg []byte) error {
-	// Bounded dial + overall deadline so a peer that accepts the TCP connection
-	// but stalls on the greeting/STARTTLS/DATA can't block the worker tick
-	// indefinitely (a synchronous dispatch would otherwise wedge the loop).
-	conn, err := net.DialTimeout("tcp", addr, config.Config().SmtpDialTimeout)
+func smtpRecipients(recipients []string) (header, envelope []string, err error) {
+	recipients = scrubRecipients(recipients)
+	if len(recipients) == 0 {
+		return nil, nil, fmt.Errorf("smtp: no valid recipients")
+	}
+	header, envelope = make([]string, len(recipients)), make([]string, len(recipients))
+	for i, rcpt := range recipients {
+		address, err := mail.ParseAddress(rcpt)
+		if err != nil {
+			return nil, nil, fmt.Errorf("smtp: invalid recipient %q: %w", rcpt, err)
+		}
+		header[i], envelope[i] = address.String(), address.Address
+	}
+	return header, envelope, nil
+}
+
+// buildMessage writes an RFC 5322 message: an RFC 2047 subject, Date, a
+// Message-ID in the sender's domain, a quoted-printable body and, with an
+// attachment, a multipart/mixed body whose filename uses RFC 2231.
+func buildMessage(sender *mail.Address, rcpts []string, subject string, headers map[string]string, contentType, body, attachmentName string, attachment []byte) ([]byte, error) {
+	_, domain, ok := strings.Cut(sender.Address, "@")
+	if !ok || domain == "" {
+		return nil, fmt.Errorf("smtp: smtp_from %q has no domain for the Message-ID", sender.Address)
+	}
+	var msg bytes.Buffer
+	fmt.Fprintf(&msg, "From: %s\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%s@%s>\r\nMIME-Version: 1.0\r\n",
+		sender, strings.Join(rcpts, ",\r\n "), encodeHeader(scrubMailHeader(subject)), time.Now().Format(time.RFC1123Z), rand.Text(), domain)
+	for k, v := range headers {
+		fmt.Fprintf(&msg, "%s: %s\r\n", k, v)
+	}
+	if len(attachment) == 0 {
+		fmt.Fprintf(&msg, "Content-Type: %s; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", contentType)
+		if err := writeQuotedPrintable(&msg, body); err != nil {
+			return nil, err
+		}
+		return msg.Bytes(), nil
+	}
+	if attachmentName = scrubMailHeader(attachmentName); attachmentName == "" {
+		return nil, fmt.Errorf("smtp: attachment has no name")
+	}
+	contentDisposition := mime.FormatMediaType("attachment", map[string]string{"filename": attachmentName})
+	if contentDisposition == "" {
+		return nil, fmt.Errorf("smtp: invalid attachment name")
+	}
+	parts := multipart.NewWriter(&msg)
+	fmt.Fprintf(&msg, "Content-Type: multipart/mixed; boundary=%s\r\n\r\n", parts.Boundary())
+	part, err := parts.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {contentType + "; charset=UTF-8"},
+		"Content-Transfer-Encoding": {"quoted-printable"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := writeQuotedPrintable(part, body); err != nil {
+		return nil, err
+	}
+	part, err = parts.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {"application/pdf"},
+		"Content-Disposition":       {contentDisposition},
+		"Content-Transfer-Encoding": {"base64"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	encoded := base64.StdEncoding.EncodeToString(attachment)
+	for len(encoded) > 76 {
+		io.WriteString(part, encoded[:76]+"\r\n")
+		encoded = encoded[76:]
+	}
+	io.WriteString(part, encoded+"\r\n")
+	if err := parts.Close(); err != nil {
+		return nil, err
+	}
+	return msg.Bytes(), nil
+}
+
+// encodeHeader RFC 2047-encodes a non-ASCII value, folding between encoded-words.
+func encodeHeader(v string) string {
+	return strings.ReplaceAll(mime.QEncoding.Encode("utf-8", v), "?= =?", "?=\r\n =?")
+}
+
+func writeQuotedPrintable(w io.Writer, body string) error {
+	qp := quotedprintable.NewWriter(w)
+	if _, err := io.WriteString(qp, body); err != nil {
+		return err
+	}
+	return qp.Close()
+}
+
+// sendSMTPWithStartTLS requires STARTTLS before authenticating: smtp.SendMail
+// falls back to plaintext and would leak the credentials. Cancelling ctx, or the
+// smtp_deadline, aborts the exchange.
+func sendSMTPWithStartTLS(ctx context.Context, addr, host, user, pass, from string, recipients []string, msg []byte) (err error) {
+	conn, err := (&net.Dialer{Timeout: config.Config().SmtpDialTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("smtp: dial %s: %w", addr, err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(config.Config().SmtpDeadline))
+	defer context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })()
+	defer func() {
+		if err != nil && ctx.Err() != nil {
+			err = fmt.Errorf("%w: %w", ctx.Err(), err)
+		}
+	}()
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		conn.Close()
@@ -199,8 +279,7 @@ func sendSMTPWithStartTLS(addr, host, user, pass, from string, recipients []stri
 	if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 		return fmt.Errorf("smtp: STARTTLS: %w", err)
 	}
-	auth := smtp.PlainAuth("", user, pass, host)
-	if err := c.Auth(auth); err != nil {
+	if err := c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil {
 		return fmt.Errorf("smtp: auth: %w", err)
 	}
 	if err := c.Mail(from); err != nil {
@@ -221,93 +300,12 @@ func sendSMTPWithStartTLS(addr, host, user, pass, from string, recipients []stri
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("smtp: close body: %w", err)
 	}
-	return c.Quit()
-}
-
-func (m *MailClient) sendHTMLViaSMTP(ctx context.Context, subject string, htmlBody string, recipients []string, attachmentName string, attachmentData []byte) error {
-	if len(recipients) == 0 {
-		return fmt.Errorf("smtp: no recipients")
-	}
-	smtpPass, err := m.Secrets.GetSecret(ctx, "smtp_pass")
-	if err != nil {
-		return fmt.Errorf("failed to get SMTP password: %w", err)
-	}
-	from := scrubMailHeader(config.Config().SmtpFrom)
-	host := config.Config().SmtpHost
-	port := config.Config().SmtpPort
-	addr := host + ":" + strconv.Itoa(port)
-
-	cleanRcpts := scrubRecipients(recipients)
-	if len(cleanRcpts) == 0 {
-		return fmt.Errorf("smtp: no valid recipients")
-	}
-	cleanSubject := scrubMailHeader(subject)
-	cleanAttachmentName := scrubMailHeader(attachmentName)
-
-	// Two-buffer assembly (P2-17): write the RFC 5322 headers into
-	// `headers`, write the multipart body parts (which carry their
-	// own boundary delimiters) into `body`, then concatenate. The
-	// previous implementation constructed a multipart.Writer against
-	// a buffer it then immediately Reset'd — relying on the writer
-	// having captured its boundary string before the Reset wiped its
-	// internal state. That worked, but only by accident; this
-	// version keeps the writer pointed at a clean buffer the entire
-	// time.
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	boundary := writer.Boundary()
-
-	htmlHeader := make(textproto.MIMEHeader)
-	htmlHeader.Set("Content-Type", "text/html; charset=UTF-8")
-	htmlPart, err := writer.CreatePart(htmlHeader)
-	if err != nil {
-		return fmt.Errorf("failed to create html part: %w", err)
-	}
-	htmlPart.Write([]byte(htmlBody))
-
-	if len(attachmentData) > 0 && cleanAttachmentName != "" {
-		attHeader := make(textproto.MIMEHeader)
-		attHeader.Set("Content-Type", "application/pdf")
-		attHeader.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", cleanAttachmentName))
-		attHeader.Set("Content-Transfer-Encoding", "base64")
-		attPart, err := writer.CreatePart(attHeader)
-		if err != nil {
-			return fmt.Errorf("failed to create attachment part: %w", err)
-		}
-		encoded := base64.StdEncoding.EncodeToString(attachmentData)
-		for i := 0; i < len(encoded); i += 76 {
-			end := i + 76
-			if end > len(encoded) {
-				end = len(encoded)
-			}
-			attPart.Write([]byte(encoded[i:end] + "\r\n"))
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to finalize multipart body: %w", err)
-	}
-
-	var headers bytes.Buffer
-	fmt.Fprintf(&headers, "From: %s\r\n", from)
-	fmt.Fprintf(&headers, "To: %s\r\n", strings.Join(cleanRcpts, ", "))
-	fmt.Fprintf(&headers, "Subject: %s\r\n", cleanSubject)
-	fmt.Fprintf(&headers, "MIME-Version: 1.0\r\n")
-	fmt.Fprintf(&headers, "Content-Type: multipart/mixed; boundary=%s\r\n\r\n", boundary)
-
-	msg := append(headers.Bytes(), body.Bytes()...)
-	pass := strings.TrimSpace(smtpPass)
-	return sendSMTPWithStartTLS(addr, host, config.Config().SmtpUser, pass, from, cleanRcpts, msg)
+	// DATA acceptance commits delivery; a QUIT failure must not trigger a resend.
+	_ = c.Quit()
+	return nil
 }
 
 // --- API mode ---
-
-func (m *MailClient) sendViaAPI(ctx context.Context, subject string, body string, recipients []string, headers map[string]string) error {
-	return m.postMailAPI(ctx, subject, body, recipients, false, headers)
-}
-
-func (m *MailClient) sendHTMLViaAPI(ctx context.Context, subject string, htmlBody string, recipients []string) error {
-	return m.postMailAPI(ctx, subject, htmlBody, recipients, true, nil)
-}
 
 // postMailAPI delivers a message to keel's REST API.
 //   - Validates that smtp_host is a bare host[:port] (no scheme,

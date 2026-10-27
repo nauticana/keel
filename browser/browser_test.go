@@ -158,3 +158,21 @@ func TestRenderAgainstRealChrome(t *testing.T) {
 		t.Errorf("profile dir leaked: %v", dirs)
 	}
 }
+
+func TestRemoveProfileOutlastsLateWriter(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "chromedp-userdata-1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { // a helper process writing after the browser exits
+		defer close(done)
+		time.Sleep(20 * time.Millisecond)
+		_ = os.MkdirAll(filepath.Join(dir, "Crashes"), 0o700)
+	}()
+	(&Launcher{}).removeProfile(dir)
+	<-done
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("profile dir survived: %v", err)
+	}
+}

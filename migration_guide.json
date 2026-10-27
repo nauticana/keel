@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.137",
+   "title": "Mail standards, in-flight notifications, subscriber drops and NATS durables",
+   "tags": [
+    "behavioral"
+   ],
+   "summary": "SMTP messages are standards-encoded and cancellable, mail_mode=api refuses attachments, an in-flight notification dedupe key is retried, full Redis/Valkey subscribers drop instead of blocking, dotted NATS subscriptions get valid durables, and browser profile dirs are removed reliably.",
+   "body_markdown": "### Behavioral\n\n- SMTP: a non-ASCII subject is an RFC 2047 encoded-word, the body is quoted-printable, every message carries `Date` and a `Message-ID` in the `smtp_from` domain, `From` and the envelope sender come from the parsed `smtp_from`, and an attachment's filename uses RFC 2231 parameters. Cancelling `ctx` aborts the exchange. Each recipient must be one RFC 5322 address: the `To` header carries it as formatted, the envelope only its mailbox. Once the server accepts the body, a failed `QUIT` no longer reports the send as failed. An attachment without a name, or an `smtp_from` without a domain, is refused.\n- `mail_mode=api`: `SendEmailHTML` with an attachment returns `dispatcher.ErrMailAttachmentUnsupported` instead of dropping it.\n- A notification whose `DedupeKey` another send still holds returns `port.ErrNotificationInFlight`; the notify worker retries it instead of recording it as sent.\n- `cache.CacheService.Subscribe` on Redis/Valkey drops a message when the subscriber's buffer is full, as the memory backend does, instead of blocking the connection. The memory backend's `Publish` no longer races a closing subscriber.\n- `NATSSubscriber`: a dotted subscription such as `ride.completed` gets the durable `ride_completed` and a subject filter; JetStream refused the dotted durable. Undotted durables keep their names.\n- `browser.Launcher` removes a render's profile dir even when Chrome's helper processes write to it after the browser exits."
+  },
+  {
    "version": "v1.2.136",
    "title": "Password special characters, server shutdown and unique-key relations",
    "tags": [

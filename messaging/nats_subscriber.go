@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -11,8 +12,8 @@ import (
 	"github.com/nauticana/keel/secret"
 )
 
-// NATSSubscriber consumes a JetStream subject via a durable pull consumer.
-// Subscription name is used as the consumer's `Durable` — survives restarts.
+// NATSSubscriber consumes a JetStream subject via a durable pull consumer named
+// after the subscription (see consumerConfig), so it survives restarts.
 // Messages unacked within AckWait are redelivered up to MaxDeliver times,
 // then routed to the stream's DLQ (`<stream>.DLQ`) if one is configured.
 type NATSSubscriber struct {
@@ -38,13 +39,7 @@ func (s *NATSSubscriber) Subscribe(ctx context.Context, subscription string, han
 	if err != nil {
 		return fmt.Errorf("nats: stream %s: %w", streamName(subscription), err)
 	}
-	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       subscription,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       config.Config().NatsAckWait,
-		MaxDeliver:    config.Config().NatsMaxDeliver,
-		MaxAckPending: config.Config().NatsMaxAckPending,
-	})
+	cons, err := stream.CreateOrUpdateConsumer(ctx, consumerConfig(subscription))
 	if err != nil {
 		return fmt.Errorf("nats: consumer %s: %w", subscription, err)
 	}
@@ -67,6 +62,24 @@ func (s *NATSSubscriber) Subscribe(ctx context.Context, subscription string, han
 			return fmt.Errorf("nats: batch: %w", err)
 		}
 	}
+}
+
+// consumerConfig names the durable after the subscription. JetStream refuses a
+// dot in a durable, so a subject subscription such as ride.completed becomes the
+// durable ride_completed filtered to its subject.
+func consumerConfig(subscription string) jetstream.ConsumerConfig {
+	cfg := jetstream.ConsumerConfig{
+		Durable:       subscription,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       config.Config().NatsAckWait,
+		MaxDeliver:    config.Config().NatsMaxDeliver,
+		MaxAckPending: config.Config().NatsMaxAckPending,
+	}
+	if strings.Contains(subscription, ".") {
+		cfg.Durable = strings.ReplaceAll(subscription, ".", "_")
+		cfg.FilterSubject = subscription
+	}
+	return cfg
 }
 
 func (s *NATSSubscriber) dispatch(ctx context.Context, m jetstream.Msg, handler port.MessageHandler) {

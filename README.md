@@ -48,6 +48,10 @@ Then follow [Configuration and Getting Started](doc/configuration-and-getting-st
 
 Keel's own HTTP API writes every 64-bit integer (`int`, `int64`, `uint`, `uint64`) as a JSON string, so ids above 2^53 reach JavaScript clients intact (RFC 7493 §2.2), and accepts a string or a number for those types on input. Snowflake ids and money are 64-bit; bounded values such as display orders, sizes and exponents use `int16` or `int32`, matching their columns, and stay numbers. Numbers decoded into untyped values keep every digit (RFC 8259 §6), and JWT claims are parsed exactly. Errors are RFC 9457 problem details. Standards-defined bodies such as OAuth and SCIM keep their specified number types. See [API data format](doc/authentication.md#api-data-format).
 
+## Standards
+
+Keel implements OAuth 2.0 and its extensions (RFC 6749, 6750, 7009, 7591, 7636, 7662, 8252, 8414, 8693, 8707, 9207, 9728), JOSE and JWT (RFC 7515, 7517, 7518, 7519, 7523), OpenID Connect Core and Discovery, SAML 2.0 Web SSO, SCIM 2.0 (RFC 7643, 7644), API JSON (RFC 8259, 7493 §2.2, 9457) and email (RFC 5321, 5322, 3207, 4954, 2045, 2047, 2231). [Standards and Compliance](doc/authentication.md#standards-compliance) states what each covers and leaves out.
+
 ## Documentation
 
 | Topic | Contents |
@@ -55,7 +59,7 @@ Keel's own HTTP API writes every 64-bit integer (`int`, `int64`, `uint`, `uint64
 | [Configuration and Getting Started](doc/configuration-and-getting-started.md) | Configuration, bootstrap, REST, and workers |
 | [Package Reference](doc/package-reference.md) | Package responsibilities and adapter inventory |
 | [Authentication](doc/authentication.md) | API keys, OAuth, standards compliance, sessions, MFA, OTP, and social sign-in |
-| [Standards and Compliance](doc/authentication.md#standards-compliance) | API JSON, OAuth, token verification, outbound connection, and SCIM standards |
+| [Standards and Compliance](doc/authentication.md#standards-compliance) | API JSON, OAuth, token verification, outbound connection, SCIM, and email standards |
 | [Identity and Access](doc/identity-and-access.md) | Domain verification, tenant SSO, SCIM, and consent |
 | [Application Services](doc/application-services.md) | Quotas, limiters, guards, notifications, realtime, and reusable services |
 | [Reusable Primitives](doc/reusable-primitives.md) | Shared cryptography, HTTP, scheduling, content, browser, reference-data, and reliability helpers |

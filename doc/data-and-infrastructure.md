@@ -250,7 +250,7 @@ type Message struct {
 | `noop` | `NoOpPublisher` (drops every message) | — (error) | none |
 | `gcp` | `PubSubPublisher` (Cloud Pub/Sub) | `PubSubSubscriber` | `--gcp_project_id` |
 | `aws` | `SNSPublisher` (looks up topic ARN by name) | `SQSSubscriber` (long-poll, ack via `DeleteMessage`, nack via `ChangeMessageVisibility(0)`) | Standard AWS SDK credentials chain |
-| `nats` | `NATSPublisher` (JetStream, work-queue retention, lazy stream creation) | `NATSSubscriber` (durable pull consumer; `MaxDeliver=3`, `AckWait=30s`) | `nats_url`; optional `nats_name` config + `nats_creds_secret` (secret NAME holding the .creds content) |
+| `nats` | `NATSPublisher` (JetStream, work-queue retention, lazy stream creation) | `NATSSubscriber` (durable pull consumer named after the subscription, `ride.completed` → `ride_completed` filtered to its subject; `MaxDeliver=3`, `AckWait=30s`) | `nats_url`; optional `nats_name` config + `nats_creds_secret` (secret NAME holding the .creds content) |
 
 The factory dispatches on the `messaging_mode` flag:
 
@@ -679,4 +679,6 @@ cache.Publish(ctx, "user-events", payload)
 ch, _ := cache.Subscribe(ctx, "user-events")
 for msg := range ch { … }
 ```
+
+The channel buffers 100 messages; on every backend a message arriving when it is full is dropped rather than stalling the connection.
 

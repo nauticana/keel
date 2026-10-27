@@ -47,6 +47,7 @@ type CacheService interface {
 	RPush(ctx context.Context, key string, value string) error
 	LPopAll(ctx context.Context, key string) ([]string, error)
 	Publish(ctx context.Context, channel string, message string) error
+	// Subscribe's channel buffers 100 messages; a message arriving when it is full is dropped.
 	Subscribe(ctx context.Context, channel string) (<-chan string, error)
 
 	// Close releases backend resources (connection pools, sweeper

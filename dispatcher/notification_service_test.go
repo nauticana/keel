@@ -2,8 +2,10 @@ package dispatcher
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/nauticana/keel/idempotency"
 	"github.com/nauticana/keel/port"
 )
 
@@ -78,5 +80,31 @@ func TestLocalNotificationService_TypedChannelKeepsType(t *testing.T) {
 	}
 	if inbox.addedType != "S" || inbox.method != "" {
 		t.Fatalf("type = %q, dispatcher method = %q", inbox.addedType, inbox.method)
+	}
+}
+
+func TestLocalNotificationServiceDedupeStates(t *testing.T) {
+	ledger := &idempotency.MemoryLedger{}
+	notif := NewLocalNotificationService()
+	notif.Register("sms", &recordingDispatcher{})
+	notif.Ledger = ledger
+	req := port.NotificationRequest{Channel: "sms", To: "+15551234567", Body: "hi", DedupeKey: "k"}
+	ctx := context.Background()
+
+	held, err := ledger.Begin(ctx, "notification:sms:k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := notif.Send(ctx, req); !errors.Is(err, port.ErrNotificationInFlight) {
+		t.Fatalf("held key: %v, want ErrNotificationInFlight", err)
+	}
+	if err := ledger.Release(ctx, "notification:sms:k", held.Fence); err != nil {
+		t.Fatal(err)
+	}
+	if err := notif.Send(ctx, req); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if err := notif.Send(ctx, req); !errors.Is(err, port.ErrNotificationDuplicate) {
+		t.Fatalf("repeat: %v, want ErrNotificationDuplicate", err)
 	}
 }

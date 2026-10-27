@@ -138,6 +138,7 @@ err := notif.Send(ctx, port.NotificationRequest{Channel: dispatcher.EmailChannel
 switch {
 case errors.Is(err, port.ErrNotificationSuppressed): // *port.SuppressedError carries the reason
 case errors.Is(err, port.ErrNotificationDuplicate):  // an earlier Send already carried this DedupeKey
+case errors.Is(err, port.ErrNotificationInFlight):   // another Send still holds it; retry later
 }
 ```
 
