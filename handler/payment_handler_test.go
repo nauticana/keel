@@ -317,3 +317,45 @@ func TestCreateCheckout_ReusesStoredCustomer(t *testing.T) {
 		t.Fatalf("guest: status=%d request=%+v", rec.Code, guest.last)
 	}
 }
+
+func TestCreateCheckoutOwnsMetadataUserID(t *testing.T) {
+	fake := &fakeCheckout{respURL: "https://checkout.stripe.com/c/pay/x"}
+	h := newCheckoutHandler(fake)
+	body := map[string]any{"mode": "setup", "successUrl": "https://app.example/ok", "cancelUrl": "https://app.example/cancel",
+		"metadata": map[string]string{"user_id": "999", "order": "o1"}}
+	if rec := postCheckout(h, body); rec.Code != http.StatusOK || fake.last.Metadata["user_id"] != "" || fake.last.Metadata["order"] != "o1" {
+		t.Fatalf("guest: status=%d metadata=%v", rec.Code, fake.last.Metadata)
+	}
+
+	h.AllowGuestCheckout = false
+	h.UserService = intentUsers{}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/billing/checkout", strings.NewReader(string(raw)))
+	req.Header.Set("Authorization", "Bearer ok")
+	rec := httptest.NewRecorder()
+	h.CreateCheckout(rec, req)
+	if rec.Code != http.StatusOK || fake.last.Metadata["user_id"] != "7" {
+		t.Fatalf("signed in: status=%d metadata=%v", rec.Code, fake.last.Metadata)
+	}
+}
+
+func TestCreateCheckoutValidatesCurrencyAndMethods(t *testing.T) {
+	fake := &fakeCheckout{respURL: "https://checkout.stripe.com/c/pay/x"}
+	h := newCheckoutHandler(fake)
+	base := func(extra map[string]any) map[string]any {
+		body := map[string]any{"mode": "setup", "successUrl": "https://app.example/ok", "cancelUrl": "https://app.example/cancel"}
+		for k, v := range extra {
+			body[k] = v
+		}
+		return body
+	}
+	if rec := postCheckout(h, base(map[string]any{"currency": "usd", "paymentMethodTypes": []string{"card"}})); rec.Code != http.StatusOK ||
+		fake.last.Currency != "usd" || len(fake.last.PaymentMethodTypes) != 1 {
+		t.Fatalf("valid: status=%d req=%+v", rec.Code, fake.last)
+	}
+	for _, extra := range []map[string]any{{"currency": "us"}, {"currency": "us$"}, {"paymentMethodTypes": []string{"Card&x=1"}}, {"paymentMethodTypes": []string{"card", "card"}}} {
+		if rec := postCheckout(h, base(extra)); rec.Code != http.StatusBadRequest {
+			t.Errorf("%v: status=%d, want 400", extra, rec.Code)
+		}
+	}
+}

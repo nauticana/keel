@@ -1,6 +1,13 @@
 package billing
 
-import "time"
+import (
+	"errors"
+	"math"
+	"time"
+)
+
+// ErrInvoiceAmountOverflow: a line amount or the invoice total does not fit int64 minor units.
+var ErrInvoiceAmountOverflow = errors.New("billing: invoice amount overflows int64 minor units")
 
 // InvoiceLineDraft / InvoiceDraft describe the period invoice a project computes
 // for a partner. Amounts are minor currency units (e.g. cents).
@@ -22,10 +29,25 @@ type InvoiceDraft struct {
 	Lines    []InvoiceLineDraft
 }
 
-func (d *InvoiceDraft) TotalMinor() int64 {
-	var t int64
-	for _, l := range d.Lines {
-		t += l.UnitPriceMinor * l.Quantity
+// TotalMinor sums the line amounts; ErrInvoiceAmountOverflow when they do not fit int64.
+func (d *InvoiceDraft) TotalMinor() (int64, error) {
+	_, total, err := d.amounts()
+	return total, err
+}
+
+func (d *InvoiceDraft) amounts() ([]int64, int64, error) {
+	lines := make([]int64, len(d.Lines))
+	var total int64
+	for i, l := range d.Lines {
+		amount := l.UnitPriceMinor * l.Quantity
+		if l.Quantity != 0 && (amount/l.Quantity != l.UnitPriceMinor || l.Quantity == -1 && l.UnitPriceMinor == math.MinInt64) {
+			return nil, 0, ErrInvoiceAmountOverflow
+		}
+		if amount > 0 && total > math.MaxInt64-amount || amount < 0 && total < math.MinInt64-amount {
+			return nil, 0, ErrInvoiceAmountOverflow
+		}
+		total += amount
+		lines[i] = amount
 	}
-	return t
+	return lines, total, nil
 }

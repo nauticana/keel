@@ -233,7 +233,8 @@ apis, reports, _ := restService.Init(ctx, db)
 
 // Optional: validate a generic CRUD batch after all parent/child writes are
 // visible, but before the transaction commits. Returning an error rolls back
-// the entire batch and is surfaced by RestHandler as a failed POST.
+// the entire batch; a *model.AppError or a sentinel registered with
+// handler.RegisterErrorCode answers with its status.
 validationQueries := map[string]string{
     "validate_schedule": `SELECT COUNT(*) FROM commission_rule WHERE ...`,
 }

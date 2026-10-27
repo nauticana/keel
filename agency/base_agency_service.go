@@ -636,8 +636,8 @@ func (s *BaseAgencyService) RevokeDelegation(ctx context.Context, clientPartnerI
 	}
 	delegationID := common.AsInt64(delegation.Rows[0][0])
 	agencyPartnerID := common.AsInt64(delegation.Rows[0][1])
-	if callerPartnerID != agencyPartnerID && callerPartnerID != clientPartnerID {
-		return port.ErrNotClientOwner
+	if callerPartnerID != agencyPartnerID {
+		return port.ErrNotDelegatedAgency
 	}
 	if _, err = tx.Query(ctx, qCloseBilling, delegationID); err != nil {
 		return fmt.Errorf("agency: close billing model: %w", err)

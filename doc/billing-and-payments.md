@@ -69,6 +69,7 @@ This expresses every real shape, e.g. **$1000/yr billed monthly** (`billing_cycl
 - **Activation:** `Activate(…, BillingTerms, …)` / `ChangePlan(…, BillingTerms)` / `CreateSubscription(…, BillingTerms)` read the matching price row (`ErrPriceNotFound` otherwise) and **snapshot** the price onto `partner_plan_subscription`, set `renewal_date = begda + term`, `next_charge_date = begda` (first installment due), `amount_minor`, and the per-installment `installment_minor`. All dates are computed in Go and bound — the lifecycle INSERTs carry no dialect-specific `INTERVAL` SQL.
 - **Price locks for the term, refreshes on renewal:** the snapshot holds the price steady for the whole committed term, so a long commitment is how you lock a fixed/discount price. At renewal the engine re-reads the current offer and re-snapshots — so a month-to-month sub (1-month term) follows the current price each month, while a 3-year term holds its price for 3 years. If the offer was withdrawn, the term can't renew and the row ends.
 - **Cancellation falls out for free:** cancel-at-period-end sets `effective_cancel_date = renewal_date`. A monthly term ends next month; a committed annual/3-yr term keeps billing monthly until the term ends — exactly the discount-commitment rule. `auto_renew` then decides whether a new term begins.
+- **Overflow:** a self-scheduled invoice whose line amounts or total overflow int64 minor units is refused with `billing.ErrInvoiceAmountOverflow` before anything is written.
 - **Installment engine:** set `SelfScheduledEngine.BillSubscriptionsFromTable = true` and each `RunCycle` charges every due subscription: it computes the installment (exact int64, remainder on the final charge of the term), advances `next_charge_date` by one `billing_cycle`, and at term end either rolls to a new term (`auto_renew`, re-reading the current price) or stops and ends the row. Pure math lives in `BillingTerms`/`InstallmentMinor` (unit-tested); `InstallmentsPerUnit` errors rather than guessing for cycles that don't divide the term unit.
 - **Provider-driven path:** `ProviderSubscriptionEventHandler` reads terms from `metadata[BillingCycleKey/TermTypeKey/TermCountKey]` (defaults `billing_cycle`/`term_type`/`term_count`, stamped by the checkout creator from the selected price); a field absent from the metadata falls back to `opts.DefaultTerms` (whose zero value is monthly / 1-month term).
 - **Catalog read:** `GetPlans` returns each `Plan` with `Prices []PlanPrice` (cycle, term, `AmountMinor`, display `Amount`, currency, `Exponent`, `PriceID`) — the single source of truth for pricing. Build the checkout `AllowedPriceIDs` whitelist from `Prices[].PriceID`.
@@ -112,7 +113,7 @@ that maps canonical events into its domain actions.
 POST /public/webhook/{provider}
   1. Bind/reuse request id; read body (MaxBytesReader, 256 KiB cap)
   2. Peek event id + type via EventParser.PeekEventMeta — reject empty id
-  3. Verify signature BEFORE any DB write — bad signatures never touch storage
+  3. Verify signature BEFORE any DB write — bad signatures never touch storage (400); an unreadable signing secret is ErrSignatureSecretUnavailable (500, retried)
   4. Idempotency check on (provider, event_id) — duplicates → return without dispatching
   5. Insert correlated log row (unique-index race guard catches concurrent retries)
   6. Parse into canonical PaymentEvent (minor-unit amount, identities, request id, metadata)
@@ -252,13 +253,13 @@ pagination-complete `InvoiceLines` before dispatch. Check
 `InvoiceLinesComplete` before treating an empty slice as authoritative. Each
 line carries `AmountMinor`, `Currency`, `ServiceFrom`, `ServiceTo`, and
 `Metadata`. Refund/dispute consumers correlate through `ChargeID` and
-`DisputeID`. The JWT-gated checkout path also injects `user_id` into top-level
-metadata automatically. `RequestID` correlates domain logs to the webhook log
+`DisputeID`. Checkout owns top-level `metadata.user_id`: the session user on the
+JWT-gated path, dropped on a guest checkout, never the caller's value. `RequestID` correlates domain logs to the webhook log
 and metrics exemplar; `ReplayMode` identifies an operator replay.
 
 ```go
 func (h *myDomainHandler) OnPaymentEvent(ctx context.Context, e *payment.PaymentEvent) error {
-    userID := e.Metadata["user_id"] // auto-injected by CreateCheckout for JWT-gated callers
+    userID := e.Metadata["user_id"] // set by CreateCheckout from the session
     switch e.EventType {
     case "checkout.session.completed":
         if e.Mode == "setup" {
@@ -320,7 +321,7 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 |------|--------------------|----------|
 | `subscription` (default) | yes — must be in `AllowedPriceIDs` | Recurring billing — subscriptions, seats |
 | `payment` | yes — must be in `AllowedPriceIDs` | One-off charge |
-| `setup` | **must be empty** | Capture a payment method without charging (SetupIntent flow). `line_items` are omitted from the Stripe request; a non-empty `priceId` here is rejected because Stripe ignores it anyway. |
+| `setup` | **must be empty** | Capture a payment method without charging (SetupIntent flow). `line_items` are omitted from the Stripe request; a non-empty `priceId` here is rejected because Stripe ignores it anyway. Stripe needs `currency` or `paymentMethodTypes`; with neither, keel offers `card`. |
 
 Setup mode returns the same `{ "checkoutUrl": "..." }` shape; Stripe persists a SetupIntent on the resulting session that consumers can read from `setup_intent.succeeded` webhooks. The handler enforces the `mode` allowlist (one of the three values above) before reaching the port — unknown modes fail with 400, not a downstream Stripe 502.
 
@@ -580,10 +581,11 @@ The HTTP surface is supplied by `handler.AgencyHandler`:
 | POST | `/api/v1/agency/clients/invite` | Mint/reuse an invitation token |
 | POST | `/api/v1/agency/clients/cancel` | Withdraw an invitation |
 | GET | `/public/agency/invite` | Read public invitation summary |
-| POST | `/api/v1/agency/invite/accept` | Accept and create referral delegation |
+| POST | `/api/v1/agency/invite/accept` | Accept and create referral delegation; requires `AGENCY_DELEGATION/SET_ROLE` |
 | GET/POST | `/api/v1/agency/payout-profile` | Read/select a fully onboarded payout destination |
 | GET | `/api/v1/agency/earnings` | Read currency-separated balances and history |
 | POST | `/api/v1/agency/delegation/roles` | Client replaces the agency's role set and per-role expiries |
+| POST | `/api/v1/agency/delegation/revoke` | Agency ends its delegation for `clientPartnerId`; requires `AGENCY/MANAGE_CLIENTS` |
 
 Wire `AgencyHandler.Routes(restPrefix+"/v1", "/public")`, install the returned
 handlers, and wire `payout.OnboardingService.TransferSink` to the agency payout service.

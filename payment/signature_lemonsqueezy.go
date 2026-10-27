@@ -46,7 +46,7 @@ func (v *LemonSqueezySignatureVerifier) Verify(ctx context.Context, sigHeader st
 	}
 	rawSecret, err := v.Secrets.GetSecret(ctx, secretName)
 	if err != nil {
-		return fmt.Errorf("failed to get lemonsqueezy webhook secret: %w", err)
+		return fmt.Errorf("%w: lemonsqueezy: %w", ErrSignatureSecretUnavailable, err)
 	}
 	if sigHeader == "" {
 		return fmt.Errorf("missing X-Signature header")

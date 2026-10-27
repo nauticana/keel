@@ -74,16 +74,19 @@ func TestAgencyHandlerSetDelegationRole(t *testing.T) {
 	}
 }
 
-func TestAgencyHandlerDelegationRoleRequiresGrant(t *testing.T) {
+func TestAgencyHandlerDelegationRoutesRequireGrant(t *testing.T) {
 	h := &AgencyHandler{Agency: &fakeDelegationAgency{}, DB: denyAllRepo{}}
-	route := h.Routes("/api/v1", "/public")["/api/v1/agency/delegation/roles"]
-	if route == nil {
-		t.Fatal("delegation role route not mounted")
-	}
-	w := httptest.NewRecorder()
-	route(w, delegationRoleRequest(`{"roles":[{"role":"view"}]}`))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 without AGENCY_DELEGATION/SET_ROLE", w.Code)
+	routes := h.Routes("/api/v1", "/public")
+	for path, body := range map[string]string{
+		"/api/v1/agency/delegation/roles":  `{"roles":[{"role":"view"}]}`,
+		"/api/v1/agency/invite/accept":     `{"token":"t"}`,
+		"/api/v1/agency/delegation/revoke": `{"clientPartnerId":5}`,
+	} {
+		w := httptest.NewRecorder()
+		routes[path](w, delegationRoleRequest(body))
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s: status = %d, want 403 without the grant", path, w.Code)
+		}
 	}
 }
 

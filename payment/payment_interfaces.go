@@ -167,6 +167,10 @@ type CheckoutRequest struct {
 	// object instead of stopping at Checkout. For Stripe subscriptions, the
 	// subscription metadata is also reflected on subscription invoice lines.
 	LineMetadata map[string]string
+	// Currency (ISO 4217) and PaymentMethodTypes are sent when set; a setup
+	// session with neither offers cards, since Stripe requires one of them.
+	Currency           string
+	PaymentMethodTypes []string
 }
 
 // SignatureVerifier validates a webhook signature for a specific provider.

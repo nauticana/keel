@@ -109,6 +109,16 @@ func (c *StripeCheckoutClient) CreateCheckoutSession(ctx context.Context, req Ch
 		form.Set("line_items[0][price]", req.PriceID)
 		form.Set("line_items[0][quantity]", strconv.FormatInt(req.Quantity, 10))
 	}
+	if req.Currency != "" {
+		form.Set("currency", strings.ToLower(req.Currency))
+	}
+	methods := req.PaymentMethodTypes
+	if len(methods) == 0 && req.Mode == ModeSetup && req.Currency == "" {
+		methods = []string{"card"}
+	}
+	for i, m := range methods {
+		form.Set("payment_method_types["+strconv.Itoa(i)+"]", m)
+	}
 	if req.SuccessURL != "" {
 		form.Set("success_url", req.SuccessURL)
 	}

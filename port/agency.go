@@ -10,6 +10,7 @@ import (
 var (
 	ErrAgencyNotFound          = errors.New("agency: not found")
 	ErrNotClientOwner          = errors.New("agency: caller does not own the client partner")
+	ErrNotDelegatedAgency      = errors.New("agency: only the delegated agency can revoke")
 	ErrDelegationExists        = errors.New("agency: client already has an active delegation")
 	ErrSelfDelegation          = errors.New("agency: a partner cannot delegate to itself")
 	ErrAgencyNotApproved       = errors.New("agency: this agency is awaiting approval")

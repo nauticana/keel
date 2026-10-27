@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -134,6 +136,26 @@ type CreateCheckoutRequest struct {
 	CancelURL    string            `json:"cancelUrl"`
 	Metadata     map[string]string `json:"metadata"`
 	LineMetadata map[string]string `json:"lineMetadata"`
+	// Currency is an ISO 4217 code; PaymentMethodTypes are provider codes such as "card".
+	Currency           string   `json:"currency"`
+	PaymentMethodTypes []string `json:"paymentMethodTypes"`
+}
+
+var (
+	currencyCode      = regexp.MustCompile(`^[A-Za-z]{3}$`)
+	paymentMethodType = regexp.MustCompile(`^[a-z_]{1,40}$`)
+)
+
+func validCheckoutMethods(currency string, methods []string) bool {
+	if currency != "" && !currencyCode.MatchString(currency) || len(methods) > 16 {
+		return false
+	}
+	for i, m := range methods {
+		if !paymentMethodType.MatchString(m) || slices.Contains(methods[:i], m) {
+			return false
+		}
+	}
+	return true
 }
 
 // CreateCheckout exposes CheckoutClient.CreateCheckoutSession as an HTTP
@@ -181,21 +203,13 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 	if !h.ReadRequest(w, r, &req) {
 		return
 	}
-	// Auto-inject user_id into metadata for the JWT-gated path so
-	// the webhook can recover "which user paid" without each consumer
-	// round-tripping the id through Stripe metadata themselves
-	// (downstream feedback v0.5.1-A). Don't overwrite a caller-supplied
-	// value — admin / impersonation flows that explicitly set user_id
-	// to a different id continue to win. That override is NOT privilege-
-	// gated here: a downstream exposing checkout to untrusted users should
-	// reject or admin-gate caller-supplied metadata["user_id"] first.
+	// The webhook trusts metadata.user_id as the payer, so only the session sets it.
+	delete(req.Metadata, "user_id")
 	if session != nil {
 		if req.Metadata == nil {
 			req.Metadata = map[string]string{}
 		}
-		if _, ok := req.Metadata["user_id"]; !ok {
-			req.Metadata["user_id"] = strconv.Itoa(session.Id)
-		}
+		req.Metadata["user_id"] = strconv.Itoa(session.Id)
 	}
 	mode := req.Mode
 	if mode == "" {
@@ -220,6 +234,10 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "mode must be subscription, payment, or setup")
 		return
 	}
+	if !validCheckoutMethods(req.Currency, req.PaymentMethodTypes) {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "currency or paymentMethodTypes is invalid")
+		return
+	}
 	if !h.redirectAllowed(req.SuccessURL) {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "successUrl is not allowed")
 		return
@@ -233,15 +251,17 @@ func (h *AbstractPaymentHandler) CreateCheckout(w http.ResponseWriter, r *http.R
 		return
 	}
 	url, err := h.Checkout.CreateCheckoutSession(r.Context(), payment.CheckoutRequest{
-		Mode:         mode,
-		PriceID:      req.PriceID,
-		Quantity:     req.Quantity,
-		CustomerID:   customerID,
-		Email:        req.Email,
-		SuccessURL:   req.SuccessURL,
-		CancelURL:    req.CancelURL,
-		Metadata:     req.Metadata,
-		LineMetadata: req.LineMetadata,
+		Mode:               mode,
+		PriceID:            req.PriceID,
+		Quantity:           req.Quantity,
+		CustomerID:         customerID,
+		Email:              req.Email,
+		SuccessURL:         req.SuccessURL,
+		CancelURL:          req.CancelURL,
+		Metadata:           req.Metadata,
+		LineMetadata:       req.LineMetadata,
+		Currency:           req.Currency,
+		PaymentMethodTypes: req.PaymentMethodTypes,
 	})
 	if err != nil {
 		// Stripe's raw error body sometimes reveals account / price-id

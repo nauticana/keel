@@ -949,3 +949,15 @@ func contains(haystack, needle string) bool {
 // silence the time/sync imports when only some subset of tests run.
 var _ = time.Second
 var _ = sync.Mutex{}
+
+func TestProcess_UnreadableSecretIsRetryable(t *testing.T) {
+	err := (&StripeSignatureVerifier{Secrets: fakeSecrets{}}).Verify(context.Background(), "t=1,v1=00", []byte(stripeBody))
+	if !errors.Is(err, ErrSignatureSecretUnavailable) {
+		t.Fatalf("verify: %v", err)
+	}
+	prov := &stubProvider{name: "stripe", verifyErr: err}
+	err = newProcessor(newMemRepo(), prov).Process(context.Background(), "stripe", "sig", []byte(stripeBody), &recordingHandler{})
+	if !errors.Is(err, ErrSignatureSecretUnavailable) || errors.Is(err, ErrPermanent) {
+		t.Fatalf("process: %v, want a transient error", err)
+	}
+}

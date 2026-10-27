@@ -25,6 +25,10 @@ import (
 //	if errors.Is(err, payment.ErrPermanent) { /* return 4xx */ }
 var ErrPermanent = errors.New("permanent webhook error")
 
+// ErrSignatureSecretUnavailable: the signing secret could not be read. Transient,
+// so the provider retries instead of the delivery being refused as unsigned.
+var ErrSignatureSecretUnavailable = errors.New("payment: webhook signing secret unavailable")
+
 const (
 	defaultWebhookReplayLimit       = 50
 	defaultWebhookReplayMaxAttempts = 5
@@ -232,6 +236,9 @@ func (p *WebhookProcessor) Process(
 	// junk. Bad signatures are permanent: a retry of the same payload
 	// fails the same way.
 	if err := provider.Verify(ctx, sigHeader, body); err != nil {
+		if errors.Is(err, ErrSignatureSecretUnavailable) {
+			return err
+		}
 		outcome = webhookOutcomeRejected
 		return permanentErr("signature verification failed: %v", err)
 	}

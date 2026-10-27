@@ -144,6 +144,22 @@ func TestCreateCheckoutSession_SetupMode(t *testing.T) {
 	if strings.Contains(capturedBody, "line_items") {
 		t.Errorf("setup mode must not send line_items\ngot: %s", capturedBody)
 	}
+	if !strings.Contains(capturedBody, "payment_method_types%5B0%5D=card") || strings.Contains(capturedBody, "currency=") {
+		t.Errorf("setup mode without a currency must offer cards\ngot: %s", capturedBody)
+	}
+
+	if _, err := c.CreateCheckoutSession(context.Background(), CheckoutRequest{Mode: "setup", Currency: "EUR"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(capturedBody, "currency=eur") || strings.Contains(capturedBody, "payment_method_types") {
+		t.Errorf("a currency replaces the default card\ngot: %s", capturedBody)
+	}
+	if _, err := c.CreateCheckoutSession(context.Background(), CheckoutRequest{Mode: "setup", PaymentMethodTypes: []string{"card", "sepa_debit"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(capturedBody, "payment_method_types%5B1%5D=sepa_debit") {
+		t.Errorf("payment method types not sent\ngot: %s", capturedBody)
+	}
 }
 
 func TestCreateCheckoutSession_NonOKResponse(t *testing.T) {

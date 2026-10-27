@@ -61,7 +61,7 @@ func (v *StripeSignatureVerifier) Verify(ctx context.Context, sigHeader string, 
 	}
 	rawSecret, err := v.Secrets.GetSecret(ctx, secretName)
 	if err != nil {
-		return fmt.Errorf("failed to get stripe webhook secret: %w", err)
+		return fmt.Errorf("%w: stripe: %w", ErrSignatureSecretUnavailable, err)
 	}
 
 	if sigHeader == "" {

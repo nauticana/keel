@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.2.138",
+   "title": "Webhook secrets, checkout user and currency, invite authority, invoice overflow",
+   "tags": [
+    "breaking",
+    "behavioral"
+   ],
+   "summary": "An unreadable webhook signing secret answers 500, checkout owns metadata.user_id and sends a setup currency or card, accepting an agency invite needs AGENCY_DELEGATION/SET_ROLE, only the agency revokes a delegation, and an overflowing self-scheduled invoice is refused.",
+   "body_markdown": "### Breaking\n\n- `billing.InvoiceDraft.TotalMinor` returns `(int64, error)`; `billing.ErrInvoiceAmountOverflow` refuses a self-scheduled invoice whose line amounts or total overflow int64 before anything is written.\n- `POST /agency/invite/accept` requires `AGENCY_DELEGATION/SET_ROLE` (seeded for `PARTNER_ADMIN`); other members get 403.\n- `POST /agency/delegation/revoke` requires `AGENCY/MANAGE_CLIENTS` and a `clientPartnerId`, and only the delegated agency may revoke (`port.ErrNotDelegatedAgency`, 403); a client removes the agency's access by setting an empty role list.\n\n### Behavioral\n\n- A webhook whose signing secret cannot be read returns `payment.ErrSignatureSecretUnavailable` and answers 500, so the provider retries; it used to be a 400.\n- `CreateCheckout` sets `metadata.user_id` from the session, overwriting a caller-supplied value, and drops it on a guest checkout.\n- `CheckoutRequest.Currency` and `PaymentMethodTypes` (JSON `currency`, `paymentMethodTypes`) reach Stripe; a setup session with neither sends `payment_method_types[0]=card`, which Stripe requires. An invalid value is a 400."
+  },
+  {
    "version": "v1.2.137",
    "title": "Mail standards, in-flight notifications, subscriber drops and NATS durables",
    "tags": [

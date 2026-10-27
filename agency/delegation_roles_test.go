@@ -279,7 +279,7 @@ func TestRevokeExpiresOpenRolesAndKeepsRows(t *testing.T) {
 	expired := store.now.Add(-time.Hour)
 	store.roles = map[string]*time.Time{"view": nil, "operate": &future, "publish": &expired}
 
-	if err := newRoleService(store).RevokeDelegation(context.Background(), testClient, testClient, testActor); err != nil {
+	if err := newRoleService(store).RevokeDelegation(context.Background(), testClient, testAgency, testActor); err != nil {
 		t.Fatalf("RevokeDelegation: %v", err)
 	}
 	if store.active || !store.committed {
@@ -305,7 +305,7 @@ func TestRevokeRollsBackWhenRoleExpiryFails(t *testing.T) {
 	store.roles = map[string]*time.Time{"view": nil}
 	store.failExpire = true
 
-	err := newRoleService(store).RevokeDelegation(context.Background(), testClient, testClient, testActor)
+	err := newRoleService(store).RevokeDelegation(context.Background(), testClient, testAgency, testActor)
 	if err == nil || !strings.Contains(err.Error(), "role update failed") {
 		t.Fatalf("err = %v, want wrapped role update failure", err)
 	}
@@ -394,5 +394,13 @@ func TestDelegationReadModelsCarryRoles(t *testing.T) {
 	}
 	if len(clients[0].Roles) != 2 || clients[1].Roles != nil {
 		t.Fatalf("client roles = %+v / %+v", clients[0].Roles, clients[1].Roles)
+	}
+}
+
+func TestRevokeRefusesTheClient(t *testing.T) {
+	store := newRoleStore()
+	err := newRoleService(store).RevokeDelegation(context.Background(), testClient, testClient, testActor)
+	if !errors.Is(err, port.ErrNotDelegatedAgency) || store.committed || !store.active {
+		t.Fatalf("err = %v committed=%v active=%v", err, store.committed, store.active)
 	}
 }

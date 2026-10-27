@@ -174,12 +174,12 @@ func (e *SelfScheduledEngine) billDuePartners(ctx context.Context) {
 		if draft == nil || len(draft.Lines) == 0 {
 			continue
 		}
-		invID, err := e.createInvoice(ctx, pid, draft)
+		invID, totalMinor, err := e.createInvoice(ctx, pid, draft)
 		if err != nil {
 			e.logErr(fmt.Sprintf("self-scheduled: create invoice for partner %d: %s", pid, err.Error()))
 			continue
 		}
-		e.chargeInvoice(ctx, pid, invID, draft.TotalMinor(), draft.Currency, 0, strconv.FormatInt(invID, 10), e.advanceRenewalFn(ctx, pid))
+		e.chargeInvoice(ctx, pid, invID, totalMinor, draft.Currency, 0, strconv.FormatInt(invID, 10), e.advanceRenewalFn(ctx, pid))
 	}
 }
 
@@ -264,13 +264,16 @@ func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invI
 	}
 }
 
-func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64, draft *InvoiceDraft) (int64, error) {
-	totalMinor := draft.TotalMinor()
-
-	// Header + lines in one tx, so the charge path never sees a half-written invoice.
+// createInvoice writes the header and lines in one tx, so the charge path never
+// sees a half-written invoice, and returns its id and total.
+func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64, draft *InvoiceDraft) (int64, int64, error) {
+	amounts, totalMinor, err := draft.amounts()
+	if err != nil {
+		return 0, 0, err
+	}
 	tx, err := e.Repo.BeginTx(ctx, selfSchedQueries)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	committed := false
 	defer func() {
@@ -282,10 +285,9 @@ func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64
 	id := tx.GenID()
 	number := fmt.Sprintf("INV-%d", id)
 	if _, err := tx.Query(ctx, qSSCreateInvoice, id, partnerID, number, totalMinor, totalMinor, draft.Currency); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	for i, l := range draft.Lines {
-		amountMinor := l.UnitPriceMinor * l.Quantity
 		var svcFrom, svcTo any
 		if !l.ServiceFrom.IsZero() {
 			svcFrom = l.ServiceFrom
@@ -293,8 +295,8 @@ func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64
 		if !l.ServiceTo.IsZero() {
 			svcTo = l.ServiceTo
 		}
-		if _, err := tx.Query(ctx, qSSInsertLine, id, i+1, l.Description, l.Quantity, l.UnitPriceMinor, amountMinor, svcFrom, svcTo); err != nil {
-			return 0, err
+		if _, err := tx.Query(ctx, qSSInsertLine, id, i+1, l.Description, l.Quantity, l.UnitPriceMinor, amounts[i], svcFrom, svcTo); err != nil {
+			return 0, 0, err
 		}
 		if l.PlanID != "" || l.AddonID != "" {
 			var planID, addonID any
@@ -305,15 +307,15 @@ func (e *SelfScheduledEngine) createInvoice(ctx context.Context, partnerID int64
 				addonID = l.AddonID
 			}
 			if _, err := tx.Query(ctx, qSSInsertSubLine, id, i+1, planID, addonID); err != nil {
-				return 0, err
+				return 0, 0, err
 			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	committed = true
-	return id, nil
+	return id, totalMinor, nil
 }
 
 // billDueSubscriptions charges every due subscription from its snapshot terms.
@@ -376,7 +378,7 @@ func (e *SelfScheduledEngine) chargeDueSub(ctx context.Context, row []any) {
 			ServiceTo:      terms.BillingCycle.NextRenewal(nextCharge),
 		},
 	}}
-	invID, err := e.createInvoice(ctx, partnerID, draft)
+	invID, _, err := e.createInvoice(ctx, partnerID, draft)
 	if err != nil {
 		e.logErr(fmt.Sprintf("self-scheduled: create installment invoice for partner %d: %s", partnerID, err.Error()))
 		return

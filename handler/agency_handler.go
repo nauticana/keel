@@ -12,6 +12,7 @@ import (
 func init() {
 	RegisterErrorStatus(port.ErrAgencyNotFound, http.StatusNotFound)
 	RegisterErrorStatus(port.ErrNotClientOwner, http.StatusForbidden)
+	RegisterErrorStatus(port.ErrNotDelegatedAgency, http.StatusForbidden)
 	RegisterErrorStatus(port.ErrDelegationExists, http.StatusConflict)
 	RegisterErrorStatus(port.ErrSelfDelegation, http.StatusConflict)
 	RegisterErrorStatus(port.ErrAgencyNotApproved, http.StatusForbidden)
@@ -61,18 +62,19 @@ func (h *AgencyHandler) Routes(apiPrefix, publicPrefix string) map[string]func(h
 		viewPayoutProfile(w, r)
 	}
 	return map[string]func(http.ResponseWriter, *http.Request){
-		publicPrefix + "/agency/invite":         h.InviteInfo,
-		apiPrefix + "/agency/enroll":            h.Enroll,
-		apiPrefix + "/agency/profile":           h.Profile,
-		apiPrefix + "/agency/clients":           manage(h.Clients),
-		apiPrefix + "/agency/clients/invite":    manage(h.InviteClient),
-		apiPrefix + "/agency/clients/cancel":    manage(h.CancelClient),
-		apiPrefix + "/agency/billing-model":     manage(h.SetBillingModel),
-		apiPrefix + "/agency/earnings":          earnings,
-		apiPrefix + "/agency/payout-profile":    payoutProfile,
-		apiPrefix + "/agency/invite/accept":     h.AcceptInvite,
+		publicPrefix + "/agency/invite":      h.InviteInfo,
+		apiPrefix + "/agency/enroll":         h.Enroll,
+		apiPrefix + "/agency/profile":        h.Profile,
+		apiPrefix + "/agency/clients":        manage(h.Clients),
+		apiPrefix + "/agency/clients/invite": manage(h.InviteClient),
+		apiPrefix + "/agency/clients/cancel": manage(h.CancelClient),
+		apiPrefix + "/agency/billing-model":  manage(h.SetBillingModel),
+		apiPrefix + "/agency/earnings":       earnings,
+		apiPrefix + "/agency/payout-profile": payoutProfile,
+		apiPrefix + "/agency/invite/accept": WrapTableAction(
+			h.DB, h.UserService, "AGENCY_DELEGATION", "SET_ROLE", "agency_client_delegation", h.AcceptInvite),
 		apiPrefix + "/agency/delegation":        h.Delegation,
-		apiPrefix + "/agency/delegation/revoke": h.RevokeDelegation,
+		apiPrefix + "/agency/delegation/revoke": manage(h.RevokeDelegation),
 		apiPrefix + "/agency/delegation/roles": WrapTableAction(
 			h.DB, h.UserService, "AGENCY_DELEGATION", "SET_ROLE", "agency_client_delegation", h.SetDelegationRoles),
 		TableActionPath(apiPrefix, "agency_profile", "approve"): WrapTableAction(
@@ -259,8 +261,9 @@ func (h *AgencyHandler) RevokeDelegation(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if request.ClientPartnerID == 0 {
-		request.ClientPartnerID = session.PartnerId
+	if request.ClientPartnerID <= 0 {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "clientPartnerId is required")
+		return
 	}
 	if err := h.Agency.RevokeDelegation(r.Context(), request.ClientPartnerID, session.PartnerId, int64(session.Id)); err != nil {
 		h.WriteServiceError(w, r, err)
