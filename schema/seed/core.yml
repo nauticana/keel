@@ -112,6 +112,7 @@ seeds:
       - [http_read_timeout, int, true, '15', HTTP read timeout in seconds]
       - [http_write_timeout, int, true, '30', HTTP write timeout in seconds]
       - [http_idle_timeout, int, true, '120', HTTP idle timeout in seconds]
+      - [http_max_header_values, int, true, '500', 'Most header values per HTTP request (each header line counts once); 0 = 500']
       - [push_mode, string, true, noop, 'Push provider: noop | fcm | apns | fcm,apns (route by device platform)']
       - [apns_key_id, string, true, '', APNs auth key id (.p8 key)]
       - [apns_team_id, string, true, '', Apple developer team id]

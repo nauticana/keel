@@ -147,6 +147,7 @@ func (h *HttpBackend) Handle(functions map[string]func(w http.ResponseWriter, r 
 	}
 }
 
+// Run serves until SIGTERM, SIGINT or the end of ctx, then shuts down gracefully.
 func (h *HttpBackend) Run(ctx context.Context) {
 	if h.handler == nil {
 		h.Journal.Error("HTTP handlers not initialized")
@@ -185,23 +186,13 @@ func (h *HttpBackend) Run(ctx context.Context) {
 		return
 	}
 
-	newServer := func(port int) *http.Server {
-		return &http.Server{
-			Addr:         fmt.Sprintf(":%d", port),
-			Handler:      h.handler,
-			ReadTimeout:  time.Duration(config.Config().HttpReadTimeout) * time.Second,
-			WriteTimeout: time.Duration(config.Config().HttpWriteTimeout) * time.Second,
-			IdleTimeout:  time.Duration(config.Config().HttpIdleTimeout) * time.Second,
-		}
-	}
-
 	// listenFail signals a bind/serve error from either listener so
 	// Run can exit cleanly instead of waiting on the signal channel
 	// forever (P1-69). A misconfigured port (already-bound, or no
 	// permission for <1024) used to silently log + hang.
 	listenFail := make(chan error, 2)
 
-	plainServer := newServer(config.Config().HttpApiPort)
+	plainServer := h.newServer(config.Config().HttpApiPort)
 	h.Journal.Info(fmt.Sprintf("starting http server on port %d (tls_policy=%s)", config.Config().HttpApiPort, config.Config().MaxTLSVersion))
 	go func() {
 		if err := plainServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -212,7 +203,7 @@ func (h *HttpBackend) Run(ctx context.Context) {
 
 	var tlsServer *http.Server
 	if config.Config().TLSCert != "" && config.Config().TLSKey != "" {
-		tlsServer = newServer(config.Config().HTTPSPort)
+		tlsServer = h.newServer(config.Config().HTTPSPort)
 		if policy.enforce {
 			tlsServer.TLSConfig = &tls.Config{MinVersion: policy.minVersion}
 		}
@@ -227,9 +218,12 @@ func (h *HttpBackend) Run(ctx context.Context) {
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(quit)
 	select {
-	case <-quit:
-		// graceful shutdown below
+	case sig := <-quit:
+		h.Journal.Info("shutting down server: " + sig.String())
+	case <-ctx.Done():
+		h.Journal.Info("shutting down server: " + context.Cause(ctx).Error())
 	case err := <-listenFail:
 		h.Journal.Error("listener failed at startup: " + err.Error())
 		// Drain any second listener failure so it doesn't disappear
@@ -243,7 +237,6 @@ func (h *HttpBackend) Run(ctx context.Context) {
 		// also closes cleanly.
 	}
 
-	h.Journal.Info("shutting down server...")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := plainServer.Shutdown(shutdownCtx); err != nil {
@@ -253,6 +246,17 @@ func (h *HttpBackend) Run(ctx context.Context) {
 		if err := tlsServer.Shutdown(shutdownCtx); err != nil {
 			h.Journal.Error(fmt.Sprintf("tls server forced to shutdown: %s", err.Error()))
 		}
+	}
+}
+
+func (h *HttpBackend) newServer(port int) *http.Server {
+	return &http.Server{
+		Addr:                fmt.Sprintf(":%d", port),
+		Handler:             h.handler,
+		ReadTimeout:         time.Duration(config.Config().HttpReadTimeout) * time.Second,
+		WriteTimeout:        time.Duration(config.Config().HttpWriteTimeout) * time.Second,
+		IdleTimeout:         time.Duration(config.Config().HttpIdleTimeout) * time.Second,
+		MaxHeaderValueCount: config.Config().HttpMaxHeaderValues,
 	}
 }
 

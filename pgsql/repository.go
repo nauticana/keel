@@ -43,18 +43,17 @@ SELECT b.table_name, b.column_name, b.udt_name, b.ordinal_position, b.is_nullabl
  ORDER BY b.table_name, b.ordinal_position`,
 
 		data.QGetForeignKeys: `
-SELECT distinct f.constraint_name, f.table_name, k.ordinal_position, k.column_name, c.table_name as parent_table
-  FROM information_schema.key_column_usage k,
-       information_schema.table_constraints f,
-       information_schema.constraint_column_usage c
- WHERE f.constraint_type = 'FOREIGN KEY'
-   AND f.table_schema    = ?
-   AND k.constraint_name = f.constraint_name
-   AND k.table_schema    = f.table_schema
-   AND k.table_name      = f.table_name
-   AND c.constraint_name = f.constraint_name
-   AND c.table_schema    = f.table_schema
- ORDER BY 1,2,3`,
+SELECT c.conname, t.relname, k.ord, a.attname, p.relname, pa.attname
+  FROM pg_constraint c
+  JOIN pg_class t ON t.oid = c.conrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace
+  JOIN pg_class p ON p.oid = c.confrelid
+ CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(attnum, parent_attnum, ord)
+  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+  JOIN pg_attribute pa ON pa.attrelid = c.confrelid AND pa.attnum = k.parent_attnum
+ WHERE c.contype = 'f'
+   AND n.nspname = ?
+ ORDER BY 1, 2, 3`,
 
 		data.QGetFkLookupStyles: `SELECT constraint_name, lookup_style FROM foreign_key_lookup`,
 

@@ -434,9 +434,11 @@ func (s *RestService) GetTableCache(ctx context.Context) (map[string]map[string]
 			if svc == nil {
 				continue
 			}
+			if len(fk.ParentColumns) == 0 {
+				return nil, fmt.Errorf("foreign key %s has no referenced columns", constraintName)
+			}
 			result[table.TableName] = make(map[string]string)
-			// Dropdown values are the parent's own id — the last key column.
-			keyCol := table.Keys[len(table.Keys)-1]
+			keyCol := fk.ParentColumns[len(fk.ParentColumns)-1]
 			qColumn := displayColumn
 			if displayColumn == keyCol.ColumnName {
 				qColumn = ""

@@ -74,6 +74,8 @@ srv.Handle(myRoutes)
 srv.Run(ctx)
 ```
 
+`Run` shuts down gracefully on SIGTERM, SIGINT or the end of `ctx`, and logs which. `http_max_header_values` (default 500) caps the header values of one request.
+
 For services that don't use `HttpBackend` (workers exposing healthchecks, MCP servers, etc.), use `APIKeyAuthMiddleware` directly per the example above.
 
 ### Configuration
@@ -636,7 +638,7 @@ A sign-in counts as the partner's own identity provider (`sign_in_method` `T`) w
 
 `CheckSignInMethod(userID, method)` resolves the user's partner and the policy in one lookup and refuses with 403 `sso_required`; a failed lookup refuses too. keel calls it at password sign-in, at one-time-code sign-in, at Google and Apple sign-in and again when a 2FA step completes. A downstream login handler must call it, and set `session.SignInMethod`, before `SessionTokens`. Each session records its method, and a refresh is refused once the policy no longer admits it, so tightening the policy ends other sessions at their next refresh; a session without a method is admitted only by value 0.
 
-The password rules (`MIN_PASSWORD_*`, `MAX_ATTEMPTS`, `AUTO_UNLOCK_MINUTES`, `PASSWORD_EXPIRE_DAYS`) `SESSION_MAX_HOURS` and `SSO_JIT_CREATE` resolve the same way. A failed policy lookup refuses the operation instead of falling back to the global rules. `GetPasswordPolicy` and `/public/password/policy` report the global rules.
+The password rules (`MIN_PASSWORD_*`, `MAX_ATTEMPTS`, `AUTO_UNLOCK_MINUTES`, `PASSWORD_EXPIRE_DAYS`) `SESSION_MAX_HOURS` and `SSO_JIT_CREATE` resolve the same way. A failed policy lookup refuses the operation instead of falling back to the global rules. `GetPasswordPolicy` and `/public/password/policy` report the global rules, `minSpecial` included. `MIN_PASSWORD_LENGTH` counts characters, not bytes; an ASCII letter or digit counts toward its class, and any other character toward `MIN_PASSWORD_SPECIAL`.
 
 ### Registering Social Login Routes
 

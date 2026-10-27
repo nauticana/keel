@@ -60,11 +60,11 @@ func (s *RelationAPI) Get(ctx context.Context, partnerID int64, userID int, wher
 	}
 	for _, record := range records {
 		m := record.(map[string]any)
-		keyVals := make(map[string]any)
-		for _, key := range s.DataService.GetTable().Keys {
-			keyVals[key.ColumnName] = m[key.PascalName]
+		row := make(map[string]any)
+		for _, col := range s.DataService.GetTable().Columns {
+			row[col.ColumnName] = m[col.PascalName]
 		}
-		children, err := s.FetchChildren(ctx, partnerID, userID, keyVals)
+		children, err := s.FetchChildren(ctx, partnerID, userID, row)
 		if err != nil {
 			return nil, err
 		}
@@ -105,16 +105,18 @@ func maskSecretColumns(records []any, table *model.TableDefinition) {
 	}
 }
 
-func (s *RelationAPI) FetchChildren(ctx context.Context, partnerID int64, userID int, parentKeyValues map[string]any) (map[string]any, error) {
+// FetchChildren reads each child relation of the parent row whose values,
+// keyed by column name, are parentValues.
+func (s *RelationAPI) FetchChildren(ctx context.Context, partnerID int64, userID int, parentValues map[string]any) (map[string]any, error) {
 	if s.ChildServices == nil {
 		return nil, nil
 	}
 	results := make(map[string]any)
 	for _, childRel := range s.ChildServices {
-		fkVals := make(map[string]any)
-		for i, keyCol := range s.DataService.GetTable().Keys {
-			keyVal := parentKeyValues[keyCol.ColumnName]
-			fkVals[childRel.ParentRelation.ChildColumns[i].ColumnName] = keyVal
+		fk := childRel.ParentRelation
+		fkVals := make(map[string]any, len(fk.ChildColumns))
+		for i, parentCol := range fk.ParentColumns {
+			fkVals[fk.ChildColumns[i].ColumnName] = parentValues[parentCol.ColumnName]
 		}
 		childItems, err := childRel.Get(ctx, partnerID, userID, fkVals, "")
 		if err != nil {
@@ -230,15 +232,16 @@ func (s *RelationAPI) propogateKeys(parent any) {
 					break
 				}
 			}
-			if fk == nil || len(fk.ChildColumns) != len(parentTable.Keys) {
+			if fk == nil {
 				continue
 			}
 			childItems := s.getChildItems(parent, fieldName)
 			for _, child := range childItems {
 				if childMap, ok := child.(map[string]any); ok {
-					for idx, id := range parentTable.Keys {
-						fkCol := fk.ChildColumns[idx]
-						childMap[fkCol.PascalName] = parentMap[id.PascalName]
+					for idx, parentCol := range fk.ParentColumns {
+						if v, ok := parentMap[parentCol.PascalName]; ok {
+							childMap[fk.ChildColumns[idx].PascalName] = v
+						}
 					}
 					childRel.propogateKeys(child)
 				}
@@ -255,7 +258,7 @@ func (s *RelationAPI) propogateKeys(parent any) {
 				break
 			}
 		}
-		if fk != nil && len(fk.ChildColumns) == len(parentTable.Keys) {
+		if fk != nil {
 			childField := parentVal.FieldByName(fieldName)
 			if childField.IsValid() && childField.Kind() == reflect.Slice {
 				for i := 0; i < childField.Len(); i++ {
@@ -266,15 +269,15 @@ func (s *RelationAPI) propogateKeys(parent any) {
 					} else {
 						childElem = child
 					}
-					for idx, id := range parentTable.Keys {
-						idVal := parentVal.FieldByName(id.PascalName)
+					for idx, parentCol := range fk.ParentColumns {
+						idVal := parentVal.FieldByName(parentCol.PascalName)
 						fkCol := fk.ChildColumns[idx]
 						target := childElem
 						if target.Kind() == reflect.Ptr {
 							target = target.Elem()
 						}
 						fkField := target.FieldByName(fkCol.PascalName)
-						if fkField.IsValid() && fkField.CanSet() {
+						if idVal.IsValid() && fkField.IsValid() && fkField.CanSet() {
 							fkField.Set(idVal)
 						}
 					}
@@ -479,7 +482,7 @@ func (s *RelationAPI) GetDefinition(apiName string, version string) map[string]a
 				}
 			}
 		}
-		result["ParentKeys"] = s.ParentRelation.Parent.Keys
+		result["ParentKeys"] = s.ParentRelation.ParentColumns
 		result["ChildKeys"] = myFkColumns
 	}
 	if s.ChildServices != nil {

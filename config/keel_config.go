@@ -83,6 +83,7 @@ const (
 	http_read_timeout             = "http_read_timeout"
 	http_write_timeout            = "http_write_timeout"
 	http_idle_timeout             = "http_idle_timeout"
+	http_max_header_values        = "http_max_header_values"
 	hc_port                       = "hc_port"
 	push_mode                     = "push_mode"
 	apns_key_id                   = "apns_key_id"
@@ -243,6 +244,7 @@ type KeelConfig struct {
 	MaxRequestSize              int64         // max_request_size              16777216           Maximum request body size (bytes)
 	HttpReadTimeout             int           // http_read_timeout             15                 HTTP read timeout in seconds
 	HttpWriteTimeout            int           // http_write_timeout            30                 HTTP write timeout in seconds
+	HttpMaxHeaderValues         int           // http_max_header_values        500                Most header values per request; 0 = default
 	HttpIdleTimeout             int           // http_idle_timeout             120                HTTP idle timeout in seconds
 	HCPort                      int           // hc_port                       0                  Health check port override for workers
 	PushMode                    string        // push_mode                     noop               Push provider: noop, fcm, apns or fcm,apns
@@ -400,6 +402,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.MaxRequestSize = c.Int64(m, max_request_size)
 	c.HttpReadTimeout = c.Int(m, http_read_timeout)
 	c.HttpWriteTimeout = c.Int(m, http_write_timeout)
+	c.HttpMaxHeaderValues = c.Int(m, http_max_header_values)
 	c.HttpIdleTimeout = c.Int(m, http_idle_timeout)
 	c.HCPort = c.Int(m, hc_port)
 	c.PushMode = c.String(m, push_mode)
@@ -517,6 +520,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.AgencyPayoutMinMinor < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", agency_payout_min_minor))
+	}
+	if c.HttpMaxHeaderValues == 0 {
+		c.HttpMaxHeaderValues = 500
+	} else if c.HttpMaxHeaderValues < 0 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", http_max_header_values))
 	}
 	if c.OTPSendWindow <= 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be positive", otp_send_window))

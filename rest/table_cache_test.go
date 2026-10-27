@@ -22,6 +22,22 @@ func (lookupRowsQS) Query(context.Context, string, ...any) (*model.QueryResult, 
 }
 func (lookupRowsQS) GenID() int64 { return 0 }
 
+type uniqueLookupDB struct {
+	staleLookupDB
+	fk  *model.ForeignKey
+	svc *legacyTableService
+}
+
+func (d uniqueLookupDB) GetForeignKey(string) *model.ForeignKey { return d.fk }
+func (d uniqueLookupDB) GetTableService(string) port.TableService { return d.svc }
+
+type uniqueLookupQS struct{}
+
+func (uniqueLookupQS) Query(context.Context, string, ...any) (*model.QueryResult, error) {
+	return &model.QueryResult{Rows: [][]any{{"alternate_fk", "D", "caption"}}}, nil
+}
+func (uniqueLookupQS) GenID() int64 { return 0 }
+
 func TestGetTableCache_SkipsUnknownConstraint(t *testing.T) {
 	var logs bytes.Buffer
 	previousOutput := log.Writer()
@@ -46,5 +62,26 @@ func TestGetTableCache_SkipsUnknownConstraint(t *testing.T) {
 	}
 	if got := logs.String(); !strings.Contains(got, "unknown constraint dropped_fk") {
 		t.Fatalf("warning log = %q", got)
+	}
+}
+
+func TestGetTableCacheUsesReferencedUniqueColumn(t *testing.T) {
+	id := &model.TableColumn{ColumnName: "id", PascalName: "Id"}
+	code := &model.TableColumn{ColumnName: "external_code", PascalName: "ExternalCode"}
+	parent := &model.TableDefinition{
+		TableName: "provider",
+		Columns:   []*model.TableColumn{id, code},
+		Keys:      []*model.TableColumn{id},
+	}
+	svc := &legacyTableService{table: parent, rows: []any{map[string]any{"Id": "1", "ExternalCode": "provider-a", "Caption": "Provider A"}}}
+	fk := &model.ForeignKey{Parent: parent, ParentColumns: []*model.TableColumn{code}}
+	s := &RestService{db: uniqueLookupDB{fk: fk, svc: svc}, qs: uniqueLookupQS{}}
+
+	cache, err := s.GetTableCache(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cache["provider"]["provider-a"] != "Provider A" {
+		t.Errorf("cache = %v, want referenced value provider-a", cache)
 	}
 }

@@ -36,12 +36,12 @@ func moneyRepo(t *testing.T, rows ...[]any) (*AbstractRepository, error) {
 		"allocation":   {TableName: "allocation", Columns: []*model.TableColumn{col("line_id", model.DT_BIGINT), col("amount_minor", model.DT_BIGINT)}},
 		"transfer":     {TableName: "transfer", Columns: []*model.TableColumn{col("from_id", model.DT_BIGINT), col("to_id", model.DT_BIGINT), col("amount_minor", model.DT_BIGINT)}},
 	}}
-	fks := &model.QueryResult{Rows: [][]any{
-		fkRow("invoice_lines", "invoice_line", 1, "invoice_id", "invoice"),
-		fkRow("line_allocations", "allocation", 1, "line_id", "invoice_line"),
-		fkRow("transfer_from", "transfer", 1, "from_id", "invoice"),
-		fkRow("transfer_to", "transfer", 1, "to_id", "invoice"),
-	}}
+	fks := fkResult(repo.TableDefinitions,
+		fkRow("invoice_lines", "invoice_line", 1, "invoice_id", "invoice", "id"),
+		fkRow("line_allocations", "allocation", 1, "line_id", "invoice_line", "id"),
+		fkRow("transfer_from", "transfer", 1, "from_id", "invoice", "id"),
+		fkRow("transfer_to", "transfer", 1, "to_id", "invoice", "id"),
+	)
 	if err := repo.LoadForeignKeys(context.Background(), fks, nil); err != nil {
 		t.Fatal(err)
 	}

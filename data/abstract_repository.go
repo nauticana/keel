@@ -356,6 +356,7 @@ func (r *AbstractRepository) checkCurrencyPath(table *model.TableDefinition, col
 func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.QueryResult, lookupStyles map[string]string) error {
 	r.ForeignKeys = make(map[string]*model.ForeignKey)
 	columns := make(map[string][]string)
+	parentColumns := make(map[string][]string)
 	var fk *model.ForeignKey
 	for _, rec := range res.Rows {
 		childName := strings.ToLower(common.AsString(rec[1]))
@@ -366,6 +367,7 @@ func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.Que
 			return fmt.Errorf("table %s not defined", childName)
 		}
 		constraintName := common.AsString(rec[0])
+		parentColumns[constraintName] = append(parentColumns[constraintName], strings.ToLower(common.AsString(rec[5])))
 		if position == 1 {
 			parentName := common.AsString(rec[4])
 			parentTable := r.TableDefinitions[parentName]
@@ -416,6 +418,13 @@ func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.Que
 		fkCols := columns[name]
 		fk.ChildColumns = make([]*model.TableColumn, len(fkCols))
 		fk.Columns = fkCols
+		for _, colName := range parentColumns[name] {
+			col := fk.Parent.Column(colName)
+			if col == nil {
+				return fmt.Errorf("foreign key %s references unknown column %s.%s", fk.ConstraintName, fk.ParentTable, colName)
+			}
+			fk.ParentColumns = append(fk.ParentColumns, col)
+		}
 		cnt := 0
 		for i, fkCol := range fkCols {
 			for _, col := range fk.Child.Columns {
@@ -433,6 +442,9 @@ func (r *AbstractRepository) LoadForeignKeys(ctx context.Context, res *model.Que
 					break
 				}
 			}
+		}
+		if len(fk.ParentColumns) != len(fkCols) || cnt != len(fkCols) {
+			return fmt.Errorf("foreign key %s has mismatched child and parent columns", fk.ConstraintName)
 		}
 	}
 	if root := r.TableDefinitions[r.partnerTable()]; root != nil {

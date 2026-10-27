@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.2.136",
+   "title": "Password special characters, server shutdown and unique-key relations",
+   "tags": [
+    "behavioral"
+   ],
+   "summary": "PasswordPolicy.Check enforces MIN_PASSWORD_SPECIAL and counts characters; HttpBackend.Run stops on ctx and caps header values with http_max_header_values; a foreign key to a unique key other than the primary key pairs its columns in nested REST.",
+   "body_markdown": "### Behavioral\n\n- `PasswordPolicy.Check` enforces `MIN_PASSWORD_SPECIAL` (loaded but ignored before) and counts `MIN_PASSWORD_LENGTH` in characters, not bytes; `PasswordPolicyView` adds `minSpecial`.\n- `HttpBackend.Run` also stops when its `ctx` ends, and logs the signal or cause. `http_max_header_values` (int, default 500; 0 takes the default, negative fails config load) sets `http.Server.MaxHeaderValueCount`; existing databases insert its `application_config_flag` row from `schema/seed/core.yml`.\n\n### Fixed\n\n- A foreign key that references a unique key other than the parent's primary key, such as `(partner_id, id)`, now pairs its columns: `model.ForeignKey.ParentColumns` (JSON `ParentColumns`) names the referenced columns, nested REST reads filter children by them, nested writes copy them into children, and a nested API's `ParentKeys` lists them in `ChildKeys` order. Before, nested reads under such a key returned no children and nested writes left the child's key unset. The foreign-key catalog query reads `pg_constraint`."
+  },
+  {
    "version": "v1.2.135",
    "title": "64-bit integers as JSON strings",
    "tags": [
