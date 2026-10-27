@@ -8,8 +8,8 @@ import (
 
 // majorAmount is the display-only major-unit projection of minor units at the
 // currency's exponent; money math stays in minor units.
-func majorAmount(minor int64, exponent int) (float64, error) {
-	decimal, err := common.FormatMinorUnits(minor, exponent)
+func majorAmount(minor int64, exponent int16) (float64, error) {
+	decimal, err := common.FormatMinorUnits(minor, int(exponent))
 	if err != nil {
 		return 0, err
 	}

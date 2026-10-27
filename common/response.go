@@ -1,7 +1,6 @@
 package common
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -9,8 +8,8 @@ import (
 )
 
 // APIResponse is the standard envelope returned by every keel-served REST
-// endpoint. `pagination` is omitempty so detail (non-list) responses stay
-// compact — list endpoints fill it via WriteJSONPaged.
+// endpoint, written with EncodeJSON. `pagination` is omitempty so detail
+// (non-list) responses stay compact — list endpoints fill it via WriteJSONPaged.
 type APIResponse struct {
 	Data       any      `json:"data,omitempty"`
 	Pagination any      `json:"pagination,omitempty"`
@@ -41,7 +40,7 @@ func WriteJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	EncodeJSON(w, map[string]string{"error": msg})
 }
 
 func writeEnvelope(w http.ResponseWriter, status int, data interface{}, pagination interface{}) {
@@ -56,7 +55,7 @@ func writeEnvelope(w http.ResponseWriter, status int, data interface{}, paginati
 			Version:   "v1",
 		},
 	}
-	json.NewEncoder(w).Encode(resp)
+	EncodeJSON(w, resp)
 }
 
 // responseRequestID reuses the middleware-bound id, then its response header.

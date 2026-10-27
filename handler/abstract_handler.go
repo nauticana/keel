@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -204,9 +203,9 @@ func (h *AbstractHandler) SessionPartner(session *model.UserSession) (int64, err
 }
 
 // ReadRequest reads the request body (capped at config.Config().MaxRequestSize) and
-// JSON-unmarshals it into req. Writes 400 on read or unmarshal failure and
-// returns ok=false. Returns true with req populated on success. Use for
-// public endpoints that do not require an authenticated session.
+// decodes it into req with common.DecodeJSON. Writes 400 on read or decode
+// failure and returns ok=false. Returns true with req populated on success. Use
+// for public endpoints that do not require an authenticated session.
 func (h *AbstractHandler) ReadRequest(w http.ResponseWriter, r *http.Request, req any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, config.Config().MaxRequestSize)
 	body, err := io.ReadAll(r.Body)
@@ -214,7 +213,7 @@ func (h *AbstractHandler) ReadRequest(w http.ResponseWriter, r *http.Request, re
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Failed to read request body")
 		return false
 	}
-	if err := json.Unmarshal(body, req); err != nil {
+	if err := common.DecodeJSON(body, req); err != nil {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Invalid JSON: "+err.Error())
 		return false
 	}
@@ -247,14 +246,13 @@ func (h *AbstractHandler) ReadAuthRequest(w http.ResponseWriter, r *http.Request
 // compatibility on a typo would surface as a customer-visible bug.
 func (h *AbstractHandler) ReadStrictRequest(w http.ResponseWriter, r *http.Request, req any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, config.Config().MaxRequestSize)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(req); err != nil {
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Invalid JSON: "+err.Error())
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Failed to read request body")
 		return false
 	}
-	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Invalid JSON: trailing content")
+	if err := common.DecodeStrictJSON(body, req); err != nil {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "Invalid JSON: "+err.Error())
 		return false
 	}
 	return true

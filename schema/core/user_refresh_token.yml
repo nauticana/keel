@@ -14,7 +14,7 @@ columns:
     default: CURRENT_TIMESTAMP
     comment: Sign-in time of the session, carried through rotation
   - name: session_max_seconds
-    type: BIGINT
+    type: INTEGER
     nullable: true
     comment: Lifetime chosen at sign-in, carried through rotation; NULL renews without limit
   - name: sign_in_method

@@ -18,7 +18,7 @@ type Request struct {
 	Status      string    `json:"status"`
 	RequestedBy int       `json:"requested_by"`
 	RequestedAt time.Time `json:"requested_at"`
-	Attempts    int       `json:"attempts"`
+	Attempts    int32     `json:"attempts"`
 	CompletedAt time.Time `json:"completed_at,omitzero"`
 	LastError   string    `json:"last_error,omitempty"`
 }

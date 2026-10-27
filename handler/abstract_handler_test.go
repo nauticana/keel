@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/keel/common"
@@ -96,5 +98,35 @@ func TestSessionPartner(t *testing.T) {
 	}
 	if got, err := h.SessionPartner(&model.UserSession{Id: 1, PartnerId: 42}); err != nil || got != 42 {
 		t.Fatalf("got %d, %v", got, err)
+	}
+}
+
+func TestReadRequestKeepsWideIntegers(t *testing.T) {
+	var h AbstractHandler
+	read := func(strict bool, body string, into any) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
+		if strict {
+			h.ReadStrictRequest(rec, req, into)
+		} else {
+			h.ReadRequest(rec, req, into)
+		}
+		return rec.Code
+	}
+	var row map[string]any
+	if code := read(false, `{"user_id":9007199254740993}`, &row); code != http.StatusOK || row["user_id"] != json.Number("9007199254740993") {
+		t.Fatalf("map: %d %#v", code, row)
+	}
+	var typed struct {
+		UserID int   `json:"userId"`
+		ID     int64 `json:"id"`
+	}
+	if code := read(true, `{"userId":"9007199254740993","id":9007199254740993}`, &typed); code != http.StatusOK || typed.UserID != 1<<53+1 || typed.ID != 1<<53+1 {
+		t.Fatalf("typed: %d %+v", code, typed)
+	}
+	for body, strict := range map[string]bool{`{"id":1} {"id":2}`: false, `{"id":1,"admin":true}`: true, `{"id":"1.5"}`: true} {
+		if code := read(strict, body, &typed); code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", body, code)
+		}
 	}
 }

@@ -27,7 +27,7 @@ type PartnerSetup struct {
 	// rows; none selects the cheapest.
 	BillingCycle string          `json:"billingCycle,omitempty"`
 	TermType     string          `json:"termType,omitempty"`
-	TermCount    int             `json:"termCount,omitempty"`
+	TermCount    int32           `json:"termCount,omitempty"`
 	Extra        json.RawMessage `json:"extra,omitempty"`
 }
 

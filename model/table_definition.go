@@ -64,7 +64,7 @@ func (t *TableDefinition) Column(name string) *TableColumn {
 	return nil
 }
 
-// UnsequencedSurrogateKey returns the sole integer key column the database
+// UnsequencedSurrogateKey returns the sole bigint key column the database
 // does not generate (no table_sequence_usage row, no DB default), else nil.
 // Inserts fill it from the repository's id generator.
 func (t *TableDefinition) UnsequencedSurrogateKey() *TableColumn {
@@ -72,7 +72,7 @@ func (t *TableDefinition) UnsequencedSurrogateKey() *TableColumn {
 		return nil
 	}
 	key := t.Keys[0]
-	if key.DataType != DT_INT || key.SequenceName != "" || key.HasDefault {
+	if key.DataType != DT_BIGINT || key.SequenceName != "" || key.HasDefault {
 		return nil
 	}
 	return key

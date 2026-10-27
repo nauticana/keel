@@ -708,7 +708,7 @@ func (s *RestService) loadTableActions(ctx context.Context) error {
 			Icon:            common.AsString(row[3]),
 			RecordSpecific:  common.AsBool(row[4]),
 			MethodName:      common.AsString(row[5]),
-			DisplayOrder:    int(common.AsInt64(row[6])),
+			DisplayOrder:    int16(common.AsInt32(row[6])),
 			ConfirmMessage:  common.AsString(row[7]),
 			Kind:            common.AsString(row[8]),
 			AuthorityObject: strings.ToUpper(tableName),

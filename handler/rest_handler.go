@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -80,25 +81,25 @@ func (h *RestHandler) castFilterValues(filter map[string]string) (map[string]any
 		}
 		colName := matchedCol.ColumnName
 		switch matchedCol.DataType {
-		case "integer":
+		case model.DT_INT, model.DT_BIGINT:
 			i, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse filter value '%s' for key '%s' as integer: %w", v, k, err)
 			}
 			typedFilter[colName] = i
-		case "float":
+		case model.DT_FLOAT:
 			f, err := strconv.ParseFloat(v, 64)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse filter value '%s' for key '%s' as float: %w", v, k, err)
 			}
 			typedFilter[colName] = f
-		case "boolean":
+		case model.DT_BOOL:
 			b, err := strconv.ParseBool(v)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse filter value '%s' for key '%s' as boolean: %w", v, k, err)
 			}
 			typedFilter[colName] = b
-		case "timestamp":
+		case model.DT_TIME:
 			d, err := time.Parse("2006-01-02 15:04:05", v)
 			if err != nil {
 				d, err = time.Parse("2006-01-02", v)
@@ -228,9 +229,10 @@ func (h *RestHandler) List(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []any{}
 	}
+	// limit is capped by max_list_page_size, so it stays a JSON number.
 	common.WriteJSON(w, http.StatusOK, map[string]any{
 		"items":  items,
-		"limit":  limit,
+		"limit":  int32(min(limit, math.MaxInt32)),
 		"offset": offset,
 		"total":  total,
 	})

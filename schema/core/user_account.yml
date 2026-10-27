@@ -59,7 +59,7 @@ columns:
     type: TIMESTAMP
     nullable: true
   - name: twofa_last_step
-    type: BIGINT
+    type: INTEGER
     default: "0"
   - name: deleted_at
     type: TIMESTAMP

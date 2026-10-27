@@ -4,7 +4,8 @@ import "fmt"
 
 const (
 	DT_STRING = "string"
-	DT_INT    = "integer"
+	DT_INT    = "integer" // int2, int4: a JSON number
+	DT_BIGINT = "bigint"  // int8: a JSON string, since it can exceed 2^53
 	DT_FLOAT  = "float"
 	DT_BOOL   = "boolean"
 	DT_TEXT   = "text"
@@ -26,6 +27,7 @@ const (
 var TypescriptNames = map[string]string{
 	DT_BOOL:   "boolean",
 	DT_INT:    "number",
+	DT_BIGINT: "string",
 	DT_FLOAT:  "number",
 	DT_STRING: "string",
 	DT_TEXT:   "string",
@@ -38,10 +40,10 @@ type TableColumn struct {
 	Caption      string
 	DataType     string
 	InputType    string
-	Size         int
-	Scale        int
+	Size         int32
+	Scale        int32
 	Step         string
-	Order        int
+	Order        int32
 	IsKey        bool
 	Required     bool
 	SequenceName string
@@ -53,8 +55,8 @@ type TableColumn struct {
 	// UI/CRUD display overrides from the column_display_attribute table (optional).
 	// Zero values mean "no override" — editable, shown, written normally.
 	DisplayMode  string // one of Display* ("" = editable default)
-	DisplayWidth int
-	DisplayRows  int
+	DisplayWidth int32
+	DisplayRows  int32
 	// CurrencyPath marks a BIGINT minor-units money column and locates its
 	// currency: a sibling column ("currency") or the parent tables, each
 	// reached by its one foreign key, to the row holding it ("invoice.currency").
@@ -65,6 +67,8 @@ func (f *TableColumn) GetTypeScriptDecorator() string {
 	switch f.DataType {
 	case DT_INT:
 		return fmt.Sprintf("@IsNumeric(%d, 0)", f.Size)
+	case DT_BIGINT:
+		return "@IsString(20)"
 	case DT_FLOAT:
 		return fmt.Sprintf("@IsNumeric(%d, %d)", f.Size, f.Scale)
 	case DT_STRING:
@@ -74,6 +78,11 @@ func (f *TableColumn) GetTypeScriptDecorator() string {
 	default:
 		return ""
 	}
+}
+
+// IsInteger reports whether the column holds an integer of any width.
+func (f *TableColumn) IsInteger() bool {
+	return f.DataType == DT_INT || f.DataType == DT_BIGINT
 }
 
 func (f *TableColumn) GetTsAssertion() string {

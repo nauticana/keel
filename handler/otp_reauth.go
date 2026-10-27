@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"math"
 	"net/http"
 
 	"github.com/nauticana/keel/common"
@@ -81,6 +82,6 @@ func (h *OTPHandler) SendReauthOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	common.WriteJSON(w, http.StatusOK, map[string]any{
 		"channel":            channel,
-		"resendCountdownSec": config.Config().OTPTTLSeconds,
+		"resendCountdownSec": int32(min(config.Config().OTPTTLSeconds, math.MaxInt32)),
 	})
 }

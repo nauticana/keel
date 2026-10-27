@@ -25,7 +25,7 @@ type ReviewResolutionRequest struct {
 
 type ReviewResolutionRecord struct {
 	InstructionID     int64
-	LegNo             int
+	LegNo             int32
 	Outcome           ReviewResolution
 	ActorID           int64
 	Note              string

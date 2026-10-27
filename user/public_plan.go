@@ -11,6 +11,6 @@ type PublicPlan struct {
 	ID             string              `json:"id"`
 	Caption        string              `json:"caption"`
 	ActivationMode string              `json:"activationMode"` // drives the registration CTA (trial vs subscribe)
-	TrialDays      int                 `json:"trialDays"`
+	TrialDays      int32               `json:"trialDays"`
 	Prices         []billing.PlanPrice `json:"prices"`
 }

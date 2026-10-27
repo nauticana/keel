@@ -1,6 +1,7 @@
 package claims
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -60,5 +61,20 @@ func TestPrincipal(t *testing.T) {
 	}
 	if _, err := TokenPrincipal(map[string]any{"iss": "https://as"}); err == nil {
 		t.Fatal("missing sub must error")
+	}
+}
+
+func TestInt64IsExact(t *testing.T) {
+	m := map[string]any{"partner_id": json.Number("9007199254740993")}
+	if id, ok := PartnerID(m); !ok || id != 1<<53+1 {
+		t.Fatalf("json.Number partner_id = %d, %v", id, ok)
+	}
+	for _, v := range []any{float64(1<<53 + 2), 1.5, "x", nil} {
+		if got := Int64(v); got != 0 {
+			t.Errorf("Int64(%#v) = %d, want 0", v, got)
+		}
+	}
+	if got := Int64(int64(7)); got != 7 {
+		t.Errorf("Int64(int64) = %d", got)
 	}
 }

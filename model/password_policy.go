@@ -17,18 +17,18 @@ type PasswordPolicy struct {
 // PasswordPolicyView is the client-safe subset (composition rules only;
 // lockout/expiry stay server-only).
 type PasswordPolicyView struct {
-	MinLength int `json:"minLength"`
-	MinUpper  int `json:"minUpper"`
-	MinLower  int `json:"minLower"`
-	MinDigit  int `json:"minDigit"`
+	MinLength int32 `json:"minLength"`
+	MinUpper  int32 `json:"minUpper"`
+	MinLower  int32 `json:"minLower"`
+	MinDigit  int32 `json:"minDigit"`
 }
 
 func (p PasswordPolicy) ClientView() PasswordPolicyView {
 	return PasswordPolicyView{
-		MinLength: p.MinPasswordLength,
-		MinUpper:  p.MinPasswordUpper,
-		MinLower:  p.MinPasswordLower,
-		MinDigit:  p.MinPasswordDigit,
+		MinLength: int32(p.MinPasswordLength),
+		MinUpper:  int32(p.MinPasswordUpper),
+		MinLower:  int32(p.MinPasswordLower),
+		MinDigit:  int32(p.MinPasswordDigit),
 	}
 }
 

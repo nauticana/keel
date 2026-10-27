@@ -116,12 +116,12 @@ func (h *BillingHandler) ChangePlan() http.HandlerFunc {
 			PlanID       string `json:"planId"`
 			BillingCycle string `json:"billingCycle"`
 			TermType     string `json:"termType"`
-			TermCount    int    `json:"termCount"`
+			TermCount    int32  `json:"termCount"`
 		}
-		if json.Unmarshal(body, &req) != nil || req.PlanID == "" {
+		if common.DecodeJSON(body, &req) != nil || req.PlanID == "" {
 			return nil, NewAPIError(http.StatusBadRequest, "planId is required")
 		}
-		terms, err := changeTerms(req.BillingCycle, req.TermType, req.TermCount)
+		terms, err := changeTerms(req.BillingCycle, req.TermType, int(req.TermCount))
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +157,7 @@ func (h *BillingHandler) CheckChange() http.HandlerFunc {
 		var req struct {
 			PlanID string `json:"planId"`
 		}
-		if json.Unmarshal(body, &req) != nil || req.PlanID == "" {
+		if common.DecodeJSON(body, &req) != nil || req.PlanID == "" {
 			return nil, NewAPIError(http.StatusBadRequest, "planId is required")
 		}
 		overages, err := h.Subscriptions.CheckChange(ctx, partnerID, req.PlanID)

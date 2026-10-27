@@ -758,7 +758,7 @@ func (s *BaseAgencyService) Profile(ctx context.Context, agencyPartnerID int64) 
 	profile := &model.AgencyProfile{
 		AgencyPartnerID:  common.AsInt64(row[0]),
 		WholesaleAllowed: common.AsBool(row[1]),
-		DefaultRateBP:    int(common.AsInt64(row[2])),
+		DefaultRateBP:    common.AsInt32(row[2]),
 		Suspended:        common.AsBool(row[4]),
 	}
 	if approvedAt := common.AsTime(row[3]); !approvedAt.IsZero() {
@@ -833,7 +833,7 @@ func (s *BaseAgencyService) Earnings(ctx context.Context, agencyPartnerID int64)
 	if row, queryErr := s.QueryFirst(ctx, qPayingClients, agencyPartnerID); queryErr != nil {
 		return nil, fmt.Errorf("agency: paying clients: %w", queryErr)
 	} else if row != nil {
-		out.PayingClients = int(common.AsInt64(row[0]))
+		out.PayingClients = common.AsInt32(row[0])
 	}
 	return out, nil
 }

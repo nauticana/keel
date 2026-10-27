@@ -31,10 +31,10 @@ func moneyRepo(t *testing.T, rows ...[]any) (*AbstractRepository, error) {
 		return &model.TableColumn{ColumnName: name, DataType: dataType}
 	}
 	repo := &AbstractRepository{TableDefinitions: map[string]*model.TableDefinition{
-		"invoice":      {TableName: "invoice", Columns: []*model.TableColumn{col("id", model.DT_INT), col("currency", model.DT_STRING)}},
-		"invoice_line": {TableName: "invoice_line", Columns: []*model.TableColumn{col("invoice_id", model.DT_INT), col("amount_minor", model.DT_INT), col("note", model.DT_STRING)}},
-		"allocation":   {TableName: "allocation", Columns: []*model.TableColumn{col("line_id", model.DT_INT), col("amount_minor", model.DT_INT)}},
-		"transfer":     {TableName: "transfer", Columns: []*model.TableColumn{col("from_id", model.DT_INT), col("to_id", model.DT_INT), col("amount_minor", model.DT_INT)}},
+		"invoice":      {TableName: "invoice", Columns: []*model.TableColumn{col("id", model.DT_BIGINT), col("currency", model.DT_STRING)}},
+		"invoice_line": {TableName: "invoice_line", Columns: []*model.TableColumn{col("invoice_id", model.DT_BIGINT), col("amount_minor", model.DT_BIGINT), col("note", model.DT_STRING)}},
+		"allocation":   {TableName: "allocation", Columns: []*model.TableColumn{col("line_id", model.DT_BIGINT), col("amount_minor", model.DT_BIGINT)}},
+		"transfer":     {TableName: "transfer", Columns: []*model.TableColumn{col("from_id", model.DT_BIGINT), col("to_id", model.DT_BIGINT), col("amount_minor", model.DT_BIGINT)}},
 	}}
 	fks := &model.QueryResult{Rows: [][]any{
 		fkRow("invoice_lines", "invoice_line", 1, "invoice_id", "invoice"),
@@ -72,7 +72,7 @@ func TestApplyColumnDisplayRefusesBadCurrencyPaths(t *testing.T) {
 		{"invoice_line", "amount_minor", "currency", "has no column currency"},
 		{"invoice_line", "amount_minor", "allocation.currency", "no foreign key to allocation"},
 		{"invoice_line", "amount_minor", "invoice.code", "has no column code"},
-		{"invoice_line", "note", "invoice.currency", "not integer"},
+		{"invoice_line", "note", "invoice.currency", "not bigint"},
 		{"transfer", "amount_minor", "invoice.currency", "more than one foreign key to invoice"},
 	} {
 		_, err := moneyRepo(t, displayRow(tc.table, tc.column, tc.path))

@@ -60,7 +60,7 @@ func (t *sqlInstructionTx) Lock(ctx context.Context, id int64) (*Instruction, er
 		Status:         common.AsString(row[6]),
 		FailureReason:  common.AsString(row[7]),
 		CreatedAt:      common.AsTime(row[8]),
-		Exponent:       int(common.AsInt64(row[9])),
+		Exponent:       int16(common.AsInt32(row[9])),
 	}
 	legs, err := t.tx.Query(ctx, qInstructionLegs, id)
 	if err != nil {
@@ -68,7 +68,7 @@ func (t *sqlInstructionTx) Lock(ctx context.Context, id int64) (*Instruction, er
 	}
 	for _, r := range legs.Rows {
 		instr.Legs = append(instr.Legs, InstructionLeg{
-			LegNo:             int(common.AsInt64(r[0])),
+			LegNo:             common.AsInt32(r[0]),
 			Provider:          common.AsString(r[1]),
 			BankInfoID:        common.AsInt64(r[2]),
 			ProviderAccountID: common.AsString(r[3]),
@@ -78,7 +78,7 @@ func (t *sqlInstructionTx) Lock(ctx context.Context, id int64) (*Instruction, er
 			PayoutID:          common.AsString(r[7]),
 			Status:            common.AsString(r[8]),
 			ReversedMinor:     common.AsInt64(r[9]),
-			Attempts:          int(common.AsInt64(r[10])),
+			Attempts:          common.AsInt32(r[10]),
 			FailureReason:     common.AsString(r[11]),
 			CreatedAt:         common.AsTime(r[12]),
 		})
@@ -143,7 +143,7 @@ func (t *sqlInstructionTx) UpdateLeg(ctx context.Context, instructionID int64, l
 	return nil
 }
 
-func (t *sqlInstructionTx) RecordEvent(ctx context.Context, instructionID int64, legNo int, ev *PayoutWebhookEvent) (bool, error) {
+func (t *sqlInstructionTx) RecordEvent(ctx context.Context, instructionID int64, legNo int32, ev *PayoutWebhookEvent) (bool, error) {
 	res, err := t.tx.Query(ctx, qInstructionEventRecord, ev.Provider, ev.RawEventID, instructionID, legNo,
 		string(ev.Type), ev.AmountMinor, ev.AmountReversedMinor)
 	if err != nil {

@@ -30,11 +30,11 @@ type Subscription struct {
 	MonthlyCost      float64 `json:"monthlyCost"` // display projection of InstallmentMinor
 	InstallmentMinor int64   `json:"installmentMinor"`
 	Currency         string  `json:"currency"`
-	Exponent         int     `json:"exponent"`
+	Exponent         int16   `json:"exponent"`
 	BillingCycle     string  `json:"billingCycle,omitempty"` // PERIOD_TYPE code copied from the plan's billing_period (M/Q/A/…)
 	AutoRenew        bool    `json:"autoRenew"`
 	TrialEnd         string  `json:"trialEnd"`
-	Seats            int     `json:"seats"`
+	Seats            int32   `json:"seats"`
 	ProviderManaged  bool    `json:"providerManaged"` // provider subscription and customer both exist
 	// ScheduledPlanID starts at ScheduledAt, when this subscription ends.
 	ScheduledPlanID string `json:"scheduledPlanId,omitempty"`
@@ -49,7 +49,7 @@ type Invoice struct {
 	Total      float64 `json:"total"` // display projection of TotalMinor
 	TotalMinor int64   `json:"totalMinor"`
 	Currency   string  `json:"currency"`
-	Exponent   int     `json:"exponent"`
+	Exponent   int16   `json:"exponent"`
 	IssuedAt   string  `json:"issuedAt"`
 	PaidAt     string  `json:"paidAt,omitempty"`
 }
@@ -61,7 +61,7 @@ type Plan struct {
 	Caption        string      `json:"caption"`
 	Currency       string      `json:"currency"`
 	ActivationMode string      `json:"activationMode"`
-	TrialDays      int         `json:"trialDays"`
+	TrialDays      int32       `json:"trialDays"`
 	Prices         []PlanPrice `json:"prices"`
 }
 
@@ -70,12 +70,12 @@ type Plan struct {
 // major-unit projection at Exponent. PriceID is the provider price id (empty for free plans).
 type PlanPrice struct {
 	BillingCycle string  `json:"billingCycle"` // PERIOD_TYPE code: how often charged
-	TermCount    int     `json:"termCount"`    // commitment length
+	TermCount    int32   `json:"termCount"`    // commitment length
 	TermType     string  `json:"termType"`     // PERIOD_TYPE code: commitment/pricing unit
 	AmountMinor  int64   `json:"amountMinor"`  // price per term_type unit
 	Amount       float64 `json:"amount"`
 	Currency     string  `json:"currency"`
-	Exponent     int     `json:"exponent"`
+	Exponent     int16   `json:"exponent"`
 	PriceID      string  `json:"priceId,omitempty"`
 }
 
@@ -275,11 +275,11 @@ func (s *AbstractBillingService) GetSubscription(ctx context.Context, partnerID 
 		Endda:            common.AsString(row[4]),
 		InstallmentMinor: common.AsInt64(row[5]),
 		Currency:         common.AsString(row[6]),
-		Exponent:         int(common.AsInt64(row[11])),
+		Exponent:         int16(common.AsInt32(row[11])),
 		BillingCycle:     common.AsString(row[7]),
 		AutoRenew:        common.AsBool(row[8]),
 		TrialEnd:         common.AsString(row[9]),
-		Seats:            int(common.AsInt32(row[10])),
+		Seats:            common.AsInt32(row[10]),
 		ProviderManaged:  common.AsBool(row[12]),
 	}
 	if at := common.AsString(row[13]); at != "" {
@@ -331,7 +331,7 @@ func (s *AbstractBillingService) GetInvoices(ctx context.Context, partnerID int6
 			Status:     common.AsString(row[4]),
 			IssuedAt:   common.AsString(row[5]),
 			PaidAt:     common.AsString(row[6]),
-			Exponent:   int(common.AsInt64(row[7])),
+			Exponent:   int16(common.AsInt32(row[7])),
 		}
 		if inv.Total, err = majorAmount(inv.TotalMinor, inv.Exponent); err != nil {
 			return nil, err
@@ -378,7 +378,7 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 				Caption:        common.AsString(row[1]),
 				Currency:       common.AsString(row[2]),
 				ActivationMode: common.AsString(row[3]),
-				TrialDays:      int(common.AsInt32(row[4])),
+				TrialDays:      common.AsInt32(row[4]),
 			}
 			byID[id] = p
 			order = append(order, id)
@@ -389,12 +389,12 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 		}
 		price := PlanPrice{
 			BillingCycle: billing,
-			TermCount:    int(common.AsInt32(row[6])),
+			TermCount:    common.AsInt32(row[6]),
 			TermType:     common.AsString(row[7]),
 			AmountMinor:  common.AsInt64(row[8]),
 			Currency:     common.AsString(row[9]),
 			PriceID:      common.AsString(row[10]),
-			Exponent:     int(common.AsInt64(row[11])),
+			Exponent:     int16(common.AsInt32(row[11])),
 		}
 		if err := price.FillAmount(); err != nil {
 			return nil, fmt.Errorf("plan %s: %w", id, err)

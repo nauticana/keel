@@ -22,9 +22,21 @@ type ProblemDetail struct {
 // InternalErrorDetail replaces every 5xx detail so internal context never reaches a client.
 const InternalErrorDetail = "internal server error — see request_id in your logs"
 
-// WriteProblem writes p as application/problem+json with p.Status.
+// WriteProblem writes p as application/problem+json with p.Status. status is
+// a JSON number as RFC 9457 requires; details is API JSON (see EncodeJSON).
 func WriteProblem(w http.ResponseWriter, p ProblemDetail) error {
+	var details json.RawMessage
+	if p.Details != nil {
+		var err error
+		if details, err = MarshalJSON(p.Details); err != nil {
+			return err
+		}
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)
-	return json.NewEncoder(w).Encode(p)
+	type wire ProblemDetail
+	return json.NewEncoder(w).Encode(struct {
+		wire
+		Details json.RawMessage `json:"details,omitempty"`
+	}{wire(p), details})
 }

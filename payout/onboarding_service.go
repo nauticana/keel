@@ -633,7 +633,7 @@ type bankInfoRow struct {
 	Email             string
 	ProviderAgreement bool
 	OnboardedAt       string
-	Exponent          int
+	Exponent          int16
 }
 
 func (s *OnboardingService) loadBankInfo(ctx context.Context, userID int, partnerID int64) (*bankInfoRow, error) {
@@ -657,7 +657,7 @@ func (s *OnboardingService) loadBankInfo(ctx context.Context, userID int, partne
 		Email:             kcommon.AsString(row[7]),
 		ProviderAgreement: kcommon.AsBool(row[8]),
 		OnboardedAt:       kcommon.AsString(row[9]),
-		Exponent:          int(kcommon.AsInt64(row[10])),
+		Exponent:          int16(kcommon.AsInt32(row[10])),
 	}, nil
 }
 

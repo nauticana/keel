@@ -157,7 +157,7 @@ func (s *DocumentService) insert(ctx context.Context, doc *PartnerDocument, typ 
 		if err != nil {
 			return err
 		}
-		doc.VersionNo = int(common.AsInt64(next.Rows[0][0]))
+		doc.VersionNo = common.AsInt32(next.Rows[0][0])
 		var expires any
 		if !doc.ExpiresOn.IsZero() {
 			expires = doc.ExpiresOn

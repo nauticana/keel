@@ -16,7 +16,7 @@ const (
 // provider idempotency key. FundingID and PayoutID name the provider's
 // funding and bank-payout transfers (equal on single-step providers).
 type InstructionLeg struct {
-	LegNo             int       `json:"legNo"`
+	LegNo             int32     `json:"legNo"`
 	Provider          string    `json:"provider"`
 	BankInfoID        int64     `json:"bankInfoId"`
 	ProviderAccountID string    `json:"providerAccountId"`
@@ -26,7 +26,7 @@ type InstructionLeg struct {
 	PayoutID          string    `json:"payoutId,omitempty"`
 	Status            string    `json:"status"`
 	ReversedMinor     int64     `json:"reversedMinor"`
-	Attempts          int       `json:"attempts"`
+	Attempts          int32     `json:"attempts"`
 	FailureReason     string    `json:"failureReason,omitempty"`
 	CreatedAt         time.Time `json:"createdAt"`
 }

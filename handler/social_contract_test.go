@@ -125,7 +125,7 @@ func TestLoginSocialContract(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
 		t.Fatalf("google = %d %s", w.Code, w.Body.String())
 	}
-	for k, want := range map[string]any{"token": "jwt", "refreshToken": "refresh", "isNewUser": true, "partnerId": float64(9), "userId": float64(5)} {
+	for k, want := range map[string]any{"token": "jwt", "refreshToken": "refresh", "isNewUser": true, "partnerId": "9", "userId": "5"} {
 		if resp.Data[k] != want {
 			t.Errorf("%s = %v, want %v", k, resp.Data[k], want)
 		}

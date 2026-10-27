@@ -465,7 +465,7 @@ func (r *RepositoryPgsql) LoadColumns(ctx context.Context) (map[string][]*model.
 		precision := common.AsInt32(rec[6])
 		scale := common.AsInt32(rec[7])
 		columnDefault := common.AsString(rec[8])
-		if int(precision) > 0 {
+		if precision > 0 {
 			size = precision
 		}
 		col := &model.TableColumn{
@@ -473,9 +473,9 @@ func (r *RepositoryPgsql) LoadColumns(ctx context.Context) (map[string][]*model.
 			PascalName: common.PascalCase(columnName),
 			Caption:    common.TitleCase(columnName),
 			Required:   required,
-			Size:       int(size),
-			Scale:      int(scale),
-			Order:      int(position),
+			Size:       size,
+			Scale:      scale,
+			Order:      position,
 		}
 		if columnDefault != "" && !strings.HasPrefix(columnDefault, "nextval(") {
 			col.HasDefault = true
@@ -500,7 +500,7 @@ func (r *RepositoryPgsql) LoadColumns(ctx context.Context) (map[string][]*model.
 			col.Size = 9
 			col.Step = "1"
 		case "int8":
-			col.DataType = model.DT_INT
+			col.DataType = model.DT_BIGINT
 			col.InputType = IT_NUMBER
 			col.Size = 18
 			col.Step = "1"

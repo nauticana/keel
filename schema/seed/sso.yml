@@ -86,7 +86,7 @@ seeds:
   - table: table_action_parameter
     columns: [table_name, action_name, seq, param_name, caption, data_type, required]
     rows:
-      - [partner_identity_provider, configure, 1, id, Connection (empty for new), integer, false]
+      - [partner_identity_provider, configure, 1, id, Connection (empty for new), bigint, false]
       - [partner_identity_provider, configure, 2, caption, Caption, string, true]
       - [partner_identity_provider, configure, 3, issuer, Issuer, string, false]
       - [partner_identity_provider, configure, 4, client_id, Client ID, string, false]

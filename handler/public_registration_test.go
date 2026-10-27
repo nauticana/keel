@@ -94,7 +94,7 @@ func TestHandoffCodeIsSingleUse(t *testing.T) {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
 	body := envelope.Data
-	if body["refreshToken"] != "refresh" || body["partnerId"] != float64(40) || len(users.refreshed) != 1 || users.refreshed[0] != user.SignInTenant {
+	if body["refreshToken"] != "refresh" || body["partnerId"] != "40" || len(users.refreshed) != 1 || users.refreshed[0] != user.SignInTenant {
 		t.Fatalf("body %v refreshed %v", body, users.refreshed)
 	}
 	if rec := exchange(h, code); rec.Code != http.StatusBadRequest {

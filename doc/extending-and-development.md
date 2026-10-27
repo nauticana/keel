@@ -99,7 +99,7 @@ All methods are stateless — they only inspect the JWT or request context and w
 | `RequireUser(w, r) (int, bool)` | 401 if no user id. |
 | `RequirePartner(w, r) (int64, bool)` | 401 if `partner_id <= 0`. |
 | `SessionPartner(session) (int64, error)` | Same rule for a `JSONFunc`, which has a session and no writer; the error is a 401 `*APIError`. |
-| `ReadRequest(w, r, &req) bool` | `MaxBytesReader(config.Config().MaxRequestSize)` + JSON unmarshal; 400 on failure. Public endpoints. |
+| `ReadRequest(w, r, &req) bool` | `MaxBytesReader(config.Config().MaxRequestSize)` + `common.DecodeJSON`; 400 on failure. Public endpoints. `ReadStrictRequest` also refuses undeclared members. |
 | `ReadAuthRequest(w, r, &req) (*Session, bool)` | `RequireSession + ReadRequest` combined. Authenticated endpoints with a JSON body. |
 | `RequireMethod(w, r, methods...string) bool` | 405 + `Allow` header if `r.Method` doesn't match any of the allowed methods. One-line guard for HTTP-method-restricted handlers. |
 | `RequireQueryInt64(w, r, name string) (int64, bool)` | Reads `?name=<int>` from the URL, parses to int64. 400 on missing or unparseable value. |
@@ -550,8 +550,22 @@ sail with no compile-time signal, so the following are HARD constraints:
   permission set. Authorisation seeds MUST include the
   `authorization_object` + `authorization_object_action` row for every
   custom action, or sail will show the button greyed out.
-- **`common.ProblemDetail`** (RFC 7807), written by `common.WriteProblem`, is the error envelope sail expects.
+- **`common.ProblemDetail`** (RFC 9457), written by `common.WriteProblem`, is the error envelope sail expects.
   Don't return bare strings or custom shapes.
+- **64-bit integers are JSON strings.** `common.WriteJSON`, `WriteJSONPaged`,
+  `WriteJSONError` and the problem `details` member encode `int`, `int64`,
+  `uint` and `uint64` as strings, so ids above 2^53 survive a JavaScript
+  client; `int32` and narrower, floats and the problem `status` stay numbers.
+  `ReadRequest`, `ReadStrictRequest` and `common.DecodeJSON` accept a string
+  or a number for those types and decode a number into `any` as a
+  `json.Number`. Decode a `JSONFunc` body with `common.DecodeJSON`, and write a
+  hand-built response with `common.EncodeJSON` or `common.MarshalJSON`. An
+  `int8` column's metadata `DataType` is `bigint` (`model.DT_BIGINT`), so sail
+  knows the value is a string; `int2` and `int4` stay `integer`. Type an
+  API field with its column's Go type (`SMALLINT` `int16`, `INTEGER`
+  `int32`, `BIGINT` `int64`); a bounded value without a column takes the
+  narrowest type that holds it, so only ids, money and unbounded counts
+  become strings.
 - **`MainMenu` / `Permissions` / `TableDefinitions`** in
   `RestService.GetClientCache` are sail's bootstrap payload. Adding a new
   metadata table for sail to consume = add a slot to `GetClientCache` and

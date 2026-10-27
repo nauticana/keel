@@ -222,11 +222,19 @@ Each row records what keel implements of an IETF or OASIS specification, what it
 | OpenID Connect Dynamic Registration | Not applicable: the server issues no ID tokens. |
 | OpenID Connect Core `prompt` | Honored on `/oauth/authorize` without ID tokens: `none` answers `login_required` or `consent_required`, and combined with another value `invalid_request`; `login` and `select_account` end the authorization server session and return through `LoginURL`; `consent` is always in effect. `max_age` and `auth_time` are not supported. |
 
+### API data format
+
+| Specification | Status |
+|---|---|
+| RFC 8259 JSON | keel's own API bodies are one JSON value; a request with trailing content is refused. A number decoded into an untyped value keeps every digit (`json.Number`), so precision is never lost to a `float64` (§6). |
+| RFC 7493 I-JSON | §2.2 only: every 64-bit integer (`int`, `int64`, `uint`, `uint64`) is written as a string, since it may lie outside the IEEE 754 exact-integer range; input accepts a string or a number for those types. Duplicate member names are not refused, so keel does not claim I-JSON as a whole. |
+| RFC 9457 Problem Details | Errors are `application/problem+json`; `status` is a JSON number and `details` is an extension member in the API format above. |
+
 ### Sign-in and token verification
 
 | Specification | Status |
 |---|---|
-| RFC 7515 / 7517 / 7518 / 7519 JOSE and JWT | Algorithms are allowlisted per issuer; `none` and HMAC with public keys are refused. A token with a `crit` header is refused. RSA keys are at least 2048 bits. A JWK whose `use` is not `sig` is ignored. An unknown `kid` refreshes the key set at most every 30 s. `exp`, `nbf` and `iat` allow 60 s of clock skew. |
+| RFC 7515 / 7517 / 7518 / 7519 JOSE and JWT | Numeric claims are parsed exactly, so a 64-bit `partner_id` keeps every digit. Algorithms are allowlisted per issuer; `none` and HMAC with public keys are refused. A token with a `crit` header is refused. RSA keys are at least 2048 bits. A JWK whose `use` is not `sig` is ignored. An unknown `kid` refreshes the key set at most every 30 s. `exp`, `nbf` and `iat` allow 60 s of clock skew. |
 | OpenID Connect Core 1.0 | `state`, `nonce` and S256 PKCE on every request. An ID token's `iss` must match exactly and its `aud` must be only the client id, since keel trusts no other audience (`3.1.3.7); `azp`, when present, must be the client id, except for Google, whose mobile sign-in names the app's own client. |
 | OpenID Connect Discovery 1.0 | The discovered issuer must equal the configured one, and every endpoint must be `https`. |
 | RFC 7523 JWT client authentication | `private_key_jwt`: `iss` and `sub` are the client id, `aud` the token endpoint, a random `jti`, one-minute lifetime. |

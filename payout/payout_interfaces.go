@@ -233,7 +233,7 @@ type InstantPayoutInput struct {
 	ProviderAccountID string // pre-resolved by the service layer
 	Amount            int64  // minor units
 	Currency          string
-	Exponent          *int // the currency table's exponent; required by providers that wire decimals
+	Exponent          *int16 // the currency table's exponent; required by providers that wire decimals
 	IdempotencyKey    string
 }
 
@@ -375,7 +375,7 @@ type InstructionTx interface {
 	InsertLeg(ctx context.Context, instructionID int64, leg *InstructionLeg) error
 	UpdateLeg(ctx context.Context, instructionID int64, leg *InstructionLeg) error
 	// RecordEvent returns true when the provider event id was already applied.
-	RecordEvent(ctx context.Context, instructionID int64, legNo int, ev *PayoutWebhookEvent) (bool, error)
+	RecordEvent(ctx context.Context, instructionID int64, legNo int32, ev *PayoutWebhookEvent) (bool, error)
 	RecordResolution(ctx context.Context, resolution ReviewResolutionRecord) error
 }
 

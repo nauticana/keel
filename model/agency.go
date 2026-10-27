@@ -15,7 +15,7 @@ type AgencyCommissionSource struct {
 type AgencyProfile struct {
 	AgencyPartnerID  int64      `json:"agencyPartnerId"`
 	WholesaleAllowed bool       `json:"wholesaleAllowed"`
-	DefaultRateBP    int        `json:"defaultCommissionRateBp,omitempty"`
+	DefaultRateBP    int32      `json:"defaultCommissionRateBp,omitempty"`
 	ApprovedAt       *time.Time `json:"approvedAt,omitempty"`
 	Suspended        bool       `json:"suspended"`
 }
@@ -76,7 +76,7 @@ type AgencyEarnings struct {
 	Balances      []AgencyEarningsBalance `json:"balances"`
 	Entries       []AgencyEarningEntry    `json:"entries"`
 	Payouts       []AgencyPayout          `json:"payouts"`
-	PayingClients int                     `json:"payingClients"`
+	PayingClients int32                   `json:"payingClients"`
 }
 
 type AgencyEarningsBalance struct {

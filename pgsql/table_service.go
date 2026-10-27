@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -150,7 +149,7 @@ func updateStampKind(col *model.TableColumn) int {
 	switch col.DataType {
 	case model.DT_TIME:
 		return stampNow
-	case model.DT_INT:
+	case model.DT_INT, model.DT_BIGINT:
 		return stampUser
 	}
 	return stampNone
@@ -586,7 +585,10 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 			// caller-supplied value as a safety hatch for backfills.
 			v = userID
 		default:
-			v = s.ExtractValue(item, col)
+			var err error
+			if v, err = s.ExtractValue(item, col); err != nil {
+				return -1, err
+			}
 		}
 		if col == generatedKey && !isPositiveID(v) {
 			if s.IdGenerator == nil {
@@ -621,13 +623,8 @@ func (s *TableServicePgsql) InsertSingle(ctx context.Context, partnerID int64, u
 	return generatedID, nil
 }
 
-// isPositiveID reports whether a caller-supplied key value is a usable id;
-// ids beyond 2^53 arrive from JSON clients as strings.
+// isPositiveID reports whether a caller-supplied key value is a usable id.
 func isPositiveID(v any) bool {
-	if str, ok := v.(string); ok {
-		id, err := strconv.ParseInt(str, 10, 64)
-		return err == nil && id > 0
-	}
 	id, ok := common.AsInt64OK(v)
 	return ok && id > 0
 }
@@ -728,14 +725,18 @@ func (s *TableServicePgsql) Update(ctx context.Context, partnerID int64, userID 
 			vals = append(vals, userID)
 			continue
 		}
-		vals = append(vals, s.ExtractValue(item, col))
+		v, err := s.ExtractValue(item, col)
+		if err != nil {
+			return err
+		}
+		vals = append(vals, v)
 	}
 	for _, id := range s.Table.Keys {
-		tempCol := &model.TableColumn{
-			ColumnName: id.ColumnName,
-			PascalName: id.PascalName,
+		v, err := s.ExtractValue(item, id)
+		if err != nil {
+			return err
 		}
-		vals = append(vals, s.ExtractValue(item, tempCol))
+		vals = append(vals, v)
 	}
 	sqlText := s.sqlUpdateByID
 	if applyPartner {
@@ -805,7 +806,11 @@ func (s *TableServicePgsql) Patch(ctx context.Context, partnerID int64, userID i
 		if !listed {
 			continue
 		}
-		vals = append(vals, s.ExtractValue(changes, col))
+		v, err := s.ExtractValue(changes, col)
+		if err != nil {
+			return err
+		}
+		vals = append(vals, v)
 		set = append(set, quoteIdent(col.ColumnName)+" = "+s.Placeholder(len(vals)))
 	}
 	if named == 0 {
@@ -819,11 +824,14 @@ func (s *TableServicePgsql) Patch(ctx context.Context, partnerID int64, userID i
 	}
 	var where []string
 	for _, id := range s.Table.Keys {
-		keyCol := &model.TableColumn{ColumnName: id.ColumnName, PascalName: id.PascalName}
-		if !hasColumn(key, keyCol) {
+		if !hasColumn(key, id) {
 			return fmt.Errorf("patch on %s: missing key %s", s.Table.TableName, id.ColumnName)
 		}
-		vals = append(vals, s.ExtractValue(key, keyCol))
+		v, err := s.ExtractValue(key, id)
+		if err != nil {
+			return err
+		}
+		vals = append(vals, v)
 		where = append(where, quoteIdent(id.ColumnName)+" = "+s.Placeholder(len(vals)))
 	}
 	if applyPartner {

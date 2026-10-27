@@ -3,7 +3,6 @@ package handler
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/nauticana/keel/common"
@@ -123,7 +122,7 @@ func (b *bufferingWriter) Write(p []byte) (int, error) {
 // a response is never corrupted.
 func stripEnvelopeField(body []byte, field string) ([]byte, bool) {
 	var env map[string]any
-	if json.Unmarshal(body, &env) != nil {
+	if common.DecodeJSON(body, &env) != nil {
 		return body, false
 	}
 	data, ok := env["data"]
@@ -144,7 +143,7 @@ func stripEnvelopeField(body []byte, field string) ([]byte, bool) {
 	if !changed {
 		return body, false
 	}
-	out, err := json.Marshal(env)
+	out, err := common.MarshalJSON(env)
 	if err != nil {
 		return body, false
 	}

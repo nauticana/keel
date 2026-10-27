@@ -388,7 +388,7 @@ func ensurePseudonym(ctx context.Context, tx port.QueryService, userID int) (str
 func requestFrom(r []any) Request {
 	return Request{
 		ID: common.AsInt64(r[0]), UserID: int(common.AsInt64(r[1])), Status: common.AsString(r[2]),
-		RequestedBy: int(common.AsInt64(r[3])), RequestedAt: common.AsTime(r[4]), Attempts: int(common.AsInt64(r[5])),
+		RequestedBy: int(common.AsInt64(r[3])), RequestedAt: common.AsTime(r[4]), Attempts: common.AsInt32(r[5]),
 		CompletedAt: common.AsTime(r[6]), LastError: common.AsString(r[7]),
 	}
 }

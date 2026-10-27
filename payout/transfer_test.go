@@ -51,12 +51,12 @@ func wiseTestSign(t *testing.T, key *rsa.PrivateKey, body []byte) string {
 // minorToDecimal — the provider amount contract (USD 2dp, JPY 0dp, BHD 3dp)
 // -----------------------------------------------------------------------------
 
-func exponent(n int) *int { return &n }
+func exponent(n int16) *int16 { return &n }
 
 func TestDecimalAmount(t *testing.T) {
 	cases := []struct {
 		amount   int64
-		exponent int
+		exponent int16
 		want     string
 	}{
 		{599, 2, "5.99"},

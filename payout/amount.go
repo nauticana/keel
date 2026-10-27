@@ -17,5 +17,5 @@ func decimalAmount(in InstantPayoutInput) (string, error) {
 	if in.Exponent == nil {
 		return "", errNoExponent
 	}
-	return common.FormatMinorUnits(in.Amount, *in.Exponent)
+	return common.FormatMinorUnits(in.Amount, int(*in.Exponent))
 }

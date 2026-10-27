@@ -104,7 +104,7 @@ func TestRefreshToken_RotatesAndRejectsReuse(t *testing.T) {
 			Data map[string]any `json:"data"`
 		}
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
-		if out.Data["token"] != "jwt-a@b" || out.Data["refreshToken"] != "refresh-rotated" || out.Data["partnerId"] != float64(3) {
+		if out.Data["token"] != "jwt-a@b" || out.Data["refreshToken"] != "refresh-rotated" || out.Data["partnerId"] != "3" {
 			t.Fatalf("data=%v", out.Data)
 		}
 	}

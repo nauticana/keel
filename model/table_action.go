@@ -46,7 +46,7 @@ type TableAction struct {
 	RecordSpecific  bool                    `json:"recordSpecific"` // TRUE: per-row button; FALSE: table-level
 	MethodName      string                  `json:"-"`              // optional URL-path override; resolved into Method server-side
 	Method          string                  `json:"method"`         // resolved URL path (POST target)
-	DisplayOrder    int                     `json:"displayOrder"`
+	DisplayOrder    int16                   `json:"displayOrder"`
 	ConfirmMessage  string                  `json:"confirmMessage,omitempty"`
 	Kind            string                  `json:"kind,omitempty"`  // action_kind: P post (default) / R redirect / V reveal
 	AuthorityObject string                  `json:"authorityObject"` // uppercased TableName — for canExecute() check on client

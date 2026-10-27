@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
+	"github.com/nauticana/keel/common"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -151,7 +151,7 @@ func TestListAndRevokeSessions(t *testing.T) {
 	var out struct {
 		Data []user.ActiveSession `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK || len(out.Data) != 2 || out.Data[0].Current || !out.Data[1].Current || users.sessionsOf != 5 {
+	if err := common.DecodeJSON(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusOK || len(out.Data) != 2 || out.Data[0].Current || !out.Data[1].Current || users.sessionsOf != 5 {
 		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := authed(http.MethodPost, "/api/user/sessions/revoke", `{"id":21}`); rec.Code != http.StatusNoContent || len(users.revoked) != 1 {

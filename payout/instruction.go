@@ -22,7 +22,7 @@ type Instruction struct {
 	PartnerID      int64            `json:"partnerId"`
 	UserID         int64            `json:"userId"`
 	Currency       string           `json:"currency"`
-	Exponent       int              `json:"exponent"`
+	Exponent       int16            `json:"exponent"`
 	AmountMinor    int64            `json:"amountMinor"`
 	IdempotencyKey string           `json:"idempotencyKey"`
 	Status         string           `json:"status"`
@@ -31,7 +31,7 @@ type Instruction struct {
 	Legs           []InstructionLeg `json:"legs"`
 }
 
-func (i *Instruction) leg(legNo int) *InstructionLeg {
+func (i *Instruction) leg(legNo int32) *InstructionLeg {
 	for n := range i.Legs {
 		if i.Legs[n].LegNo == legNo {
 			return &i.Legs[n]
@@ -60,8 +60,8 @@ func (i *Instruction) liveLeg() *InstructionLeg {
 	return nil
 }
 
-func (i *Instruction) nextLegNo() int {
-	next := 1
+func (i *Instruction) nextLegNo() int32 {
+	next := int32(1)
 	for _, l := range i.Legs {
 		if l.LegNo >= next {
 			next = l.LegNo + 1

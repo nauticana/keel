@@ -233,6 +233,7 @@ func verify(ctx context.Context, p *JWKSProvider, tokenStr, expectedAud, expecte
 	}
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods(algorithms),
+		jwt.WithJSONNumber(),
 		jwt.WithExpirationRequired(),
 		jwt.WithLeeway(jwtLeeway),
 		jwt.WithAudience(expectedAud),

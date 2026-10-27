@@ -57,7 +57,7 @@ func resolveSubscriptionOffer(rows [][]any, setup *PartnerSetup, mode billing.Ac
 		wt := billing.ParseBillingPeriod(setup.TermType).Code()
 		wn := max(setup.TermCount, 1)
 		for i, row := range rows {
-			if common.AsString(row[0]) == wc && common.AsString(row[1]) == wt && int(common.AsInt32(row[2])) == wn {
+			if common.AsString(row[0]) == wc && common.AsString(row[1]) == wt && common.AsInt32(row[2]) == wn {
 				idx = i
 				break
 			}

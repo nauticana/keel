@@ -439,7 +439,7 @@ func (s *BaseAgencyPayoutService) dispatchOne(ctx context.Context, payoutID int6
 	row := claim.Rows[0]
 	agencyID := common.AsInt64(row[0])
 	userID := common.AsInt64(row[1])
-	exponent := int(common.AsInt64(row[9]))
+	exponent := int16(common.AsInt32(row[9]))
 	input := payout.InstantPayoutInput{
 		UserID:            userID,
 		PartnerID:         agencyID,

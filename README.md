@@ -44,6 +44,10 @@ go get github.com/nauticana/keel@<version>
 
 Then follow [Configuration and Getting Started](doc/configuration-and-getting-started.md) for runtime configuration, application bootstrap, REST wiring, and workers.
 
+## API JSON
+
+Keel's own HTTP API writes every 64-bit integer (`int`, `int64`, `uint`, `uint64`) as a JSON string, so ids above 2^53 reach JavaScript clients intact (RFC 7493 §2.2), and accepts a string or a number for those types on input. Snowflake ids and money are 64-bit; bounded values such as display orders, sizes and exponents use `int16` or `int32`, matching their columns, and stay numbers. Numbers decoded into untyped values keep every digit (RFC 8259 §6), and JWT claims are parsed exactly. Errors are RFC 9457 problem details. Standards-defined bodies such as OAuth and SCIM keep their specified number types. See [API data format](doc/authentication.md#api-data-format).
+
 ## Documentation
 
 | Topic | Contents |
@@ -51,7 +55,7 @@ Then follow [Configuration and Getting Started](doc/configuration-and-getting-st
 | [Configuration and Getting Started](doc/configuration-and-getting-started.md) | Configuration, bootstrap, REST, and workers |
 | [Package Reference](doc/package-reference.md) | Package responsibilities and adapter inventory |
 | [Authentication](doc/authentication.md) | API keys, OAuth, standards compliance, sessions, MFA, OTP, and social sign-in |
-| [Standards and Compliance](doc/authentication.md#standards-compliance) | OAuth, token verification, outbound connection, and SCIM standards |
+| [Standards and Compliance](doc/authentication.md#standards-compliance) | API JSON, OAuth, token verification, outbound connection, and SCIM standards |
 | [Identity and Access](doc/identity-and-access.md) | Domain verification, tenant SSO, SCIM, and consent |
 | [Application Services](doc/application-services.md) | Quotas, limiters, guards, notifications, realtime, and reusable services |
 | [Reusable Primitives](doc/reusable-primitives.md) | Shared cryptography, HTTP, scheduling, content, browser, reference-data, and reliability helpers |

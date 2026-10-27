@@ -149,7 +149,7 @@ func (h *AgencyHandler) Clients(w http.ResponseWriter, r *http.Request) {
 			h.WriteServiceError(w, r, err)
 			return
 		}
-		common.WriteJSON(w, http.StatusOK, map[string]int{"added": added})
+		common.WriteJSON(w, http.StatusOK, map[string]int32{"added": int32(added)})
 	default:
 		h.WriteError(w, http.StatusMethodNotAllowed, "Method Not Allowed", "Use GET or POST")
 	}

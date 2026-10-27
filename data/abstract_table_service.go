@@ -2,6 +2,8 @@ package data
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 
 	"github.com/nauticana/keel/common"
@@ -87,7 +89,10 @@ func (s *AbstractTableService) CheckPermission(ctx context.Context, principal mo
 	return true, !bypassScope
 }
 
-func (s *AbstractTableService) ExtractValue(item any, col *model.TableColumn) any {
+// ExtractValue reads col from a struct or a decoded JSON map. A JSON number,
+// string or float bound to an integer column becomes an exact int64, and a
+// fractional or inexact one is a 400; any other JSON number binds as its text.
+func (s *AbstractTableService) ExtractValue(item any, col *model.TableColumn) (any, error) {
 	val := reflect.ValueOf(item)
 	var v any
 	if val.Kind() == reflect.Map {
@@ -97,21 +102,45 @@ func (s *AbstractTableService) ExtractValue(item any, col *model.TableColumn) an
 			mv, ok = m[col.ColumnName]
 		}
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		v = mv
 	} else {
 		f := val.FieldByName(col.PascalName)
 		if !f.IsValid() {
-			return nil // struct has no field for this column → SQL NULL, not a panic
+			return nil, nil // struct has no field for this column → SQL NULL, not a panic
 		}
 		v = f.Interface()
 	}
-	// A form sends "" for a cleared field; for a non-text column that maps to
-	// SQL NULL — Postgres can't cast '' to bigint/numeric/bool/timestamp.
-	if str, ok := v.(string); ok && str == "" &&
-		col.DataType != model.DT_STRING && col.DataType != model.DT_TEXT {
-		return nil
+	var text string
+	switch n := v.(type) {
+	case string:
+		// A form sends "" for a cleared field; for a non-text column that maps
+		// to SQL NULL — Postgres can't cast '' to bigint/numeric/bool/timestamp.
+		if n == "" && col.DataType != model.DT_STRING && col.DataType != model.DT_TEXT {
+			return nil, nil
+		}
+		text = n
+	case json.Number:
+		text = string(n)
+	case float32, float64:
+		if !col.IsInteger() {
+			return v, nil
+		}
+		i, ok := common.AsInt64OK(v)
+		if !ok {
+			return nil, model.NewBadRequest(fmt.Sprintf("%s must be an integer", col.ColumnName))
+		}
+		return i, nil
+	default:
+		return v, nil
 	}
-	return v
+	if !col.IsInteger() {
+		return text, nil
+	}
+	i, ok := common.AsInt64OK(text)
+	if !ok {
+		return nil, model.NewBadRequest(fmt.Sprintf("%s must be an integer", col.ColumnName))
+	}
+	return i, nil
 }

@@ -670,7 +670,7 @@ func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, erro
 				ID:             id,
 				Caption:        common.AsString(row[1]),
 				ActivationMode: common.AsString(row[2]),
-				TrialDays:      int(common.AsInt32(row[3])),
+				TrialDays:      common.AsInt32(row[3]),
 			}
 			byID[id] = p
 			order = append(order, id)
@@ -681,12 +681,12 @@ func (r *RegistrationService) ListPlans(ctx context.Context) ([]PublicPlan, erro
 		}
 		price := billing.PlanPrice{
 			BillingCycle: cycle,
-			TermCount:    int(common.AsInt32(row[5])),
+			TermCount:    common.AsInt32(row[5]),
 			TermType:     common.AsString(row[6]),
 			AmountMinor:  common.AsInt64(row[7]),
 			Currency:     common.AsString(row[8]),
 			PriceID:      common.AsString(row[9]),
-			Exponent:     int(common.AsInt64(row[10])),
+			Exponent:     int16(common.AsInt32(row[10])),
 		}
 		if err := price.FillAmount(); err != nil {
 			return nil, err

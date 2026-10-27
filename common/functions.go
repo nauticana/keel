@@ -4,10 +4,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	maps0 "maps"
+	"math"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -24,11 +27,8 @@ func AsFloat64(v any) float64 {
 	return -1
 }
 
-// AsFloat64OK is the explicit-result sibling. Returns ok=true only
-// when v is a known numeric type. Callers should prefer this in
-// hot paths that read quota / amount columns where -1 is a real
-// value — the sentinel-based AsFloat64 conflates "NULL row" with
-// "actual -1".
+// AsFloat64OK is the explicit-result sibling; integer inputs must be exactly
+// representable. Prefer it when -1 is a real value rather than a NULL sentinel.
 func AsFloat64OK(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -44,10 +44,24 @@ func AsFloat64OK(v any) (float64, bool) {
 	case uint32:
 		return float64(n), true
 	case uint64:
-		return float64(n), true
+		f := float64(n)
+		return f, f < math.Exp2(64) && uint64(f) == n
+	case json.Number:
+		if !strings.ContainsAny(string(n), ".eE") {
+			if i, err := n.Int64(); err == nil {
+				return AsFloat64OK(i)
+			}
+			if u, err := strconv.ParseUint(string(n), 10, 64); err == nil {
+				return AsFloat64OK(u)
+			}
+			return 0, false
+		}
+		f, err := n.Float64()
+		return f, err == nil
 	}
 	if i, ok := asInt64(v); ok {
-		return float64(i), true
+		f := float64(i)
+		return f, f >= -math.Exp2(63) && f < math.Exp2(63) && int64(f) == i
 	}
 	return 0, false
 }
@@ -62,7 +76,7 @@ func AsInt32(v any) int32 {
 // AsInt32OK is the explicit-result sibling of AsInt32. Same
 // motivation as AsFloat64OK: distinguish "NULL" from "actual -1".
 func AsInt32OK(v any) (int32, bool) {
-	if i, ok := AsInt64OK(v); ok {
+	if i, ok := AsInt64OK(v); ok && i >= math.MinInt32 && i <= math.MaxInt32 {
 		return int32(i), true
 	}
 	return 0, false
@@ -78,18 +92,33 @@ func AsInt64(v any) int64 {
 // AsInt64OK is the explicit-result sibling of AsInt64. Returns
 // ok=false on nil / unrecognized types so callers can distinguish
 // NULL columns from actual -1 values (relevant in quota /
-// "unlimited" sentinels).
+// "unlimited" sentinels). A json.Number or decimal string converts
+// exactly; a float converts only when it is a whole number below 2^53,
+// since a larger one has already lost digits.
 func AsInt64OK(v any) (int64, bool) {
 	if i, ok := asInt64(v); ok {
 		return i, true
 	}
 	switch n := v.(type) {
+	case string:
+		i, err := strconv.ParseInt(n, 10, 64)
+		return i, err == nil
+	case json.Number:
+		i, err := strconv.ParseInt(string(n), 10, 64)
+		return i, err == nil
 	case float64:
-		return int64(n), true
+		return exactInt64(n)
 	case float32:
-		return int64(n), true
+		return exactInt64(float64(n))
 	}
 	return 0, false
+}
+
+func exactInt64(f float64) (int64, bool) {
+	if f != math.Trunc(f) || math.Abs(f) >= 1<<53 {
+		return 0, false
+	}
+	return int64(f), true
 }
 
 // asInt64 covers every Go integer width; pgx scans SMALLINT as int16.

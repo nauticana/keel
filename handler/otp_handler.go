@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -102,11 +103,11 @@ const (
 // a client-side fallback.
 type otpSendResponse struct {
 	OtpToken           string `json:"otpToken"`
-	ResendCountdownSec int    `json:"resendCountdownSec"`
+	ResendCountdownSec int32  `json:"resendCountdownSec"`
 }
 
 func makeOtpSendResponse(token string) otpSendResponse {
-	return otpSendResponse{OtpToken: token, ResendCountdownSec: config.Config().OTPTTLSeconds}
+	return otpSendResponse{OtpToken: token, ResendCountdownSec: int32(min(config.Config().OTPTTLSeconds, math.MaxInt32))}
 }
 
 // otpTokenPrefix is the cache-key namespace for SendOTP-issued tokens.

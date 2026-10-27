@@ -202,7 +202,7 @@ func (s *InstructionService) dispatch(ctx context.Context, plan *dispatchPlan) (
 	return plan.provider.RequestInstantPayout(ctx, in)
 }
 
-func (s *InstructionService) recordDispatch(ctx context.Context, id int64, legNo int, result *InstantPayoutResult, callErr error) (*Instruction, error) {
+func (s *InstructionService) recordDispatch(ctx context.Context, id int64, legNo int32, result *InstantPayoutResult, callErr error) (*Instruction, error) {
 	var out *Instruction
 	err := s.Store.InTx(ctx, func(tx InstructionTx) error {
 		instr, err := tx.Lock(ctx, id)

@@ -9,7 +9,7 @@ columns:
   - name: hostname
     type: VARCHAR(64)
   - name: pid
-    type: BIGINT
+    type: INTEGER
   - name: status
     type: CHAR(1)
   - name: last_heartbeat

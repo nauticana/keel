@@ -66,7 +66,7 @@ func writeErrorHeaders(w http.ResponseWriter, err error) {
 }
 
 // JSONFunc is the signature of an authenticated JSON business function.
-// body is nil when the request had no body.
+// body is nil when the request had no body; decode it with common.DecodeJSON.
 type JSONFunc func(ctx context.Context, session *model.UserSession, body json.RawMessage) (any, error)
 
 // JSONPublicFunc is the signature of an anonymous JSON business function.

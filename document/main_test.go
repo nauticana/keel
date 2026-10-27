@@ -90,7 +90,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		}
 		out.Rows = [][]any{{max + 1}}
 	case qInsert:
-		m.rows[args[0].(int64)] = []any{args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], int64(args[8].(int)),
+		m.rows[args[0].(int64)] = []any{args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], int64(args[8].(int32)),
 			args[9], args[10], args[11], args[12], time.Now(), args[13], nil, nil, nil, nil, nil, nil}
 		m.inserted = append(m.inserted, args[0].(int64))
 	case qSupersede:

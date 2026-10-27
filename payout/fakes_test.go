@@ -342,7 +342,7 @@ func (t *memInstructionTx) UpdateLeg(_ context.Context, instructionID int64, leg
 	return nil
 }
 
-func (t *memInstructionTx) RecordEvent(_ context.Context, _ int64, _ int, ev *PayoutWebhookEvent) (bool, error) {
+func (t *memInstructionTx) RecordEvent(_ context.Context, _ int64, _ int32, ev *PayoutWebhookEvent) (bool, error) {
 	k := ev.Provider + "/" + ev.RawEventID
 	if t.s.events[k] {
 		return true, nil

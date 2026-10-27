@@ -136,7 +136,7 @@ func TestBillingHandlerOverTargetLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if code != http.StatusConflict || problem.Status != http.StatusConflict ||
-		!strings.Contains(body, `"details":[{"resource":"MAX_LOCATIONS","caption":"Locations","count":3,"limit":1}]`) {
+		!strings.Contains(body, `"details":[{"resource":"MAX_LOCATIONS","caption":"Locations","count":"3","limit":"1"}]`) {
 		t.Fatalf("status=%d body=%s", code, body)
 	}
 

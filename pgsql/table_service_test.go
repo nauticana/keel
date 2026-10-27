@@ -2,6 +2,7 @@ package pgsql
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -439,7 +440,7 @@ func TestIsGlobalRole_QueryShape(t *testing.T) {
 // default), qty (int, nullable, NO default). No sequence → InsertSingle takes
 // the Exec path so captureQuerier records the SQL without a Row stub.
 func defaultSubTable() *model.TableDefinition {
-	idCol := &model.TableColumn{ColumnName: "id", PascalName: "Id", IsKey: true, DataType: model.DT_INT}
+	idCol := &model.TableColumn{ColumnName: "id", PascalName: "Id", IsKey: true, DataType: model.DT_BIGINT}
 	nameCol := &model.TableColumn{ColumnName: "name", PascalName: "Name", DataType: model.DT_STRING}
 	sortCol := &model.TableColumn{ColumnName: "sort_order", PascalName: "SortOrder", DataType: model.DT_INT, HasDefault: true}
 	qtyCol := &model.TableColumn{ColumnName: "qty", PascalName: "Qty", DataType: model.DT_INT}
@@ -505,7 +506,7 @@ func TestInsertSingle_GeneratesUnsequencedSurrogateKey(t *testing.T) {
 		"absent":   {"Name": "x"},
 		"zero":     {"Id": float64(0), "Name": "x"},
 		"negative": {"Id": int64(-4), "Name": "x"},
-		"invalid":  {"Id": "abc", "Name": "x"},
+		"null":     {"Id": nil, "Name": "x"},
 	} {
 		id, err := s.InsertSingle(ctx, 0, 0, item)
 		if err != nil || id != 9001 || qc.args[0] != int64(9001) {
@@ -513,9 +514,17 @@ func TestInsertSingle_GeneratesUnsequencedSurrogateKey(t *testing.T) {
 		}
 	}
 
-	id, err := s.InsertSingle(ctx, 0, 0, map[string]any{"Id": "9007199254740993", "Name": "x"})
-	if err != nil || id != -1 || qc.args[0] != "9007199254740993" {
-		t.Fatalf("caller id must be kept: id=%d err=%v args=%v", id, err, qc.args)
+	for _, given := range []any{"9007199254740993", json.Number("9007199254740993")} {
+		id, err := s.InsertSingle(ctx, 0, 0, map[string]any{"Id": given, "Name": "x"})
+		if err != nil || id != -1 || qc.args[0] != int64(9007199254740993) {
+			t.Fatalf("caller id %#v must be kept exactly: id=%d err=%v args=%v", given, id, err, qc.args)
+		}
+	}
+	for _, bad := range []any{"abc", json.Number("1.5")} {
+		var appErr *model.AppError
+		if _, err := s.InsertSingle(ctx, 0, 0, map[string]any{"Id": bad, "Name": "x"}); !errors.As(err, &appErr) || appErr.Status != 400 {
+			t.Fatalf("id %#v must be a 400: %v", bad, err)
+		}
 	}
 
 	s.IdGenerator = nil

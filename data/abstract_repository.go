@@ -311,8 +311,8 @@ func (r *AbstractRepository) applyColumnDisplay(ctx context.Context) error {
 			continue
 		}
 		col.DisplayMode = strings.ToUpper(strings.TrimSpace(common.AsString(rec[2])))
-		col.DisplayWidth = int(common.AsInt32(rec[3]))
-		col.DisplayRows = int(common.AsInt32(rec[4]))
+		col.DisplayWidth = common.AsInt32(rec[3])
+		col.DisplayRows = common.AsInt32(rec[4])
 		col.CurrencyPath = strings.TrimSpace(common.AsString(rec[5]))
 		if col.CurrencyPath != "" {
 			if err := r.checkCurrencyPath(table, col); err != nil {
@@ -327,8 +327,8 @@ func (r *AbstractRepository) applyColumnDisplay(ctx context.Context) error {
 // column's table, each through the one foreign key to that parent, to the
 // table whose last segment names the currency column.
 func (r *AbstractRepository) checkCurrencyPath(table *model.TableDefinition, col *model.TableColumn) error {
-	if col.DataType != model.DT_INT {
-		return fmt.Errorf("money column is %s, not %s", col.DataType, model.DT_INT)
+	if col.DataType != model.DT_BIGINT {
+		return fmt.Errorf("money column is %s, not %s", col.DataType, model.DT_BIGINT)
 	}
 	parts := strings.Split(col.CurrencyPath, ".")
 	for _, name := range parts[:len(parts)-1] {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -113,8 +114,8 @@ func (h *OAuthConnectHandler) saveAPIKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req apiKeyRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<16) // cap the credential body at 64 KiB
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Provider == "" || req.CredRef == "" || req.EntityID < 0 {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16)) // cap the credential body at 64 KiB
+	if err != nil || common.DecodeJSON(body, &req) != nil || req.Provider == "" || req.CredRef == "" || req.EntityID < 0 {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "provider and cred_ref are required")
 		return
 	}

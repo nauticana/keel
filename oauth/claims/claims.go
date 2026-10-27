@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
 )
 
@@ -68,20 +69,14 @@ func Audience(raw any) []string {
 	return nil
 }
 
-// Int64 reads an integer JWT claim that may arrive as int64 (freshly built) or
-// float64 (round-tripped through JSON).
+// Int64 reads an integer JWT claim: an int64 when freshly built, a json.Number
+// when parsed. 0 when absent or not an exact integer.
 func Int64(v any) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case float64:
-		return int64(n)
-	}
-	return 0
+	n, _ := common.AsInt64OK(v)
+	return n
 }
 
-// PartnerID reads partner_id from a decoded JWT claim set (tolerating
-// int64-vs-float64 from JSON). The bool reports whether a usable (non-zero) id
+// PartnerID reads partner_id from a decoded JWT claim set. The bool reports whether a usable (non-zero) id
 // was present, so callers can tell "no tenant" from "tenant 0".
 func PartnerID(m map[string]any) (int64, bool) {
 	if m == nil {

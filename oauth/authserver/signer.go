@@ -100,6 +100,7 @@ func NewLocalValidatorMulti(signer *RS256Signer, issuer string, audiences []stri
 func (v *LocalValidator) Validate(_ context.Context, bearer string) (*model.TokenPrincipal, error) {
 	opts := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithJSONNumber(),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuer(v.issuer),
 	}
