@@ -396,11 +396,7 @@ func TestPDFDecompressionBombs(t *testing.T) {
 	}
 }
 
-// The tests below wait for folio fixes (TODO C15); un-skip them when keel
-// pins a folio release that contains them.
-
 func TestPDFFormOwnResources(t *testing.T) {
-	t.Skip("waits for folio#458: a form's fonts are looked up in the page's resources")
 	cmap := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def 1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <01> <0048> <02> <0069> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
 	raw := onePage("/XObject << /Fm1 5 0 R >>", streamObj("", "/Fm1 Do"),
 		streamObj("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >>", "BT /F1 12 Tf 72 720 Td <0102> Tj ET"),
@@ -413,7 +409,6 @@ func TestPDFFormOwnResources(t *testing.T) {
 }
 
 func TestPDFSimpleFontWideCodespace(t *testing.T) {
-	t.Skip("waits for folio#459: a simple font is split by its ToUnicode codespace width")
 	cmap := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /W def 1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfchar <48> <0048> <69> <0069> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
 	raw := onePage("/Font << /F1 5 0 R >>", streamObj("", "BT /F1 12 Tf 72 720 Td (Hi) Tj ET"),
 		"<< /Type /Font /Subtype /TrueType /BaseFont /Arial /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>",
@@ -426,7 +421,6 @@ func TestPDFSimpleFontWideCodespace(t *testing.T) {
 
 // 40 forms, each drawing the next twice, is 2^39 draws from a few KB.
 func TestPDFNestedFormsBounded(t *testing.T) {
-	t.Skip("waits for folio#457: nested forms are bounded by depth only, so this runs for days")
 	var names, forms []string
 	for i := range 40 {
 		names = append(names, fmt.Sprintf("/X%d %d 0 R", i, 5+i))
@@ -440,8 +434,8 @@ func TestPDFNestedFormsBounded(t *testing.T) {
 		forms = append(forms, streamObj("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << "+res+" >>", body))
 	}
 	start := time.Now()
-	if _, err := native.Extract(context.Background(), mediaPDF, onePage(res, streamObj("", "/X0 Do"), forms...)); err == nil {
-		t.Error("an exponential form graph must be refused")
+	if _, err := native.Extract(context.Background(), mediaPDF, onePage(res, streamObj("", "/X0 Do"), forms...)); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("an exponential form graph must be refused: %v", err)
 	}
 	if d := time.Since(start); d > 10*time.Second {
 		t.Errorf("took %v", d)

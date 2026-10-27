@@ -1,6 +1,6 @@
 module github.com/nauticana/keel
 
-go 1.25.3
+go 1.26.10
 
 require (
 	cloud.google.com/go/pubsub/v2 v2.6.0
@@ -20,7 +20,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sns v1.39.17
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.27
 	github.com/beevik/etree v1.5.0
-	github.com/carlos7ags/folio v0.10.1
+	github.com/carlos7ags/folio v0.11.0
 	github.com/chromedp/cdproto v0.0.0-20250803210736-d308e07a266d
 	github.com/chromedp/chromedp v0.14.2
 	github.com/crewjam/saml v0.5.1
@@ -34,8 +34,8 @@ require (
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/russellhaering/goxmldsig v1.4.0
 	github.com/smallstep/pkcs7 v0.2.1
-	golang.org/x/crypto v0.53.0
-	golang.org/x/sync v0.21.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/sync v0.24.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -59,7 +59,7 @@ require (
 	github.com/sony/gobreaker v0.5.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
-	golang.org/x/image v0.43.0 // indirect
+	golang.org/x/image v0.47.0 // indirect
 )
 
 require (
@@ -133,10 +133,10 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/net v0.56.0
+	golang.org/x/net v0.61.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0
 	google.golang.org/api v0.274.0
 	google.golang.org/appengine/v2 v2.0.6 // indirect

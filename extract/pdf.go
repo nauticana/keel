@@ -65,7 +65,7 @@ func extractPDF(ctx context.Context, raw []byte, maxBytes int64) (out Extracted,
 
 func pdfError(err error) error {
 	switch {
-	case errors.Is(err, reader.ErrMemoryLimitExceeded):
+	case errors.Is(err, reader.ErrMemoryLimitExceeded), errors.Is(err, reader.ErrFormBudgetExceeded):
 		return fmt.Errorf("%w: %w", ErrTooLarge, err)
 	case errors.Is(err, reader.ErrInvalidPassword), errors.Is(err, reader.ErrUnsupportedEncryption):
 		return fmt.Errorf("%w: %w", ErrEncrypted, err)
