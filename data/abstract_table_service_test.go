@@ -36,8 +36,8 @@ func TestExtractValueBindsJSONExactly(t *testing.T) {
 		}
 	}
 	for _, bad := range []any{"abc", json.Number("1.5"), "9223372036854775808", float64(1.5), float64(1 << 54)} {
-		var appErr *model.AppError
-		if _, err := s.ExtractValue(map[string]any{"user_id": bad}, id); !errors.As(err, &appErr) || appErr.Status != 400 {
+		_, err := s.ExtractValue(map[string]any{"user_id": bad}, id)
+		if appErr, ok := errors.AsType[*model.AppError](err); !ok || appErr.Status != 400 {
 			t.Errorf("%#v: %v, want a 400", bad, err)
 		}
 	}

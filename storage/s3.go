@@ -99,8 +99,7 @@ func createBucketS3(ctx context.Context, spec Spec, secrets secret.SecretProvide
 		}
 	}
 	_, err = client.CreateBucket(ctx, input)
-	var owned *types.BucketAlreadyOwnedByYou
-	if err != nil && !errors.As(err, &owned) {
+	if _, owned := errors.AsType[*types.BucketAlreadyOwnedByYou](err); err != nil && !owned {
 		return fmt.Errorf("s3: create bucket %s: %w", spec.Bucket, err)
 	}
 	return nil

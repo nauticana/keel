@@ -285,9 +285,9 @@ func (h *PublicHandler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 		exchange = &oidc.GoogleCode{}
 	}
 	a, err := exchange.Identity(r.Context(), clientID, clientSecret, req.Code, req.RedirectURI)
-	var tokenErr *oidc.TokenError
+	tokenErr, refused := errors.AsType[*oidc.TokenError](err)
 	switch {
-	case errors.As(err, &tokenErr):
+	case refused:
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", tokenErr.Error())
 		return
 	case errors.Is(err, oidc.ErrEmailNotVerified):

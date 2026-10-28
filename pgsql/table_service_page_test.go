@@ -229,8 +229,8 @@ func TestOrderTerms_RejectionIsClientError(t *testing.T) {
 	s := newPagedService(t, partnerSpecificTable(), &pageQuerier{})
 	for _, in := range []string{"nope", "amount SIDEWAYS", "amount DESC id"} {
 		_, err := s.orderTerms(in)
-		var appErr *model.AppError
-		if !errors.As(err, &appErr) {
+		appErr, ok := errors.AsType[*model.AppError](err)
+		if !ok {
 			t.Fatalf("orderTerms(%q) = %v, want a typed *model.AppError", in, err)
 		}
 		if appErr.Status != http.StatusBadRequest {
@@ -242,8 +242,8 @@ func TestOrderTerms_RejectionIsClientError(t *testing.T) {
 func TestPlanSelect_UnknownFilterColumnIsClientError(t *testing.T) {
 	s := newPagedService(t, partnerSpecificTable(), &pageQuerier{})
 	_, err := s.planSelect(context.Background(), 42, 7, map[string]any{"nope": 1})
-	var appErr *model.AppError
-	if !errors.As(err, &appErr) || appErr.Status != http.StatusBadRequest {
+	appErr, ok := errors.AsType[*model.AppError](err)
+	if !ok || appErr.Status != http.StatusBadRequest {
 		t.Fatalf("planSelect with unknown filter column = %v, want a 400 AppError", err)
 	}
 }

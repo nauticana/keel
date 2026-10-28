@@ -97,8 +97,7 @@ func TestSendRefusesSuppressedAddress(t *testing.T) {
 	if !errors.Is(err, port.ErrNotificationSuppressed) {
 		t.Fatalf("err = %v, want ErrNotificationSuppressed", err)
 	}
-	var suppressed *port.SuppressedError
-	if !errors.As(err, &suppressed) || suppressed.Reason != SuppressBounced {
+	if suppressed, ok := errors.AsType[*port.SuppressedError](err); !ok || suppressed.Reason != SuppressBounced {
 		t.Fatalf("err = %v, want the reason", err)
 	}
 	if rec.method != "" {

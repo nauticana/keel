@@ -68,8 +68,7 @@ func TestProviderStatusIsTypedAndKeepsTheTokenOut(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":{"code":429}}`)
 	})
 	_, err := c.Read(context.Background(), testToken, "S", "A1")
-	var se *common.HTTPStatusError
-	if !errors.As(err, &se) || !se.RateLimited() || se.Header.Get("Retry-After") != "30" {
+	if se, ok := errors.AsType[*common.HTTPStatusError](err); !ok || !se.RateLimited() || se.Header.Get("Retry-After") != "30" {
 		t.Fatalf("err = %v", err)
 	}
 	if strings.Contains(err.Error(), testToken) {

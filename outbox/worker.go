@@ -30,8 +30,8 @@ func (e *PermanentError) Unwrap() error { return e.Err }
 func Permanent(err error) error { return &PermanentError{Err: err} }
 
 func isPermanent(err error) bool {
-	var permanent *PermanentError
-	return errors.As(err, &permanent)
+	_, ok := errors.AsType[*PermanentError](err)
+	return ok
 }
 
 const (

@@ -91,8 +91,7 @@ func TestSessionPartner(t *testing.T) {
 	var h AbstractHandler
 	for _, session := range []*model.UserSession{nil, {Id: 1}, {Id: 1, PartnerId: -1}} {
 		_, err := h.SessionPartner(session)
-		var apiErr *APIError
-		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+		if apiErr, ok := errors.AsType[*APIError](err); !ok || apiErr.Status != http.StatusUnauthorized {
 			t.Fatalf("session %+v: err = %v, want 401 APIError", session, err)
 		}
 	}

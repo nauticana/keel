@@ -245,8 +245,8 @@ func pendingCode(t *testing.T, store *regStore, email string) int {
 }
 
 func isBadRequest(err error) bool {
-	var appErr *model.AppError
-	return errors.As(err, &appErr) && appErr.Status == 400
+	appErr, ok := errors.AsType[*model.AppError](err)
+	return ok && appErr.Status == 400
 }
 
 func TestRegisterCreatesAccountAndPartner(t *testing.T) {

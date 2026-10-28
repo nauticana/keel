@@ -1,6 +1,12 @@
 package common
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+
+	"golang.org/x/net/html"
+)
 
 func TestPlainText(t *testing.T) {
 	for name, tc := range map[string]struct{ in, want string }{
@@ -26,5 +32,21 @@ func TestPlainText(t *testing.T) {
 		if got := PlainText(tc.in); got != tc.want {
 			t.Errorf("%s: PlainText(%q) = %q, want %q", name, tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestPlainTextLines(t *testing.T) {
+	doc, err := html.Parse(strings.NewReader(`<html><head><title>Tab</title></head><body>
+		<div><p>Call <b>us</b>:  <a href="tel:+15550100">555&nbsp;0100</a></p><p> </p>
+		<address>1 Main St<br>Springfield</address><script>x()</script><span>Mon</span>–<span>Fri</span></div></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Call us: 555 0100", "1 Main St", "Springfield", "Mon–Fri"}
+	if got := PlainTextLines(doc); !slices.Equal(got, want) {
+		t.Errorf("PlainTextLines = %q, want %q", got, want)
+	}
+	if got := PlainTextLines(&html.Node{Type: html.DocumentNode}); got != nil {
+		t.Errorf("empty document = %q", got)
 	}
 }

@@ -246,8 +246,7 @@ func TestFailureIsRecorded(t *testing.T) {
 	runs := 0
 	for i := range 2 {
 		_, err := s.Redeem(ctx, token, decision, counting(&runs, nil, &Failure{Reason: "forbidden"}))
-		var f *Failure
-		if !errors.As(err, &f) || f.Reason != "forbidden" {
+		if f, ok := errors.AsType[*Failure](err); !ok || f.Reason != "forbidden" {
 			t.Fatalf("redeem %d: err = %v", i, err)
 		}
 	}
@@ -263,7 +262,7 @@ func TestUnknownOutcomeBlocksUntilReconciled(t *testing.T) {
 	runs := 0
 	if _, err := s.Redeem(ctx, token, decision, counting(&runs, nil, errors.New("timeout"))); !errors.Is(err, ErrUnknownOutcome) {
 		t.Fatalf("err = %v, want ErrUnknownOutcome", err)
-	} else if u := new(UnknownOutcome); !errors.As(err, &u) || u.ClaimID != table.rows[0].id {
+	} else if u, ok := errors.AsType[*UnknownOutcome](err); !ok || u.ClaimID != table.rows[0].id {
 		t.Fatalf("err = %#v, want claim %d", err, table.rows[0].id)
 	}
 	if _, err := s.Redeem(ctx, token, decision, counting(&runs, nil, nil)); !errors.Is(err, ErrUnknownOutcome) || runs != 1 {

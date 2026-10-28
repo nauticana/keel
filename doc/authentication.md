@@ -74,7 +74,7 @@ srv.Handle(myRoutes)
 srv.Run(ctx)
 ```
 
-`Run` shuts down gracefully on SIGTERM, SIGINT or the end of `ctx`, and logs which. `http_max_header_values` (default 500) caps the header values of one request.
+`Run` shuts down gracefully on SIGTERM, SIGINT or the end of `ctx`, and logs which. With `debug_port` set, `Run` and worker binaries serve `service.DebugServer`: the runtime profiles (`goroutine`, `heap`, `goroutineleak`, …) at `/debug/pprof/{name}` on `127.0.0.1` only, `?debug=1` for text. `http_max_header_values` (default 500) caps the header values of one request.
 
 For services that don't use `HttpBackend` (workers exposing healthchecks, MCP servers, etc.), use `APIKeyAuthMiddleware` directly per the example above.
 

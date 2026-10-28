@@ -36,8 +36,7 @@ func (v *GoogleMXVerifier) Verify(ctx context.Context, proof DomainProof) (strin
 	mailDomain := DomainFromEmail(proof.Email)
 	mxs, err := resolver.LookupMX(ctx, mailDomain)
 	if err != nil {
-		var dnsErr *net.DNSError
-		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
 			return "", fmt.Errorf("%w: %s has no MX records", ErrDomainNotProven, mailDomain)
 		}
 		return "", fmt.Errorf("domain verification: MX lookup of %s: %w", mailDomain, err)

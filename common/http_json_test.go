@@ -69,8 +69,8 @@ func TestRequestJSONStatusErrorKeepsBodyAndHeaders(t *testing.T) {
 	defer srv.Close()
 
 	body, hdr, err := requestJSON(context.Background(), srv.Client(), http.MethodGet, srv.URL, nil, nil)
-	var se *HTTPStatusError
-	if !errors.As(err, &se) {
+	se, ok := errors.AsType[*HTTPStatusError](err)
+	if !ok {
 		t.Fatalf("err = %v, want *HTTPStatusError", err)
 	}
 	if se.Status != 429 || se.Body != "slow down" || se.Header.Get("Retry-After") != "30" {
@@ -105,9 +105,9 @@ func TestRequestJSONOversizedStatusRetainsClassification(t *testing.T) {
 	}))
 	defer srv.Close()
 	body, hdr, err := requestJSON(context.Background(), srv.Client(), http.MethodGet, srv.URL, nil, nil)
-	var statusErr *HTTPStatusError
+	statusErr, ok := errors.AsType[*HTTPStatusError](err)
 	if string(body) != "abcd" || hdr.Get("Retry-After") != "5" ||
-		!errors.Is(err, ErrResponseTooLarge) || !errors.As(err, &statusErr) || !statusErr.RateLimited() {
+		!errors.Is(err, ErrResponseTooLarge) || !ok || !statusErr.RateLimited() {
 		t.Fatalf("body=%q hdr=%v err=%v statusErr=%+v", body, hdr, err, statusErr)
 	}
 }

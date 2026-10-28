@@ -2,7 +2,6 @@ package pgsql
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
@@ -31,15 +30,11 @@ type TxQueryServicePgsql struct {
 }
 
 func (s *TxQueryServicePgsql) Query(ctx context.Context, queryName string, args ...any) (*model.QueryResult, error) {
-	sql := s.Queries[queryName]
-	if sql == "" {
-		return nil, fmt.Errorf("query not found: %s", queryName)
-	}
-	rows, err := s.Tx.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to run query: %w", err)
-	}
-	return scanResult(rows)
+	return namedQuery{s.Tx, s.Queries}.result(ctx, queryName, args)
+}
+
+func (s *TxQueryServicePgsql) QueryEach(ctx context.Context, queryName string, scan func(port.RowScanner) error, args ...any) error {
+	return namedQuery{s.Tx, s.Queries}.each(ctx, queryName, scan, args)
 }
 
 func (s *TxQueryServicePgsql) Commit(ctx context.Context) error {
@@ -64,5 +59,8 @@ func (s *TxQueryServicePgsql) QueryService(catalogID string, queries map[string]
 	}
 }
 
-var _ port.TxQueryService = (*TxQueryServicePgsql)(nil)
-var _ port.TxQueryCatalog = (*TxQueryServicePgsql)(nil)
+var (
+	_ port.TxQueryService = (*TxQueryServicePgsql)(nil)
+	_ port.TxQueryCatalog = (*TxQueryServicePgsql)(nil)
+	_ port.RowQuerier     = (*TxQueryServicePgsql)(nil)
+)

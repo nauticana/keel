@@ -2,7 +2,6 @@ package pgsql
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nauticana/keel/model"
@@ -16,19 +15,18 @@ type QueryServicePgsql struct {
 }
 
 func (s *QueryServicePgsql) Query(ctx context.Context, queryName string, args ...any) (*model.QueryResult, error) {
-	sql := s.Queries[queryName]
-	if sql == "" {
-		return nil, fmt.Errorf("query not found: %s", queryName)
-	}
-	rows, err := s.Client.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to run query: %w", err)
-	}
-	return scanResult(rows)
+	return namedQuery{s.Client, s.Queries}.result(ctx, queryName, args)
+}
+
+func (s *QueryServicePgsql) QueryEach(ctx context.Context, queryName string, scan func(port.RowScanner) error, args ...any) error {
+	return namedQuery{s.Client, s.Queries}.each(ctx, queryName, scan, args)
 }
 
 func (s *QueryServicePgsql) GenID() int64 {
 	return s.IdGenerator.NextID()
 }
 
-var _ port.QueryService = (*QueryServicePgsql)(nil)
+var (
+	_ port.QueryService = (*QueryServicePgsql)(nil)
+	_ port.RowQuerier   = (*QueryServicePgsql)(nil)
+)

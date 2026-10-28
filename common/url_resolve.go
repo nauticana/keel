@@ -47,7 +47,7 @@ func resolveURL(ctx context.Context, rawURL string, lookup hostLookup) (string, 
 	if strings.HasPrefix(host, "www.") {
 		return "", false, fmt.Errorf("%w: %q: %v", ErrHostUnresolvable, host, apexErr)
 	}
-	www := *parsed
+	www := parsed.Clone()
 	www.Host = "www." + parsed.Host
 	if wwwErr := hostResolves(ctx, www.Hostname(), lookup); wwwErr != nil {
 		return "", false, fmt.Errorf("%w: %q (%v) and its www. variant (%v)", ErrHostUnresolvable, host, apexErr, wwwErr)

@@ -176,8 +176,8 @@ func TestAppleGrantsRedeemReportsRefusedCode(t *testing.T) {
 	f := newFakeApple(t)
 	f.tokenErr = "invalid_grant"
 	a, _ := newTestAppleGrants(t, f)
-	var refused *TokenError
-	if _, err := a.Redeem(context.Background(), "used-code", "apple-sub"); !errors.As(err, &refused) || refused.Code != "invalid_grant" {
+	_, err := a.Redeem(context.Background(), "used-code", "apple-sub")
+	if refused, ok := errors.AsType[*TokenError](err); !ok || refused.Code != "invalid_grant" {
 		t.Fatalf("want TokenError invalid_grant, got %v", err)
 	}
 }
@@ -199,8 +199,8 @@ func TestAppleGrantsRevokeGrant(t *testing.T) {
 	checkClientSecret(t, form, key)
 
 	f.revokeErr = "invalid_client"
-	var refused *TokenError
-	if err := a.RevokeGrant(context.Background(), AppleIssuer, sealed); !errors.As(err, &refused) || refused.Code != "invalid_client" {
+	err = a.RevokeGrant(context.Background(), AppleIssuer, sealed)
+	if refused, ok := errors.AsType[*TokenError](err); !ok || refused.Code != "invalid_client" {
 		t.Fatalf("want TokenError invalid_client, got %v", err)
 	}
 }

@@ -112,8 +112,7 @@ func TestChangePlanTx_RefusesOverTargetLimit(t *testing.T) {
 		err := svc.ChangePlanTx(context.Background(), tx, 7, "TARGET", BillingTerms{BillingCycle: PeriodAnnual, TermType: PeriodAnnual, TermCount: 1})
 		writes := callCount(&tx.fakeQS, qLcChangePlanClose) + callCount(&tx.fakeQS, qLcInsertActive) + callCount(&tx.fakeQS, qLcInsertFree)
 		if tc.refused {
-			var over *OverTargetLimitError
-			if !errors.As(err, &over) || over.PlanID != "TARGET" || writes != 0 {
+			if over, ok := errors.AsType[*OverTargetLimitError](err); !ok || over.PlanID != "TARGET" || writes != 0 {
 				t.Fatalf("mode %s: err=%v calls=%+v", tc.mode, err, tx.calls)
 			}
 			continue

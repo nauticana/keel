@@ -251,8 +251,7 @@ func (p *StripeConnectProvider) RequestInstantPayout(ctx context.Context, in Ins
 // isStripeInstantUnavailable detects Stripe's instant-ineligibility
 // error class so callers get the typed ErrInstantPayoutUnavailable.
 func isStripeInstantUnavailable(err error) bool {
-	var apiErr *stripeAPIError
-	if errors.As(err, &apiErr) && apiErr.Code != "" {
+	if apiErr, ok := errors.AsType[*stripeAPIError](err); ok && apiErr.Code != "" {
 		return strings.EqualFold(apiErr.Code, "instant_payouts_unsupported") ||
 			strings.EqualFold(apiErr.Code, "instant_payouts_limit_exceeded")
 	}
@@ -401,8 +400,7 @@ func isStripeInsufficientBalance(err error) bool {
 	if err == nil {
 		return false
 	}
-	var apiErr *stripeAPIError
-	if errors.As(err, &apiErr) && apiErr.Code != "" {
+	if apiErr, ok := errors.AsType[*stripeAPIError](err); ok && apiErr.Code != "" {
 		return strings.EqualFold(apiErr.Code, "balance_insufficient")
 	}
 	msg := err.Error()

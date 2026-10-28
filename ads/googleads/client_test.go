@@ -110,16 +110,15 @@ func TestErrorStatusDecodesGoogleAdsFailure(t *testing.T) {
 		 "requestId":"req-1"}]}}]`)
 	})
 	_, err := Search[customerRow](context.Background(), c, "secret-token", "1", "SELECT a FROM campaign")
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
+	apiErr, ok := errors.AsType[*APIError](err)
+	if !ok {
 		t.Fatalf("err = %v", err)
 	}
 	if apiErr.HTTPStatus != 403 || apiErr.Status != "PERMISSION_DENIED" || apiErr.RequestID != "req-1" ||
 		len(apiErr.Failures) != 1 || apiErr.Failures[0].Code != "DEVELOPER_TOKEN_NOT_APPROVED" || apiErr.Failures[0].Category != "authorizationError" {
 		t.Fatalf("apiErr = %+v", apiErr)
 	}
-	var se *common.HTTPStatusError
-	if !errors.As(err, &se) || !se.Unauthorized() {
+	if se, ok := errors.AsType[*common.HTTPStatusError](err); !ok || !se.Unauthorized() {
 		t.Fatalf("not classified as unauthorized: %v", err)
 	}
 	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "dev-secret") {
@@ -137,9 +136,9 @@ func TestErrorStatusWithoutEnvelopeKeepsRequestIDHeader(t *testing.T) {
 		_, _ = io.WriteString(w, `upstream down`)
 	})
 	_, err := c.AccessibleCustomers(context.Background(), "tok")
-	var apiErr *APIError
-	var se *common.HTTPStatusError
-	if !errors.As(err, &apiErr) || apiErr.RequestID != "hdr-id" || !errors.As(err, &se) || !se.Transient() {
+	apiErr, isAPI := errors.AsType[*APIError](err)
+	se, isStatus := errors.AsType[*common.HTTPStatusError](err)
+	if !isAPI || apiErr.RequestID != "hdr-id" || !isStatus || !se.Transient() {
 		t.Fatalf("err = %v", err)
 	}
 }

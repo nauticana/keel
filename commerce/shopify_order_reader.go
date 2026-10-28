@@ -235,11 +235,11 @@ func (r *ShopifyOrderReader) query(ctx context.Context, token, url string, vars 
 			map[string]any{"query": shopifyOrdersQuery, "variables": vars})
 		wait := time.Duration(0)
 		if err != nil {
-			var status *common.HTTPStatusError
+			status, ok := errors.AsType[*common.HTTPStatusError](err)
 			switch {
-			case errors.As(err, &status) && status.Unauthorized():
+			case ok && status.Unauthorized():
 				return fmt.Errorf("%w: %w", ErrAccessDenied, err)
-			case errors.As(err, &status) && status.RateLimited():
+			case ok && status.RateLimited():
 				wait = time.Second
 			default:
 				return err

@@ -91,8 +91,8 @@ func (s rpcStatus) failures() ([]Failure, string) {
 // wrapError maps a RequestJSON failure: a status error becomes an *APIError,
 // anything else is wrapped as is. No header or token enters the message.
 func wrapError(op string, err error) error {
-	var se *common.HTTPStatusError
-	if !errors.As(err, &se) {
+	se, ok := errors.AsType[*common.HTTPStatusError](err)
+	if !ok {
 		return fmt.Errorf("googleads: %s: %w", op, err)
 	}
 	apiErr := &APIError{HTTPStatus: se.Status, cause: se}

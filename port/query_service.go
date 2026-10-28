@@ -11,6 +11,18 @@ type QueryService interface {
 	GenID() int64
 }
 
+// RowScanner reads the current row into typed destinations in SELECT-list order.
+type RowScanner interface {
+	Scan(dest ...any) error
+}
+
+// RowQuerier is an optional QueryService capability for hot queries: it hands
+// each row to scan without boxing cells into a QueryResult. A scan error stops
+// the iteration and is returned unchanged.
+type RowQuerier interface {
+	QueryEach(ctx context.Context, queryName string, scan func(RowScanner) error, args ...any) error
+}
+
 type TxQueryService interface {
 	QueryService
 	Commit(ctx context.Context) error

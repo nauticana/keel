@@ -86,6 +86,7 @@ const (
 	http_idle_timeout             = "http_idle_timeout"
 	http_max_header_values        = "http_max_header_values"
 	hc_port                       = "hc_port"
+	debug_port                    = "debug_port"
 	push_mode                     = "push_mode"
 	apns_key_id                   = "apns_key_id"
 	apns_team_id                  = "apns_team_id"
@@ -248,6 +249,7 @@ type KeelConfig struct {
 	HttpMaxHeaderValues         int           // http_max_header_values        500                Most header values per request; 0 = default
 	HttpIdleTimeout             int           // http_idle_timeout             120                HTTP idle timeout in seconds
 	HCPort                      int           // hc_port                       0                  Health check port override for workers
+	DebugPort                   int           // debug_port                    0                  Loopback port of the /debug/pprof profiles; 0 disables
 	PushMode                    string        // push_mode                     noop               Push provider: noop, fcm, apns or fcm,apns
 	APNsKeyID                   string        // apns_key_id                   ""                 APNs auth key id (.p8 key)
 	APNsTeamID                  string        // apns_team_id                  ""                 Apple developer team id
@@ -407,6 +409,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.HttpMaxHeaderValues = c.Int(m, http_max_header_values)
 	c.HttpIdleTimeout = c.Int(m, http_idle_timeout)
 	c.HCPort = c.Int(m, hc_port)
+	c.DebugPort = c.Int(m, debug_port)
 	c.PushMode = c.String(m, push_mode)
 	c.APNsKeyID = c.String(m, apns_key_id)
 	c.APNsTeamID = c.String(m, apns_team_id)
@@ -523,6 +526,9 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.AgencyPayoutMinMinor < 0 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: cannot be negative", agency_payout_min_minor))
+	}
+	if c.DebugPort < 0 || c.DebugPort > 65535 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 0 and 65535", debug_port))
 	}
 	if c.HttpMaxHeaderValues == 0 {
 		c.HttpMaxHeaderValues = 500

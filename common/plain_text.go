@@ -35,31 +35,45 @@ func PlainText(markup string) string {
 
 // PlainTextNode is PlainText for an already-parsed subtree.
 func PlainTextNode(n *html.Node) string {
-	var sb strings.Builder
-	writePlainText(&sb, n)
-	return strings.Join(strings.Fields(sb.String()), " ")
+	return strings.Join(PlainTextLines(n), " ")
 }
 
-func writePlainText(sb *strings.Builder, n *html.Node) {
-	switch n.Type {
-	case html.TextNode:
-		sb.WriteString(n.Data)
-		return
-	case html.CommentNode, html.DoctypeNode:
-		return
-	case html.ElementNode:
-		if plainTextSkipped[n.DataAtom] {
+// PlainTextLines is the visible text of a subtree split at non-inline element
+// boundaries: one whitespace-collapsed entry per run, empty runs dropped.
+func PlainTextLines(n *html.Node) []string {
+	var lines []string
+	var run strings.Builder
+	flush := func() {
+		if line := strings.Join(strings.Fields(run.String()), " "); line != "" {
+			lines = append(lines, line)
+		}
+		run.Reset()
+	}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		switch n.Type {
+		case html.TextNode:
+			run.WriteString(n.Data)
 			return
+		case html.CommentNode, html.DoctypeNode:
+			return
+		case html.ElementNode:
+			if plainTextSkipped[n.DataAtom] {
+				return
+			}
+		}
+		block := n.Type == html.ElementNode && !plainTextInline[n.DataAtom]
+		if block {
+			flush()
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+		if block {
+			flush()
 		}
 	}
-	breaksWord := n.Type == html.ElementNode && !plainTextInline[n.DataAtom]
-	if breaksWord {
-		sb.WriteByte(' ')
-	}
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		writePlainText(sb, c)
-	}
-	if breaksWord {
-		sb.WriteByte(' ')
-	}
+	walk(n)
+	flush()
+	return lines
 }

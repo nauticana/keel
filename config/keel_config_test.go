@@ -22,7 +22,7 @@ var keelTestFlagIDs = []string{
 	nats_creds_secret, storage_mode, storage_bucket, s3_endpoint, storage_credential_secret, dms_max_bytes, scan_mode, scan_addr, extract_mode, extract_max_bytes, extract_ocr_max_pages,
 	storage_public_base_url, storage_account_url, storage_region, storage_clock_skew, messaging_mode,
 	max_request_size, http_read_timeout, http_write_timeout, http_max_header_values,
-	http_idle_timeout, hc_port, push_mode, apns_key_id, apns_team_id,
+	http_idle_timeout, hc_port, debug_port, push_mode, apns_key_id, apns_team_id,
 	apns_bundle_id, apns_key_secret, apns_sandbox, apns_token_ttl, redis_url, valkey_url,
 	valkey_cluster, sms_provider, sms_service_sid, payout_provider,
 	payout_return_url, payout_webhook_url, airwallex_api_base,

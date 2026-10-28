@@ -137,7 +137,7 @@ func (s *Service) Reconcile(ctx context.Context, claimID int64, run Run) ([]byte
 func (s *Service) settle(ctx context.Context, c Claim, fence string, run Run) ([]byte, error) {
 	key := ledgerKey(c.ID)
 	result, err := run(ctx, c)
-	var f *Failure
+	f, isFailure := errors.AsType[*Failure](err)
 	switch {
 	case err == nil && len(result) > MaxResultBytes:
 		markErr := s.Ledger.MarkUnknown(context.WithoutCancel(ctx), key, fence)
@@ -148,7 +148,7 @@ func (s *Service) settle(ctx context.Context, c Claim, fence string, run Run) ([
 			return nil, unknown(c.ID, cerr, markErr)
 		}
 		return result, nil
-	case errors.As(err, &f):
+	case isFailure:
 		if len(f.Reason) > MaxResultBytes {
 			return s.releaseFailure(ctx, c.ID, key, fence, f, ErrResultTooLarge)
 		}

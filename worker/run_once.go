@@ -4,6 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os/signal"
+	"runtime/pprof"
+	"syscall"
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/common"
@@ -37,6 +40,8 @@ func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.D
 	if !flag.Parsed() {
 		flag.Parse()
 	}
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 	secrets, err := secret.NewSecretProvider(ctx)
 	if err != nil {
 		return fmt.Errorf("RunOnce: secrets: %w", err)
@@ -62,6 +67,7 @@ func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.D
 	if err != nil {
 		return err
 	}
+	pprof.SetGoroutineLabels(pprof.WithLabels(ctx, pprof.Labels("worker", caption)))
 	journal, err := logger.NewApplicationLogger(caption)
 	if err != nil {
 		return fmt.Errorf("RunOnce: logger: %w", err)
@@ -77,6 +83,10 @@ func RunOnce(ctx context.Context, loadConfig func(ctx context.Context, db port.D
 	quota := &service.QuotaServiceDb{Repo: db, Bus: bus, Journal: journal}
 	journal.Info(caption + ": running once")
 	w.ProcessQueue(ctx, journal, db, quota, qs)
+	if ctx.Err() != nil {
+		journal.Info(caption + ": stopped: " + context.Cause(ctx).Error())
+		return context.Cause(ctx)
+	}
 	journal.Info(caption + ": done")
 	return nil
 }

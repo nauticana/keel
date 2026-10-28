@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"runtime/pprof"
 	"time"
 
 	"github.com/nauticana/keel/logger"
@@ -16,6 +17,7 @@ import (
 func RunQueueInProcess(ctx context.Context, w QueueWorker, db port.DatabaseRepository, journal logger.ApplicationLogger, quota port.QuotaService, interval time.Duration) {
 	qs := db.GetQueryService(ctx, w.GetOLTPQueries())
 	pending, claim, reclaim, name := w.QueueQueries()
+	pprof.SetGoroutineLabels(pprof.WithLabels(ctx, pprof.Labels("worker", name)))
 	loop := &JobLoop{QS: qs, Journal: journal, GetPendingQuery: pending, ClaimQuery: claim, ReclaimQuery: reclaim, WorkerName: name, Leased: leasedClaim(w)}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

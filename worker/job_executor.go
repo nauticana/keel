@@ -7,6 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"runtime/pprof"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
+	"github.com/nauticana/keel/service"
 	"github.com/nauticana/keel/storage"
 )
 
@@ -82,10 +86,15 @@ type JobExecutor struct {
 
 // Run refuses a Caption that cannot register (ErrCaption) and a failed
 // registration, so a running worker always has a registry row and heartbeat.
-func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvider) error {
+// SIGTERM or SIGINT stops it with a nil error; the end of parent returns parent's error.
+func (e *JobExecutor) Run(parent context.Context, secretProvider secret.SecretProvider) error {
 	if err := checkCaption(e.Caption); err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(parent, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	ctx = pprof.WithLabels(ctx, pprof.Labels("worker", e.Caption))
+	pprof.SetGoroutineLabels(ctx)
 	hcPort := e.Worker.GetHealthcheckPort()
 	if config.Config().HCPort > 0 {
 		hcPort = config.Config().HCPort
@@ -112,6 +121,7 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 		_ = hcServer.Shutdown(shutdownCtx)
 	}()
 
+	(&service.DebugServer{Journal: e.Journal}).Start(ctx)
 	e.Journal.Info("starting new service " + e.Caption)
 	dbOLTP := e.DB
 	if dbOLTP == nil {
@@ -147,7 +157,8 @@ func (e *JobExecutor) Run(ctx context.Context, secretProvider secret.SecretProvi
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			e.Journal.Info("stopping " + e.Caption + ": " + context.Cause(ctx).Error())
+			return parent.Err()
 		case <-ticker.C:
 			e.runTick(ctx, dbOLTP, quotaService, qsOLTP, loop)
 		}

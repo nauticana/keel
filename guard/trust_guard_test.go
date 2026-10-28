@@ -32,8 +32,8 @@ func TestDuplicateGuard_ReturnsExistingID(t *testing.T) {
 	qs := fakeQuerier{rows: map[string][][]any{"qDup": {{int64(999)}}}}
 	err := NewDuplicateGuard("qDup", time.Minute).Check(context.Background(), qs, baseInput())
 
-	var dup *DuplicateError
-	if !errors.As(err, &dup) {
+	dup, ok := errors.AsType[*DuplicateError](err)
+	if !ok {
 		t.Fatalf("want *DuplicateError, got %v", err)
 	}
 	if dup.ExistingID != 999 {

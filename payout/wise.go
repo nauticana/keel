@@ -359,8 +359,7 @@ func isWiseInsufficientBalance(err error) bool {
 	if err == nil {
 		return false
 	}
-	var apiErr *wiseAPIError
-	if errors.As(err, &apiErr) && apiErr.Code != "" {
+	if apiErr, ok := errors.AsType[*wiseAPIError](err); ok && apiErr.Code != "" {
 		// Wise uses various codes for funding shortfalls; cover the
 		// documented ones plus a substring fallback.
 		if strings.EqualFold(apiErr.Code, "balance.insufficient_funds") ||

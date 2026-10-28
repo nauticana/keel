@@ -519,8 +519,8 @@ func TestInsertSingle_GeneratesUnsequencedSurrogateKey(t *testing.T) {
 		}
 	}
 	for _, bad := range []any{"abc", json.Number("1.5")} {
-		var appErr *model.AppError
-		if _, err := s.InsertSingle(ctx, 0, 0, map[string]any{"Id": bad, "Name": "x"}); !errors.As(err, &appErr) || appErr.Status != 400 {
+		_, err := s.InsertSingle(ctx, 0, 0, map[string]any{"Id": bad, "Name": "x"})
+		if appErr, ok := errors.AsType[*model.AppError](err); !ok || appErr.Status != 400 {
 			t.Fatalf("id %#v must be a 400: %v", bad, err)
 		}
 	}

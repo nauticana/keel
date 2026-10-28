@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -40,31 +39,32 @@ func (r *DOMRenderer) Render(ctx context.Context, req RenderRequest) (*RenderRes
 	tabCtx, closeTab := session.NewTab(timeout)
 	defer closeTab()
 
-	var actions chromedp.Tasks
 	if ua := strings.TrimSpace(req.UserAgent); ua != "" {
-		actions = append(actions, emulation.SetUserAgentOverride(ua))
+		if _, err := chromedp.Call(tabCtx, emulation.SetUserAgentOverride, emulation.SetUserAgentOverrideParams{UserAgent: ua}); err != nil {
+			return nil, fmt.Errorf("browser: user agent for %s: %w", req.URL, err)
+		}
 	}
 	var requests *requestLog
 	if req.CaptureRequests {
 		requests = newRequestLog(req.MaxRequests)
-		chromedp.ListenTarget(tabCtx, requests.observe)
+		requests.listen(tabCtx)
 	}
 	out := &RenderResult{URL: req.URL, Evaluations: map[string]any{}, EvaluationErrors: map[string]error{}}
 	start := time.Now()
-	actions = append(actions,
+	err = chromedp.Do(tabCtx,
 		chromedp.Navigate(req.URL),
 		// body visible = the static shell of an asynchronously hydrating app is in place.
-		chromedp.WaitVisible("body", chromedp.ByQuery),
-		chromedp.ActionFunc(func(context.Context) error {
+		chromedp.WaitVisible(chromedp.CSS("body")),
+		chromedp.Func(func(context.Context, *chromedp.Target) error {
 			out.Loaded = time.Since(start)
 			return nil
 		}),
+		chromedp.Sleep(req.Settle),
 	)
-	if req.Settle > 0 {
-		actions = append(actions, chromedp.Sleep(req.Settle))
+	if err == nil {
+		out.RenderedHTML, err = chromedp.Run(tabCtx, chromedp.OuterHTML(chromedp.CSS("html")))
 	}
-	actions = append(actions, chromedp.OuterHTML("html", &out.RenderedHTML))
-	if err := chromedp.Run(tabCtx, actions); err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("browser: render %s: %w", req.URL, err)
 	}
 	if requests != nil {
@@ -72,7 +72,10 @@ func (r *DOMRenderer) Render(ctx context.Context, req RenderRequest) (*RenderRes
 	}
 
 	for label, expr := range req.Evaluations {
-		value, err := evaluate(tabCtx, expr)
+		// A throwing expression evaluates to nil: "feature absent" is a regular
+		// outcome for a probe, distinct from an expression that could not run.
+		guarded := fmt.Sprintf("(function(){try{return (%s);}catch(e){return null;}})()", expr)
+		value, err := chromedp.Run(tabCtx, chromedp.Evaluate[any](guarded))
 		if err != nil {
 			out.EvaluationErrors[label] = err
 			continue
@@ -87,32 +90,13 @@ func (r *DOMRenderer) Render(ctx context.Context, req RenderRequest) (*RenderRes
 	return out, nil
 }
 
-// evaluate turns a throwing expression into nil: "feature absent" is a regular
-// outcome for a probe, distinct from an expression that could not run.
-func evaluate(tabCtx context.Context, expr string) (any, error) {
-	var raw json.RawMessage
-	guarded := fmt.Sprintf("(function(){try{return (%s);}catch(e){return null;}})()", expr)
-	if err := chromedp.Run(tabCtx, chromedp.Evaluate(guarded, &raw)); err != nil {
-		return nil, err
-	}
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, err
-	}
-	return value, nil
-}
-
 func cookies(tabCtx context.Context) ([]http.Cookie, error) {
-	var found []*network.Cookie
-	err := chromedp.Run(tabCtx, chromedp.ActionFunc(func(ctx context.Context) (err error) {
-		found, err = network.GetCookies().Do(ctx)
-		return err
-	}))
+	res, err := chromedp.Call(tabCtx, network.GetCookies, network.GetCookiesParams{})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]http.Cookie, 0, len(found))
-	for _, c := range found {
+	out := make([]http.Cookie, 0, len(res.Cookies))
+	for _, c := range res.Cookies {
 		out = append(out, http.Cookie{
 			Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path,
 			Secure: c.Secure, HttpOnly: c.HTTPOnly, SameSite: sameSite(c.SameSite),

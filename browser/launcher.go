@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -100,8 +101,8 @@ func (l *Launcher) allocatorOptions(profileDir string) []chromedp.ExecAllocatorO
 		chromedp.Flag("metrics-recording-only", true),
 		chromedp.Flag("hide-scrollbars", true),
 		chromedp.Flag("mute-audio", true),
+		chromedp.Env(l.chromeEnv(os.Environ(), profileDir)...),
 		chromedp.ModifyCmdFunc(func(cmd *exec.Cmd) {
-			cmd.Env = chromeEnv(os.Environ(), profileDir)
 			l.info("launch: " + strings.Join(cmd.Args, " "))
 		}),
 	}
@@ -114,21 +115,15 @@ func (l *Launcher) allocatorOptions(profileDir string) []chromedp.ExecAllocatorO
 	return opts
 }
 
-// chromeEnv points TMPDIR into the profile dir so Chrome's temp files are
-// removed with it, and supplies a HOME when the service has none — crashpad
-// derives its database path from it.
-func chromeEnv(parent []string, profileDir string) []string {
-	env := append([]string{}, parent...)
-	hasHome := false
-	for _, kv := range parent {
-		if strings.HasPrefix(kv, "HOME=") && kv != "HOME=" {
-			hasHome = true
-		}
-	}
-	if !hasHome {
+// chromeEnv is what Chrome's environment adds to parent: TMPDIR in the profile
+// dir so Chrome's temp files are removed with it, and a HOME when the service
+// has none — crashpad derives its database path from it.
+func (l *Launcher) chromeEnv(parent []string, profileDir string) []string {
+	env := []string{"TMPDIR=" + profileDir}
+	if !slices.ContainsFunc(parent, func(kv string) bool { return strings.HasPrefix(kv, "HOME=") && kv != "HOME=" }) {
 		env = append(env, "HOME="+profileDir)
 	}
-	return append(env, "TMPDIR="+profileDir)
+	return env
 }
 
 func (l *Launcher) execPath() string {

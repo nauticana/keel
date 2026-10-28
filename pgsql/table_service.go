@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
@@ -35,16 +36,18 @@ func scopePartnerFilter(where map[string]any, partnerID int64, userID int, globa
 	}
 }
 
-// pgxQuerier is the minimal pgx surface that TableServicePgsql calls
-// against. Both *pgxpool.Pool and pgx.Tx satisfy it — having Client be
-// an interface (rather than a concrete pool) is what lets WithTx fork
-// a tx-bound copy of the service so RelationAPI.Post can run all of
-// its writes inside one transaction (P1-35).
+// pgxQuerier is the pgx surface a pool and a transaction share, so table and
+// query services run the same code on either.
 type pgxQuerier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
+
+var (
+	_ pgxQuerier = (*pgxpool.Pool)(nil)
+	_ pgxQuerier = (pgx.Tx)(nil)
+)
 
 type TableServicePgsql struct {
 	data.AbstractTableService

@@ -86,8 +86,7 @@ func TestProviderErrorIsTypedAndKeepsTheKeyOut(t *testing.T) {
 		_, _ = io.WriteString(w, `{"errors":[{"code":"throttled"}]}`)
 	})
 	err := c.CreateEvent(context.Background(), testKey, Event{Metric: "m", UniqueID: "u", Profile: Profile{ExternalID: "7"}})
-	var se *common.HTTPStatusError
-	if !errors.As(err, &se) || !se.RateLimited() || se.Header.Get("Retry-After") != "12" {
+	if se, ok := errors.AsType[*common.HTTPStatusError](err); !ok || !se.RateLimited() || se.Header.Get("Retry-After") != "12" {
 		t.Fatalf("err = %v", err)
 	}
 	if strings.Contains(err.Error(), testKey) {

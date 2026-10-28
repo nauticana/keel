@@ -82,3 +82,18 @@ func TestDecodeStrictJSONRefusesUnknownMembers(t *testing.T) {
 		t.Fatalf("unknown member: %v", err)
 	}
 }
+
+func TestDecodeJSONRefusesDuplicateNames(t *testing.T) {
+	for _, body := range []string{`{"role":"user","role":"admin"}`, `{"a":{"x":1,"x":2}}`} {
+		var v map[string]any
+		if err := DecodeJSON([]byte(body), &v); err == nil {
+			t.Errorf("%s: decoded %v", body, v)
+		}
+	}
+	var r struct {
+		ID int64 `json:"id"`
+	}
+	if err := DecodeStrictJSON([]byte(`{"id":"1","id":"2"}`), &r); err == nil {
+		t.Errorf("strict: decoded %d", r.ID)
+	}
+}

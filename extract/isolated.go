@@ -128,8 +128,8 @@ func (i *Isolated) runChild(ctx context.Context, mediaType string, raw []byte) (
 }
 
 func childError(err error, stderr string) error {
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) {
+	exit, ok := errors.AsType[*exec.ExitError](err)
+	if !ok {
 		return fmt.Errorf("%w: %w", ErrIsolationFailed, err)
 	}
 	switch exit.ExitCode() {

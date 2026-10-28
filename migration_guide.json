@@ -9,6 +9,17 @@
  },
  "migrations": [
   {
+   "version": "v1.3.1",
+   "title": "chromedp v0.21, Infisical SDK v0.9, typed row scanning, signal-aware workers, duplicate JSON names refused",
+   "tags": [
+    "additive",
+    "breaking",
+    "behavioral"
+   ],
+   "summary": "browser runs on chromedp v0.21.0, secret on infisical/go-sdk v0.9.1; data.Collect scans named queries into typed rows and replaces data.ScanRows; API JSON decoding refuses duplicate member names; workers stop cleanly on SIGTERM; debug_port serves runtime profiles on loopback.",
+   "body_markdown": "### Dependencies\n\n| Module | Old | New |\n|---|---|---|\n| `github.com/chromedp/chromedp` | v0.14.2 | v0.21.0 |\n| `github.com/chromedp/cdproto` | 2025-08-03 pseudo-version | v0.158.6 |\n| `github.com/infisical/go-sdk` | v0.7.2 | v0.9.1 |\n\nThe keel API of `browser` and `secret` is unchanged. Code that runs its own chromedp actions on `Session.Context`, `Session.NewTab` or `Launcher.NewAllocator` contexts moves to chromedp's generic API (`Run`/`Do`, `Action[T]`, typed selectors, `Events` in place of `ListenTarget`); chromedp's `docs/MIGRATION.md` maps every name. Chrome now talks to chromedp over a pipe instead of a DevTools port.\n\n### New\n\n| Symbol | Purpose |\n|---|---|\n| `port.RowScanner`, `port.RowQuerier` (`QueryEach`) | optional `QueryService` capability that hands each row to a typed scan instead of boxing it into a `QueryResult`; both pgsql query services implement it, including transaction-bound ones |\n| `data.Collect[T](ctx, qs, queryName, scan, args...)`, `data.ErrRowsUnsupported` | named query → `[]T` through `QueryEach`; a service without `RowQuerier` returns `ErrRowsUnsupported` |\n| `service.DebugServer` (`Start`) and `debug_port` (config, default 0 = off, 0–65535) | runtime profiles, including `goroutineleak`, at `/debug/pprof/{name}` on `127.0.0.1:debug_port`; `HttpBackend.Run` and `JobExecutor.Run` start it |\n| `common.PlainTextLines(*html.Node) []string` | `PlainTextNode` split at non-inline element boundaries: one whitespace-collapsed entry per run, empty runs dropped. `PlainTextNode` is its join |\n\n### Removed\n\n| Old | New |\n|---|---|\n| `data.ScanRows(rows, scan)` | `data.Collect(ctx, qs, queryName, scan, args...)` for keel named queries; `pgx.CollectRows` for a raw pgx query |\n\n### Behavioral\n\n- `common.DecodeJSON` and `common.DecodeStrictJSON`, and so `ReadRequest` and `ReadStrictRequest`, refuse a duplicate member name at any depth.\n- `JobExecutor.Run` (and `AbstractWorker.Run`) stop on SIGTERM or SIGINT with a nil error and log the signal; the end of the caller's context still returns that context's error. Worker goroutines carry the pprof label `worker=<Caption>`.\n- `worker.RunOnce` cancels the running pass on SIGTERM or SIGINT and returns the signal as its error.\n- `domain.HTTPFileVerifier` without a `Client` reuses one public-only client instead of building a transport per verification.\n\n### Migration steps\n\n1. Bump keel and `go mod tidy`.\n2. Existing databases insert the `debug_port` `application_config_flag` row from `schema/seed/core.yml`.\n3. Replace `data.ScanRows` as above; a `QueryService` fake used with `data.Collect` implements `QueryEach`."
+  },
+  {
    "version": "v1.3.0",
    "title": "Typed query results and Go 1.27 modernization",
    "tags": [

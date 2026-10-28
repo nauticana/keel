@@ -173,8 +173,8 @@ func TestTenantResolverResolve(t *testing.T) {
 			t.Errorf("Resolve(%d) err = %v, want ErrTenantNotFound", foreign, err)
 		}
 	}
-	var choice *TenantChoiceError
-	if _, err := r.Resolve(ctx, user7, 0); !errors.Is(err, ErrTenantRequired) || !errors.As(err, &choice) || len(choice.Choices) != 4 {
+	_, err := r.Resolve(ctx, user7, 0)
+	if choice, ok := errors.AsType[*TenantChoiceError](err); !errors.Is(err, ErrTenantRequired) || !ok || len(choice.Choices) != 4 {
 		t.Errorf("Resolve(0) with several = %v", err)
 	}
 	if tenant, err := r.Resolve(ctx, model.TenantCaller{UserID: 8}, 0); err != nil || tenant.PartnerID != 20 {

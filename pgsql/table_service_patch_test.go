@@ -80,8 +80,8 @@ func TestPatch_Forbidden(t *testing.T) {
 	auth := &stubAuthQuery{permRows: nil, globalRows: nil}
 	s, _ := newService(t, patchTable(), auth)
 	err := s.Patch(context.Background(), 42, 7, map[string]any{"id": int64(1)}, map[string]any{"amount": int64(5)})
-	var appErr *model.AppError
-	if !errors.As(err, &appErr) || appErr.Status != 403 {
+	appErr, ok := errors.AsType[*model.AppError](err)
+	if !ok || appErr.Status != 403 {
 		t.Fatalf("err = %v, want 403 AppError", err)
 	}
 	if appErr.Message != model.NoAuthorizationMessage || appErr.Detail != "no authorization for UPDATE on invoice" {

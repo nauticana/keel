@@ -332,3 +332,9 @@ func TestMicrosoftEntraRoleQuery(t *testing.T) {
 		t.Fatalf("EntraRolesURL = %s", EntraRolesURL)
 	}
 }
+
+func TestPublicHTTPClientIsShared(t *testing.T) {
+	if publicHTTPClient() != publicHTTPClient() {
+		t.Fatal("each verification builds its own client and transport")
+	}
+}

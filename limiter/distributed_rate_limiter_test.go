@@ -160,8 +160,7 @@ func TestDistributedReplicasShareQuotaAndFleetRejectionChargesNothing(t *testing
 	if admitted != 6 || !errors.Is(last, ErrRateLimited) {
 		t.Fatalf("admitted %d last %v", admitted, last)
 	}
-	var limit *LimitError
-	if !errors.As(last, &limit) || limit.Scope != "turn.fleet" {
+	if limit, ok := errors.AsType[*LimitError](last); !ok || limit.Scope != "turn.fleet" {
 		t.Fatalf("rejection = %v", last)
 	}
 	partnerKey, _, _ := windowKey("rl", "turn", "p", 1, time.Second, fake.Now())

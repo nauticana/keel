@@ -99,7 +99,7 @@ All methods are stateless — they only inspect the JWT or request context and w
 | `RequireUser(w, r) (int, bool)` | 401 if no user id. |
 | `RequirePartner(w, r) (int64, bool)` | 401 if `partner_id <= 0`. |
 | `SessionPartner(session) (int64, error)` | Same rule for a `JSONFunc`, which has a session and no writer; the error is a 401 `*APIError`. |
-| `ReadRequest(w, r, &req) bool` | `MaxBytesReader(config.Config().MaxRequestSize)` + `common.DecodeJSON`; 400 on failure. Public endpoints. `ReadStrictRequest` also refuses undeclared members. |
+| `ReadRequest(w, r, &req) bool` | `MaxBytesReader(config.Config().MaxRequestSize)` + `common.DecodeJSON`; 400 on failure. Public endpoints. `ReadStrictRequest` also refuses undeclared members. Both refuse a duplicate member name. |
 | `ReadAuthRequest(w, r, &req) (*Session, bool)` | `RequireSession + ReadRequest` combined. Authenticated endpoints with a JSON body. |
 | `RequireMethod(w, r, methods...string) bool` | 405 + `Allow` header if `r.Method` doesn't match any of the allowed methods. One-line guard for HTTP-method-restricted handlers. |
 | `RequireQueryInt64(w, r, name string) (int64, bool)` | Reads `?name=<int>` from the URL, parses to int64. 400 on missing or unparseable value. |

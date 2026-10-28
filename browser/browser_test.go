@@ -42,12 +42,12 @@ func TestSweepRemovesOnlyStaleBrowserDirs(t *testing.T) {
 }
 
 func TestChromeEnv(t *testing.T) {
-	withHome := chromeEnv([]string{"HOME=/home/app", "PATH=/bin"}, "/tmp/p")
+	withHome := (&Launcher{}).chromeEnv([]string{"HOME=/home/app", "PATH=/bin"}, "/tmp/p")
 	if slices.Contains(withHome, "HOME=/tmp/p") || !slices.Contains(withHome, "TMPDIR=/tmp/p") {
 		t.Errorf("env = %v", withHome)
 	}
 	for _, parent := range [][]string{{"PATH=/bin"}, {"HOME="}} {
-		if env := chromeEnv(parent, "/tmp/p"); !slices.Contains(env, "HOME=/tmp/p") {
+		if env := (&Launcher{}).chromeEnv(parent, "/tmp/p"); !slices.Contains(env, "HOME=/tmp/p") {
 			t.Errorf("parent %v: env = %v", parent, env)
 		}
 	}

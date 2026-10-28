@@ -261,8 +261,7 @@ func (h *SocialLoginHandler) redeemAppleGrant(w http.ResponseWriter, r *http.Req
 		return false
 	}
 	sealed, err := h.Apple.Redeem(r.Context(), code, identity.Subject)
-	var refused *oidc.TokenError
-	if errors.As(err, &refused) || errors.Is(err, oidc.ErrInvalidResponse) {
+	if _, refused := errors.AsType[*oidc.TokenError](err); refused || errors.Is(err, oidc.ErrInvalidResponse) {
 		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", "invalid social token")
 		return false
 	}

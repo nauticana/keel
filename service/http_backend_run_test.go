@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"os/signal"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -51,5 +54,39 @@ func TestRunStopsWhenContextEnds(t *testing.T) {
 	}
 	if !slices.Contains(journal.info, "shutting down server: deploy") {
 		t.Errorf("journal = %v, want the cause logged", journal.info)
+	}
+}
+
+func TestRunStopsOnSIGTERM(t *testing.T) {
+	keepAlive := make(chan os.Signal, 1) // the test binary survives a signal sent before Run listens
+	signal.Notify(keepAlive, syscall.SIGTERM)
+	defer signal.Stop(keepAlive)
+	saved := config.Config().HttpApiPort
+	t.Cleanup(func() { config.Config().HttpApiPort = saved })
+	config.Config().HttpApiPort = 0
+	journal := &infoLogger{}
+	h := &HttpBackend{Journal: journal}
+	h.Handle(map[string]func(http.ResponseWriter, *http.Request){"/x": func(http.ResponseWriter, *http.Request) {}})
+
+	done := make(chan struct{})
+	go func() {
+		h.Run(context.Background())
+		close(done)
+	}()
+	deadline := time.After(5 * time.Second)
+	for {
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-done:
+			if !slices.Contains(journal.info, "shutting down server: terminated signal received") {
+				t.Errorf("journal = %v, want the signal logged", journal.info)
+			}
+			return
+		case <-deadline:
+			t.Fatal("Run did not return after SIGTERM")
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"os"
 	"os/signal"
 	"slices"
 	"strings"
@@ -154,6 +153,9 @@ func (h *HttpBackend) Run(ctx context.Context) {
 		h.Journal.Error("HTTP handlers not initialized")
 		return
 	}
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	(&DebugServer{Journal: h.Journal}).Start(ctx)
 
 	if l, ok := h.QuotaService.(interface{ Listen(context.Context) error }); ok {
 		go func() {
@@ -217,12 +219,7 @@ func (h *HttpBackend) Run(ctx context.Context) {
 		}()
 	}
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(quit)
 	select {
-	case sig := <-quit:
-		h.Journal.Info("shutting down server: " + sig.String())
 	case <-ctx.Done():
 		h.Journal.Info("shutting down server: " + context.Cause(ctx).Error())
 	case err := <-listenFail:

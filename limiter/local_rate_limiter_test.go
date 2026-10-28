@@ -24,8 +24,8 @@ func TestLocalRateLimiterEnforcesPartnerAndFleet(t *testing.T) {
 		}
 	}
 	err := l.Allow(ctx, "turn", subject(1))
-	var limit *LimitError
-	if !errors.As(err, &limit) || !errors.Is(err, ErrRateLimited) || limit.Scope != "turn.partner" || limit.RetryAfter() <= 0 {
+	limit, ok := errors.AsType[*LimitError](err)
+	if !ok || !errors.Is(err, ErrRateLimited) || limit.Scope != "turn.partner" || limit.RetryAfter() <= 0 {
 		t.Fatalf("partner denial = %v", err)
 	}
 	if got := limit.ErrorHeaders().Get("Retry-After"); got != "1" {
@@ -34,7 +34,8 @@ func TestLocalRateLimiterEnforcesPartnerAndFleet(t *testing.T) {
 	if err := l.Allow(ctx, "turn", subject(2)); err != nil {
 		t.Fatal(err)
 	}
-	if err = l.Allow(ctx, "turn", subject(3)); !errors.As(err, &limit) || limit.Scope != "turn.fleet" {
+	err = l.Allow(ctx, "turn", subject(3))
+	if limit, ok := errors.AsType[*LimitError](err); !ok || limit.Scope != "turn.fleet" {
 		t.Fatalf("fleet denial = %v", err)
 	}
 	fake.Advance(2 * time.Second)

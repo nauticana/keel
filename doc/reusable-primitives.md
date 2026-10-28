@@ -258,7 +258,7 @@ point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
 
 ### `common` — URL and parsed-HTML helpers
 
-`WithScheme` (bare host → `https://`), `ResolveURL` (DNS check with a `www.` fallback, `ErrHostUnresolvable`), and over `*html.Node`: `ExtractLinks`, `ExtractTitle` (skips `<svg>` icon titles), `ExtractText` (verbatim), `PlainTextNode` (`PlainText` for a parsed subtree).
+`WithScheme` (bare host → `https://`), `ResolveURL` (DNS check with a `www.` fallback, `ErrHostUnresolvable`), and over `*html.Node`: `ExtractLinks`, `ExtractTitle` (skips `<svg>` icon titles), `ExtractText` (verbatim), `PlainTextNode` (`PlainText` for a parsed subtree), `PlainTextLines` (the same text split at block boundaries, one whitespace-collapsed entry per non-empty run).
 
 ### `service.PartnerDomainService` — does this URL belong to the partner?
 
@@ -381,31 +381,19 @@ store := handler.NewAdminSessionStore(2*time.Hour, 10_000)
 // logout: store.Delete(tok)
 ```
 
-### `data.ScanRows[T]` — generic `*sql.Rows` scanner
+### `data.Collect[T]` — typed rows from a named query
 
-Collapses the `rows.Next` / `rows.Scan` / `rows.Err` boilerplate that recurs once per typed query. Pair it with a single-row scan closure.
+`QueryService.Query` boxes every cell into `[][]any` and each read goes through a `common.As*` switch. For a hot query, `data.Collect` scans each row straight into typed variables in SELECT-list order:
 
 ```go
 type Widget struct{ ID int64; Name string }
 
-rows, err := db.QueryContext(ctx, `SELECT id, name FROM widget WHERE owner = $1`, ownerID)
-if err != nil { return nil, err }
-widgets, err := data.ScanRows(rows, func(r *sql.Rows) (Widget, error) {
+widgets, err := data.Collect(ctx, qs, qWidgetsOfOwner, func(r port.RowScanner) (Widget, error) {
     var w Widget
     return w, r.Scan(&w.ID, &w.Name)
-})
+}, ownerID)
 ```
 
-**For pgx consumers (anything wired through keel/pgsql), use [`pgx.CollectRows[T]`](https://pkg.go.dev/github.com/jackc/pgx/v5#CollectRows) directly** — pgx ships an equivalent helper with the same shape, plus `CollectOneRow`, `AppendRows`, and `ForEachRow` siblings. `data.ScanRows` exists for `database/sql` callers (downstream services with non-pgx stores) where no built-in helper is available.
-
-```go
-// pgx-native equivalent — no keel helper needed:
-rows, err := pool.Query(ctx, `SELECT id, name FROM widget WHERE owner = $1`, ownerID)
-if err != nil { return nil, err }
-widgets, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Widget, error) {
-    var w Widget
-    return w, r.Scan(&w.ID, &w.Name)
-})
-```
+It needs the optional `port.RowQuerier` capability (`QueryEach`), which both pgsql query services implement, including those bound to a transaction; any other service returns `data.ErrRowsUnsupported`.
 
 For metadata-driven dynamic-schema reads, keep using `QueryService.Query` — the `[][]any` shape is intentional for the REST engine and table-action handlers; replacing it with typed scans would defeat the purpose.

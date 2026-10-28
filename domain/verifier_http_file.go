@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"syscall"
 
 	"github.com/nauticana/keel/common"
@@ -74,14 +75,15 @@ func (v *HTTPFileVerifier) Verify(ctx context.Context, proof DomainProof) (strin
 	return "", nil
 }
 
-func publicHTTPClient() *http.Client {
+// publicHTTPClient is built once so its connections are reused across checks.
+var publicHTTPClient = sync.OnceValue(func() *http.Client {
 	timeout := config.Config().DefaultOutboundTimeout
 	dialer := &net.Dialer{Timeout: timeout, Control: dialPublicOnly}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = dialer.DialContext
 	return &http.Client{Transport: transport, Timeout: timeout}
-}
+})
 
 // dialPublicOnly makes a host that resolves to an internal address a negative verdict.
 func dialPublicOnly(network, address string, c syscall.RawConn) error {

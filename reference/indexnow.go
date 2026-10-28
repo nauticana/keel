@@ -95,8 +95,7 @@ func (c *IndexNowClient) VerifyKeyFile(ctx context.Context, host string) error {
 		if errors.Is(err, common.ErrNonPublicAddress) {
 			return fmt.Errorf("%w: %s does not resolve to a public address", ErrIndexNowKeyNotServed, host)
 		}
-		var status *common.HTTPStatusError
-		if errors.As(err, &status) && status.Permanent() {
+		if status, ok := errors.AsType[*common.HTTPStatusError](err); ok && status.Permanent() {
 			return fmt.Errorf("%w: %s: http status %d", ErrIndexNowKeyNotServed, host, status.Status)
 		}
 		return fmt.Errorf("reference: indexnow key file of %s: %w", host, withoutRequestURL(err))

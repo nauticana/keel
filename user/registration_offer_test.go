@@ -60,8 +60,7 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 
 	t.Run("requested terms not offered is a bad request", func(t *testing.T) {
 		_, err := resolveSubscriptionOffer(rows, &PartnerSetup{BillingCycle: "W", TermType: "W", TermCount: 1}, "P", 14, now)
-		var appErr *model.AppError
-		if !errors.As(err, &appErr) || appErr.Status != 400 {
+		if appErr, ok := errors.AsType[*model.AppError](err); !ok || appErr.Status != 400 {
 			t.Fatalf("err = %v, want 400", err)
 		}
 	})

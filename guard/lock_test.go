@@ -34,8 +34,7 @@ func TestLockThenCheckInOneTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := NewDuplicateGuard("dup", time.Hour).Check(context.Background(), tx, GuardInput{PartnerID: 7, DedupKey: "scan", Now: time.Now()})
-	var dup *DuplicateError
-	if !errors.As(err, &dup) || dup.ExistingID != 42 {
+	if dup, ok := errors.AsType[*DuplicateError](err); !ok || dup.ExistingID != 42 {
 		t.Fatalf("err = %v, want duplicate of 42", err)
 	}
 	if len(tx.calls) != 2 || tx.calls[0] != QueryLock || tx.args[0] != "guard:7:scan" {

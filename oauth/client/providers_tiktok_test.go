@@ -94,8 +94,8 @@ func TestTikTokCallback(t *testing.T) {
 	}
 
 	p.RequiredScopes = []string{"video.publish"}
-	var scopeErr *MissingScopeError
-	if err := p.Callback(context.Background(), "CODE", "STATE123"); !errors.As(err, &scopeErr) {
+	err := p.Callback(context.Background(), "CODE", "STATE123")
+	if _, ok := errors.AsType[*MissingScopeError](err); !ok {
 		t.Errorf("a narrower grant must fail with MissingScopeError, got %v", err)
 	}
 }

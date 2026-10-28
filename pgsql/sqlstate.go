@@ -19,6 +19,6 @@ func IsForeignKeyViolation(err error) bool { return hasSQLState(err, sqlstateFor
 func IsExclusionViolation(err error) bool  { return hasSQLState(err, sqlstateExclusionViolation) }
 
 func hasSQLState(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == code
 }

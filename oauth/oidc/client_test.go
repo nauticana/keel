@@ -131,8 +131,11 @@ func TestCodeFlowRefusals(t *testing.T) {
 		body   string
 		check  func(error) bool
 	}{
-		"state mismatch":     {params: callback("other")},
-		"idp error":          {params: url.Values{"state": {"st-1"}, "error": {"access_denied"}}, check: func(err error) bool { var ce *CallbackError; return errors.As(err, &ce) && ce.Code == "access_denied" }},
+		"state mismatch": {params: callback("other")},
+		"idp error": {params: url.Values{"state": {"st-1"}, "error": {"access_denied"}}, check: func(err error) bool {
+			ce, ok := errors.AsType[*CallbackError](err)
+			return ok && ce.Code == "access_denied"
+		}},
 		"no code":            {params: url.Values{"state": {"st-1"}}},
 		"nonce mismatch":     {edit: func(cl jwt.MapClaims) { cl["nonce"] = "other" }},
 		"no nonce":           {edit: func(cl jwt.MapClaims) { delete(cl, "nonce") }},
@@ -143,9 +146,12 @@ func TestCodeFlowRefusals(t *testing.T) {
 		"no subject":         {edit: func(cl jwt.MapClaims) { delete(cl, "sub") }},
 		"symmetric":          {sign: hmac},
 		"not advertised alg": {sign: es256},
-		"refused code":       {status: http.StatusBadRequest, body: `{"error":"invalid_grant"}`, check: func(err error) bool { var te *TokenError; return errors.As(err, &te) && te.Code == "invalid_grant" }},
-		"no id_token":        {body: `{"access_token":"at"}`},
-		"issuer outage":      {status: http.StatusBadGateway, check: func(err error) bool { return err != nil && !errors.Is(err, ErrInvalidResponse) }},
+		"refused code": {status: http.StatusBadRequest, body: `{"error":"invalid_grant"}`, check: func(err error) bool {
+			te, ok := errors.AsType[*TokenError](err)
+			return ok && te.Code == "invalid_grant"
+		}},
+		"no id_token":   {body: `{"access_token":"at"}`},
+		"issuer outage": {status: http.StatusBadGateway, check: func(err error) bool { return err != nil && !errors.Is(err, ErrInvalidResponse) }},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -155,8 +155,8 @@ func TestBaseProviderCallbackRefusesNarrowGrant(t *testing.T) {
 		RequiredScopes: []string{"webmasters"},
 	}
 	err := b.Callback(context.Background(), "CODE", "S")
-	var missing *MissingScopeError
-	if !errors.As(err, &missing) {
+	missing, ok := errors.AsType[*MissingScopeError](err)
+	if !ok {
 		t.Fatalf("err = %v, want *MissingScopeError", err)
 	}
 	if !reflect.DeepEqual(missing.Missing, []string{"webmasters"}) {

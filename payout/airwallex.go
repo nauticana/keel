@@ -412,10 +412,9 @@ func (p *AirwallexProvider) GetPayoutStatus(ctx context.Context, providerPayoutI
 // the envelope didn't parse — every Airwallex error response is JSON,
 // but a misbehaving proxy or non-JSON 5xx could land here.
 //
-// Callers identify specific error classes via errors.As:
+// Callers identify specific error classes via errors.AsType:
 //
-//	var apiErr *airwallexAPIError
-//	if errors.As(err, &apiErr) && apiErr.Code == "insufficient_balance" { ... }
+//	if apiErr, ok := errors.AsType[*airwallexAPIError](err); ok && apiErr.Code == "insufficient_balance" { ... }
 type airwallexAPIError struct {
 	Path       string
 	StatusCode int
@@ -442,8 +441,7 @@ func isInsufficientBalance(err error) bool {
 	if err == nil {
 		return false
 	}
-	var apiErr *airwallexAPIError
-	if errors.As(err, &apiErr) && apiErr.Code != "" {
+	if apiErr, ok := errors.AsType[*airwallexAPIError](err); ok && apiErr.Code != "" {
 		// The current Transfers API returns balance_insufficient; older
 		// surfaces used insufficient_balance — accept both.
 		return strings.EqualFold(apiErr.Code, "balance_insufficient") ||

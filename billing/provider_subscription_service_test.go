@@ -244,8 +244,7 @@ func TestProviderSubscriptionService_RefusesOverTargetLimit(t *testing.T) {
 	s, life, _ := newSubService(store, client)
 	life.overages = []port.QuotaOverage{{Resource: "MAX_LOCATIONS", Count: 3, Limit: 1}}
 	_, err := s.ChangePlan(context.Background(), 7, "BASIC", BillingTerms{})
-	var over *OverTargetLimitError
-	if !errors.As(err, &over) || !errors.Is(err, ErrOverTargetLimit) || over.Overages[0].Count != 3 {
+	if over, ok := errors.AsType[*OverTargetLimitError](err); !ok || !errors.Is(err, ErrOverTargetLimit) || over.Overages[0].Count != 3 {
 		t.Fatalf("err = %v", err)
 	}
 	if client.to != "" || life.changedTo != "" {

@@ -23,25 +23,10 @@ type SecretProviderInfisical struct {
 	environment string
 }
 
-// NewSecretProviderInfisical constructs the Infisical backend, the
-// production-grade managed-secrets option for deployments not on
-// AWS/GCP/Azure (which would otherwise fall back to the local
-// secrets.json file).
-//
-// Project id, environment slug, and host are the non-secret location
-// knobs (flags); the machine-identity client id/secret are read by the
-// SDK from INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _CLIENT_SECRET when
-// UniversalAuthLogin is called with empty args. This mirrors how the
-// GSM/AWS/Azure backends defer to their vendor SDK's ambient credential
-// chain — no secret material is passed through keel's own flags.
-//
-// AutoTokenRefresh (the SDK default) keeps the universal-auth token
-// renewed for the process lifetime; the factory builds this once at
-// boot, identical to the other cloud backends.
-//
-// Empty --infisical_project_id or --infisical_environment is a
-// configuration error rather than a silent default, matching the
-// fail-fast behavior of the AWS and Azure providers.
+// NewSecretProviderInfisical builds the Infisical backend from the non-secret
+// project, environment and host flags. The machine-identity credentials come
+// from INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _CLIENT_SECRET, read by the SDK,
+// and the SDK keeps the login token refreshed.
 func NewSecretProviderInfisical(ctx context.Context) (*SecretProviderInfisical, error) {
 	projectID := strings.TrimSpace(*common.InfisicalProjectID)
 	if projectID == "" {
@@ -52,12 +37,7 @@ func NewSecretProviderInfisical(ctx context.Context) (*SecretProviderInfisical, 
 		return nil, fmt.Errorf("infisical secret provider: --infisical_environment is required")
 	}
 
-	client := infisical.NewInfisicalClient(ctx, infisical.Config{
-		SiteUrl:          strings.TrimSpace(*common.InfisicalHost),
-		AutoTokenRefresh: true,
-	})
-	// Empty args => SDK reads INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/_SECRET
-	// from the environment (the ambient-credential analog of GSM's ADC).
+	client := infisical.NewInfisicalClient(ctx, infisical.Config{SiteUrl: strings.TrimSpace(*common.InfisicalHost)})
 	if _, err := client.Auth().UniversalAuthLogin("", ""); err != nil {
 		return nil, fmt.Errorf("infisical universal-auth login failed: %w", err)
 	}
@@ -99,8 +79,7 @@ func (s *SecretProviderInfisical) PutSecret(ctx context.Context, path string, va
 		SecretPath:     "/",
 		NewSecretValue: value,
 	})
-	var apiErr *infisicalerrors.APIError
-	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+	if apiErr, ok := errors.AsType[*infisicalerrors.APIError](err); ok && apiErr.StatusCode == http.StatusNotFound {
 		_, err = s.client.Secrets().Create(infisical.CreateSecretOptions{
 			SecretKey:   path,
 			ProjectID:   s.projectID,

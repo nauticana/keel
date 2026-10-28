@@ -26,7 +26,7 @@ func (l *Launcher) Start(ctx context.Context) (*Session, error) {
 		cancelBrowser()
 		cancelAlloc()
 	}}
-	if err := chromedp.Run(browserCtx); err != nil {
+	if err := chromedp.Do(browserCtx); err != nil {
 		s.Close()
 		return nil, fmt.Errorf("browser: start chrome: %w", err)
 	}

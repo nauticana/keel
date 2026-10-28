@@ -35,8 +35,7 @@ func (v *DNSTXTVerifier) Verify(ctx context.Context, proof DomainProof) (string,
 	}
 	records, err := resolver.LookupTXT(ctx, proof.Domain)
 	if err != nil {
-		var dnsErr *net.DNSError
-		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
 			return "", fmt.Errorf("%w: %s has no TXT records", ErrDomainNotProven, proof.Domain)
 		}
 		return "", fmt.Errorf("domain verification: TXT lookup of %s: %w", proof.Domain, err)

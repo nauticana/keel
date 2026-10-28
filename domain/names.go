@@ -25,11 +25,11 @@ var publicEmailDomains = map[string]bool{
 
 // DomainFromEmail returns the lowercased domain part of an email, or "".
 func DomainFromEmail(email string) string {
-	at := strings.LastIndex(email, "@")
-	if at < 0 || at == len(email)-1 {
+	_, domain, found := strings.CutLast(email, "@")
+	if !found {
 		return ""
 	}
-	return strings.ToLower(strings.TrimSpace(email[at+1:]))
+	return strings.ToLower(strings.TrimSpace(domain))
 }
 
 // HostFromURL returns a URL's lowercased host (no scheme, leading "www.", port, or path).

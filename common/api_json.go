@@ -93,13 +93,18 @@ func MarshalJSON(v any) ([]byte, error) {
 	return jsonv2.Marshal(v, apiJSON)
 }
 
+// apiJSONIn refuses a duplicate member name, which parsers resolve differently
+// and so can smuggle a second value past a check.
+var apiJSONIn = jsonv2.JoinOptions(apiJSON, jsontext.AllowDuplicateNames(false))
+
 // DecodeJSON reads exactly one JSON value from data into v. A 64-bit integer
-// accepts a string or a number, and a number decoded into any is a json.Number.
+// accepts a string or a number, a number decoded into any is a json.Number, and
+// a duplicate member name is an error.
 func DecodeJSON(data []byte, v any) error {
-	return jsonv2.Unmarshal(data, v, apiJSON)
+	return jsonv2.Unmarshal(data, v, apiJSONIn)
 }
 
 // DecodeStrictJSON is DecodeJSON that also refuses members v does not declare.
 func DecodeStrictJSON(data []byte, v any) error {
-	return jsonv2.Unmarshal(data, v, apiJSON, jsonv2.RejectUnknownMembers(true))
+	return jsonv2.Unmarshal(data, v, apiJSONIn, jsonv2.RejectUnknownMembers(true))
 }

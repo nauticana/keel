@@ -142,12 +142,13 @@ func TestGoogleCodeIdentity(t *testing.T) {
 	}
 
 	tokenStatus, tokenBody = http.StatusBadRequest, `{"error":"invalid_grant","error_description":"Bad Request"}`
-	var te *TokenError
-	if _, err := g.Identity(ctx, "cid", "sec", "c", "postmessage"); !errors.As(err, &te) || te.Error() != "token exchange failed: invalid_grant — Bad Request" {
+	_, err = g.Identity(ctx, "cid", "sec", "c", "postmessage")
+	if te, ok := errors.AsType[*TokenError](err); !ok || te.Error() != "token exchange failed: invalid_grant — Bad Request" {
 		t.Fatalf("refused code: %v", err)
 	}
 	tokenStatus, tokenBody = http.StatusOK, `{}`
-	if _, err := g.Identity(ctx, "cid", "sec", "c", "postmessage"); !errors.As(err, &te) || te.Error() != "token exchange failed" {
+	_, err = g.Identity(ctx, "cid", "sec", "c", "postmessage")
+	if te, ok := errors.AsType[*TokenError](err); !ok || te.Error() != "token exchange failed" {
 		t.Fatalf("no access token: %v", err)
 	}
 	tokenBody, userInfo = `{"access_token":"at"}`, `{"id":"g-1","verified_email":false}`

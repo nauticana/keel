@@ -143,12 +143,10 @@ func TestErrorStatusDecodesGraphErrorWithoutLeakingTheToken(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":{"message":"Error validating access token","type":"OAuthException","code":190,"error_subcode":463,"fbtrace_id":"T1"}}`)
 	})
 	_, err := c.AdAccounts(context.Background(), "secret-token")
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) || !apiErr.TokenInvalid() || apiErr.Throttled() || apiErr.Subcode != 463 || apiErr.TraceID != "T1" {
+	if apiErr, ok := errors.AsType[*APIError](err); !ok || !apiErr.TokenInvalid() || apiErr.Throttled() || apiErr.Subcode != 463 || apiErr.TraceID != "T1" {
 		t.Fatalf("err = %v", err)
 	}
-	var se *common.HTTPStatusError
-	if !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+	if se, ok := errors.AsType[*common.HTTPStatusError](err); !ok || se.Status != http.StatusBadRequest {
 		t.Fatalf("does not unwrap to the status error: %v", err)
 	}
 	if strings.Contains(err.Error(), "secret-token") {
@@ -171,8 +169,7 @@ func TestTransportErrorDropsTheTokenFromTheURL(t *testing.T) {
 	c, srv := server(t, func(http.ResponseWriter, *http.Request) {})
 	srv.Close()
 	_, err := c.AdAccounts(context.Background(), "secret-token")
-	var ue *url.Error
-	if err == nil || strings.Contains(err.Error(), "secret-token") || !errors.As(err, &ue) {
+	if _, ok := errors.AsType[*url.Error](err); err == nil || strings.Contains(err.Error(), "secret-token") || !ok {
 		t.Fatalf("err = %v", err)
 	}
 }

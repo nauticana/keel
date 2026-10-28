@@ -61,8 +61,8 @@ var (
 // which would leak PII into error logs and 4xx response bodies. Callers
 // that need the underlying value should look it up themselves.
 func classifyUniqueViolation(err error) error {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if !ok || pgErr.Code != "23505" {
 		return err
 	}
 	switch pgErr.ConstraintName {
