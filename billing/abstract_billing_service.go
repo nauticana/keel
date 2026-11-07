@@ -265,6 +265,9 @@ func (s *AbstractBillingService) GetSubscription(ctx context.Context, partnerID 
 	if len(res.Rows) == 0 {
 		return nil, ErrNoSubscription
 	}
+	if err := res.RequireColumns(16); err != nil {
+		return nil, fmt.Errorf("%s: %w", qBillGetSubscription, err)
+	}
 	row := res.Rows[0]
 	sub := &Subscription{
 		PartnerID:        partnerID,
@@ -321,6 +324,9 @@ func (s *AbstractBillingService) GetInvoices(ctx context.Context, partnerID int6
 	if err != nil {
 		return nil, err
 	}
+	if err := res.RequireColumns(8); err != nil {
+		return nil, fmt.Errorf("%s: %w", qBillGetInvoices, err)
+	}
 	invoices := make([]Invoice, len(res.Rows))
 	for i, row := range res.Rows {
 		inv := Invoice{
@@ -354,6 +360,9 @@ func (s *AbstractBillingService) GetUsage(ctx context.Context, partnerID int64) 
 		if len(res.Rows) == 0 {
 			return nil, fmt.Errorf("%w: %s", ErrUnknownResource, r)
 		}
+		if err := res.RequireColumns(3); err != nil {
+			return nil, fmt.Errorf("%s: %w", qBillGetUsage, err)
+		}
 		row := res.Rows[0]
 		items = append(items, UsageItem{Resource: r, Caption: common.AsString(row[0]), Used: common.AsInt64(row[1]), Limit: common.AsInt64(row[2])})
 	}
@@ -365,6 +374,9 @@ func (s *AbstractBillingService) GetPlans(ctx context.Context) ([]Plan, error) {
 	res, err := s.qs.Query(ctx, qBillGetAllPlans)
 	if err != nil {
 		return nil, err
+	}
+	if err := res.RequireColumns(12); err != nil {
+		return nil, fmt.Errorf("%s: %w", qBillGetAllPlans, err)
 	}
 	// One row per (plan, price); group by plan id, preserving query order.
 	order := make([]string, 0, len(res.Rows))
@@ -469,6 +481,9 @@ func (s *AbstractBillingService) ListPaymentMethods(ctx context.Context, partner
 	if err != nil {
 		return nil, err
 	}
+	if err := res.RequireColumns(4); err != nil {
+		return nil, fmt.Errorf("%s: %w", qBillListMethods, err)
+	}
 	out := make([]PaymentMethodInfo, len(res.Rows))
 	for i, row := range res.Rows {
 		out[i] = PaymentMethodInfo{
@@ -492,6 +507,9 @@ func (s *AbstractBillingService) CurrentSubscription(ctx context.Context, partne
 	}
 	if len(res.Rows) == 0 {
 		return nil, ErrNoSubscription
+	}
+	if err := res.RequireColumns(5); err != nil {
+		return nil, fmt.Errorf("%s: %w", qBillActiveProvSub, err)
 	}
 	row := res.Rows[0]
 	return &ProviderSubscription{

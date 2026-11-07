@@ -32,3 +32,20 @@ func TestQueryResultAsMaps(t *testing.T) {
 		t.Fatalf("nil AsMaps = %v", got)
 	}
 }
+
+func TestQueryResultRequireColumns(t *testing.T) {
+	var nilResult *QueryResult
+	if err := nilResult.RequireColumns(3); !errors.Is(err, ErrColumnNotFound) {
+		t.Fatalf("nil result err = %v, want ErrColumnNotFound", err)
+	}
+	qr := &QueryResult{Rows: [][]any{{1, 2, 3}, {1, 2}}}
+	if err := qr.RequireColumns(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := qr.RequireColumns(3); !errors.Is(err, ErrColumnNotFound) || !strings.Contains(err.Error(), "row 1 has 2 columns, reader expects 3") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := (&QueryResult{}).RequireColumns(5); err != nil {
+		t.Fatal(err)
+	}
+}

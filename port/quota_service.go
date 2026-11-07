@@ -14,7 +14,9 @@ type QuotaService interface {
 	CheckAddon(ctx context.Context, partnerId int64, resource string) (bool, error)
 	GetPartnerQuota(ctx context.Context, partnerID int64, resource string, def int64) (int64, error)
 	LogUsage(ctx context.Context, partnerID int64, quotaName string, amount int64, description string) error
-	ReportAddonUsage(ctx context.Context, partnerID int64, addonID string, amount int64, notes string) error
+	// RecordUsageOnce is LogUsage keyed by the caller's idempotency key: a
+	// repeat of (partnerID, resource, key) records nothing and reports false.
+	RecordUsageOnce(ctx context.Context, partnerID int64, resource, key string, amount int64, description string) (recorded bool, err error)
 	// InvalidatePartner drops the partner's cached limits and add-ons after its
 	// subscription changed, here and, when the service has a bus, in every
 	// other process.

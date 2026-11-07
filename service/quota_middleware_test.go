@@ -32,8 +32,8 @@ func (*scriptedQuota) GetPartnerQuota(context.Context, int64, string, int64) (in
 	return 0, nil
 }
 func (*scriptedQuota) LogUsage(context.Context, int64, string, int64, string) error { return nil }
-func (*scriptedQuota) ReportAddonUsage(context.Context, int64, string, int64, string) error {
-	return nil
+func (*scriptedQuota) RecordUsageOnce(context.Context, int64, string, string, int64, string) (bool, error) {
+	return true, nil
 }
 func (*scriptedQuota) InvalidatePartner(context.Context, int64) {}
 

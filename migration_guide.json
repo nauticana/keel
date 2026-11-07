@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.3.2",
+   "title": "API envelope reader, idempotent usage recording, invoice and payment status domains, narrow-row guard",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "common.DecodeAPIResponse reads a keel {data, meta} envelope; QuotaService.RecordUsageOnce records usage under an idempotency key and replaces ReportAddonUsage; invoice.status and payment_record.payment_status get constant domains, CHECKs and typed codes; billing readers refuse a narrower query override instead of panicking; dms.ErrInvalidKey is gone.",
+   "body_markdown": "### Compile breaks\n\n- `port.QuotaService` gains `RecordUsageOnce(ctx, partnerID, resource, key, amount, description) (recorded bool, err error)` and loses `ReportAddonUsage`, which was `LogUsage` under another name: call `LogUsage(ctx, partnerID, addonID, amount, notes)`, or `RecordUsageOnce` when the report may be resent. Implementations and test doubles add the new method.\n- `dms.ErrInvalidKey` is removed; match `storage.ErrInvalidKey`, which it aliased since v1.2.139.\n\n### Database\n\n- `usage_ledger` gains `idempotency_key VARCHAR(128) NULL` and the partial unique index `usage_ledger_idempotency_uq (partner_id, resource_name, idempotency_key) WHERE idempotency_key IS NOT NULL` (plain unique on MySQL, where NULLs are distinct).\n- `invoice.status` gets `chk_invoice_status` (`D`, `O`, `A`, `P`, `V`) and `payment_record.payment_status` gets `chk_payment_record_status` (`P`, `F`, `R`), with the `invoice_status` and `payment_status` constant domains and lookups from `schema/seed/billing.yml`. A row holding another code must be mapped to one of these before the CHECK is applied; `provider` columns stay open identifiers.\n\n### Additive\n\n- `common.DecodeAPIResponse[T](r, maxBytes) (T, *APIMeta, error)` reads one keel envelope with the API JSON rules and refuses a body over `maxBytes`; a missing or null `data` is `common.ErrEmptyData`. A `json.RawMessage` field written through `EncodeJSON`/`MarshalJSON` is compacted: the JSON value survives, not its original bytes, so sign the compact form.\n- `QuotaServiceDb.RecordUsageOnce` inserts with `ON CONFLICT ... DO NOTHING RETURNING id`; `recorded` is false on a repeat. A blank key, one over `service.MaxUsageKeyLen` (128 bytes), or a non-positive amount is `service.ErrUsageKey`.\n- `billing.InvoiceStatus*` and `billing.PaymentStatus*` name the codes.\n- `model.QueryResult.RequireColumns(n)` returns `ErrColumnNotFound` when a row is narrower than n; `AbstractBillingService` readers call it, so a `Queries` override from an earlier release (for example an 11-column `bill_get_all_plans`) returns an error naming the query instead of panicking."
+  },
+  {
    "version": "v1.3.1",
    "title": "chromedp v0.21, Infisical SDK v0.9, typed row scanning, signal-aware workers, duplicate JSON names refused",
    "tags": [

@@ -48,6 +48,9 @@ columns:
     type: TEXT
     nullable: true
 primary_key: [id]
+checks:
+  - name: chk_invoice_status
+    expression: "status IN ('D', 'O', 'A', 'P', 'V')"
 sequence:
   name: invoice_seq
   column: id

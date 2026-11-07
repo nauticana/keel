@@ -44,9 +44,7 @@ const (
 )
 
 var (
-	ErrDocumentExists = errors.New("dms: document already exists")
-	// ErrInvalidKey is storage.ErrInvalidKey, so a key a backend refuses maps the same way.
-	ErrInvalidKey        = storage.ErrInvalidKey
+	ErrDocumentExists    = errors.New("dms: document already exists")
 	ErrComponentTooLarge = errors.New("dms: component exceeds the size limit")
 	// ErrObserver and ErrHeaderStale are soft: the operation succeeded and the
 	// error is for logging. See Succeeded.
@@ -121,7 +119,7 @@ func validID(id string) bool {
 
 func compID(id string) error {
 	if !validID(id) || id == HeaderComponent {
-		return fmt.Errorf("%w: component %q", ErrInvalidKey, id)
+		return fmt.Errorf("%w: component %q", storage.ErrInvalidKey, id)
 	}
 	return nil
 }
@@ -137,7 +135,7 @@ func uniqueIDs(comps []ComponentInput) error {
 			return err
 		}
 		if seen[c.ID] {
-			return fmt.Errorf("%w: duplicate component %q", ErrInvalidKey, c.ID)
+			return fmt.Errorf("%w: duplicate component %q", storage.ErrInvalidKey, c.ID)
 		}
 		seen[c.ID] = true
 	}

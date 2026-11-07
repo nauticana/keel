@@ -565,7 +565,12 @@ sail with no compile-time signal, so the following are HARD constraints:
   `ReadRequest`, `ReadStrictRequest` and `common.DecodeJSON` accept a string
   or a number for those types and decode a number into `any` as a
   `json.Number`. Decode a `JSONFunc` body with `common.DecodeJSON`, and write a
-  hand-built response with `common.EncodeJSON` or `common.MarshalJSON`. An
+  hand-built response with `common.EncodeJSON` or `common.MarshalJSON`; a
+  `json.RawMessage` field is written compacted: the JSON value survives, not
+  its original bytes, so sign the compact form. A Go
+  client reads a keel envelope with `common.DecodeAPIResponse[T](body,
+  maxBytes)`, which returns the data and `APIMeta`, and `ErrEmptyData` when
+  data is missing or null. An
   `int8` column's metadata `DataType` is `bigint` (`model.DT_BIGINT`), so sail
   knows the value is a string; `int2` and `int4` stay `integer`. Type an
   API field with its column's Go type (`SMALLINT` `int16`, `INTEGER`

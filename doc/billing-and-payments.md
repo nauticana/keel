@@ -310,7 +310,8 @@ body, err := client.Post(ctx, "/payment_methods/pm_xyz/attach", form)
 |-------|---------|
 | `payment_webhook_log` | Raw inbound webhooks — idempotency key on `(provider, event_id)`, request correlation, replay attempts, and terminal dead-letter state |
 | `payment_method` | Partner-owned provider customer tokens (`stripe cus_...`) |
-| `payment_record` | Completed / failed / refunded transactions — `amount_minor` is authoritative; provider-scoped unique payment id; optional indexed `(provider, provider_charge_id)` for refund/dispute correlation; `invoice_id` FK |
+| `invoice` | `status` is `D` draft, `O` open (self-scheduled, awaiting a charge), `A` action required, `P` paid, `V` void (`billing.InvoiceStatus*`, constant `invoice_status`) |
+| `payment_record` | Completed / failed / refunded transactions (`payment_status` `P`, `F`, `R`; `billing.PaymentStatus*`, constant `payment_status`); `provider` is an open identifier, since products add providers — `amount_minor` is authoritative; provider-scoped unique payment id; optional indexed `(provider, provider_charge_id)` for refund/dispute correlation; `invoice_id` FK |
 | `invoice_line_payment` | Durable payment (`P`) / refund (`R`) allocation to invoice lines in minor units; `provider_ref` uniquely keys refund sources |
 
 ### Checkout modes

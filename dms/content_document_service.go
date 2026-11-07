@@ -57,7 +57,7 @@ func (s *ContentDocumentService) repo(ctx context.Context, id string, write bool
 
 func (s *ContentDocumentService) docKey(docKey string) error {
 	if !validID(docKey) || docKey == HeaderComponent || s.Repos.IsReserved(docKey) {
-		return fmt.Errorf("%w: document %q", ErrInvalidKey, docKey)
+		return fmt.Errorf("%w: document %q", storage.ErrInvalidKey, docKey)
 	}
 	return nil
 }

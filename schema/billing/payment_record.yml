@@ -44,6 +44,9 @@ columns:
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
 primary_key: [id]
+checks:
+  - name: chk_payment_record_status
+    expression: "payment_status IN ('P', 'F', 'R')"
 sequence:
   name: payment_record_seq
   column: id

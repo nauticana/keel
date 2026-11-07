@@ -2,6 +2,8 @@ package common
 
 import (
 	"encoding/json"
+	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -86,5 +88,49 @@ func TestWriteJSONAndProblemNumberTypes(t *testing.T) {
 	_ = WriteProblem(rec, ProblemDetail{Title: "Gone", Status: http.StatusGone})
 	if strings.Contains(rec.Body.String(), "details") {
 		t.Fatalf("absent details must be omitted: %s", rec.Body.String())
+	}
+}
+
+func TestDecodeAPIResponse(t *testing.T) {
+	type item struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+	body := `{"data":{"id":"9007199254740993","name":"x"},"meta":{"request_id":"r1","timestamp":"t","version":"v1"}}`
+	got, meta, err := DecodeAPIResponse[item](strings.NewReader(body), int64(len(body)))
+	if err != nil || got.ID != 9007199254740993 || got.Name != "x" || meta == nil || meta.RequestID != "r1" {
+		t.Fatalf("got=%+v meta=%+v err=%v", got, meta, err)
+	}
+	if _, _, err := DecodeAPIResponse[item](strings.NewReader(body), int64(len(body))-1); err == nil {
+		t.Fatal("oversized body must fail")
+	}
+	for _, b := range []string{`{"meta":{}}`, `{"data":null,"meta":{}}`, `{"data": null ,"meta":{}}`} {
+		if _, _, err := DecodeAPIResponse[item](strings.NewReader(b), 1<<10); !errors.Is(err, ErrEmptyData) {
+			t.Fatalf("%s: err=%v, want ErrEmptyData", b, err)
+		}
+	}
+	for _, limit := range []int64{0, -1, math.MaxInt64} {
+		if _, _, err := DecodeAPIResponse[item](strings.NewReader(body), limit); err == nil {
+			t.Fatalf("limit %d must fail", limit)
+		}
+	}
+	if _, _, err := DecodeAPIResponse[item](strings.NewReader(`{"data":{"id":"x"}}`), 1<<10); err == nil {
+		t.Fatal("malformed data must fail")
+	}
+	if _, _, err := DecodeAPIResponse[item](strings.NewReader(`{"data":{"id":1,"id":2}}`), 1<<10); err == nil {
+		t.Fatal("duplicate member must fail")
+	}
+}
+
+func TestMarshalJSONPassesRawMessageThrough(t *testing.T) {
+	raw := json.RawMessage(`{"n": 12345678901234567890, "a": [1, 2]}`)
+	got, err := MarshalJSON(struct {
+		Doc json.RawMessage `json:"doc"`
+	}{raw})
+	want, _ := json.Marshal(struct {
+		Doc json.RawMessage `json:"doc"`
+	}{raw})
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("got %s err=%v, want %s", got, err, want)
 	}
 }

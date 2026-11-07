@@ -920,12 +920,14 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     user_id                              BIGINT       ,
     api_key_id                           BIGINT       ,
     oauth_client_id                      VARCHAR(255) ,
+    idempotency_key                      VARCHAR(128) ,
     PRIMARY KEY (id),
     CONSTRAINT partner_usage_ledger FOREIGN KEY (partner_id) REFERENCES business_partner(id),
     CONSTRAINT usage_ledger_user FOREIGN KEY (user_id) REFERENCES user_account(id),
     CONSTRAINT usage_ledger_api_key FOREIGN KEY (api_key_id) REFERENCES api_key(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_usage_ledger_quota ON usage_ledger(partner_id, resource_name, usage_time);
+CREATE UNIQUE INDEX usage_ledger_idempotency_uq ON usage_ledger(partner_id, resource_name, idempotency_key);
 
 -- Raw inbound payment provider webhooks — idempotency + audit
 CREATE TABLE IF NOT EXISTS payment_webhook_log (
@@ -1281,7 +1283,8 @@ CREATE TABLE IF NOT EXISTS invoice (
     last_error                           TEXT         ,
     PRIMARY KEY (id),
     CONSTRAINT partner_invoices FOREIGN KEY (partner_id) REFERENCES business_partner(id),
-    CONSTRAINT invoice_currency FOREIGN KEY (currency) REFERENCES currency(code)
+    CONSTRAINT invoice_currency FOREIGN KEY (currency) REFERENCES currency(code),
+    CONSTRAINT chk_invoice_status CHECK (status IN ('D', 'O', 'A', 'P', 'V'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX idx_invoice_number ON invoice(invoice_number);
 CREATE INDEX idx_invoice_partner ON invoice(partner_id);
@@ -1362,7 +1365,8 @@ CREATE TABLE IF NOT EXISTS payment_record (
     CONSTRAINT invoice_payment_records FOREIGN KEY (invoice_id) REFERENCES invoice(id),
     CONSTRAINT payment_record_invoice_partner FOREIGN KEY (invoice_id, partner_id) REFERENCES invoice(id, partner_id),
     CONSTRAINT payment_record_invoice_currency FOREIGN KEY (invoice_id, currency) REFERENCES invoice(id, currency),
-    CONSTRAINT payment_record_currency FOREIGN KEY (currency) REFERENCES currency(code)
+    CONSTRAINT payment_record_currency FOREIGN KEY (currency) REFERENCES currency(code),
+    CONSTRAINT chk_payment_record_status CHECK (payment_status IN ('P', 'F', 'R'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE INDEX idx_payment_record_partner ON payment_record(partner_id, paid_at);
 CREATE INDEX idx_payment_record_provider_charge ON payment_record(provider, provider_charge_id);

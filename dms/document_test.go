@@ -194,16 +194,16 @@ func TestInvalidAndReservedKeys(t *testing.T) {
 	s, _, _ := newService(t)
 	ctx := context.Background()
 	for _, key := range []string{"a/b", "..", ".", "", HeaderComponent, "ClientKeys"} {
-		if err := s.Create(ctx, "K1", key, "", nil); !errors.Is(err, ErrInvalidKey) {
+		if err := s.Create(ctx, "K1", key, "", nil); !errors.Is(err, storage.ErrInvalidKey) {
 			t.Errorf("document key %q: %v", key, err)
 		}
 	}
 	for _, id := range []string{"a/b", HeaderComponent, "", "DATA.bin"} { // DATA.bin: the file backend refuses it
-		if err := s.Create(ctx, "K1", "D1", "", []ComponentInput{comp(id, "x")}); !errors.Is(err, ErrInvalidKey) {
+		if err := s.Create(ctx, "K1", "D1", "", []ComponentInput{comp(id, "x")}); !errors.Is(err, storage.ErrInvalidKey) {
 			t.Errorf("component id %q: %v", id, err)
 		}
 	}
-	if err := s.Create(ctx, "K1", "D1", "", []ComponentInput{comp("a", "x"), comp("a", "y")}); !errors.Is(err, ErrInvalidKey) {
+	if err := s.Create(ctx, "K1", "D1", "", []ComponentInput{comp("a", "x"), comp("a", "y")}); !errors.Is(err, storage.ErrInvalidKey) {
 		t.Errorf("duplicate component: %v", err)
 	}
 }

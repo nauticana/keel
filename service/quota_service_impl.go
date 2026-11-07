@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +31,7 @@ const (
 	qGetPartnerQuota        = "get_partner_quota"
 	qGetPartnerAddon        = "get_partner_addon"
 	qAddUsage               = "add_usage"
+	qAddUsageOnce           = "add_usage_once"
 	qLockQuota              = "lock_quota"
 	qGetPlanLimits          = "get_plan_limits"
 	qGetResourceCaption     = "get_resource_caption"
@@ -73,6 +76,13 @@ SELECT addon_id, COUNT(*) AS active_count
 	qAddUsage: `
 INSERT INTO usage_ledger (id, partner_id, resource_name, amount, notes, user_id, api_key_id, oauth_client_id)
 VALUES (nextval('usage_ledger_seq'), ?, ?, ?, ?, ?, ?, ?)
+`,
+
+	qAddUsageOnce: `
+INSERT INTO usage_ledger (id, partner_id, resource_name, amount, notes, user_id, api_key_id, oauth_client_id, idempotency_key)
+VALUES (nextval('usage_ledger_seq'), ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (partner_id, resource_name, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+RETURNING id
 `,
 
 	// Tx-scoped advisory lock keyed "partnerID:resource" — serializes
@@ -523,8 +533,21 @@ func usageArgs(ctx context.Context, partnerID int64, resource string, amount int
 	return []any{partnerID, resource, amount, notes, userID, apiKeyID, clientID}
 }
 
-func (s *QuotaServiceDb) ReportAddonUsage(ctx context.Context, partnerID int64, addonID string, amount int64, notes string) error {
-	return s.LogUsage(ctx, partnerID, addonID, amount, notes)
+// MaxUsageKeyLen is the width of usage_ledger.idempotency_key.
+const MaxUsageKeyLen = 128
+
+var ErrUsageKey = errors.New("quota: idempotency key must be nonblank and at most 128 bytes, and amount positive")
+
+func (s *QuotaServiceDb) RecordUsageOnce(ctx context.Context, partnerID int64, resource, key string, amount int64, description string) (bool, error) {
+	if strings.TrimSpace(key) == "" || len(key) > MaxUsageKeyLen || amount <= 0 {
+		return false, ErrUsageKey
+	}
+	s.init(ctx)
+	res, err := s.qs.Query(ctx, qAddUsageOnce, append(usageArgs(ctx, partnerID, resource, amount, description), key)...)
+	if err != nil {
+		return false, fmt.Errorf("add usage %s amount of %d to partner %d: %w", resource, amount, partnerID, err)
+	}
+	return len(res.Rows) > 0, nil
 }
 
 // PlanOverages compares each live-counted resource the target or the current

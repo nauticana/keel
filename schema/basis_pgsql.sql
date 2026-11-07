@@ -901,9 +901,11 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     user_id                              BIGINT       ,
     api_key_id                           BIGINT       ,
     oauth_client_id                      VARCHAR(255) ,
+    idempotency_key                      VARCHAR(128) ,
     CONSTRAINT usage_ledger_pk PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ledger_quota ON usage_ledger(partner_id, resource_name, usage_time);
+CREATE UNIQUE INDEX IF NOT EXISTS usage_ledger_idempotency_uq ON usage_ledger(partner_id, resource_name, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE SEQUENCE IF NOT EXISTS usage_ledger_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('usage_ledger', 'id', 'usage_ledger_seq') ON CONFLICT DO NOTHING;
@@ -1267,7 +1269,8 @@ CREATE TABLE IF NOT EXISTS invoice (
     attempt_count                        INTEGER       NOT NULL DEFAULT 0,
     next_attempt_at                      TIMESTAMP    ,
     last_error                           TEXT         ,
-    CONSTRAINT invoice_pk PRIMARY KEY (id)
+    CONSTRAINT invoice_pk PRIMARY KEY (id),
+    CONSTRAINT chk_invoice_status CHECK (status IN ('D', 'O', 'A', 'P', 'V'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_number ON invoice(invoice_number);
 CREATE INDEX IF NOT EXISTS idx_invoice_partner ON invoice(partner_id);
@@ -1341,7 +1344,8 @@ CREATE TABLE IF NOT EXISTS payment_record (
     paid_at                              TIMESTAMP    ,
     raw_payload                          TEXT         ,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT payment_record_pk PRIMARY KEY (id)
+    CONSTRAINT payment_record_pk PRIMARY KEY (id),
+    CONSTRAINT chk_payment_record_status CHECK (payment_status IN ('P', 'F', 'R'))
 );
 CREATE INDEX IF NOT EXISTS idx_payment_record_partner ON payment_record(partner_id, paid_at);
 CREATE INDEX IF NOT EXISTS idx_payment_record_provider_charge ON payment_record(provider, provider_charge_id);

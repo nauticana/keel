@@ -1,6 +1,27 @@
 comment: Billing seed data
 order: 170
 seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [invoice_status, Invoice Status]
+      - [payment_status, Payment Status]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [invoice_status, D, Draft]
+      - [invoice_status, O, Open]
+      - [invoice_status, A, Action Required]
+      - [invoice_status, P, Paid]
+      - [invoice_status, V, Void]
+      - [payment_status, P, Paid]
+      - [payment_status, F, Failed]
+      - [payment_status, R, Refunded]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [invoice_status, invoice, status]
+      - [payment_status, payment_record, payment_status]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:

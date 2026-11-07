@@ -41,6 +41,20 @@ func (qr *QueryResult) Indexes(names ...string) ([]int, error) {
 	return out, nil
 }
 
+// RequireColumns reports ErrColumnNotFound when a row has fewer than n
+// columns, so a positional reader fails on a narrower query instead of panicking.
+func (qr *QueryResult) RequireColumns(n int) error {
+	if qr == nil {
+		return fmt.Errorf("%w: nil query result", ErrColumnNotFound)
+	}
+	for i, row := range qr.Rows {
+		if len(row) < n {
+			return fmt.Errorf("%w: row %d has %d columns, reader expects %d", ErrColumnNotFound, i, len(row), n)
+		}
+	}
+	return nil
+}
+
 // Row returns row i, or ErrRowOutOfRange.
 func (qr *QueryResult) Row(i int) (Row, error) {
 	if qr == nil || i < 0 || i >= len(qr.Rows) {

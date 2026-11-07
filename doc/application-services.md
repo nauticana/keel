@@ -13,7 +13,10 @@ allowed, err := quota.CheckQuota(ctx, partnerID, "MEDIA", 1) // room for 1 more?
 hasAddon, err := quota.CheckAddon(ctx, partnerID, "PRO_LOCATIONS")
 remainingQuota, err := quota.GetPartnerQuota(ctx, partnerID int64, "PRO_LOCATIONS", 20)
 quota.LogUsage(ctx, partnerID, "API_CALLS", 1, "public-api")
+recorded, err := quota.RecordUsageOnce(ctx, partnerID, "AI_CREDITS", "report:42", 5, "usage report")
 ```
+
+`RecordUsageOnce` is `LogUsage` under a caller-chosen idempotency key (1–128 bytes, stored in `usage_ledger.idempotency_key`): a repeat of `(partner, resource, key)` writes nothing and reports `false`, so a client that resends a usage report after a lost response cannot double-count. The amount must be positive; `service.ErrUsageKey` refuses a blank or overlong key or a non-positive amount.
 
 ### Two resource categories
 

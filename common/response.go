@@ -1,6 +1,11 @@
 package common
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"time"
 
@@ -20,6 +25,40 @@ type APIMeta struct {
 	RequestID string `json:"request_id"`
 	Timestamp string `json:"timestamp"`
 	Version   string `json:"version"`
+}
+
+// ErrEmptyData reports an envelope whose data member is missing or null.
+var ErrEmptyData = errors.New("api response: no data")
+
+// DecodeAPIResponse reads one `{data, meta}` envelope of at most maxBytes from
+// r, decoding data with the API JSON rules. The caller checks the status first;
+// an error body is not an envelope.
+func DecodeAPIResponse[T any](r io.Reader, maxBytes int64) (T, *APIMeta, error) {
+	var data T
+	if maxBytes < 1 || maxBytes == math.MaxInt64 {
+		return data, nil, fmt.Errorf("api response: invalid body limit %d", maxBytes)
+	}
+	var env struct {
+		Data json.RawMessage `json:"data"`
+		Meta *APIMeta        `json:"meta"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return data, nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return data, nil, fmt.Errorf("api response: body exceeds %d bytes", maxBytes)
+	}
+	if err := DecodeJSON(body, &env); err != nil {
+		return data, nil, fmt.Errorf("api response: %w", err)
+	}
+	if len(env.Data) == 0 || string(env.Data) == "null" {
+		return data, env.Meta, ErrEmptyData
+	}
+	if err := DecodeJSON(env.Data, &data); err != nil {
+		return data, env.Meta, fmt.Errorf("api response data: %w", err)
+	}
+	return data, env.Meta, nil
 }
 
 // WriteJSON emits `{data, meta}` for non-paginated responses.

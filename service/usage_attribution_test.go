@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/keel/common"
@@ -60,5 +62,30 @@ func TestSSOMiddlewareBindsSessionUser(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if got != int64(9) {
 		t.Fatalf("context user = %v, want 9", got)
+	}
+}
+
+func TestRecordUsageOnce(t *testing.T) {
+	svc, qs, _ := newQuotaSvc(nil)
+	ctx := context.Background()
+	qs.rows[qAddUsageOnce] = [][]any{{int64(1)}}
+	if recorded, err := svc.RecordUsageOnce(ctx, 7, "AI_CREDITS", "lic:1-10", 3, "report"); err != nil || !recorded {
+		t.Fatalf("recorded=%v err=%v", recorded, err)
+	}
+	args := qs.calls[qs.callIndex(qAddUsageOnce)].args
+	if len(args) != 8 || args[0] != int64(7) || args[2] != int64(3) || args[7] != "lic:1-10" {
+		t.Fatalf("args = %v", args)
+	}
+	qs.rows[qAddUsageOnce] = nil
+	if recorded, err := svc.RecordUsageOnce(ctx, 7, "AI_CREDITS", "lic:1-10", 3, "report"); err != nil || recorded {
+		t.Fatalf("replay: recorded=%v err=%v, want false", recorded, err)
+	}
+	for _, c := range []struct {
+		key    string
+		amount int64
+	}{{"", 1}, {" \t\n", 1}, {strings.Repeat("k", MaxUsageKeyLen+1), 1}, {"k", 0}, {"k", -1}} {
+		if _, err := svc.RecordUsageOnce(ctx, 7, "AI_CREDITS", c.key, c.amount, ""); !errors.Is(err, ErrUsageKey) {
+			t.Fatalf("key %q amount %d: err = %v", c.key, c.amount, err)
+		}
 	}
 }

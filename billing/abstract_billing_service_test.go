@@ -499,3 +499,13 @@ func TestActivate_ExistingPaidSubscription(t *testing.T) {
 		t.Fatalf("second paid subscription wrote: %+v", secondTx.calls)
 	}
 }
+
+func TestGetPlans_RefusesNarrowRows(t *testing.T) {
+	svc, _ := newSvc(map[string][][]any{
+		qBillGetAllPlans: {{"pro", "Pro", "USD", "A", int64(14), "M", int64(1), "M", int64(10000), "USD", "price_m"}},
+	})
+	_, err := svc.GetPlans(context.Background())
+	if !errors.Is(err, model.ErrColumnNotFound) || !strings.Contains(err.Error(), qBillGetAllPlans) {
+		t.Fatalf("err = %v, want ErrColumnNotFound naming the query", err)
+	}
+}

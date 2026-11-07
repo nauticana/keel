@@ -25,6 +25,9 @@ columns:
   - name: oauth_client_id
     type: VARCHAR(255)
     nullable: true
+  - name: idempotency_key
+    type: VARCHAR(128)
+    nullable: true
 primary_key: [id]
 sequence:
   name: usage_ledger_seq
@@ -49,3 +52,7 @@ foreign_keys:
 indexes:
   - name: idx_usage_ledger_quota
     columns: [partner_id, resource_name, usage_time]
+  - name: usage_ledger_idempotency_uq
+    columns: [partner_id, resource_name, idempotency_key]
+    unique: true
+    where: "idempotency_key IS NOT NULL"
