@@ -20,7 +20,7 @@ func TestMain(m *testing.M) {
 type memStore struct {
 	requests map[int64][]any // selectRequestFields order
 	events   [][]any
-	single   map[int64]bool // approval_policy.allow_single_person by partner
+	policies [][]any // approval_policy rows: id, partner_id, object_type, allow_single_person, changed_by, confirmed_by, begda, endda
 	nextID   int64
 	pending  []func() // undo log of the open transaction
 	clock    time.Duration
@@ -39,7 +39,7 @@ func (m *memStore) view(r []any) []any {
 }
 
 func newStore() *memStore {
-	return &memStore{requests: map[int64][]any{}, single: map[int64]bool{}}
+	return &memStore{requests: map[int64][]any{}}
 }
 
 func (m *memStore) GenID() int64                 { m.nextID++; return m.nextID }
@@ -90,8 +90,34 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			}
 		}
 	case qAllowSingle:
-		if v, ok := m.single[args[0].(int64)]; ok {
-			out.Rows = [][]any{{v}}
+		for _, p := range m.policies {
+			if p[2] == args[0] && p[7] == nil && (p[1] == args[1] || (p[1] == nil && len(out.Rows) == 0)) {
+				out.Rows = [][]any{{p[3] == true && p[6] != nil}}
+			}
+		}
+	case qClosePolicy:
+		for _, p := range m.policies {
+			if p[1] == args[0] && p[2] == args[1] && p[7] == nil {
+				p[7] = m.now()
+			}
+		}
+	case qInsertPolicy:
+		var begda any
+		if args[5].(bool) {
+			begda = m.now()
+		}
+		m.policies = append(m.policies, []any{args[0], args[1], args[2], args[3], args[4], nil, begda, nil})
+	case qLockPendingPolicy:
+		for _, p := range m.policies {
+			if p[1] == args[0] && p[2] == args[1] && p[6] == nil && p[7] == nil {
+				out.Rows = [][]any{{p[0], p[4]}}
+			}
+		}
+	case qConfirmPolicy:
+		for _, p := range m.policies {
+			if p[0] == args[1] {
+				p[5], p[6] = args[0], m.now()
+			}
 		}
 	case qSetDecision:
 		r := m.requests[args[3].(int64)]

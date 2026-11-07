@@ -20,7 +20,10 @@ import (
 	"github.com/nauticana/keel/storage"
 )
 
-const maxTitle = 200
+const (
+	maxTitle    = 200
+	maxLanguage = 8
+)
 
 // DocumentService stores partner documents: the file goes to the repository
 // its document_type names as a one-component dms document, the record to
@@ -31,6 +34,9 @@ type DocumentService struct {
 	Repos   *dms.ContentRepositoryService
 	Docs    *dms.ContentDocumentService
 	Scanner scan.ContentScanner // optional
+	// Policy decides whether an uploader may review their own document; nil
+	// refuses every self-review.
+	Policy SeparationPolicy
 	// OnStored runs inside Store's transaction after the row is written, so an
 	// application updates its own tables atomically with the document (a
 	// licence number on the holder's profile, an outbox event). An error
@@ -99,6 +105,13 @@ func (s *DocumentService) Store(ctx context.Context, up Upload) (*PartnerDocumen
 	if up.PartnerID == 0 || up.Body == nil {
 		return nil, fmt.Errorf("document: partner and body are required")
 	}
+	subject, err := up.Subject.normalized()
+	if err != nil {
+		return nil, err
+	}
+	if len(up.Language) > maxLanguage {
+		return nil, fmt.Errorf("%w: language exceeds %d characters", ErrInvalidUpload, maxLanguage)
+	}
 	typ, err := s.documentType(ctx, up.DocumentType)
 	if err != nil {
 		return nil, err
@@ -125,9 +138,9 @@ func (s *DocumentService) Store(ctx context.Context, up Upload) (*PartnerDocumen
 
 	qs := s.query(ctx)
 	doc := &PartnerDocument{
-		ID: qs.GenID(), ContRepID: typ.ContRepID, PartnerID: up.PartnerID, UserID: up.UserID, DocumentType: typ.ID,
+		ID: qs.GenID(), ContRepID: typ.ContRepID, PartnerID: up.PartnerID, Subject: subject, DocumentType: typ.ID,
 		Title: common.TruncateRunes(strings.TrimSpace(up.Title), maxTitle), FileName: common.TruncateRunes(storage.SanitizeFilename(up.FileName), maxTitle),
-		DocumentNumber: up.DocumentNumber, ExpiresOn: up.ExpiresOn, OriginIP: up.OriginIP, UploadedBy: up.UploadedBy,
+		DocumentNumber: up.DocumentNumber, ExpiresOn: up.ExpiresOn, Language: up.Language, OriginIP: up.OriginIP, UploadedBy: up.UploadedBy,
 		Status: StatusApproved,
 	}
 	doc.DocKey = strconv.FormatInt(doc.ID, 10)
@@ -153,7 +166,7 @@ func (s *DocumentService) insert(ctx context.Context, doc *PartnerDocument, typ 
 		if err := s.lockGroup(ctx, tx, doc); err != nil {
 			return err
 		}
-		next, err := tx.Query(ctx, qNextVersion, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID))
+		next, err := tx.Query(ctx, qNextVersion, doc.PartnerID, doc.DocumentType, doc.userArg(), doc.keyArg())
 		if err != nil {
 			return err
 		}
@@ -162,12 +175,13 @@ func (s *DocumentService) insert(ctx context.Context, doc *PartnerDocument, typ 
 		if !doc.ExpiresOn.IsZero() {
 			expires = doc.ExpiresOn
 		}
-		if _, err := tx.Query(ctx, qInsert, doc.ID, doc.ContRepID, doc.DocKey, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID),
-			doc.Title, doc.FileName, doc.VersionNo, doc.DocumentNumber, expires, doc.OriginIP, nullableID(doc.UploadedBy), doc.Status); err != nil {
+		if _, err := tx.Query(ctx, qInsert, doc.ID, doc.ContRepID, doc.DocKey, doc.PartnerID, doc.DocumentType, doc.userArg(),
+			doc.Title, doc.FileName, doc.VersionNo, doc.DocumentNumber, expires, doc.OriginIP, nullableID(doc.UploadedBy), doc.Status,
+			doc.keyArg(), common.NullIfEmpty(doc.Language)); err != nil {
 			return err
 		}
 		if doc.Status == StatusApproved && typ.Supersedes {
-			if _, err := tx.Query(ctx, qSupersede, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID), doc.ID); err != nil {
+			if err := s.supersede(ctx, tx, doc); err != nil {
 				return err
 			}
 		}
@@ -204,7 +218,13 @@ func (s *DocumentService) transact(ctx context.Context, fn func(port.TxQueryServ
 // lock cannot do this: the rows that must exclude each other are still
 // pending, or not inserted yet.
 func (s *DocumentService) lockGroup(ctx context.Context, tx port.TxQueryService, doc *PartnerDocument) error {
-	_, err := tx.Query(ctx, qLockGroup, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID))
+	_, err := tx.Query(ctx, qLockGroup, doc.PartnerID, doc.DocumentType, doc.userArg(), doc.keyArg())
+	return err
+}
+
+// supersede retires the other approved document of the group.
+func (s *DocumentService) supersede(ctx context.Context, tx port.TxQueryService, doc *PartnerDocument) error {
+	_, err := tx.Query(ctx, qSupersede, doc.PartnerID, doc.DocumentType, doc.userArg(), doc.keyArg(), doc.ID)
 	return err
 }
 
@@ -221,8 +241,8 @@ func (s *DocumentService) lock(ctx context.Context, tx port.TxQueryService, part
 
 // Review approves or rejects a pending document. An approval supersedes the
 // previously approved version of the same type and subject in the same
-// transaction, unless the type keeps every approved document. A type with
-// independent review refuses its uploader with ErrSelfReview.
+// transaction, unless the type keeps every approved document. The uploader is
+// refused with ErrSelfReview unless Policy allows a single person for the type.
 func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID int64, approve bool, notes string) error {
 	return s.transact(ctx, func(tx port.TxQueryService) error {
 		doc, err := s.lock(ctx, tx, partnerID, id)
@@ -236,8 +256,16 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 		if err != nil {
 			return err
 		}
-		if typ.IndependentReview && reviewerID == doc.UploadedBy {
-			return fmt.Errorf("%w: %d", ErrSelfReview, id)
+		if reviewerID == doc.UploadedBy {
+			allowed := false
+			if s.Policy != nil {
+				if allowed, err = s.Policy.AllowsSinglePerson(ctx, partnerID, doc.DocumentType); err != nil {
+					return err
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("%w: %d", ErrSelfReview, id)
+			}
 		}
 		status := StatusRejected
 		if approve {
@@ -246,7 +274,7 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 				return err
 			}
 			if typ.Supersedes {
-				if _, err := tx.Query(ctx, qSupersede, doc.PartnerID, doc.DocumentType, nullableID(doc.UserID), doc.ID); err != nil {
+				if err := s.supersede(ctx, tx, doc); err != nil {
 					return err
 				}
 			}
@@ -355,14 +383,14 @@ func (s *DocumentService) ListByPartner(ctx context.Context, partnerID int64) ([
 	return s.list(ctx, qListByPartner, partnerID)
 }
 
-// ListByUser returns every non-retired document about one member of the partner.
-func (s *DocumentService) ListByUser(ctx context.Context, partnerID, userID int64) ([]*PartnerDocument, error) {
-	return s.list(ctx, qListByUser, partnerID, userID)
+// ListBySubject returns every non-retired document about one subject of the partner.
+func (s *DocumentService) ListBySubject(ctx context.Context, partnerID int64, subject Subject) ([]*PartnerDocument, error) {
+	return s.list(ctx, qListBySubject, partnerID, subject.userArg(), subject.keyArg())
 }
 
 // ByVersion resolves a document the way clients address it: subject, type and version.
-func (s *DocumentService) ByVersion(ctx context.Context, partnerID, userID int64, documentType string, versionNo int) (*PartnerDocument, error) {
-	docs, err := s.list(ctx, qByVersion, partnerID, nullableID(userID), documentType, versionNo)
+func (s *DocumentService) ByVersion(ctx context.Context, partnerID int64, subject Subject, documentType string, versionNo int) (*PartnerDocument, error) {
+	docs, err := s.list(ctx, qByVersion, partnerID, documentType, versionNo, subject.userArg(), subject.keyArg())
 	if err != nil {
 		return nil, err
 	}
@@ -372,10 +400,10 @@ func (s *DocumentService) ByVersion(ctx context.Context, partnerID, userID int64
 	return unpurged(docs[0])
 }
 
-// Latest returns the newest non-retired version of every type for a subject
-// (userID 0 = the partner), the basis of a "missing / pending / rejected" summary.
-func (s *DocumentService) Latest(ctx context.Context, partnerID, userID int64) ([]*PartnerDocument, error) {
-	return s.list(ctx, qLatest, partnerID, nullableID(userID))
+// Latest returns the newest non-retired version of every type for a subject,
+// the basis of a "missing / pending / rejected" summary.
+func (s *DocumentService) Latest(ctx context.Context, partnerID int64, subject Subject) ([]*PartnerDocument, error) {
+	return s.list(ctx, qLatest, partnerID, subject.userArg(), subject.keyArg())
 }
 
 // ReviewedBy returns the documents a reviewer decided, newest first.
@@ -388,10 +416,9 @@ func (s *DocumentService) Pending(ctx context.Context, partnerID int64) ([]*Part
 	return s.list(ctx, qPending, partnerID)
 }
 
-// Approved returns the approved document of a type for a subject (userID 0 =
-// the partner), or ErrNotFound.
-func (s *DocumentService) Approved(ctx context.Context, partnerID, userID int64, documentType string) (*PartnerDocument, error) {
-	docs, err := s.list(ctx, qApproved, partnerID, documentType, nullableID(userID))
+// Approved returns the approved document of a type for a subject, or ErrNotFound.
+func (s *DocumentService) Approved(ctx context.Context, partnerID int64, subject Subject, documentType string) (*PartnerDocument, error) {
+	docs, err := s.list(ctx, qApproved, partnerID, documentType, subject.userArg(), subject.keyArg())
 	if err != nil {
 		return nil, err
 	}

@@ -24,6 +24,7 @@ func init() {
 	RegisterErrorMessage(document.ErrInvalidState, http.StatusConflict, "document_invalid_state", "The document's status does not allow this operation")
 	RegisterErrorMessage(document.ErrTenantMismatch, http.StatusForbidden, "document_forbidden", "This document type is not available")
 	RegisterErrorMessage(document.ErrSelfReview, http.StatusForbidden, "document_self_review", "The uploader cannot review this document")
+	RegisterErrorMessage(document.ErrInvalidUpload, http.StatusBadRequest, "document_invalid_upload", "The upload's subject or language is invalid")
 	RegisterErrorMessage(scan.ErrContentRejected, http.StatusForbidden, "content_rejected", "The file was rejected by the content scanner")
 }
 
@@ -52,8 +53,9 @@ type DocumentHandler struct {
 }
 
 // Upload accepts multipart field "file" with the form fields document_type,
-// title, document_number, expires_on (YYYY-MM-DD) and user_id (the subject;
-// empty = the partner), and answers 201 with the stored document.
+// title, document_number, expires_on (YYYY-MM-DD), language and the subject
+// user_id or subject_key (neither = the partner), and answers 201 with the
+// stored document.
 func (h *DocumentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -88,7 +90,8 @@ func (h *DocumentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	up := document.Upload{
 		PartnerID: partnerID, DocumentType: r.FormValue("document_type"), Title: r.FormValue("title"),
-		FileName: header.Filename, DocumentNumber: r.FormValue("document_number"),
+		FileName: header.Filename, DocumentNumber: r.FormValue("document_number"), Language: r.FormValue("language"),
+		Subject:  document.Subject{SubjectKey: r.FormValue("subject_key")},
 		OriginIP: common.TrustedClientIP(r), UploadedBy: int64(session.Id), Body: file,
 	}
 	if up.DocumentType == "" {

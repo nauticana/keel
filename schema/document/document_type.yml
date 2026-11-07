@@ -3,8 +3,8 @@ comment: |
   A kind of partner document: which repository it is routed to, its upload
   limits, whether it starts pending review and whether a new approval
   supersedes the previous one (false for a type that is a set, where every
-  approved document stands alone). independent_review refuses a review by
-  the document's uploader. Seeded by each application.
+  approved document stands alone). Whether the uploader may review their
+  own document is the approval_policy of the type. Seeded by each application.
 columns:
   - name: id
     type: VARCHAR(30)
@@ -22,9 +22,6 @@ columns:
   - name: supersedes
     type: BOOLEAN
     default: true
-  - name: independent_review
-    type: BOOLEAN
-    default: false
 primary_key: [id]
 foreign_keys:
   - name: document_type_repository

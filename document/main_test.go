@@ -28,7 +28,7 @@ func (c *catalog) Repositories(context.Context) ([]dms.RepositoryDefinition, err
 
 // memStore is an in-memory stand-in for the document tables, driven by query name.
 type memStore struct {
-	types      map[string][]any // contrep_id, max_bytes, media_types, requires_review, supersedes, independent_review
+	types      map[string][]any // contrep_id, max_bytes, media_types, requires_review, supersedes
 	owners     map[string]any   // contrep_id → partner_id or nil
 	rows       map[int64][]any  // partner_document in selectFields order
 	nextID     int64
@@ -69,6 +69,9 @@ func same(a, b any) bool {
 	return a == b
 }
 
+// subject reports whether row r is about the subject (user, key).
+func subject(r []any, user, key any) bool { return same(r[5], user) && same(r[21], key) }
+
 func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.QueryResult, error) {
 	out := &model.QueryResult{}
 	switch name {
@@ -83,18 +86,18 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	case qNextVersion:
 		var max int64
 		for _, r := range m.rows {
-			if r[3] == args[0] && r[4] == args[1] && same(r[5], args[2]) && r[8].(int64) > max {
+			if r[3] == args[0] && r[4] == args[1] && subject(r, args[2], args[3]) && r[8].(int64) > max {
 				max = r[8].(int64)
 			}
 		}
 		out.Rows = [][]any{{max + 1}}
 	case qInsert:
 		m.rows[args[0].(int64)] = []any{args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], int64(args[8].(int32)),
-			args[9], args[10], args[11], args[12], time.Now(), args[13], nil, nil, nil, nil, nil, nil}
+			args[9], args[10], args[11], args[12], time.Now(), args[13], nil, nil, nil, nil, nil, nil, args[14], args[15]}
 		m.inserted = append(m.inserted, args[0].(int64))
 	case qSupersede:
 		for _, r := range m.rows {
-			if r[3] == args[0] && r[4] == args[1] && same(r[5], args[2]) && r[14] == StatusApproved && r[0] != args[3] {
+			if r[3] == args[0] && r[4] == args[1] && subject(r, args[2], args[3]) && r[14] == StatusApproved && r[0] != args[4] {
 				r[14], r[18] = StatusSuperseded, time.Now()
 			}
 		}
@@ -110,16 +113,22 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 				out.Rows = append(out.Rows, r)
 			}
 		}
+	case qListBySubject:
+		for _, r := range m.rows {
+			if r[3] == args[0] && subject(r, args[1], args[2]) && r[14] != StatusRetired {
+				out.Rows = append(out.Rows, r)
+			}
+		}
 	case qByVersion:
 		for _, r := range m.rows {
-			if r[3] == args[0] && same(r[5], args[1]) && r[4] == args[2] && r[8] == int64(args[3].(int)) {
+			if r[3] == args[0] && r[4] == args[1] && r[8] == int64(args[2].(int)) && subject(r, args[3], args[4]) {
 				out.Rows = [][]any{r}
 			}
 		}
 	case qLatest:
 		latest := map[any][]any{}
 		for _, r := range m.rows {
-			if r[3] == args[0] && same(r[5], args[1]) && r[14] != StatusRetired {
+			if r[3] == args[0] && subject(r, args[1], args[2]) && r[14] != StatusRetired {
 				if cur, ok := latest[r[4]]; !ok || r[8].(int64) > cur[8].(int64) {
 					latest[r[4]] = r
 				}
@@ -142,7 +151,7 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		}
 	case qApproved:
 		for _, r := range m.rows {
-			if r[3] == args[0] && r[4] == args[1] && same(r[5], args[2]) && r[14] == StatusApproved {
+			if r[3] == args[0] && r[4] == args[1] && subject(r, args[2], args[3]) && r[14] == StatusApproved {
 				out.Rows = append(out.Rows, r)
 			}
 		}
@@ -185,13 +194,12 @@ func newService(t *testing.T) (*DocumentService, *memStore) {
 	t.Helper()
 	store := &memStore{
 		types: map[string][]any{
-			"licence":    {"docs", int64(64), "image/png, application/pdf", true, true, false},
-			"permit":     {"docs", int64(64), "image/png", true, true, true},
-			"logo":       {"docs", int64(64), "image/png", false, true, false},
-			"attachment": {"docs", int64(64), "image/png", false, false, false},
-			"cold":       {"cold", int64(64), "image/png", false, true, false},
-			"foreign":    {"other", int64(64), "image/png", false, true, false},
-			"brief":      {"docs", int64(4096), mediaDOCX, false, true, false},
+			"licence":    {"docs", int64(64), "image/png, application/pdf", true, true},
+			"logo":       {"docs", int64(64), "image/png", false, true},
+			"attachment": {"docs", int64(64), "image/png", false, false},
+			"cold":       {"cold", int64(64), "image/png", false, true},
+			"foreign":    {"other", int64(64), "image/png", false, true},
+			"brief":      {"docs", int64(4096), mediaDOCX, false, true},
 		},
 		owners: map[string]any{"docs": nil, "other": int64(99), "cold": nil},
 		rows:   map[int64][]any{},
@@ -208,5 +216,12 @@ func newService(t *testing.T) (*DocumentService, *memStore) {
 var png = append([]byte("\x89PNG\r\n\x1a\n"), 1, 2, 3)
 
 func upload(typ string, userID int64, body []byte) Upload {
-	return Upload{PartnerID: 7, UserID: userID, DocumentType: typ, Title: "Front", FileName: "../front.png", UploadedBy: 3, OriginIP: "10.0.0.1", Body: bytesReader(body)}
+	return Upload{PartnerID: 7, Subject: Subject{UserID: userID}, DocumentType: typ, Title: "Front", FileName: "../front.png", UploadedBy: 3, OriginIP: "10.0.0.1", Body: bytesReader(body)}
+}
+
+// allowing is a SeparationPolicy that lets one person upload and review the named types.
+type allowing map[string]bool
+
+func (a allowing) AllowsSinglePerson(_ context.Context, _ int64, typ string) (bool, error) {
+	return a[typ], nil
 }

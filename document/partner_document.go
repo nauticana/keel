@@ -10,17 +10,18 @@ import (
 // PartnerDocument is one partner_document row. Content is filled by Read and
 // Open from the document's component attributes.
 type PartnerDocument struct {
-	ID             int64
-	ContRepID      string
-	DocKey         string
-	PartnerID      int64
-	UserID         int64 // 0 means the partner itself
+	ID        int64
+	ContRepID string
+	DocKey    string
+	PartnerID int64
+	Subject
 	DocumentType   string
 	Title          string
 	FileName       string
 	VersionNo      int32
 	DocumentNumber string
 	ExpiresOn      time.Time
+	Language       string
 	OriginIP       string
 	UploadedBy     int64
 	UploadedAt     time.Time
@@ -37,12 +38,12 @@ type PartnerDocument struct {
 func documentFromRow(r []any) *PartnerDocument {
 	return &PartnerDocument{
 		ID: common.AsInt64(r[0]), ContRepID: common.AsString(r[1]), DocKey: common.AsString(r[2]),
-		PartnerID: common.AsInt64(r[3]), DocumentType: common.AsString(r[4]), UserID: optionalID(r[5]),
+		PartnerID: common.AsInt64(r[3]), DocumentType: common.AsString(r[4]), Subject: Subject{UserID: optionalID(r[5]), SubjectKey: common.AsString(r[21])},
 		Title: common.AsString(r[6]), FileName: common.AsString(r[7]), VersionNo: common.AsInt32(r[8]),
 		DocumentNumber: common.AsString(r[9]), ExpiresOn: common.AsTime(r[10]), OriginIP: common.AsString(r[11]),
 		UploadedBy: optionalID(r[12]), UploadedAt: common.AsTime(r[13]), Status: common.AsString(r[14]),
 		ReviewerID: optionalID(r[15]), ReviewedAt: common.AsTime(r[16]), ReviewerNotes: common.AsString(r[17]),
-		SupersededAt: common.AsTime(r[18]), RetiredAt: common.AsTime(r[19]), PurgedAt: common.AsTime(r[20]),
+		SupersededAt: common.AsTime(r[18]), RetiredAt: common.AsTime(r[19]), PurgedAt: common.AsTime(r[20]), Language: common.AsString(r[22]),
 	}
 }
 

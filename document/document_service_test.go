@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/approval"
 	"github.com/nauticana/keel/dms"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/scan"
@@ -17,6 +18,13 @@ import (
 )
 
 func bytesReader(b []byte) io.Reader { return bytes.NewReader(b) }
+
+var _ SeparationPolicy = (*approval.Service)(nil)
+
+var (
+	member = Subject{UserID: 5}
+	unit   = Subject{SubjectKey: "org-unit:42"}
+)
 
 func TestStoreReadAndTrace(t *testing.T) {
 	s, _ := newService(t)
@@ -85,13 +93,13 @@ func TestApprovalSupersedesAndVersions(t *testing.T) {
 	if old, _ := s.Get(ctx, 7, v1.ID); old.Status != StatusSuperseded {
 		t.Errorf("v1 must be superseded: %s", old.Status)
 	}
-	if cur, err := s.Approved(ctx, 7, 0, "logo"); err != nil || cur.ID != v2.ID {
+	if cur, err := s.Approved(ctx, 7, Subject{}, "logo"); err != nil || cur.ID != v2.ID {
 		t.Errorf("approved: %+v %v", cur, err)
 	}
 	if store.groupLocks != 2 {
 		t.Errorf("every approving store must lock its group: %d", store.groupLocks)
 	}
-	if _, err := s.Approved(ctx, 7, 0, "licence"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Approved(ctx, 7, Subject{}, "licence"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("no approved licence yet: %v", err)
 	}
 }
@@ -124,7 +132,7 @@ func TestReviewWorkflow(t *testing.T) {
 	if doc, _ := s.Get(ctx, 7, second.ID); doc.Status != StatusRejected || doc.ReviewerNotes != "blurry" {
 		t.Errorf("rejected: %+v", doc)
 	}
-	if cur, _ := s.Approved(ctx, 7, 5, "licence"); cur == nil || cur.ID != first.ID {
+	if cur, _ := s.Approved(ctx, 7, member, "licence"); cur == nil || cur.ID != first.ID {
 		t.Errorf("a rejection keeps the previous approval: %+v", cur)
 	}
 
@@ -140,19 +148,77 @@ func TestReviewWorkflow(t *testing.T) {
 	}
 }
 
-func TestIndependentReview(t *testing.T) {
+func TestSelfReviewFollowsPolicy(t *testing.T) {
 	s, _ := newService(t)
 	ctx := context.Background()
-	doc, _ := s.Store(ctx, upload("permit", 5, png))
+	doc, _ := s.Store(ctx, upload("licence", 5, png))
 	if err := s.Review(ctx, 7, doc.ID, 3, true, ""); !errors.Is(err, ErrSelfReview) {
-		t.Errorf("the uploader must not review: %v", err)
+		t.Errorf("without a policy the uploader must not review: %v", err)
+	}
+	s.Policy = allowing{"other": true}
+	if err := s.Review(ctx, 7, doc.ID, 3, true, ""); !errors.Is(err, ErrSelfReview) {
+		t.Errorf("a policy for another type does not apply: %v", err)
 	}
 	if err := s.Review(ctx, 7, doc.ID, 9, true, ""); err != nil {
 		t.Errorf("another reviewer may: %v", err)
 	}
+	s.Policy = allowing{"licence": true}
 	own, _ := s.Store(ctx, upload("licence", 5, png))
 	if err := s.Review(ctx, 7, own.ID, 3, true, ""); err != nil {
-		t.Errorf("a type without independent review allows the uploader: %v", err)
+		t.Errorf("the policy allows the uploader: %v", err)
+	}
+}
+
+func TestSubjectKeyVersionsIndependently(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	up := upload("licence", 0, png)
+	up.Subject, up.Language = unit, "en-GB"
+	v1, err := s.Store(ctx, up)
+	if err != nil || v1.VersionNo != 1 || v1.SubjectKey != unit.SubjectKey || v1.Language != "en-GB" {
+		t.Fatalf("v1: %+v %v", v1, err)
+	}
+	if other, _ := s.Store(ctx, upload("licence", 0, png)); other.VersionNo != 1 || other.SubjectKey != "" {
+		t.Errorf("the partner's own document is another subject: %+v", other)
+	}
+	up.Body = bytesReader(png)
+	v2, err := s.Store(ctx, up)
+	if err != nil || v2.VersionNo != 2 {
+		t.Fatalf("v2: %+v %v", v2, err)
+	}
+	for _, id := range []int64{v1.ID, v2.ID} {
+		if err := s.Review(ctx, 7, id, 9, true, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if old, _ := s.Get(ctx, 7, v1.ID); old.Status != StatusSuperseded {
+		t.Errorf("v1 must be superseded: %s", old.Status)
+	}
+	if got, err := s.ByVersion(ctx, 7, unit, "licence", 2); err != nil || got.ID != v2.ID || got.UserID != 0 {
+		t.Errorf("by version: %+v %v", got, err)
+	}
+	if docs, _ := s.ListBySubject(ctx, 7, unit); len(docs) != 2 {
+		t.Errorf("list by subject: %d", len(docs))
+	}
+	if cur, _ := s.Approved(ctx, 7, Subject{}, "licence"); cur != nil {
+		t.Errorf("an approval supersedes only its subject's version: %+v", cur)
+	}
+}
+
+func TestStoreRefusesAnInvalidSubject(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	for _, bad := range []Upload{
+		{Subject: Subject{UserID: 5, SubjectKey: "x"}},
+		{Subject: Subject{SubjectKey: strings.Repeat("k", maxSubjectKey+1)}},
+		{Subject: Subject{UserID: -1}},
+		{Language: "en-GB-oxendict"},
+	} {
+		up := upload("logo", 0, png)
+		up.Subject, up.Language = bad.Subject, bad.Language
+		if _, err := s.Store(ctx, up); !errors.Is(err, ErrInvalidUpload) {
+			t.Errorf("%+v: %v", bad, err)
+		}
 	}
 }
 
@@ -164,17 +230,17 @@ func TestClientAddressingAndReviewerQueries(t *testing.T) {
 	logo, _ := s.Store(ctx, upload("logo", 0, png))
 	_ = s.Review(ctx, 7, v1.ID, 9, true, "")
 
-	if got, err := s.ByVersion(ctx, 7, 5, "licence", 2); err != nil || got.ID != v2.ID {
+	if got, err := s.ByVersion(ctx, 7, member, "licence", 2); err != nil || got.ID != v2.ID {
 		t.Errorf("by version: %+v %v", got, err)
 	}
-	if _, err := s.ByVersion(ctx, 7, 5, "licence", 3); !errors.Is(err, ErrNotFound) {
+	if _, err := s.ByVersion(ctx, 7, member, "licence", 3); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing version: %v", err)
 	}
-	latest, _ := s.Latest(ctx, 7, 5)
+	latest, _ := s.Latest(ctx, 7, member)
 	if len(latest) != 1 || latest[0].ID != v2.ID || latest[0].Status != StatusPending {
 		t.Errorf("latest per type for the driver: %+v", latest)
 	}
-	if latest, _ := s.Latest(ctx, 7, 0); len(latest) != 1 || latest[0].ID != logo.ID {
+	if latest, _ := s.Latest(ctx, 7, Subject{}); len(latest) != 1 || latest[0].ID != logo.ID {
 		t.Errorf("latest per type for the partner: %+v", latest)
 	}
 	if reviewed, _ := s.ReviewedBy(ctx, 7, 9); len(reviewed) != 1 || reviewed[0].ID != v1.ID {

@@ -16,7 +16,15 @@ const (
 
 func newService() (*Service, *memStore) {
 	store := newStore()
-	return &Service{DB: memRepo{store: store}}, store
+	return &Service{DB: memRepo{store: store}, Administrators: admins}, store
+}
+
+// admins is the Administrators resolver of the tests: two for the partner, one for the platform.
+func admins(_ context.Context, partnerID int64) ([]int64, error) {
+	if partnerID == 0 {
+		return []int64{1}, nil
+	}
+	return []int64{maker, checker}, nil
 }
 
 func TestDecideRecordsBothActors(t *testing.T) {
@@ -44,17 +52,26 @@ func TestDecideRecordsBothActors(t *testing.T) {
 }
 
 func TestMakerCannotDecideWithoutPolicy(t *testing.T) {
-	s, store := newService()
+	s, _ := newService()
 	ctx := context.Background()
 	req, _ := s.Submit(ctx, partner, "invoice", 42, maker)
 	if _, err := s.Decide(ctx, partner, req.ID, maker, true, ""); !errors.Is(err, ErrSameActor) {
 		t.Fatalf("self decision without a policy row: %v", err)
 	}
-	store.single[partner] = false
-	if _, err := s.Decide(ctx, partner, req.ID, maker, true, ""); !errors.Is(err, ErrSameActor) {
-		t.Fatalf("self decision with separation required: %v", err)
+	allowFor := func(objectType string) {
+		t.Helper()
+		if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: objectType, AllowSinglePerson: true, ChangedBy: maker}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ConfirmPolicy(ctx, partner, objectType, checker); err != nil {
+			t.Fatal(err)
+		}
 	}
-	store.single[partner] = true
+	allowFor("order")
+	if _, err := s.Decide(ctx, partner, req.ID, maker, true, ""); !errors.Is(err, ErrSameActor) {
+		t.Fatalf("a policy for another kind does not apply: %v", err)
+	}
+	allowFor("invoice")
 	decided, err := s.Decide(ctx, partner, req.ID, maker, false, "")
 	if err != nil {
 		t.Fatalf("single-person partner: %v", err)
@@ -141,10 +158,66 @@ func TestSubmitValidatesInput(t *testing.T) {
 	}
 }
 
-func TestAllowsSinglePerson(t *testing.T) {
-	store := newStore()
-	svc := &Service{DB: memRepo{store: store}}
-	if ok, err := svc.AllowsSinglePerson(context.Background(), 1); err != nil || ok {
-		t.Fatalf("no policy row: %v %v", ok, err)
+func TestPolicyFallsBackToPlatform(t *testing.T) {
+	s, _ := newService()
+	ctx := context.Background()
+	allows := func(want bool, why string) {
+		t.Helper()
+		if ok, err := s.AllowsSinglePerson(ctx, partner, "invoice"); err != nil || ok != want {
+			t.Fatalf("%s: %v %v", why, ok, err)
+		}
+	}
+	allows(false, "no row")
+	if err := s.SetPolicy(ctx, Policy{ObjectType: "invoice", AllowSinglePerson: true, ChangedBy: 1}); err != nil {
+		t.Fatalf("a platform with one administrator needs no confirmation: %v", err)
+	}
+	allows(true, "platform row")
+	if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", ChangedBy: maker}); err != nil {
+		t.Fatalf("requiring separation needs no confirmation: %v", err)
+	}
+	allows(false, "partner row over platform row")
+	if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", AllowSinglePerson: true, ChangedBy: maker}); err != nil {
+		t.Fatal(err)
+	}
+	allows(false, "a pending partner row neither allows nor falls back to the platform")
+	if err := s.ConfirmPolicy(ctx, partner, "invoice", checker); err != nil {
+		t.Fatal(err)
+	}
+	allows(true, "the confirmed partner row")
+}
+
+func TestPolicyConfirmationIsAnotherAdministratorsCall(t *testing.T) {
+	s, store := newService()
+	ctx := context.Background()
+	if err := s.ConfirmPolicy(ctx, partner, "invoice", checker); !errors.Is(err, ErrNoPendingPolicy) {
+		t.Fatalf("nothing pending: %v", err)
+	}
+	if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", ChangedBy: 99}); !errors.Is(err, ErrNotAdministrator) {
+		t.Fatalf("change by a non-administrator: %v", err)
+	}
+	if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", AllowSinglePerson: true, ChangedBy: maker}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfirmPolicy(ctx, partner, "invoice", maker); !errors.Is(err, ErrPolicyConfirmation) {
+		t.Fatalf("self-confirmation: %v", err)
+	}
+	if err := s.ConfirmPolicy(ctx, partner, "invoice", 99); !errors.Is(err, ErrNotAdministrator) {
+		t.Fatalf("confirmation by a non-administrator: %v", err)
+	}
+	if ok, _ := s.AllowsSinglePerson(ctx, partner, "invoice"); ok {
+		t.Fatal("a refused confirmation must leave the change pending")
+	}
+	if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", ChangedBy: checker}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfirmPolicy(ctx, partner, "invoice", checker); !errors.Is(err, ErrNoPendingPolicy) {
+		t.Fatalf("a later change withdraws the pending one: %v", err)
+	}
+	if len(store.policies) != 2 {
+		t.Fatalf("policies = %v", store.policies)
+	}
+	s.Administrators = nil
+	if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", ChangedBy: maker}); !errors.Is(err, ErrNotAdministrator) {
+		t.Fatalf("without a resolver: %v", err)
 	}
 }

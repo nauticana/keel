@@ -12,6 +12,10 @@ var (
 	ErrExpired      = errors.New("approval: request has expired")
 	ErrNotMaker     = errors.New("approval: only the maker can withdraw the request")
 	ErrTxCatalog    = errors.New("approval: transaction cannot bind the approval query catalog")
+
+	ErrNotAdministrator   = errors.New("approval: only an administrator of the owner can change its policy")
+	ErrPolicyConfirmation = errors.New("approval: a policy change is confirmed by another administrator")
+	ErrNoPendingPolicy    = errors.New("approval: no policy change awaits confirmation")
 )
 
 const (

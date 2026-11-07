@@ -1,9 +1,10 @@
 table: partner_document
 comment: |
   A partner's business record for one dms document (the objects under
-  <path_prefix>/<doc_key>/). user_id names the member the document is about
-  (a licence holder); null means the partner itself. A new version is a new
-  row. status P=pending review, Y=approved, N=rejected, X=superseded by a
+  <path_prefix>/<doc_key>/). The subject is the member the document is about
+  (user_id, a licence holder) or an application record (subject_key, an
+  opaque identifier); neither means the partner itself. A new version is a
+  new row. status P=pending review, Y=approved, N=rejected, X=superseded by a
   newer approval, R=retired (retired_at; purged_at once the RetentionSweeper
   deleted its objects). Content type, size and digest live in the document's
   component attributes. One approved row per partner, subject and type is
@@ -23,6 +24,9 @@ columns:
   - name: user_id
     type: BIGINT
     nullable: true
+  - name: subject_key
+    type: VARCHAR(200)
+    nullable: true
   - name: title
     type: VARCHAR(200)
   - name: file_name
@@ -35,6 +39,9 @@ columns:
     nullable: true
   - name: expires_on
     type: DATE
+    nullable: true
+  - name: language
+    type: VARCHAR(8)
     nullable: true
   - name: origin_ip
     type: VARCHAR(45)
@@ -110,3 +117,5 @@ foreign_keys:
 checks:
   - name: chk_partner_document_status
     expression: "status IN ('P', 'Y', 'N', 'X', 'R')"
+  - name: chk_partner_document_subject
+    expression: "user_id IS NULL OR subject_key IS NULL"

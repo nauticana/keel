@@ -1739,8 +1739,8 @@ CREATE TABLE IF NOT EXISTS content_repository (
 -- A kind of partner document: which repository it is routed to, its upload
 -- limits, whether it starts pending review and whether a new approval
 -- supersedes the previous one (false for a type that is a set, where every
--- approved document stands alone). independent_review refuses a review by
--- the document's uploader. Seeded by each application.
+-- approved document stands alone). Whether the uploader may review their
+-- own document is the approval_policy of the type. Seeded by each application.
 CREATE TABLE IF NOT EXISTS document_type (
     id                                   VARCHAR(30)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
@@ -1749,15 +1749,15 @@ CREATE TABLE IF NOT EXISTS document_type (
     media_types                          VARCHAR(500)  NOT NULL,
     requires_review                      TINYINT(1)    NOT NULL DEFAULT 0,
     supersedes                           TINYINT(1)    NOT NULL DEFAULT 1,
-    independent_review                   TINYINT(1)    NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
     CONSTRAINT document_type_repository FOREIGN KEY (contrep_id) REFERENCES content_repository(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A partner's business record for one dms document (the objects under
--- <path_prefix>/<doc_key>/). user_id names the member the document is about
--- (a licence holder); null means the partner itself. A new version is a new
--- row. status P=pending review, Y=approved, N=rejected, X=superseded by a
+-- <path_prefix>/<doc_key>/). The subject is the member the document is about
+-- (user_id, a licence holder) or an application record (subject_key, an
+-- opaque identifier); neither means the partner itself. A new version is a
+-- new row. status P=pending review, Y=approved, N=rejected, X=superseded by a
 -- newer approval, R=retired (retired_at; purged_at once the RetentionSweeper
 -- deleted its objects). Content type, size and digest live in the document's
 -- component attributes. One approved row per partner, subject and type is
@@ -1770,11 +1770,13 @@ CREATE TABLE IF NOT EXISTS partner_document (
     partner_id                           BIGINT        NOT NULL,
     document_type                        VARCHAR(30)   NOT NULL,
     user_id                              BIGINT       ,
+    subject_key                          VARCHAR(200) ,
     title                                VARCHAR(200)  NOT NULL,
     file_name                            VARCHAR(200)  NOT NULL,
     version_no                           INT           NOT NULL DEFAULT 1,
     document_number                      VARCHAR(50)  ,
     expires_on                           DATE         ,
+    language                             VARCHAR(8)   ,
     origin_ip                            VARCHAR(45)  ,
     uploaded_by                          BIGINT       ,
     uploaded_at                          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1792,20 +1794,40 @@ CREATE TABLE IF NOT EXISTS partner_document (
     CONSTRAINT partner_document_subject FOREIGN KEY (user_id) REFERENCES user_account(id),
     CONSTRAINT partner_document_uploader FOREIGN KEY (uploaded_by) REFERENCES user_account(id),
     CONSTRAINT partner_document_reviewer FOREIGN KEY (reviewer_id) REFERENCES user_account(id),
-    CONSTRAINT chk_partner_document_status CHECK (status IN ('P', 'Y', 'N', 'X', 'R'))
+    CONSTRAINT chk_partner_document_status CHECK (status IN ('P', 'Y', 'N', 'X', 'R')),
+    CONSTRAINT chk_partner_document_subject CHECK (user_id IS NULL OR subject_key IS NULL)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX partner_document_key_uq ON partner_document(contrep_id, doc_key);
 CREATE INDEX partner_document_ix1 ON partner_document(partner_id, document_type, version_no);
 
--- Per-partner maker-checker policy. allow_single_person lets the maker decide
--- their own request; a partner without a row requires a second person.
+-- Separation-of-duties policy per review kind. object_type is an
+-- approval_request object type or a document_type id; partner_id NULL is the
+-- platform row, which a partner's own row overrides; without either, a second
+-- person is required. allow_single_person lets the maker decide their own
+-- request and the uploader review their own document. A change closes the
+-- open row (endda) and inserts the next one, so the policy in force at any
+-- time stays on record. A row turning separation off for an owner with a
+-- second administrator waits for that administrator's confirmation
+-- (confirmed_by) and is in force from begda only once confirmed.
 CREATE TABLE IF NOT EXISTS approval_policy (
-    partner_id                           BIGINT        NOT NULL,
+    id                                   BIGINT        NOT NULL,
+    partner_id                           BIGINT       ,
+    object_type                          VARCHAR(50)   NOT NULL,
     allow_single_person                  TINYINT(1)    NOT NULL DEFAULT 0,
-    updated_at                           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (partner_id),
-    CONSTRAINT approval_policy_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id)
+    changed_by                           BIGINT        NOT NULL,
+    confirmed_by                         BIGINT       ,
+    begda                                DATETIME     ,
+    endda                                DATETIME     ,
+    PRIMARY KEY (id),
+    CONSTRAINT approval_policy_partner FOREIGN KEY (partner_id) REFERENCES business_partner(id),
+    CONSTRAINT approval_policy_changed_by FOREIGN KEY (changed_by) REFERENCES user_account(id),
+    CONSTRAINT approval_policy_confirmed_by FOREIGN KEY (confirmed_by) REFERENCES user_account(id),
+    CONSTRAINT chk_approval_policy_confirmer CHECK (confirmed_by IS NULL OR confirmed_by <> changed_by)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- approval_policy_platform_uq is a partial index on PostgreSQL (WHERE partner_id IS NULL AND endda IS NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX approval_policy_platform_uq ON approval_policy(object_type);
+-- approval_policy_partner_uq is a partial index on PostgreSQL (WHERE endda IS NULL); MySQL cannot enforce it — service-enforced
+CREATE INDEX approval_policy_partner_uq ON approval_policy(partner_id, object_type);
 
 -- Maker-checker decision on an application record (object_type, object_id).
 -- status P=pending, A=approved, R=rejected, W=withdrawn by the maker or on

@@ -20,13 +20,16 @@ const (
 )
 
 // Service runs maker-checker approval over application records. Separation
-// of maker and checker is enforced unless the partner's approval_policy
-// allows a single person to act as both.
+// of maker and checker is enforced unless the approval_policy of the
+// partner, or of the platform, allows a single person for that object type.
 type Service struct {
 	DB port.DatabaseRepository
 	// OnDecided runs inside Decide's transaction after the decision is
 	// written, so the application moves its parent record atomically with it.
 	OnDecided func(ctx context.Context, tx port.TxQueryService, req *Request) error
+	// Administrators names the users who may change the owner's policy;
+	// partnerID 0 is the platform. SetPolicy refuses everyone while it is nil.
+	Administrators func(ctx context.Context, partnerID int64) ([]int64, error)
 
 	once sync.Once
 	qs   port.QueryService
@@ -198,7 +201,7 @@ func (s *Service) ExpireDue(ctx context.Context) (int, error) {
 }
 
 // Decide approves or rejects a pending request. The checker must differ from
-// the maker (ErrSameActor) unless the partner allows a single person.
+// the maker (ErrSameActor) unless the policy allows a single person.
 func (s *Service) Decide(ctx context.Context, partnerID, id, checkerID int64, approved bool, note string) (*Request, error) {
 	if checkerID <= 0 {
 		return nil, fmt.Errorf("approval: checker is required")
@@ -222,7 +225,7 @@ func (s *Service) Decide(ctx context.Context, partnerID, id, checkerID int64, ap
 			return fmt.Errorf("%w: %d", ErrExpired, id)
 		}
 		if checkerID == req.MakerID {
-			allowed, err := s.allowsSinglePerson(ctx, tx, partnerID)
+			allowed, err := s.allowsSinglePerson(ctx, tx, partnerID, req.ObjectType)
 			if err != nil {
 				return err
 			}
@@ -304,19 +307,6 @@ func (s *Service) Events(ctx context.Context, partnerID, id int64) ([]*Event, er
 		out = append(out, eventFromRow(r))
 	}
 	return out, nil
-}
-
-// AllowsSinglePerson reports whether the partner lets the maker decide their own request.
-func (s *Service) AllowsSinglePerson(ctx context.Context, partnerID int64) (bool, error) {
-	return s.allowsSinglePerson(ctx, s.query(ctx), partnerID)
-}
-
-func (s *Service) allowsSinglePerson(ctx context.Context, qs port.QueryService, partnerID int64) (bool, error) {
-	res, err := qs.Query(ctx, qAllowSingle, partnerID)
-	if err != nil {
-		return false, err
-	}
-	return len(res.Rows) > 0 && common.AsBool(res.Rows[0][0]), nil
 }
 
 func nullableNote(note string) any {
