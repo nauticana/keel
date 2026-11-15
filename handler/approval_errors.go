@@ -13,4 +13,7 @@ func init() {
 	RegisterErrorMessage(approval.ErrSeparation, http.StatusForbidden, "separation_required", "The author cannot decide their own record")
 	RegisterErrorMessage(approval.ErrExpired, http.StatusConflict, "approval_expired", "The approval request has expired")
 	RegisterErrorMessage(approval.ErrNotMaker, http.StatusForbidden, "approval_not_maker", "Only the submitter can withdraw this request")
+	RegisterErrorMessage(approval.ErrNotAdministrator, http.StatusForbidden, "approval_policy_not_administrator", "Only an administrator can change this policy")
+	RegisterErrorMessage(approval.ErrPolicyConfirmation, http.StatusForbidden, "approval_policy_confirmation", "Another administrator must confirm this change")
+	RegisterErrorMessage(approval.ErrNoPendingPolicy, http.StatusConflict, "approval_policy_not_pending", "No policy change awaits confirmation")
 }

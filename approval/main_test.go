@@ -20,7 +20,8 @@ func TestMain(m *testing.M) {
 type memStore struct {
 	requests map[int64][]any // selectRequestFields order
 	events   [][]any
-	policies [][]any // approval_policy rows: id, partner_id, object_type, allow_single_person, changed_by, confirmed_by, begda, endda
+	policies [][]any                      // approval_policy rows: id, partner_id, object_type, allow_single_person, changed_by, confirmed_by, begda, endda
+	roles    map[int64]map[string][]int64 // partner -> role -> current members holding it
 	nextID   int64
 	pending  []func() // undo log of the open transaction
 	clock    time.Duration
@@ -118,6 +119,10 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 			if p[0] == args[1] {
 				p[5], p[6] = args[0], m.now()
 			}
+		}
+	case qAdministrators:
+		for _, id := range m.roles[args[0].(int64)][args[1].(string)] {
+			out.Rows = append(out.Rows, []any{id})
 		}
 	case qSetDecision:
 		r := m.requests[args[3].(int64)]

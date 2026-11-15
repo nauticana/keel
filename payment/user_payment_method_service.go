@@ -17,16 +17,17 @@ import (
 const (
 	MethodTypeCard      = "card"
 	MethodTypeBank      = "bank"
+	MethodTypeLink      = "link"
 	MethodTypeWallet    = "wallet"
 	MethodTypeApplePay  = "apple_pay"
 	MethodTypeGooglePay = "google_pay"
 )
 
-// SavedCard is the card metadata attached to a SetupIntent.
+// SavedCard is the display metadata of the method attached to a SetupIntent.
 type SavedCard struct {
 	MethodType string
 	Last4      string
-	Brand      string
+	Brand      string // a card's brand, or a bank account's bank name
 	ExpMonth   int
 	ExpYear    int
 }
@@ -168,7 +169,7 @@ func (s *UserPaymentMethodService) RecordFromSetupIntent(ctx context.Context, us
 	switch card.MethodType {
 	case "":
 		card.MethodType = MethodTypeCard
-	case MethodTypeCard, MethodTypeBank, MethodTypeWallet, MethodTypeApplePay, MethodTypeGooglePay:
+	case MethodTypeCard, MethodTypeBank, MethodTypeLink, MethodTypeWallet, MethodTypeApplePay, MethodTypeGooglePay:
 	default:
 		return fmt.Errorf("%w: %s", ErrUnsupportedPaymentMethod, card.MethodType)
 	}
@@ -208,36 +209,43 @@ func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, se
 		return SavedCard{}, false
 	}
 	var parsed struct {
-		PaymentMethod struct {
-			Type string `json:"type"`
-			Card struct {
-				Last4    string `json:"last4"`
-				Brand    string `json:"brand"`
-				ExpMonth int    `json:"exp_month"`
-				ExpYear  int    `json:"exp_year"`
-				Wallet   *struct {
-					Type string `json:"type"`
-				} `json:"wallet"`
-			} `json:"card"`
-		} `json:"payment_method"`
+		PaymentMethod map[string]json.RawMessage `json:"payment_method"`
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	var methodType string
+	err = json.Unmarshal(body, &parsed)
+	if err == nil {
+		err = json.Unmarshal(parsed.PaymentMethod["type"], &methodType)
+	}
+	// The type's own object: card brand, last4 and expiry; a bank's bank_name and last4.
+	var d struct {
+		Last4    string `json:"last4"`
+		Brand    string `json:"brand"`
+		BankName string `json:"bank_name"`
+		ExpMonth int    `json:"exp_month"`
+		ExpYear  int    `json:"exp_year"`
+		Wallet   *struct {
+			Type string `json:"type"`
+		} `json:"wallet"`
+	}
+	if raw := parsed.PaymentMethod[methodType]; err == nil && len(raw) > 0 {
+		err = json.Unmarshal(raw, &d)
+	}
+	if err != nil {
 		if c.Journal != nil {
 			c.Journal.Error("stripe setup_intent fetch: parse: " + err.Error())
 		}
 		return SavedCard{}, false
 	}
-	switch parsed.PaymentMethod.Type {
-	case "", "card":
+	switch methodType {
+	case "card":
 	case "us_bank_account", "sepa_debit", "bacs_debit", "au_becs_debit", "acss_debit":
-		return SavedCard{MethodType: MethodTypeBank}, true
-	default: // e.g. link: reported as is so it is never recorded as a card
-		return SavedCard{MethodType: parsed.PaymentMethod.Type}, true
+		return SavedCard{MethodType: MethodTypeBank, Last4: d.Last4, Brand: d.BankName}, true
+	default: // link carries no brand or last4; any other type is reported as is so it is never recorded as a card
+		return SavedCard{MethodType: methodType}, true
 	}
-	cd := parsed.PaymentMethod.Card
-	card := SavedCard{MethodType: MethodTypeCard, Last4: cd.Last4, Brand: cd.Brand, ExpMonth: cd.ExpMonth, ExpYear: cd.ExpYear}
-	if cd.Wallet != nil {
-		switch cd.Wallet.Type {
+	card := SavedCard{MethodType: MethodTypeCard, Last4: d.Last4, Brand: d.Brand, ExpMonth: d.ExpMonth, ExpYear: d.ExpYear}
+	if d.Wallet != nil {
+		switch d.Wallet.Type {
 		case "apple_pay":
 			card.MethodType = MethodTypeApplePay
 		case "google_pay":

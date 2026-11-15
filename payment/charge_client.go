@@ -17,6 +17,7 @@ type ChargeStatus string
 const (
 	ChargeSucceeded      ChargeStatus = "succeeded"
 	ChargeAuthorized     ChargeStatus = "authorized"      // the hold is placed and awaits Capture
+	ChargePending        ChargeStatus = "pending"         // accepted and settling, e.g. a bank debit; the outcome arrives as a webhook
 	ChargeRequiresAction ChargeStatus = "requires_action" // PaymentIntent carries a next_action to run
 	// ChargeAuthenticationRequired: the off-session confirmation was refused for
 	// SCA. The PaymentIntent has no next_action; the customer must come
@@ -29,6 +30,7 @@ const (
 type ChargeRequest struct {
 	CustomerToken      string            // provider customer id (Stripe cus_xxx)
 	PaymentMethodToken string            // provider payment-method id (Stripe pm_xxx) — off-session charges need a specific stored method
+	PaymentMethodTypes []string          // provider types the stored method may be (Stripe us_bank_account); empty means card
 	AmountMinor        int64             // minor currency units (e.g. cents)
 	Currency           string            // ISO 4217 (any case)
 	IdempotencyKey     string            // de-dupe key — use the invoice id
@@ -162,6 +164,13 @@ func (c *StripeChargeClient) confirm(ctx context.Context, req ChargeRequest, man
 		"off_session": {"true"},
 		"confirm":     {"true"},
 	}
+	methods := req.PaymentMethodTypes
+	if len(methods) == 0 {
+		methods = []string{"card"}
+	}
+	for i, m := range methods {
+		form.Set("payment_method_types["+strconv.Itoa(i)+"]", m)
+	}
 	if manual {
 		form.Set("capture_method", "manual")
 		form.Set("payment_method_options[card][request_incremental_authorization]", "if_available")
@@ -241,7 +250,9 @@ func intentResult(pi *stripePaymentIntent, manual bool) ChargeResult {
 		res.ActionURL = actionURL(pi.NextAction)
 	case manual && pi.Status == "requires_capture":
 		res.Status = ChargeAuthorized
-	case !manual && (pi.Status == "succeeded" || pi.Status == "processing"):
+	case pi.Status == "processing":
+		res.Status = ChargePending
+	case !manual && pi.Status == "succeeded":
 		res.Status = ChargeSucceeded
 	case pi.LastPaymentError != nil:
 		res = declineResult(pi.LastPaymentError)

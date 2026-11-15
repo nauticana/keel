@@ -28,8 +28,11 @@ type Service struct {
 	// written, so the application moves its parent record atomically with it.
 	OnDecided func(ctx context.Context, tx port.TxQueryService, req *Request) error
 	// Administrators names the users who may change the owner's policy;
-	// partnerID 0 is the platform. SetPolicy refuses everyone while it is nil.
-	Administrators func(ctx context.Context, partnerID int64) ([]int64, error)
+	// partnerID 0 is the platform. While it is nil, a partner's administrators
+	// are its current active members holding AdministratorRole, and with neither set
+	// the policy is refused to everyone.
+	Administrators    func(ctx context.Context, partnerID int64) ([]int64, error)
+	AdministratorRole string
 
 	once sync.Once
 	qs   port.QueryService

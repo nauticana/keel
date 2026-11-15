@@ -1,0 +1,241 @@
+{
+  "authserver.Grant": {
+    "authorizedAt": "time.Time",
+    "clientId": "string",
+    "clientName": "string",
+    "lastIssuedAt": "time.Time",
+    "scopes": [
+      "string"
+    ]
+  },
+  "billing.Invoice": {
+    "currency": "string",
+    "exponent": "number",
+    "id": "string",
+    "issuedAt": "string",
+    "number": "string",
+    "paidAt": "string",
+    "status": "string",
+    "total": "number",
+    "totalMinor": "number"
+  },
+  "billing.Plan": {
+    "activationMode": "string",
+    "caption": "string",
+    "currency": "string",
+    "id": "string",
+    "prices": [
+      {
+        "amount": "number",
+        "amountMinor": "number",
+        "billingCycle": "string",
+        "currency": "string",
+        "exponent": "number",
+        "priceId": "string",
+        "termCount": "number",
+        "termType": "string"
+      }
+    ],
+    "trialDays": "number"
+  },
+  "billing.Subscription": {
+    "autoRenew": "boolean",
+    "begda": "string",
+    "billingCycle": "string",
+    "caption": "string",
+    "currency": "string",
+    "endda": "string",
+    "exponent": "number",
+    "id": "number",
+    "installmentMinor": "number",
+    "monthlyCost": "number",
+    "partnerId": "number",
+    "planId": "string",
+    "providerManaged": "boolean",
+    "scheduledAt": "string",
+    "scheduledPlanId": "string",
+    "seats": "number",
+    "status": "string",
+    "trialEnd": "string"
+  },
+  "document.PartnerDocument": {
+    "contrep_id": "string",
+    "doc_key": "string",
+    "document_number": "string",
+    "document_type": "string",
+    "expires_on": "time.Time",
+    "file_name": "string",
+    "id": "string",
+    "language": "string",
+    "origin_ip": "string",
+    "partner_id": "number",
+    "purged_at": "time.Time",
+    "retired_at": "time.Time",
+    "reviewed_at": "time.Time",
+    "reviewer_id": "number",
+    "reviewer_notes": "string",
+    "status": "string",
+    "subject_key": "string",
+    "superseded_at": "time.Time",
+    "title": "string",
+    "uploaded_at": "time.Time",
+    "uploaded_by": "number",
+    "user_id": "number",
+    "version_no": "number"
+  },
+  "handler.otpSendResponse": {
+    "otpToken": "string",
+    "resendCountdownSec": "number"
+  },
+  "model.AgencyEarnings": {
+    "balances": [
+      {
+        "currency": "string",
+        "dueMinor": "number",
+        "heldMinor": "number",
+        "paidMinor": "number"
+      }
+    ],
+    "entries": [
+      {
+        "amountMinor": "number",
+        "clientName": "string",
+        "currency": "string",
+        "earnedAt": "time.Time",
+        "entryType": "string",
+        "id": "number",
+        "periodEnd": "time.Time",
+        "periodStart": "time.Time",
+        "status": "string"
+      }
+    ],
+    "payingClients": "number",
+    "payouts": [
+      {
+        "amountMinor": "number",
+        "currency": "string",
+        "cutoffAt": "time.Time",
+        "id": "number",
+        "paidAt": "time.Time",
+        "status": "string"
+      }
+    ]
+  },
+  "model.AgencyInvite": {
+    "agencyName": "string",
+    "clientName": "string",
+    "expired": "boolean",
+    "invitationId": "number",
+    "status": "string"
+  },
+  "model.PasswordPolicyView": {
+    "minDigit": "number",
+    "minLength": "number",
+    "minLower": "number",
+    "minSpecial": "number",
+    "minUpper": "number"
+  },
+  "model.UserMenu": {
+    "Menu": "string",
+    "MenuCaption": "string",
+    "MenuIcon": "string",
+    "MenuOrder": "number",
+    "PageCaption": "string",
+    "PageIcon": "string",
+    "PageOrder": "number",
+    "Url": "string"
+  },
+  "payout.Instruction": {
+    "amountMinor": "number",
+    "createdAt": "time.Time",
+    "currency": "string",
+    "exponent": "number",
+    "failureReason": "string",
+    "id": "number",
+    "idempotencyKey": "string",
+    "legs": [
+      {
+        "amountMinor": "number",
+        "attempts": "number",
+        "bankInfoId": "number",
+        "createdAt": "time.Time",
+        "failureReason": "string",
+        "fundingId": "string",
+        "idempotencyKey": "string",
+        "legNo": "number",
+        "payoutId": "string",
+        "provider": "string",
+        "providerAccountId": "string",
+        "reversedMinor": "number",
+        "status": "string"
+      }
+    ],
+    "partnerId": "number",
+    "status": "string",
+    "userId": "number"
+  },
+  "payout.StartOnboardingResult": {
+    "expiresAt": "string",
+    "externalAccountId": "string",
+    "url": "string"
+  },
+  "port.InboxPage": {
+    "messages": [
+      {
+        "body": "string",
+        "createdAt": "time.Time",
+        "data": {
+          "*": "string"
+        },
+        "id": "string",
+        "readAt": "time.Time",
+        "title": "string",
+        "type": "string"
+      }
+    ],
+    "unreadCount": "number"
+  },
+  "user.ActiveSession": {
+    "clientIp": "string",
+    "createdAt": "time.Time",
+    "current": "boolean",
+    "id": "number",
+    "lastSeenAt": "time.Time",
+    "signInMethod": "string",
+    "userAgent": "string"
+  },
+  "user.Member": {
+    "name": "string",
+    "userId": "number"
+  },
+  "user.PartnerCreated": {
+    "partnerId": "number",
+    "paymentRequired": "boolean",
+    "paymentUrl": "string",
+    "planId": "string"
+  },
+  "user.PublicPlan": {
+    "activationMode": "string",
+    "caption": "string",
+    "id": "string",
+    "prices": [
+      {
+        "amount": "number",
+        "amountMinor": "number",
+        "billingCycle": "string",
+        "currency": "string",
+        "exponent": "number",
+        "priceId": "string",
+        "termCount": "number",
+        "termType": "string"
+      }
+    ],
+    "trialDays": "number"
+  },
+  "user.TrustedDevice": {
+    "created_at": "string",
+    "id": "number",
+    "last_used_at": "string",
+    "name": "string"
+  }
+}

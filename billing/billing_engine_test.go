@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/nauticana/keel/payment"
 )
 
 func newEngine(qs *fakeQS) *SelfScheduledEngine {
@@ -88,5 +90,33 @@ func TestAdvanceSubscription_TermEndNoRenew(t *testing.T) {
 	c := lastCall(t, qs, qSSEndTerm)
 	if c.args[0] != renewal { // endda = term end
 		t.Fatalf("endda should be term end, got %#v", c.args[0])
+	}
+}
+
+type stubCharge struct{ res payment.ChargeResult }
+
+func (c stubCharge) Charge(context.Context, payment.ChargeRequest) (payment.ChargeResult, error) {
+	return c.res, nil
+}
+
+func TestChargeInvoice_PendingSettlesWithoutRetry(t *testing.T) {
+	qs := &fakeQS{}
+	e := newEngine(qs)
+	e.Charge = stubCharge{payment.ChargeResult{Status: payment.ChargePending, ProviderChargeID: "pi_1"}}
+	e.Credentials = func(context.Context, int64) (string, string, error) { return "cus_1", "pm_1", nil }
+	e.Suspend = func(context.Context, int64) error { t.Fatal("a settling charge suspended the partner"); return nil }
+	advanced := 0
+	e.OnPaid = func(context.Context, int64, int64) { t.Fatal("a settling charge was reported paid") }
+	e.chargeInvoice(context.Background(), 7, 42, 500, "USD", 2, "42", func() { advanced++ })
+	if advanced != 1 {
+		t.Fatalf("schedule advanced %d times; a settling period must not be billed again", advanced)
+	}
+	if c := lastCall(t, qs, qSSMarkSettling); c.args[0] != "pi_1" || c.args[1] != int64(42) {
+		t.Fatalf("mark settling args = %v", c.args)
+	}
+	for _, c := range qs.calls {
+		if c.name == qSSMarkRetry || c.name == qSSMarkPaid {
+			t.Fatalf("a settling charge ran %s", c.name)
+		}
 	}
 }

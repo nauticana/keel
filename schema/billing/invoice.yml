@@ -50,7 +50,7 @@ columns:
 primary_key: [id]
 checks:
   - name: chk_invoice_status
-    expression: "status IN ('D', 'O', 'A', 'P', 'V')"
+    expression: "status IN ('D', 'O', 'A', 'S', 'P', 'V')"
 sequence:
   name: invoice_seq
   column: id

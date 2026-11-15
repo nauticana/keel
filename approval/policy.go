@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
@@ -20,28 +21,30 @@ type Policy struct {
 	ChangedBy         int64
 }
 
-// SetPolicy records the next policy of the owner and closes the previous
-// row. ChangedBy must be one of the owner's Administrators. Requiring
-// separation is in force at once; allowing a single person is in force at
-// once only when the owner has no other administrator, otherwise it waits
-// for ConfirmPolicy and separation stays required meanwhile.
-func (s *Service) SetPolicy(ctx context.Context, p Policy) error {
+// SetPolicy records the next policy of the owner, closes the previous row
+// and reports whether the new one is in force. ChangedBy must be one of the
+// owner's administrators. Requiring separation is in force at once; allowing
+// a single person is in force at once only when the owner has no other
+// administrator, otherwise it waits for ConfirmPolicy and separation stays
+// required meanwhile.
+func (s *Service) SetPolicy(ctx context.Context, p Policy) (bool, error) {
 	p.ObjectType = strings.TrimSpace(p.ObjectType)
 	if p.PartnerID < 0 || p.ObjectType == "" || len(p.ObjectType) > maxObjectType || p.ChangedBy <= 0 {
-		return fmt.Errorf("approval: object type and the changing administrator are required")
+		return false, model.NewBadRequest(fmt.Sprintf("approval: an object type of at most %d bytes and the changing administrator are required", maxObjectType))
 	}
 	admins, err := s.administrators(ctx, p.PartnerID, p.ChangedBy)
 	if err != nil {
-		return err
+		return false, err
 	}
 	inForce := !p.AllowSinglePerson || !slices.ContainsFunc(admins, func(id int64) bool { return id != p.ChangedBy })
-	return s.transact(ctx, func(tx port.TxQueryService) error {
+	err = s.transact(ctx, func(tx port.TxQueryService) error {
 		if _, err := tx.Query(ctx, qClosePolicy, ownerArg(p.PartnerID), p.ObjectType); err != nil {
 			return err
 		}
 		_, err := tx.Query(ctx, qInsertPolicy, tx.GenID(), ownerArg(p.PartnerID), p.ObjectType, p.AllowSinglePerson, p.ChangedBy, inForce)
 		return err
 	})
+	return inForce && err == nil, err
 }
 
 // ConfirmPolicy puts the owner's pending policy for objectType in force.
@@ -49,7 +52,7 @@ func (s *Service) SetPolicy(ctx context.Context, p Policy) error {
 // set it (ErrPolicyConfirmation); ErrNoPendingPolicy when nothing waits.
 func (s *Service) ConfirmPolicy(ctx context.Context, partnerID int64, objectType string, confirmerID int64) error {
 	if partnerID < 0 || confirmerID <= 0 {
-		return fmt.Errorf("approval: owner and confirming administrator are required")
+		return model.NewBadRequest("approval: owner and confirming administrator are required")
 	}
 	if _, err := s.administrators(ctx, partnerID, confirmerID); err != nil {
 		return err
@@ -73,12 +76,21 @@ func (s *Service) ConfirmPolicy(ctx context.Context, partnerID int64, objectType
 // administrators returns the owner's administrators after checking that
 // userID is one of them.
 func (s *Service) administrators(ctx context.Context, partnerID, userID int64) ([]int64, error) {
-	if s.Administrators == nil {
-		return nil, ErrNotAdministrator
-	}
-	admins, err := s.Administrators(ctx, partnerID)
-	if err != nil {
-		return nil, err
+	var admins []int64
+	switch {
+	case s.Administrators != nil:
+		var err error
+		if admins, err = s.Administrators(ctx, partnerID); err != nil {
+			return nil, err
+		}
+	case s.AdministratorRole != "" && partnerID > 0:
+		res, err := s.query(ctx).Query(ctx, qAdministrators, partnerID, s.AdministratorRole)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range res.Rows {
+			admins = append(admins, common.AsInt64(row[0]))
+		}
 	}
 	if !slices.Contains(admins, userID) {
 		return nil, fmt.Errorf("%w: %d", ErrNotAdministrator, userID)

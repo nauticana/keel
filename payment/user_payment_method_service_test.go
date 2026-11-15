@@ -40,7 +40,7 @@ func TestStripeSetupIntentCard_WalletMethodType(t *testing.T) {
 		`,"wallet":{"type":"google_pay"}`:  MethodTypeGooglePay,
 		`,"wallet":{"type":"samsung_pay"}`: MethodTypeWallet,
 	} {
-		c := &StripeSetupIntentCardClient{Client: cannedStripeGet(`{"payment_method":{"card":{"last4":"4242","brand":"visa","exp_month":4,"exp_year":2030` + wallet + `}}}`)}
+		c := &StripeSetupIntentCardClient{Client: cannedStripeGet(`{"payment_method":{"type":"card","card":{"last4":"4242","brand":"visa","exp_month":4,"exp_year":2030` + wallet + `}}}`)}
 		card, ok := c.GetSetupIntentCard(context.Background(), "seti_1")
 		if !ok || card.MethodType != want || card.Last4 != "4242" || card.ExpYear != 2030 {
 			t.Errorf("wallet %q: %+v, %v", wallet, card, ok)
@@ -50,7 +50,7 @@ func TestStripeSetupIntentCard_WalletMethodType(t *testing.T) {
 
 func TestRecordFromSetupIntent_MethodType(t *testing.T) {
 	for name, client := range map[string]SetupIntentCardClient{
-		"apple pay": &StripeSetupIntentCardClient{Client: cannedStripeGet(`{"payment_method":{"card":{"last4":"1111","wallet":{"type":"apple_pay"}}}}`)},
+		"apple pay": &StripeSetupIntentCardClient{Client: cannedStripeGet(`{"payment_method":{"type":"card","card":{"last4":"1111","wallet":{"type":"apple_pay"}}}}`)},
 		"no client": nil,
 	} {
 		db := &insertRecorder{}
@@ -69,21 +69,23 @@ func TestRecordFromSetupIntent_MethodType(t *testing.T) {
 }
 
 func TestRecordFromSetupIntent_NonCardMethods(t *testing.T) {
-	for body, want := range map[string]error{
-		`{"payment_method":{"type":"us_bank_account","us_bank_account":{"last4":"6789"}}}`: nil,
-		`{"payment_method":{"type":"link","link":{"email":"a@b"}}}`:                        ErrUnsupportedPaymentMethod,
+	for body, want := range map[string][]any{
+		`{"payment_method":{"type":"us_bank_account","us_bank_account":{"bank_name":"STRIPE TEST BANK","last4":"6789"}}}`: {MethodTypeBank, "6789", "STRIPE TEST BANK"},
+		`{"payment_method":{"type":"sepa_debit","sepa_debit":{"bank_code":"37040044","last4":"3000"}}}`:                   {MethodTypeBank, "3000", ""},
+		`{"payment_method":{"type":"link","link":{"email":"a@b"}}}`:                                                       {MethodTypeLink, "", ""},
+		`{"payment_method":{"type":"cashapp","cashapp":{}}}`:                                                              nil,
 	} {
 		db := &insertRecorder{}
 		s := &UserPaymentMethodService{DB: db, CardClient: &StripeSetupIntentCardClient{Client: cannedStripeGet(body)}}
 		err := s.RecordFromSetupIntent(context.Background(), 7, ProviderStripe, "seti_1", "")
-		if !errors.Is(err, want) {
-			t.Fatalf("%s: err = %v, want %v", body, err, want)
+		if want == nil {
+			if !errors.Is(err, ErrUnsupportedPaymentMethod) || db.args != nil {
+				t.Fatalf("%s: err = %v, recorded %v", body, err, db.args)
+			}
+			continue
 		}
-		if want == nil && db.args[1] != MethodTypeBank {
-			t.Fatalf("bank method recorded as %v", db.args[1])
-		}
-		if want != nil && db.args != nil {
-			t.Fatal("an unsupported method must not be recorded")
+		if err != nil || db.args[1] != want[0] || db.args[4] != want[1] || db.args[5] != want[2] {
+			t.Fatalf("%s: err = %v, recorded %v", body, err, db.args)
 		}
 	}
 }

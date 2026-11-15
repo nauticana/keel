@@ -24,3 +24,15 @@ seeds:
     rows:
       - [approval_request_status, approval_request, status]
       - [approval_event_type, approval_event, event_type]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [APPROVAL_POLICY, Approval Policy Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [APPROVAL_POLICY, CHANGE, Change a separation-of-duties policy]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [PARTNER_ADMIN, APPROVAL_POLICY, CHANGE, approval_policy]

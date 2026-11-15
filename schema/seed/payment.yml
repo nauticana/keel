@@ -12,6 +12,7 @@ seeds:
     rows:
       - [payment_method_type, card, Card]
       - [payment_method_type, bank, Bank Account]
+      - [payment_method_type, link, Link]
       - [payment_method_type, wallet, Wallet]
       - [payment_method_type, apple_pay, Apple Pay]
       - [payment_method_type, google_pay, Google Pay]

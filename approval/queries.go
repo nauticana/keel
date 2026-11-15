@@ -1,5 +1,7 @@
 package approval
 
+import "github.com/nauticana/keel/user"
+
 const (
 	qInsertRequest     = "insert_request"
 	qInsertEvent       = "insert_event"
@@ -13,6 +15,7 @@ const (
 	qInsertPolicy      = "insert_policy"
 	qLockPendingPolicy = "lock_pending_policy"
 	qConfirmPolicy     = "confirm_policy"
+	qAdministrators    = "administrators"
 	qSetDecision       = "set_decision"
 	qClose             = "close"
 	qDue               = "due"
@@ -48,7 +51,13 @@ SELECT allow_single_person AND begda IS NOT NULL FROM approval_policy
 	qInsertPolicy:      `INSERT INTO approval_policy (id, partner_id, object_type, allow_single_person, changed_by, begda) VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP END)`,
 	qLockPendingPolicy: `SELECT id, changed_by FROM approval_policy WHERE partner_id IS NOT DISTINCT FROM ? AND object_type = ? AND begda IS NULL AND endda IS NULL FOR UPDATE`,
 	qConfirmPolicy:     `UPDATE approval_policy SET confirmed_by = ?, begda = CURRENT_TIMESTAMP WHERE id = ?`,
-	qSetDecision:       `UPDATE approval_request SET status = ?, checker_id = ?, decided_at = CURRENT_TIMESTAMP, decision_note = ? WHERE id = ?`,
+	qAdministrators: `
+SELECT p.user_id FROM partner_user p
+  JOIN user_permission r ON r.user_id = p.user_id
+  JOIN user_account u ON u.id = p.user_id AND u.status = '` + user.UserStatusActive + `'
+ WHERE p.partner_id = ? AND p.begda <= CURRENT_TIMESTAMP AND (p.endda IS NULL OR p.endda > CURRENT_TIMESTAMP)
+   AND r.role_id = ? AND r.begda <= CURRENT_TIMESTAMP AND (r.endda IS NULL OR r.endda > CURRENT_TIMESTAMP)`,
+	qSetDecision: `UPDATE approval_request SET status = ?, checker_id = ?, decided_at = CURRENT_TIMESTAMP, decision_note = ? WHERE id = ?`,
 	// Withdrawal and expiry close a request without a checker.
 	qClose: `UPDATE approval_request SET status = ?, decided_at = CURRENT_TIMESTAMP, decision_note = ? WHERE id = ? AND status = 'P'`,
 	qDue: `

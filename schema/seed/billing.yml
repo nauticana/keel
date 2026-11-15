@@ -12,6 +12,7 @@ seeds:
       - [invoice_status, D, Draft]
       - [invoice_status, O, Open]
       - [invoice_status, A, Action Required]
+      - [invoice_status, S, Settling]
       - [invoice_status, P, Paid]
       - [invoice_status, V, Void]
       - [payment_status, P, Paid]

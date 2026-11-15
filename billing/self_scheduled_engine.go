@@ -19,6 +19,7 @@ const (
 	qSSMarkPaid      = "ss_mark_paid"
 	qSSInsertSubLine = "ss_insert_sub_line"
 	qSSMarkAction    = "ss_mark_action_required"
+	qSSMarkSettling  = "ss_mark_settling"
 	qSSMarkRetry     = "ss_mark_retry"
 	qSSListRetryable = "ss_list_retryable"
 	qSSListDueSubs   = "ss_list_due_subs"
@@ -44,6 +45,8 @@ VALUES (?, ?, ?, ?)`,
 	qSSMarkPaid: `UPDATE invoice SET status = 'P', paid_at = CURRENT_TIMESTAMP, provider_charge_id = ? WHERE id = ?`,
 
 	qSSMarkAction: `UPDATE invoice SET status = 'A', provider_charge_id = ?, last_error = NULL WHERE id = ?`,
+
+	qSSMarkSettling: `UPDATE invoice SET status = 'S', provider_charge_id = ?, last_error = NULL WHERE id = ?`,
 
 	qSSMarkRetry: `
 UPDATE invoice
@@ -250,6 +253,13 @@ func (e *SelfScheduledEngine) chargeInvoice(ctx context.Context, partnerID, invI
 		e.exec(ctx, qSSMarkAction, res.ProviderChargeID, invID)
 		if e.OnRequiresAction != nil {
 			e.OnRequiresAction(ctx, partnerID, invID, res)
+		}
+	case payment.ChargePending:
+		// Accepted: never retried, and the schedule advances so the period is
+		// not billed again; the provider's webhook settles the invoice.
+		e.exec(ctx, qSSMarkSettling, res.ProviderChargeID, invID)
+		if onSuccess != nil {
+			onSuccess()
 		}
 	default: // failed
 		e.markRetry(ctx, invID, res.Error)

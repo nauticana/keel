@@ -648,6 +648,13 @@ step defends against, not just WHAT the function does.
   `service/`, `payment/`, `payout/` are **stable across minor releases**.
   Renames, parameter reordering, and return-shape changes require a major
   release.
+- The HTTP wire is public API too: routes, request and response member
+  names and JSON types, status codes and error codes. Installed mobile
+  builds cannot follow a change, so renaming, removing or retyping a member
+  is breaking even where the Go change looks additive; the migration guide
+  lists it under **Wire**. `handler/wire_contract_test.go` pins the members
+  of the typed response bodies it lists in `handler/testdata/wire_contract.json`;
+  rerun it with `-update-wire` only after listing the change.
 - Additive changes (new method on a struct, new optional struct field,
   new constant, new interface impl) are minor-version-safe.
 - New SQL columns are added NULL-able with a default so old schemas

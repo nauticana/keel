@@ -528,7 +528,7 @@ this summary can be checked directly against the generated schema.
 | `payment_webhook_log` | Raw inbound payment-provider webhooks with idempotency + audit |
 | `payment_method` | Stored payment methods per partner (provider customer tokens) |
 | `user_bank_info` | Versioned payout destinations — one active row per (user, partner), history preserved |
-| `user_payment_method` | Saved end-user cards, wallets, and bank methods (`currency` nullable — unknown for a SetupIntent card) |
+| `user_payment_method` | Saved end-user cards, wallets, bank accounts and Link methods (`brand` is a card brand or a bank name; `currency` nullable — unknown for a SetupIntent card) |
 | `user_billing_customer` | User ↔ provider-customer token, one per (user, provider) |
 | `table_action` | Authorized custom actions surfaced by generic CRUD UIs |
 | `invoice` | Partner invoices and provider reconciliation state |

@@ -950,7 +950,8 @@ CREATE INDEX IF NOT EXISTS idx_payment_method_default ON payment_method(partner_
 CREATE SEQUENCE IF NOT EXISTS payment_method_seq INCREMENT BY 1 START WITH 1;
 INSERT INTO table_sequence_usage (table_name, column_name, sequence_name) VALUES ('payment_method', 'id', 'payment_method_seq') ON CONFLICT DO NOTHING;
 
--- Saved payment methods for end users (cards, wallets, bank accounts).
+-- Saved payment methods for end users (cards, wallets, bank accounts,
+-- Link); brand is a card's brand or a bank account's bank name.
 -- Distinct from `payment_method`, which is partner-scoped for SaaS
 -- billing — this row is per (user_id), the consumer cards a user has
 -- on file for in-bound payments. provider_token is the provider's
@@ -963,14 +964,14 @@ CREATE TABLE IF NOT EXISTS user_payment_method (
     provider                             VARCHAR(30)   NOT NULL,
     provider_token                       VARCHAR(255)  NOT NULL,
     last_four                            VARCHAR(4)   ,
-    brand                                VARCHAR(20)  ,
+    brand                                VARCHAR(80)  ,
     expiry_month                         SMALLINT     ,
     expiry_year                          SMALLINT     ,
     currency                             CHAR(3)      ,
     is_default                           BOOLEAN       NOT NULL DEFAULT FALSE,
     created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT user_payment_method_pk PRIMARY KEY (id),
-    CONSTRAINT chk_user_payment_method_type CHECK (method_type IN ('card', 'bank', 'wallet', 'apple_pay', 'google_pay'))
+    CONSTRAINT chk_user_payment_method_type CHECK (method_type IN ('card', 'bank', 'link', 'wallet', 'apple_pay', 'google_pay'))
 );
 CREATE INDEX IF NOT EXISTS idx_user_payment_method_user ON user_payment_method(user_id, is_default);
 
@@ -1270,7 +1271,7 @@ CREATE TABLE IF NOT EXISTS invoice (
     next_attempt_at                      TIMESTAMP    ,
     last_error                           TEXT         ,
     CONSTRAINT invoice_pk PRIMARY KEY (id),
-    CONSTRAINT chk_invoice_status CHECK (status IN ('D', 'O', 'A', 'P', 'V'))
+    CONSTRAINT chk_invoice_status CHECK (status IN ('D', 'O', 'A', 'S', 'P', 'V'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_number ON invoice(invoice_number);
 CREATE INDEX IF NOT EXISTS idx_invoice_partner ON invoice(partner_id);

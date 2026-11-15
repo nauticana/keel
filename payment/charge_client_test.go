@@ -168,3 +168,27 @@ func TestCharge_RequestErrorHasNoDeclineReason(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 }
+
+func TestCharge_MethodTypesAndSettlingDebit(t *testing.T) {
+	var form []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		form = r.PostForm["payment_method_types[0]"]
+		json.NewEncoder(w).Encode(map[string]string{"id": "pi_1", "status": "processing"})
+	}))
+	defer srv.Close()
+	c := newTestChargeClient(srv)
+	for types, want := range map[string]string{"": "card", "us_bank_account": "us_bank_account"} {
+		req := ChargeRequest{CustomerToken: "cus_1", PaymentMethodToken: "pm_1", AmountMinor: 500, Currency: "usd"}
+		if types != "" {
+			req.PaymentMethodTypes = []string{types}
+		}
+		res, err := c.Charge(context.Background(), req)
+		if err != nil || res.Status != ChargePending || res.ProviderChargeID != "pi_1" {
+			t.Fatalf("processing = %+v, %v; want pending", res, err)
+		}
+		if len(form) != 1 || form[0] != want {
+			t.Fatalf("payment_method_types = %v, want %s", form, want)
+		}
+	}
+}
