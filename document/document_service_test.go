@@ -4,8 +4,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -152,11 +155,11 @@ func TestSelfReviewFollowsPolicy(t *testing.T) {
 	s, _ := newService(t)
 	ctx := context.Background()
 	doc, _ := s.Store(ctx, upload("licence", 5, png))
-	if err := s.Review(ctx, 7, doc.ID, 3, true, ""); !errors.Is(err, ErrSelfReview) {
+	if err := s.Review(ctx, 7, doc.ID, 3, true, ""); !errors.Is(err, approval.ErrSeparation) {
 		t.Errorf("without a policy the uploader must not review: %v", err)
 	}
 	s.Policy = allowing{"other": true}
-	if err := s.Review(ctx, 7, doc.ID, 3, true, ""); !errors.Is(err, ErrSelfReview) {
+	if err := s.Review(ctx, 7, doc.ID, 3, true, ""); !errors.Is(err, approval.ErrSeparation) {
 		t.Errorf("a policy for another type does not apply: %v", err)
 	}
 	if err := s.Review(ctx, 7, doc.ID, 9, true, ""); err != nil {
@@ -251,17 +254,17 @@ func TestClientAddressingAndReviewerQueries(t *testing.T) {
 	}
 }
 
-func TestOnStoredRunsInTheTransaction(t *testing.T) {
+func TestStoredHookRunsInTheTransaction(t *testing.T) {
 	s, store := newService(t)
 	ctx := context.Background()
 	var seen *PartnerDocument
-	s.OnStored = func(_ context.Context, tx port.TxQueryService, doc *PartnerDocument) error {
+	s.Hooks = map[string]Hooks{"logo": {Stored: func(_ context.Context, tx port.TxQueryService, doc *PartnerDocument) error {
 		seen = doc
 		if doc.VersionNo == 2 {
 			return errors.New("profile update failed")
 		}
 		return nil
-	}
+	}}}
 	if _, err := s.Store(ctx, upload("logo", 0, png)); err != nil || seen == nil || seen.VersionNo != 1 {
 		t.Fatalf("hook: %+v %v", seen, err)
 	}
@@ -441,20 +444,122 @@ func TestSweepKeepsLegalHoldSubject(t *testing.T) {
 	}
 }
 
-func TestOnReviewedRunsInTheTransaction(t *testing.T) {
+func TestReviewedHookRunsInTheTransaction(t *testing.T) {
 	s, _ := newService(t)
 	ctx := context.Background()
 	doc, _ := s.Store(ctx, upload("licence", 5, png))
-	s.OnReviewed = func(_ context.Context, _ port.TxQueryService, reviewed *PartnerDocument) error {
+	s.Hooks = map[string]Hooks{"licence": {Reviewed: func(_ context.Context, _ port.TxQueryService, reviewed *PartnerDocument) error {
 		if reviewed.Status != StatusApproved || reviewed.ReviewerID != 9 {
 			t.Errorf("hook saw %+v", reviewed)
 		}
 		return errors.New("approval submit failed")
-	}
+	}}}
 	if err := s.Review(ctx, 7, doc.ID, 9, true, ""); err == nil {
 		t.Fatal("hook error must fail the review")
 	}
 	if got, _ := s.Get(ctx, 7, doc.ID); got.Status != StatusPending {
 		t.Errorf("a failed hook must roll the review back: %s", got.Status)
+	}
+}
+
+func TestHooksArePerType(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	s.Hooks = map[string]Hooks{"logo": {Stored: func(context.Context, port.TxQueryService, *PartnerDocument) error {
+		return errors.New("logo only")
+	}}}
+	if _, err := s.Store(ctx, upload("attachment", 0, png)); err != nil {
+		t.Fatalf("another type's hook must not run: %v", err)
+	}
+}
+
+func TestApproveHookGatesTheApproval(t *testing.T) {
+	s, store := newService(t)
+	ctx := context.Background()
+	doc, _ := s.Store(ctx, upload("licence", 5, png))
+	refused := errors.New("content does not qualify")
+	var seen []byte
+	s.Hooks = map[string]Hooks{"licence": {Approve: func(_ context.Context, d *PartnerDocument, content []byte) error {
+		seen = content
+		return refused
+	}}}
+	if err := s.Review(ctx, 7, doc.ID, 9, true, ""); !errors.Is(err, refused) || !bytes.Equal(seen, png) {
+		t.Fatalf("gate: %v, content %v", err, seen)
+	}
+	if got, _ := s.Get(ctx, 7, doc.ID); got.Status != StatusPending || len(store.events) != 0 {
+		t.Fatalf("a refused approval writes nothing: %s", got.Status)
+	}
+	if err := s.Review(ctx, 7, doc.ID, 9, false, "no"); err != nil {
+		t.Fatalf("a rejection does not pass the gate: %v", err)
+	}
+}
+
+func TestReviewPublishesTheOutcome(t *testing.T) {
+	s, store := newService(t)
+	ctx := context.Background()
+	s.Hooks = map[string]Hooks{"licence": {Publish: true}}
+	approved, _ := s.Store(ctx, upload("licence", 5, png))
+	rejected, _ := s.Store(ctx, upload("licence", 6, png))
+	if err := s.Review(ctx, 7, approved.ID, 9, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Review(ctx, 7, rejected.ID, 9, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.events) != 2 || store.events[0][4] != EventApproved || store.events[1][4] != EventRejected ||
+		store.events[0][2] != "partner_document" || store.events[0][3] != strconv.FormatInt(approved.ID, 10) {
+		t.Fatalf("events: %v", store.events)
+	}
+	payload := fmt.Sprint(store.events[0][5])
+	if !strings.Contains(payload, `"status":"Y"`) || !strings.Contains(payload, `"reviewer_id":9`) || strings.Contains(payload, "origin_ip") || strings.Contains(payload, "file_name") {
+		t.Fatalf("payload = %s, want the decision without the document's other columns", payload)
+	}
+}
+
+func TestTextFormatsAreAdmittedByDeclaration(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	for typ, c := range map[string]struct {
+		body string
+		want string
+	}{
+		"notes": {"a,b\n1,2\n", "text/csv"},
+		"data":  {`{"a":1}`, "application/json"},
+	} {
+		up := upload(typ, 0, []byte(c.body))
+		doc, err := s.Store(ctx, up)
+		if err != nil {
+			t.Fatalf("%s: %v", typ, err)
+		}
+		if _, comp, _ := s.Docs.Read(ctx, doc.ContRepID, doc.DocKey, DataComponent); comp.ContentType != c.want {
+			t.Errorf("%s stored as %q, want %q", typ, comp.ContentType, c.want)
+		}
+	}
+	if _, err := s.Store(ctx, upload("notes", 0, []byte("# Title\n\"quoted\" text"))); err != nil {
+		t.Errorf("markdown is the next declared format: %v", err)
+	}
+	if _, err := s.Store(ctx, upload("data", 0, []byte("not json"))); !errors.Is(err, ErrMediaType) {
+		t.Errorf("JSON must parse: %v", err)
+	}
+	if _, err := s.Store(ctx, upload("data", 0, []byte{'{', 0xff, '}'})); !errors.Is(err, ErrMediaType) {
+		t.Errorf("text must be UTF-8: %v", err)
+	}
+}
+
+func TestPartnerDocumentJSONNames(t *testing.T) {
+	raw, err := json.Marshal(&PartnerDocument{ID: 1 << 60, ContRepID: "docs", Subject: Subject{UserID: 5}, Status: StatusPending, Content: &dms.Component{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	for _, want := range []string{`"id":"1152921504606846976"`, `"contrep_id":"docs"`, `"user_id":5`, `"status":"P"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s lacks %s", got, want)
+		}
+	}
+	for _, absent := range []string{"Content", "ContRepID", "reviewed_at", "subject_key"} {
+		if strings.Contains(got, absent) {
+			t.Errorf("%s carries %s", got, absent)
+		}
 	}
 }

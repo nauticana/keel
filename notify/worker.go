@@ -21,9 +21,10 @@ import (
 type Worker struct {
 	worker.AbstractWorker
 	Sender      port.NotificationService
-	MaxAttempts int           // default 5
-	LeaseTTL    time.Duration // default 5m
-	BatchLimit  int           // pending rows fetched per tick, default 50
+	MaxAttempts int             // default 5
+	LeaseTTL    time.Duration   // default 5m
+	BatchLimit  int             // pending rows fetched per tick, default 50
+	Backoff     *common.Backoff // retry delay; nil is 2s doubling to one hour
 }
 
 var (
@@ -78,7 +79,7 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 		journal.Error(fmt.Sprintf("notify %d: %s delivery failed after %d attempts: %v", jobID, req.Channel, attempts+1, sendErr))
 		return w.transition(ctx, qs, journal, jobID, qFail, truncErr(sendErr), jobID, token)
 	default:
-		delay := backoffSeconds(attempts + 1)
+		delay := w.retryBackoff().Seconds(attempts + 1)
 		journal.Warning(fmt.Sprintf("notify %d: %s delivery failed (attempt %d), retry in %ds: %v", jobID, req.Channel, attempts+1, delay, sendErr))
 		return w.transition(ctx, qs, journal, jobID, qRetry, delay, truncErr(sendErr), jobID, token)
 	}
@@ -117,13 +118,12 @@ func requestFromClaim(jobID int64, row []any) (port.NotificationRequest, error) 
 	return req, nil
 }
 
-// backoffSeconds is 2^attempt capped at one hour; the clamp keeps the shift
-// from overflowing into a negative delay.
-func backoffSeconds(attempt int) int {
-	if attempt >= 12 {
-		return 3600
+// retryBackoff is the configured Backoff, else 2s doubling to one hour.
+func (w *Worker) retryBackoff() common.Backoff {
+	if w.Backoff != nil {
+		return *w.Backoff
 	}
-	return min(1<<max(attempt, 0), 3600)
+	return common.Backoff{Base: 2 * time.Second, Max: time.Hour}
 }
 
 func truncErr(err error) string {

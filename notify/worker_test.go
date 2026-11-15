@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/worker"
 )
@@ -76,7 +78,7 @@ func TestWorker_Outcomes(t *testing.T) {
 			row := store.byChannel("email")
 			row.attempts = tc.attempts
 			lg := &fakeLogger{}
-			drain(&Worker{Sender: &fakeSender{errs: map[string]error{"email": tc.sendErr}}}, store, lg)
+			drain(&Worker{Sender: &fakeSender{errs: map[string]error{"email": tc.sendErr}}, Backoff: &fullDelay}, store, lg)
 			if row.status != tc.want || row.delay != tc.wantDelay || row.attempts != tc.attempts+1 {
 				t.Fatalf("status=%s delay=%d attempts=%d, want %s/%d/%d", row.status, row.delay, row.attempts, tc.want, tc.wantDelay, tc.attempts+1)
 			}
@@ -144,10 +146,4 @@ func TestWorker_Queries(t *testing.T) {
 	}
 }
 
-func TestBackoffSeconds(t *testing.T) {
-	for attempt, want := range map[int]int{-3: 1, 0: 1, 1: 2, 3: 8, 11: 2048, 12: 3600, 1000: 3600} {
-		if got := backoffSeconds(attempt); got != want {
-			t.Fatalf("backoffSeconds(%d) = %d, want %d", attempt, got, want)
-		}
-	}
-}
+var fullDelay = common.Backoff{Base: 2 * time.Second, Max: time.Hour, Entropy: func() float64 { return 1 }}

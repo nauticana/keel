@@ -2,8 +2,8 @@ package document
 
 import "context"
 
-// SeparationPolicy decides whether the uploader of a document of the type may
-// review it for the partner; approval.Service is one.
+// SeparationPolicy refuses a reviewer deciding a document they uploaded unless
+// the type's policy allows one person; approval.Service is one.
 type SeparationPolicy interface {
-	AllowsSinglePerson(ctx context.Context, partnerID int64, objectType string) (bool, error)
+	RequireSeparation(ctx context.Context, partnerID int64, objectType string, authorID, actorID int64) error
 }

@@ -22,7 +22,9 @@ type fakeProvider struct {
 	status   *InstantPayoutResult
 	requests []InstantPayoutInput
 	// onRequest runs inside RequestInstantPayout, e.g. to assert no store transaction is open.
-	onRequest func()
+	onRequest   func()
+	session     *PayoutOnboardingSession
+	onboardings []StartOnboardingInput
 }
 
 func (f *fakeProvider) Code() string {
@@ -32,8 +34,12 @@ func (f *fakeProvider) Code() string {
 	return f.code
 }
 
-func (f *fakeProvider) StartOnboarding(context.Context, StartOnboardingInput) (*PayoutOnboardingSession, error) {
-	return nil, ErrNotImplemented
+func (f *fakeProvider) StartOnboarding(_ context.Context, in StartOnboardingInput) (*PayoutOnboardingSession, error) {
+	f.onboardings = append(f.onboardings, in)
+	if f.session == nil {
+		return nil, ErrNotImplemented
+	}
+	return f.session, nil
 }
 
 func (f *fakeProvider) VerifyAndParseWebhook(map[string][]string, []byte) (*PayoutWebhookEvent, error) {

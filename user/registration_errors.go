@@ -13,6 +13,8 @@ var (
 	// signs in and adds its partner with CreatePartner.
 	ErrAccountExists = errors.New("user: an account already exists for this identity")
 	ErrPublicEmail   = errors.New("user: a business email address is required")
+	// ErrPlanRequired: the setup names no plan and RegistrationService.Plan is empty.
+	ErrPlanRequired = errors.New("user: a plan is required")
 	// ErrCheckout: the partner was created but its checkout session was not.
 	// The other returned values are valid; PaymentURL is empty.
 	ErrCheckout = errors.New("user: checkout session failed")

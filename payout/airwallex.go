@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -105,33 +106,37 @@ type airwallexOnboardingLinkResp struct {
 //  2. POST /api/v1/accounts/{id}/onboarding_link with return + refresh
 //     URLs to mint a hosted-KYC link the calling application opens.
 func (p *AirwallexProvider) StartOnboarding(ctx context.Context, in StartOnboardingInput) (*PayoutOnboardingSession, error) {
-	createReq := airwallexCreateAccountReq{
-		AccountCurrency: in.Currency,
-		BusinessType:    "INDIVIDUAL",
-		Country:         in.CountryCode,
-		Metadata: map[string]any{
-			"user_id":    in.UserID,
-			"partner_id": in.PartnerID,
-		},
-		PrimaryContact: map[string]any{
-			"name":            in.AccountHolder,
-			"billing_address": in.BillingAddress,
-		},
-	}
-	var createResp airwallexCreateAccountResp
-	if err := p.postJSON(ctx, "/api/v1/accounts", createReq, &createResp); err != nil {
-		return nil, fmt.Errorf("airwallex create_account: %w", err)
+	accountID := in.ExternalAccountID
+	if accountID == "" {
+		createReq := airwallexCreateAccountReq{
+			AccountCurrency: in.Currency,
+			BusinessType:    "INDIVIDUAL",
+			Country:         in.CountryCode,
+			Metadata: map[string]any{
+				"user_id":    in.UserID,
+				"partner_id": in.PartnerID,
+			},
+			PrimaryContact: map[string]any{
+				"name":            in.AccountHolder,
+				"billing_address": in.BillingAddress,
+			},
+		}
+		var createResp airwallexCreateAccountResp
+		if err := p.postJSON(ctx, "/api/v1/accounts", createReq, &createResp); err != nil {
+			return nil, fmt.Errorf("airwallex create_account: %w", err)
+		}
+		accountID = createResp.ID
 	}
 
 	linkReq := airwallexOnboardingLinkReq{ReturnURL: in.ReturnURL, RefreshURL: in.ReturnURL}
 	var linkResp airwallexOnboardingLinkResp
-	if err := p.postJSON(ctx, fmt.Sprintf("/api/v1/accounts/%s/onboarding_link", createResp.ID), linkReq, &linkResp); err != nil {
+	if err := p.postJSON(ctx, fmt.Sprintf("/api/v1/accounts/%s/onboarding_link", url.PathEscape(accountID)), linkReq, &linkResp); err != nil {
 		return nil, fmt.Errorf("airwallex onboarding_link: %w", err)
 	}
 
 	return &PayoutOnboardingSession{
 		URL:               linkResp.URL,
-		ExternalAccountID: createResp.ID,
+		ExternalAccountID: accountID,
 		ExpiresAt:         linkResp.ExpiresAt,
 	}, nil
 }

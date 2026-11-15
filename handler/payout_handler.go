@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"path"
@@ -9,6 +10,18 @@ import (
 	kcommon "github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/payout"
 )
+
+func init() {
+	RegisterErrorMessage(payout.ErrAlreadyOnboarded, http.StatusConflict, "payout_already_onboarded", "The payout account is already onboarded")
+	RegisterErrorMessage(payout.ErrBankInfoRequired, http.StatusConflict, "payout_bank_info_required", "Bank information is required first")
+	RegisterErrorMessage(payout.ErrInvalidBankInfo, http.StatusBadRequest, "payout_invalid_bank_info", "Country, currency and account holder are required")
+	RegisterErrorMessage(payout.ErrProviderMismatch, http.StatusConflict, "payout_provider_mismatch", "The bank information belongs to another payout provider")
+	RegisterErrorMessage(payout.ErrAccountNotReusable, http.StatusConflict, "payout_account_not_reusable", "The payout account cannot be reused")
+	RegisterErrorMessage(payout.ErrDestinationRegistered, http.StatusConflict, "payout_destination_registered", "A payout destination is already registered; replace the bank information first")
+	RegisterErrorMessage(payout.ErrBeneficiaryUnsupported, http.StatusConflict, "payout_beneficiary_unsupported", "The payout provider does not register beneficiaries")
+	RegisterErrorMessage(payout.ErrProviderNotConfigured, http.StatusConflict, "payout_provider_not_configured", "No payout provider is configured")
+	RegisterErrorMessage(payout.ErrProvider, http.StatusBadGateway, "payout_provider_error", "The payout provider did not accept the request")
+}
 
 // PayoutHandler bridges HTTP to payout.OnboardingService. The two
 // endpoint families have very different auth shapes:
@@ -65,7 +78,7 @@ func (h *PayoutHandler) StartOnboarding(w http.ResponseWriter, r *http.Request) 
 	}
 	out, err := h.PayoutService.StartOnboarding(r.Context(), session.Id, session.PartnerId)
 	if err != nil {
-		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, out)
@@ -80,7 +93,7 @@ func (h *PayoutHandler) ListReusable(w http.ResponseWriter, r *http.Request) {
 	}
 	accounts, err := h.PayoutService.ListReusableAccounts(r.Context(), session.Id, session.PartnerId)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]any{"accounts": accounts})
@@ -101,7 +114,7 @@ func (h *PayoutHandler) LinkReusable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.PayoutService.LinkReusableAccount(r.Context(), session.Id, session.PartnerId, req.ProviderAccountID); err != nil {
-		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"message": "account linked"})
@@ -117,7 +130,7 @@ func (h *PayoutHandler) Status(w http.ResponseWriter, r *http.Request) {
 	}
 	complete, err := h.PayoutService.IsOnboardingComplete(r.Context(), session.Id, session.PartnerId)
 	if err != nil {
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]any{"complete": complete})
@@ -149,7 +162,7 @@ func (h *PayoutHandler) ReplaceBank(w http.ResponseWriter, r *http.Request) {
 		}
 		var err error
 		if sealed, err = h.SealTaxID(req.TaxID); err != nil {
-			h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", "seal tax id: "+err.Error())
+			h.WriteServiceError(w, r, fmt.Errorf("seal tax id: %w", err))
 			return
 		}
 	}
@@ -162,7 +175,7 @@ func (h *PayoutHandler) ReplaceBank(w http.ResponseWriter, r *http.Request) {
 		TaxIDEncrypted:    sealed,
 	})
 	if err != nil {
-		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"message": "bank info replaced"})
@@ -183,7 +196,7 @@ func (h *PayoutHandler) RegisterBeneficiary(w http.ResponseWriter, r *http.Reque
 	}
 	id, err := h.PayoutService.RegisterBeneficiary(r.Context(), session.Id, session.PartnerId, req.Beneficiary)
 	if err != nil {
-		h.WriteError(w, http.StatusConflict, "Conflict", err.Error())
+		h.WriteServiceError(w, r, err)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"beneficiaryId": id})
@@ -208,13 +221,13 @@ func (h *PayoutHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "missing provider code in path")
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxWebhookBodyBytes))
 	if err != nil {
-		h.WriteError(w, http.StatusBadRequest, "Bad Request", "read body: "+err.Error())
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "unreadable or oversized body")
 		return
 	}
 	if err := h.PayoutService.HandleWebhook(r.Context(), providerCode, r.Header, body); err != nil {
-		h.WriteError(w, http.StatusUnauthorized, "Unauthorized", err.Error())
+		h.writeProblem(r, w, http.StatusUnauthorized, "Unauthorized", "webhook rejected", "", err.Error(), nil)
 		return
 	}
 	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

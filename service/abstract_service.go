@@ -2,75 +2,91 @@ package service
 
 import (
 	"context"
+	"errors"
 
+	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
-// AbstractService is the OO base for downstream projects that talk to the database through QueryService
-// interface. Concrete services embed it by value at the top of the struct declaration:
+var errUninitialized = errors.New("service: AbstractService is not initialized; build it with NewAbstractService")
+
+// AbstractService is the base a downstream service embeds by value to run its
+// named-query catalog:
 //
-//	type FooServiceImpl struct {
-//	    AbstractService
-//	    other deps...
+//	type FooService struct {
+//	    service.AbstractService
 //	}
 //
-//	func NewFooService(db port.DatabaseRepository) port.FooService {
-//	    return &FooServiceImpl{
-//	        AbstractService: NewAbstractService(db, fooQueries),
-//	    }
+//	func NewFooService(db port.DatabaseRepository) *FooService {
+//	    return &FooService{AbstractService: service.NewAbstractService(db, fooQueries)}
 //	}
-//
-// Method promotion gives subclasses `Query`, `QueryRows`, `QueryFirst`, and `Exec` for free.
 type AbstractService struct {
-	QS port.QueryService
+	QS      port.QueryService
+	db      port.DatabaseRepository
+	queries map[string]string
 }
 
-// NewAbstractService caches a QueryService bound to the given query map. The
-// map is rewritten once per backend (?→$N for Postgres) at construction time;
-// subsequent Query calls are zero-allocation lookups.
+// NewAbstractService prepares the catalog once; Query calls are lookups.
 func NewAbstractService(db port.DatabaseRepository, queries map[string]string) AbstractService {
-	return AbstractService{QS: db.GetQueryService(context.Background(), queries)}
+	return AbstractService{QS: db.GetQueryService(context.Background(), queries), db: db, queries: queries}
 }
 
-// Query is the raw passthrough to keel's QueryService. Prefer the typed
-// helpers below; reach for Query only when you need access to Columns or
-// when neither QueryFirst nor QueryRows fits.
 func (s *AbstractService) Query(ctx context.Context, name string, args ...any) (*model.QueryResult, error) {
+	if s.QS == nil {
+		return nil, errUninitialized
+	}
 	return s.QS.Query(ctx, name, args...)
 }
 
-// QueryRows runs the named query and returns every row. Wraps the
-// `(*model.QueryResult, error) → ([][]any, error)` conversion every Impl
-// was repeating.
+// QueryRows runs the named query and returns every row.
 func (s *AbstractService) QueryRows(ctx context.Context, name string, args ...any) ([][]any, error) {
-	res, err := s.QS.Query(ctx, name, args...)
+	res, err := s.Query(ctx, name, args...)
 	if err != nil {
 		return nil, err
 	}
 	return res.Rows, nil
 }
 
-// QueryFirst returns the first row, or nil if the result set is empty.
-// Idiomatic for `SELECT ... LIMIT 1` / `RETURNING id` queries.
+// QueryFirst returns the first row, or nil when there is none.
 func (s *AbstractService) QueryFirst(ctx context.Context, name string, args ...any) ([]any, error) {
-	res, err := s.QS.Query(ctx, name, args...)
-	if err != nil {
+	rows, err := s.QueryRows(ctx, name, args...)
+	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
-	if len(res.Rows) == 0 {
-		return nil, nil
-	}
-	return res.Rows[0], nil
+	return rows[0], nil
 }
 
-// Exec runs the named query and discards the result rows. Idiomatic for
-// INSERT / UPDATE / DELETE where only the error matters.
+// Exec runs the named query and discards its rows.
 func (s *AbstractService) Exec(ctx context.Context, name string, args ...any) error {
-	_, err := s.QS.Query(ctx, name, args...)
+	_, err := s.Query(ctx, name, args...)
 	return err
 }
 
-// QueryService returns the underlying QueryService for callers that need
-// transactional / streaming patterns the helpers above don't cover.
 func (s *AbstractService) QueryService() port.QueryService { return s.QS }
+
+// Atomic runs fn over the service's catalog in one transaction, committed when
+// fn returns nil and rolled back otherwise, even after the context is cancelled.
+func (s *AbstractService) Atomic(ctx context.Context, fn func(tx port.TxQueryService) error) (err error) {
+	if s.db == nil {
+		return errUninitialized
+	}
+	tx, err := s.db.BeginTx(ctx, s.queries)
+	if err != nil {
+		return err
+	}
+	// A commit attempt ends the transaction either way, so only fn's failure rolls back.
+	committing := false
+	defer func() {
+		if !committing {
+			if rollbackErr := data.RollbackDetached(tx); rollbackErr != nil {
+				err = errors.Join(err, rollbackErr)
+			}
+		}
+	}()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	committing = true
+	return tx.Commit(ctx)
+}

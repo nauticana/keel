@@ -8,7 +8,7 @@ var (
 	ErrNotFound     = errors.New("approval: request not found")
 	ErrInvalidState = errors.New("approval: request is already decided")
 	ErrAlreadyOpen  = errors.New("approval: the record already has an open request")
-	ErrSameActor    = errors.New("approval: the maker cannot decide their own request")
+	ErrSeparation   = errors.New("approval: the author cannot decide their own record")
 	ErrExpired      = errors.New("approval: request has expired")
 	ErrNotMaker     = errors.New("approval: only the maker can withdraw the request")
 	ErrTxCatalog    = errors.New("approval: transaction cannot bind the approval query catalog")

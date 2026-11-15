@@ -70,6 +70,9 @@ type UserService interface {
 	// EndMembership ends the user's membership of the partner, ends their role
 	// assignments and revokes their tokens.
 	EndMembership(partnerID int64, userID int, reason string) error
+	// Members lists the partner's current members, ids and names only, for a
+	// colleague picker; search filters by name.
+	Members(partnerID int64, search string) ([]Member, error)
 	ValidateRefreshToken(token string, device SessionDevice) (*model.UserSession, error)
 	// Sessions lists the user's live sign-in sessions; RevokeSession ends one
 	// (ErrSessionNotFound when it is not the user's or already ended).

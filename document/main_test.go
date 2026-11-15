@@ -3,6 +3,7 @@ package document
 import (
 	"context"
 	"errors"
+	"github.com/nauticana/keel/approval"
 	"maps"
 	"slices"
 	"testing"
@@ -36,6 +37,7 @@ type memStore struct {
 	updated    map[int64][]any // pre-update copies of rows changed in the open transaction
 	groupLocks int
 	heldUsers  map[int64]bool // subjects under an unreleased legal hold
+	events     [][]any        // outbox_event inserts
 }
 
 func (m *memStore) GenID() int64 { m.nextID++; return m.nextID }
@@ -172,6 +174,8 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		}
 	case qSetPurged:
 		m.rows[args[0].(int64)][20] = time.Now()
+	case "keel_outbox_insert":
+		m.events = append(m.events, args)
 	default:
 		return nil, errors.New("unexpected query " + name)
 	}
@@ -200,6 +204,8 @@ func newService(t *testing.T) (*DocumentService, *memStore) {
 			"cold":       {"cold", int64(64), "image/png", false, true},
 			"foreign":    {"other", int64(64), "image/png", false, true},
 			"brief":      {"docs", int64(4096), mediaDOCX, false, true},
+			"notes":      {"docs", int64(4096), "text/csv, text/markdown", false, false},
+			"data":       {"docs", int64(4096), "application/json", false, false},
 		},
 		owners: map[string]any{"docs": nil, "other": int64(99), "cold": nil},
 		rows:   map[int64][]any{},
@@ -222,6 +228,9 @@ func upload(typ string, userID int64, body []byte) Upload {
 // allowing is a SeparationPolicy that lets one person upload and review the named types.
 type allowing map[string]bool
 
-func (a allowing) AllowsSinglePerson(_ context.Context, _ int64, typ string) (bool, error) {
-	return a[typ], nil
+func (a allowing) RequireSeparation(_ context.Context, _ int64, typ string, authorID, actorID int64) error {
+	if authorID == actorID && !a[typ] {
+		return approval.ErrSeparation
+	}
+	return nil
 }

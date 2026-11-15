@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
@@ -118,7 +120,8 @@ func TestHandleJob_NullPartnerIsZero(t *testing.T) {
 
 func TestHandleJob_RetryBeforeMaxScopedByToken(t *testing.T) {
 	qs := applied(newFakeQS(), qRetry)
-	w := &Worker{Dispatcher: &fakeDispatcher{err: errors.New("boom")}, MaxAttempts: 5}
+	w := &Worker{Dispatcher: &fakeDispatcher{err: errors.New("boom")}, MaxAttempts: 5,
+		Backoff: &common.Backoff{Base: 2 * time.Second, Entropy: func() float64 { return 1 }}}
 	_ = handle(w, qs, &fakeLogger{}, claimRow(int64(42), 0, 555))
 
 	c := qs.ran(qRetry)

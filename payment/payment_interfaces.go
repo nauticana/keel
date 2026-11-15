@@ -267,6 +267,8 @@ type IntentRequest struct {
 	Amount     int64  // minor units; payment intents only
 	Currency   string // ISO 4217; payment intents only
 	Metadata   map[string]string
+	// PaymentMethodTypes limits a setup intent's methods; empty is card only.
+	PaymentMethodTypes []string
 }
 
 type IntentResult struct {

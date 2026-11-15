@@ -13,3 +13,11 @@ func TestCachedTransactionQueriesReuseCompiledCatalog(t *testing.T) {
 		t.Fatalf("cached queries = %q / %q, want one compiled catalog", first["find"], second["find"])
 	}
 }
+
+func TestTxViewQueryServiceRewritesPlaceholders(t *testing.T) {
+	view := &pgsqlTxView{repo: &RepositoryPgsql{}}
+	qs := view.QueryService(map[string]string{"find": "SELECT ? WHERE a = ?"}).(*TxQueryServicePgsql)
+	if got := qs.Queries["find"]; got != "SELECT $1 WHERE a = $2" {
+		t.Fatalf("query = %q, want positional placeholders", got)
+	}
+}

@@ -12,8 +12,8 @@ const maxSubjectKey = 200
 // characters), or the partner itself (the zero Subject). Versions, the
 // single approved document and the group lock are per partner, subject and type.
 type Subject struct {
-	UserID     int64
-	SubjectKey string
+	UserID     int64  `json:"user_id,omitzero"`
+	SubjectKey string `json:"subject_key,omitempty"`
 }
 
 func (s Subject) normalized() (Subject, error) {

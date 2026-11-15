@@ -81,34 +81,20 @@ type stripeConnectLinkResp struct {
 // otherwise; we surface a clear error rather than a generic 400 from
 // upstream.
 func (p *StripeConnectProvider) StartOnboarding(ctx context.Context, in StartOnboardingInput) (*PayoutOnboardingSession, error) {
-	if in.Email == "" {
-		return nil, fmt.Errorf("stripe connect: Email required for Express account creation")
-	}
-	if in.CountryCode == "" {
-		return nil, fmt.Errorf("stripe connect: CountryCode required")
-	}
 	if in.ReturnURL == "" {
 		return nil, fmt.Errorf("stripe connect: ReturnURL required for hosted onboarding")
 	}
-
-	createForm := url.Values{}
-	createForm.Set("type", "express")
-	createForm.Set("country", strings.ToUpper(in.CountryCode))
-	createForm.Set("email", in.Email)
-	createForm.Set("business_type", "individual")
-	if in.Currency != "" {
-		createForm.Set("default_currency", strings.ToLower(in.Currency))
-	}
-	createForm.Set("metadata[user_id]", strconv.FormatInt(in.UserID, 10))
-	createForm.Set("metadata[partner_id]", strconv.FormatInt(in.PartnerID, 10))
-
-	var acct stripeConnectAccountResp
-	if err := p.postForm(ctx, "/v1/accounts", createForm, &acct); err != nil {
-		return nil, fmt.Errorf("stripe connect create account: %w", err)
+	accountID := in.ExternalAccountID
+	if accountID == "" {
+		id, err := p.createAccount(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		accountID = id
 	}
 
 	linkForm := url.Values{}
-	linkForm.Set("account", acct.ID)
+	linkForm.Set("account", accountID)
 	linkForm.Set("refresh_url", in.ReturnURL)
 	linkForm.Set("return_url", in.ReturnURL)
 	linkForm.Set("type", "account_onboarding")
@@ -126,7 +112,7 @@ func (p *StripeConnectProvider) StartOnboarding(ctx context.Context, in StartOnb
 	}
 	return &PayoutOnboardingSession{
 		URL:               link.URL,
-		ExternalAccountID: acct.ID,
+		ExternalAccountID: accountID,
 		ExpiresAt:         expiresAt,
 	}, nil
 }
@@ -657,3 +643,29 @@ func mapStripeEvent(name string, fullyActivated bool) (PayoutWebhookEventType, b
 }
 
 var _ PayoutProvider = (*StripeConnectProvider)(nil)
+
+// createAccount creates the Express account a first onboarding links.
+func (p *StripeConnectProvider) createAccount(ctx context.Context, in StartOnboardingInput) (string, error) {
+	if in.Email == "" {
+		return "", fmt.Errorf("stripe connect: Email required for Express account creation")
+	}
+	if in.CountryCode == "" {
+		return "", fmt.Errorf("stripe connect: CountryCode required")
+	}
+	createForm := url.Values{}
+	createForm.Set("type", "express")
+	createForm.Set("country", strings.ToUpper(in.CountryCode))
+	createForm.Set("email", in.Email)
+	createForm.Set("business_type", "individual")
+	if in.Currency != "" {
+		createForm.Set("default_currency", strings.ToLower(in.Currency))
+	}
+	createForm.Set("metadata[user_id]", strconv.FormatInt(in.UserID, 10))
+	createForm.Set("metadata[partner_id]", strconv.FormatInt(in.PartnerID, 10))
+
+	var acct stripeConnectAccountResp
+	if err := p.postForm(ctx, "/v1/accounts", createForm, &acct); err != nil {
+		return "", fmt.Errorf("stripe connect create account: %w", err)
+	}
+	return acct.ID, nil
+}

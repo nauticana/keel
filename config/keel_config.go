@@ -140,6 +140,7 @@ const (
 	human_verifier_hostnames      = "human_verifier_hostnames"
 	max_list_page_size            = "max_list_page_size"
 	default_list_page_size        = "default_list_page_size"
+	max_export_rows               = "max_export_rows"
 	post_write_timeout            = "post_write_timeout"
 	stripe_webhook_tolerance      = "stripe_webhook_tolerance"
 	stripe_max_retries            = "stripe_max_retries"
@@ -304,6 +305,7 @@ type KeelConfig struct {
 	HumanVerifierHostnames      string        // human_verifier_hostnames      ""                 CSV of hostnames a challenge token may come from (empty = any)
 	MaxListPageSize             int           // max_list_page_size            1000               List page-size clamp
 	DefaultListPageSize         int           // default_list_page_size        100                Default list page size
+	MaxExportRows               int           // max_export_rows               10000              Rows one generic-REST CSV export returns at most (1-1000000); 0 = default
 	PostWriteTimeout            time.Duration // post_write_timeout            10                 Post-response write timeout
 	StripeWebhookTolerance      time.Duration // stripe_webhook_tolerance      300                Stripe webhook timestamp tolerance
 	StripeMaxRetries            int           // stripe_max_retries            3                  Stripe API retry count (429/5xx)
@@ -464,6 +466,7 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.HumanVerifierHostnames = c.String(m, human_verifier_hostnames)
 	c.MaxListPageSize = c.Int(m, max_list_page_size)
 	c.DefaultListPageSize = c.Int(m, default_list_page_size)
+	c.MaxExportRows = c.Int(m, max_export_rows)
 	c.PostWriteTimeout = c.Duration(m, post_write_timeout)
 	c.StripeWebhookTolerance = c.Duration(m, stripe_webhook_tolerance)
 	c.StripeMaxRetries = c.Int(m, stripe_max_retries)
@@ -529,6 +532,11 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	}
 	if c.DebugPort < 0 || c.DebugPort > 65535 {
 		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 0 and 65535", debug_port))
+	}
+	if c.MaxExportRows == 0 {
+		c.MaxExportRows = 10000
+	} else if c.MaxExportRows < 0 || c.MaxExportRows > 1000000 {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be between 1 and 1000000", max_export_rows))
 	}
 	if c.HttpMaxHeaderValues == 0 {
 		c.HttpMaxHeaderValues = 500

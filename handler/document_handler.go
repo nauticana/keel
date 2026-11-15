@@ -23,7 +23,6 @@ func init() {
 	RegisterErrorMessage(dms.ErrComponentTooLarge, http.StatusRequestEntityTooLarge, "document_too_large", "The file exceeds the size limit")
 	RegisterErrorMessage(document.ErrInvalidState, http.StatusConflict, "document_invalid_state", "The document's status does not allow this operation")
 	RegisterErrorMessage(document.ErrTenantMismatch, http.StatusForbidden, "document_forbidden", "This document type is not available")
-	RegisterErrorMessage(document.ErrSelfReview, http.StatusForbidden, "document_self_review", "The uploader cannot review this document")
 	RegisterErrorMessage(document.ErrInvalidUpload, http.StatusBadRequest, "document_invalid_upload", "The upload's subject or language is invalid")
 	RegisterErrorMessage(scan.ErrContentRejected, http.StatusForbidden, "content_rejected", "The file was rejected by the content scanner")
 }

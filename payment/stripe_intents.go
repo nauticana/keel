@@ -14,6 +14,13 @@ const stripeAPIVersion = "2024-06-20"
 func (c *StripeCheckoutClient) CreateSetupIntent(ctx context.Context, req IntentRequest) (*IntentResult, error) {
 	form := url.Values{}
 	form.Set("usage", "off_session")
+	methods := req.PaymentMethodTypes
+	if len(methods) == 0 {
+		methods = []string{"card"}
+	}
+	for i, m := range methods {
+		form.Set("payment_method_types["+strconv.Itoa(i)+"]", m)
+	}
 	return c.createIntent(ctx, "/setup_intents", req, form)
 }
 

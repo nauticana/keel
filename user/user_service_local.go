@@ -162,6 +162,7 @@ const (
 	qInsertRefreshToken          = "insert_refresh_token"
 	qGetRefreshToken             = "get_refresh_token"
 	qEndMembership               = "end_membership"
+	qMembers                     = "members"
 	qEndPermissions              = "end_permissions"
 	qRevokeRefreshToken          = "revoke_refresh_token"
 	qRevokeAllRefreshTokensForID = "revoke_all_refresh_tokens_for_user"
@@ -519,6 +520,18 @@ SELECT n.cidr FROM partner_signin_network n
                           AND (pu.endda IS NULL OR pu.endda > CURRENT_TIMESTAMP)
                         ORDER BY pu.begda, pu.partner_id
                         LIMIT 1)
+`,
+	qMembers: `
+SELECT u.id, TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS name
+  FROM partner_user p
+  JOIN user_account u ON u.id = p.user_id
+ WHERE p.partner_id = ?
+   AND p.begda <= CURRENT_TIMESTAMP
+   AND (p.endda IS NULL OR p.endda > CURRENT_TIMESTAMP)
+   AND u.status <> '` + UserStatusDeleted + `'
+   AND LOWER(CONCAT_WS(' ', u.first_name, u.last_name)) LIKE ? ESCAPE '!'
+ ORDER BY name, u.id
+ LIMIT ?
 `,
 	qEndMembership: `
 UPDATE partner_user SET endda = CURRENT_TIMESTAMP
@@ -1483,6 +1496,28 @@ func (s *LocalUserService) ExternalSignInMethod(partnerID int64, id ExternalIden
 		return SignInTenant, nil
 	}
 	return SignInExternal, nil
+}
+
+// Members returns up to max_list_page_size current members of the partner
+// whose name contains search, ignoring case; an empty search matches all.
+func (s *LocalUserService) Members(partnerID int64, search string) ([]Member, error) {
+	search = strings.ToLower(strings.TrimSpace(search))
+	if partnerID <= 0 {
+		return nil, ErrNoMembership
+	}
+	if utf8.RuneCountInString(search) > MaxMemberSearch {
+		return nil, model.NewBadRequest(fmt.Sprintf("search is at most %d characters", MaxMemberSearch))
+	}
+	pattern := "%" + memberLikeEscaper.Replace(search) + "%"
+	res, err := s.queryService.Query(s.ctx(), qMembers, partnerID, pattern, config.Config().MaxListPageSize)
+	if err != nil {
+		return nil, fmt.Errorf("members of partner %d: %w", partnerID, err)
+	}
+	out := make([]Member, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		out = append(out, Member{UserID: common.AsInt64(row[0]), Name: common.AsString(row[1])})
+	}
+	return out, nil
 }
 
 // EndMembership ends the user's open membership of the partner and, in the

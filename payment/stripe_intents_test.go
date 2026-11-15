@@ -34,7 +34,8 @@ func TestCreateSetupIntent_CreatesCustomerAndEphemeralKey(t *testing.T) {
 			if r.Header.Get("Stripe-Version") != "" {
 				t.Error("Stripe-Version unexpectedly changed the setup-intent API version")
 			}
-			if r.Form.Get("customer") != "cus_1" || r.Form.Get("usage") != "off_session" || r.Form.Get("metadata[user_id]") != "7" {
+			if r.Form.Get("customer") != "cus_1" || r.Form.Get("usage") != "off_session" || r.Form.Get("metadata[user_id]") != "7" ||
+				r.Form.Get("payment_method_types[0]") != "card" || r.Form.Has("payment_method_types[1]") {
 				t.Errorf("setup form=%v", r.Form)
 			}
 			_, _ = w.Write([]byte(`{"id":"seti_1","client_secret":"seti_1_secret"}`))
@@ -77,5 +78,25 @@ func TestCreatePaymentIntent_ReusesCustomerAndValidates(t *testing.T) {
 	res, err := c.CreatePaymentIntent(context.Background(), IntentRequest{CustomerID: "cus_9", Amount: 1250, Currency: "usd"})
 	if err != nil || res.ClientSecret != "pi_1_secret" || res.CustomerID != "cus_9" {
 		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestCreateSetupIntent_SendsRequestedMethodTypes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.URL.Path {
+		case "/ephemeral_keys":
+			_, _ = w.Write([]byte(`{"secret":"ek"}`))
+		case "/setup_intents":
+			if r.Form.Get("payment_method_types[0]") != "card" || r.Form.Get("payment_method_types[1]") != "us_bank_account" {
+				t.Errorf("setup form=%v", r.Form)
+			}
+			_, _ = w.Write([]byte(`{"id":"seti_2","client_secret":"s"}`))
+		}
+	}))
+	defer srv.Close()
+	c := &StripeCheckoutClient{Secrets: intentSecrets{}, BaseURL: srv.URL}
+	if _, err := c.CreateSetupIntent(context.Background(), IntentRequest{CustomerID: "cus_1", PaymentMethodTypes: []string{"card", "us_bank_account"}}); err != nil {
+		t.Fatal(err)
 	}
 }

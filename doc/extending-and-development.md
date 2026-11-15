@@ -34,6 +34,7 @@ The sessions `Register` and `RegisterWithIdentity` return passed `CheckSignInMet
 |---|---|
 | `Users` | Password and sign-in policy, sessions. Required for signup |
 | `Domains`, `RequireDomainProof` | `evidence` from `Domains.Check` is recorded by `RecordTx` in the partner transaction; without it the account's verified email proves the domain (`VE`) when it can. `RequireDomainProof` requires every partner to have a proven domain, and `SendConfirmation` refuses a mailbox off it; without it the domain is optional |
+| `Plan` | The plan a `PartnerSetup` without `PlanID` takes; with neither, signup fails with `user.ErrPlanRequired` (400 `plan_required`) before any write |
 | `Roles` | Granted to the creator; each must be `partner_scoped`. Nil grants `PARTNER_ADMIN` |
 | `EmailPolicy` | Screens an emailed-code signup address; `user.BusinessEmail` refuses free mailboxes |
 | `OnPartnerTx` | Writes the application's rows in the partner transaction; `PartnerSetup.Extra` carries its fields. Bind the application's queries with `port.TxQueryCatalog` |
@@ -131,10 +132,14 @@ for _, row := range res.Rows {
 }
 ```
 
-Positional `res.Rows[i][j]` with `common.As*` stays the fastest read. For typed reads with errors, `res.Row(i)` with `row.At[T](j)` (by position) or `row.Get[T](name)` (by name, a linear lookup per call), and `res.Col[T](i, name)`, convert through `model.Coerce[T]`, and `res.Scan[T](func(model.Row) (T, error))` maps every row. `T` is `int64`, `int32`, `int`, `float64`, `bool`, `string`, `time.Time`, `[]byte`, `any`, or a pointer to one for a nullable column. Failures are `model.ErrColumnNotFound`, `ErrRowOutOfRange`, `ErrNullValue` or `ErrCoercion` (a fractional float into an integer, an overflow, an unconvertible type); `common.As*` are the same converters with lenient sentinels.
+Positional `res.Rows[i][j]` with `common.As*` stays the fastest read. For typed reads with errors, `res.Row(i)` with `row.At[T](j)` (by position) or `row.Get[T](name)` (by name, a linear lookup per call), `row.Into(&a, &b, …)` (the leading columns in order; an error names the failing column), and `res.Col[T](i, name)`, convert through `model.Coerce[T]`, and `res.Scan[T](func(model.Row) (T, error))` maps every row. `T` is `int64`, `int32`, `int`, `float64`, `bool`, `string`, `time.Time`, `[]byte`, `any`, or a pointer to one for a nullable column. Failures are `model.ErrColumnNotFound`, `ErrRowOutOfRange`, `ErrNullValue` or `ErrCoercion` (a fractional float into an integer, an overflow, an unconvertible type); `common.As*` are the same converters with lenient sentinels.
 
 ```go
 ids, err := res.Scan[int64](func(r model.Row) (int64, error) { return r.Get[int64]("id") })
+
+var id int64
+var note *string // nullable column
+err = row.Into(&id, &note)
 ```
 
 Cells arrive as Go primitives: NUMERIC as `float64` (a NaN or infinite value fails the query with `pgsql.ErrNonFiniteNumeric`) and TIME as `"HH:MM:SS"`. Money is never NUMERIC; it is `BIGINT` minor units.

@@ -280,7 +280,9 @@ type ReusableAccount struct {
 // + billing address from the existing user_bank_info row (which the
 // downstream's registration wizard filled in earlier), calls the
 // provider, and persists the returned ExternalAccountID placeholder.
-// Returns the URL the calling application should open.
+// Returns the URL the calling application should open. An account linked
+// but not yet onboarded gets a fresh link; an onboarded one is
+// ErrAlreadyOnboarded.
 func (s *OnboardingService) StartOnboarding(ctx context.Context, userID int, partnerID int64) (*StartOnboardingResult, error) {
 	provider, err := s.forPartner(ctx, partnerID)
 	if err != nil {
@@ -290,27 +292,28 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, userID int, par
 	if err != nil {
 		return nil, err
 	}
-	if bank.ProviderAccountID != "" {
-		return nil, fmt.Errorf("provider account already linked")
+	if bank.OnboardedAt != "" {
+		return nil, ErrAlreadyOnboarded
 	}
 	if bank.Provider != provider.Code() {
-		return nil, fmt.Errorf("bank info provider %q does not match partner provider %q", bank.Provider, provider.Code())
+		return nil, fmt.Errorf("%w: %q, partner uses %q", ErrProviderMismatch, bank.Provider, provider.Code())
 	}
 	sess, err := provider.StartOnboarding(ctx, StartOnboardingInput{
-		UserID:         int64(userID),
-		PartnerID:      partnerID,
-		Email:          bank.Email,
-		CountryCode:    bank.CountryCode,
-		Currency:       bank.Currency,
-		AccountHolder:  bank.AccountHolderName,
-		BillingAddress: bank.BillingAddress,
-		ReturnURL:      s.OnboardingReturnURL,
-		NotifyURL:      s.WebhookCallbackURL,
+		UserID:            int64(userID),
+		PartnerID:         partnerID,
+		Email:             bank.Email,
+		CountryCode:       bank.CountryCode,
+		Currency:          bank.Currency,
+		AccountHolder:     bank.AccountHolderName,
+		BillingAddress:    bank.BillingAddress,
+		ReturnURL:         s.OnboardingReturnURL,
+		NotifyURL:         s.WebhookCallbackURL,
+		ExternalAccountID: bank.ProviderAccountID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("provider StartOnboarding: %w", err)
+		return nil, fmt.Errorf("%w: start onboarding: %w", ErrProvider, err)
 	}
-	if sess.ExternalAccountID != "" {
+	if sess.ExternalAccountID != "" && sess.ExternalAccountID != bank.ProviderAccountID {
 		if err := s.writeExternalAccountID(ctx, provider.Code(), int64(userID), partnerID, sess.ExternalAccountID, false); err != nil {
 			return nil, fmt.Errorf("persist external account id: %w", err)
 		}
@@ -425,7 +428,7 @@ func (s *OnboardingService) LinkReusableAccount(ctx context.Context, userID int,
 		return fmt.Errorf("link existing account: %w", err)
 	}
 	if len(res.Rows) == 0 {
-		return fmt.Errorf("provider account not reusable for this user")
+		return ErrAccountNotReusable
 	}
 	return nil
 }
@@ -477,7 +480,7 @@ func (s *OnboardingService) RequestInstantPayout(ctx context.Context, userID int
 		return nil, fmt.Errorf("user has no linked provider account")
 	}
 	if bank.Provider != provider.Code() {
-		return nil, fmt.Errorf("bank info provider %q does not match partner provider %q", bank.Provider, provider.Code())
+		return nil, fmt.Errorf("%w: %q, partner uses %q", ErrProviderMismatch, bank.Provider, provider.Code())
 	}
 	if !bank.ProviderAgreement || bank.OnboardedAt == "" {
 		return nil, fmt.Errorf("provider onboarding not completed for this account")
@@ -506,7 +509,7 @@ func (s *OnboardingService) RegisterBeneficiary(ctx context.Context, userID int,
 	}
 	creator, ok := provider.(BeneficiaryCreator)
 	if !ok {
-		return "", fmt.Errorf("provider %s does not support beneficiary registration", provider.Code())
+		return "", fmt.Errorf("%w: %s", ErrBeneficiaryUnsupported, provider.Code())
 	}
 	qs, err := s.ready(ctx)
 	if err != nil {
@@ -519,14 +522,14 @@ func (s *OnboardingService) RegisterBeneficiary(ctx context.Context, userID int,
 		return "", err
 	}
 	if bank.Provider != provider.Code() {
-		return "", fmt.Errorf("bank info provider %q does not match partner provider %q", bank.Provider, provider.Code())
+		return "", fmt.Errorf("%w: %q, partner uses %q", ErrProviderMismatch, bank.Provider, provider.Code())
 	}
 	if bank.ProviderAccountID != "" {
-		return "", fmt.Errorf("destination already registered — replace the bank info version first")
+		return "", ErrDestinationRegistered
 	}
 	id, err := creator.CreateBeneficiary(ctx, beneficiary)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: create beneficiary: %w", ErrProvider, err)
 	}
 	// Conditional claim pinned to the validated version id: a row
 	// replaced while the provider call was in flight makes the claim
@@ -536,7 +539,7 @@ func (s *OnboardingService) RegisterBeneficiary(ctx context.Context, userID int,
 		return "", fmt.Errorf("persist beneficiary id: %w", err)
 	}
 	if len(res.Rows) == 0 {
-		return "", fmt.Errorf("bank info changed during registration — beneficiary %s not linked", id)
+		return "", fmt.Errorf("%w: bank info changed during registration, beneficiary %s not linked", ErrDestinationRegistered, id)
 	}
 	return id, nil
 }
@@ -558,7 +561,7 @@ type NewBankInfo struct {
 // without an active destination.
 func (s *OnboardingService) ReplaceBankInfo(ctx context.Context, userID int, partnerID int64, info NewBankInfo) error {
 	if info.CountryCode == "" || info.Currency == "" || info.AccountHolderName == "" {
-		return fmt.Errorf("replace bank info: country, currency, and holder are required")
+		return ErrInvalidBankInfo
 	}
 	provider, err := s.forPartner(ctx, partnerID)
 	if err != nil {
@@ -642,8 +645,11 @@ func (s *OnboardingService) loadBankInfo(ctx context.Context, userID int, partne
 		return nil, err
 	}
 	res, err := qs.Query(ctx, qPayoutBankInfo, userID, partnerID)
-	if err != nil || len(res.Rows) == 0 {
-		return nil, fmt.Errorf("user_bank_info not found — complete the billing step first")
+	if err != nil {
+		return nil, fmt.Errorf("load bank info: %w", err)
+	}
+	if len(res.Rows) == 0 {
+		return nil, ErrBankInfoRequired
 	}
 	row := res.Rows[0]
 	return &bankInfoRow{

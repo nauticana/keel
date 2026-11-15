@@ -168,6 +168,7 @@ seeds:
       - [human_verifier_hostnames, string, true, '', CSV of hostnames a challenge token may come from (empty = any)]
       - [max_list_page_size, int, false, '1000', List page-size clamp]
       - [default_list_page_size, int, false, '100', Default list page size]
+      - [max_export_rows, int, false, '10000', 'Rows one generic-REST CSV export returns at most (1-1000000); 0 = 10000']
       - [post_write_timeout, duration, false, '10', Post-response write timeout]
       - [stripe_webhook_tolerance, duration, false, '300', Stripe webhook timestamp tolerance]
       - [stripe_max_retries, int, false, '3', Stripe API retry count (429/5xx)]
@@ -516,6 +517,7 @@ seeds:
       - [TABLE, INSERT, INSERT]
       - [TABLE, UPDATE, UPDATE]
       - [TABLE, DELETE, DELETE]
+      - [TABLE, EXPORT, EXPORT]
       - [REPORT, ACCESS, ACCESS]
   - table: rest_api_header
     columns: [id, master_table]

@@ -100,6 +100,26 @@ func (s *Service) AllowsSinglePerson(ctx context.Context, partnerID int64, objec
 	return s.allowsSinglePerson(ctx, s.query(ctx), partnerID, objectType)
 }
 
+// RequireSeparation refuses actorID deciding what authorID wrote, with
+// ErrSeparation, unless the policy of objectType allows a single person.
+func (s *Service) RequireSeparation(ctx context.Context, partnerID int64, objectType string, authorID, actorID int64) error {
+	return s.requireSeparation(ctx, s.query(ctx), partnerID, objectType, authorID, actorID)
+}
+
+func (s *Service) requireSeparation(ctx context.Context, qs port.QueryService, partnerID int64, objectType string, authorID, actorID int64) error {
+	if authorID != actorID {
+		return nil
+	}
+	allowed, err := s.allowsSinglePerson(ctx, qs, partnerID, objectType)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("%w: %s", ErrSeparation, objectType)
+	}
+	return nil
+}
+
 func (s *Service) allowsSinglePerson(ctx context.Context, qs port.QueryService, partnerID int64, objectType string) (bool, error) {
 	res, err := qs.Query(ctx, qAllowSingle, objectType, partnerID)
 	if err != nil {

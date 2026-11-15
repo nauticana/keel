@@ -215,6 +215,9 @@ type StartOnboardingInput struct {
 	BillingAddress string
 	ReturnURL      string
 	NotifyURL      string // server-side webhook callback URL
+	// ExternalAccountID names an account linked earlier whose onboarding is
+	// unfinished; the provider issues a new link to it instead of a new account.
+	ExternalAccountID string
 }
 
 // InstantPayoutInput requests an out-of-cycle payout to the user's
@@ -331,8 +334,17 @@ type ProviderResolver interface {
 }
 
 var (
-	ErrProviderNotConfigured = errors.New("payout: no payout provider configured for partner")
-	ErrUnknownProvider       = errors.New("payout: unknown payout provider code")
+	ErrProviderNotConfigured  = errors.New("payout: no payout provider configured for partner")
+	ErrUnknownProvider        = errors.New("payout: unknown payout provider code")
+	ErrAlreadyOnboarded       = errors.New("payout: provider account already onboarded")
+	ErrBankInfoRequired       = errors.New("payout: no active bank info for the user and partner")
+	ErrInvalidBankInfo        = errors.New("payout: country, currency and account holder are required")
+	ErrProviderMismatch       = errors.New("payout: bank info belongs to another payout provider")
+	ErrAccountNotReusable     = errors.New("payout: provider account is not reusable for this user")
+	ErrDestinationRegistered  = errors.New("payout: a destination is already registered for this bank info")
+	ErrBeneficiaryUnsupported = errors.New("payout: the provider does not register beneficiaries")
+	// ErrProvider wraps a failed provider call; its cause is never client text.
+	ErrProvider = errors.New("payout: provider request failed")
 )
 
 // ReleaseReason tells the Allocator why allocated earnings return to the payee.

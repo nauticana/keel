@@ -12,6 +12,7 @@ var ReservedActionNames = map[string]struct{}{
 	"post":          {},
 	"delete":        {},
 	"get-paginated": {},
+	"export":        {},
 }
 
 // IsReservedActionName reports whether action_name is in the reserved

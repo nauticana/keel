@@ -20,23 +20,53 @@ if plain, ok := crypto.Open(kek, row); ok { use(plain) } else { use([]byte(row))
 
 ### `handler.JSON` / `handler.JSONPublic` — typed JSON endpoint adapter
 
-Eliminates the method-check / auth / decode / dispatch / error-map / write prologue every JSON handler otherwise repeats. Available as methods on `AbstractHandler`, so any handler that embeds it gets them for free. Return `*handler.APIError` to set a specific status; any other error → 500.
+Methods on `AbstractHandler` that run the method check, the session (`JSON` only), the body read and the response. The body is bounded by `max_request_size` (413 above it) and must be valid JSON without duplicate member names; a GET's query parameters arrive as a JSON object of strings, an array for a repeated name. `JSON` binds the session to the context as its `common.CallerSession`, so the service reads the caller the same way from HTTP, a tool call or a worker. Return `*handler.APIError` for an exact status; any other error goes through `WriteServiceError`, so a registered sentinel keeps its status and an unregistered one is a sanitized 500.
 
 ```go
-type MyHandler struct{ handler.AbstractHandler; svc *MyService }
-
-mux.Handle("/api/v1/widget", h.JSON("POST", func(ctx context.Context, s *model.UserSession, body json.RawMessage) (any, error) {
+mux.Handle("/api/v1/widget", h.JSON("POST", func(ctx context.Context, _ *model.UserSession, body json.RawMessage) (any, error) {
     var req CreateWidget
-    if err := json.Unmarshal(body, &req); err != nil {
-        return nil, handler.NewAPIError(http.StatusBadRequest, "bad request: "+err.Error())
+    if err := common.DecodeJSON(body, &req); err != nil {
+        return nil, handler.NewAPIError(http.StatusBadRequest, "invalid request")
     }
-    w, err := h.svc.Create(ctx, s.UserID, req)
-    if errors.Is(err, ErrConflict) { return nil, handler.NewAPIError(http.StatusConflict, "exists") }
-    return w, err
+    return h.svc.Create(ctx, req) // the service authorizes with service.Access
 }))
 
-mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, _ json.RawMessage) (any, error) { ... }))
+mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, query json.RawMessage) (any, error) { ... }))
 ```
+
+### `service.AbstractService` and `service.Access` — the base of a downstream service
+
+`NewAbstractService(db, queries)` prepares a named-query catalog once; the embedding service gets `Query`, `QueryRows`, `QueryFirst`, `Exec`, and `Atomic(ctx, fn)`, which runs `fn` over the same catalog in one transaction, committed when it returns nil and rolled back otherwise.
+
+`Access{DB, Role}` authorizes an operation for the caller bound to the context:
+
+| Method | Passes when |
+|---|---|
+| `Caller(ctx)` | a signed-in user is bound, or no caller is bound and `Role` names the worker's role |
+| `Tenant(ctx, partnerID)` | the user's session tenant is `partnerID`; a worker role may act in any tenant |
+| `Action(ctx, partnerID, object, action, scope)` | `Tenant` passes and the principal holds the grant |
+| `Table(ctx, partnerID, action, table)` | `Action` with the `TABLE` object |
+| `Platform(ctx, object, action, scope)` | the principal holds the grant, for rows no tenant owns |
+
+Another tenant is `service.ErrNotFound` (404), a missing grant, a caller without a user or a missing repository is `service.ErrForbidden` (403), and no caller at all is `common.ErrUnauthenticated` (401). A zero principal is never authorized.
+
+```go
+type WidgetService struct {
+    service.AbstractService
+    service.Access
+}
+
+func (s *WidgetService) Rename(ctx context.Context, partnerID, id int64, name string) error {
+    if _, err := s.Table(ctx, partnerID, "UPDATE", "widget"); err != nil {
+        return err
+    }
+    return s.Atomic(ctx, func(tx port.TxQueryService) error { ... })
+}
+```
+
+### `keeltest` — repository fakes for service tests
+
+`keeltest.NewDatabase(grants...)` is a `port.DatabaseRepository` whose callers hold the listed `object/action/scope` grants; it records every check. `Queries` answers named queries from scripted rows (`Rows`), argument-dependent answers (`Answer`) or errors (`Fail`), and records each call; `Database.Queries` serves `GetQueryService` and `Database.Tx` serves `BeginTx` and `RunInTx`, with `Committed` and `RolledBack` set, or failing with `CommitErr` / `RollbackErr`. `keeltest.AsUser(partnerID, userID)` is a context with that caller bound. Any other repository method panics.
 
 ### `crypto.Sealer` — one KEK per purpose
 
@@ -278,7 +308,7 @@ A user belongs to at most one partner at a time. PostgreSQL enforces it with the
 
 ### Ending a membership
 
-`UserService.EndMembership(partnerID, userID, reason)` sets `endda` on the open `partner_user` row and, in the same transaction, ends the user's open `user_permission` rows and revokes every refresh and access token; with `LocalUserService.OAuthTokens` set it also revokes the user's authorization-server refresh tokens. Rows are ended, never deleted. `handler.MembershipHandler` mounts `partner_user/end` for the session partner, gated by `PARTNER_USER` `END` (seeded for `PARTNER_ADMIN`).
+`UserService.EndMembership(partnerID, userID, reason)` sets `endda` on the open `partner_user` row and, in the same transaction, ends the user's open `user_permission` rows and revokes every refresh and access token; with `LocalUserService.OAuthTokens` set it also revokes the user's authorization-server refresh tokens. Rows are ended, never deleted. `handler.MembershipHandler` mounts `partner_user/end` for the session partner, gated by `PARTNER_USER` `END` (seeded for `PARTNER_ADMIN`). It also mounts `partner_user/directory` (`GET ?q=`), gated by `PARTNER_USER` `DIRECTORY` (seeded for `PARTNER_ADMIN`; an application grants it to the roles that choose colleagues, such as reviewers): `UserService.Members(partnerID, search)` returns the session partner's current members as `{userId, name}` only, ordered by name, filtered by a case-insensitive name substring of at most 100 characters, and bounded by `max_list_page_size`.
 
 A `partner_user` or `user_permission` row is read-only once `endda` is set (`data.EndedReadOnlyTables`): generic Update, Patch and Delete skip it, and a later change is a new row. No seeded role may update or delete a `partner_user` row through generic REST, so a membership ends only through the route.
 
@@ -334,6 +364,10 @@ The scheme is [Standard Webhooks](https://www.standardwebhooks.com/) v1, so rece
 | any other status, a redirect, an egress rejection, invalid payload JSON, an event without a partner, a destination owned by another partner | `outbox.PermanentError` — dead-lettered on the first attempt |
 
 Egress fails closed: HTTPS only, no credentials in the URL, the host must match `AllowedHosts` (exact, `*.suffix`, or `*`), and the *resolved* address is checked at connect time, so a listed name pointing at a loopback, private, link-local or CGNAT address is refused (`AllowPrivateNetworks` lifts that for in-cluster receivers). Redirects are never followed, the proxy environment is ignored, the response body is read up to 64 KiB and discarded, and one attempt is bounded by `Timeout` (10s; keep it below the worker's `LeaseTTL`). Errors stored in `last_error` name the host only, never the URL. Any `Dispatcher` or resolver can return `outbox.Permanent(err)` to skip the remaining retries.
+
+### `common.Backoff` — capped exponential retry delay
+
+`Backoff{Base, Max, Entropy}.Delay(attempt)` waits between half and all of `Base·2^(attempt-1)`, capped at `Max` (equal jitter, so retries of one failure spread out); `Seconds(attempt)` is the same in whole seconds, at least one, for a SQL interval. A zero `Base` is one second, a zero `Max` is uncapped, and a nil `Entropy` is `math/rand/v2`; inject `Entropy` for exact delays in tests. The `notify` and `outbox` workers use it.
 
 ### `clock` — injectable time
 

@@ -32,7 +32,7 @@ func (v *pgsqlTxView) Table(name string) port.TableService {
 func (v *pgsqlTxView) QueryService(queries map[string]string) port.QueryService {
 	return &TxQueryServicePgsql{
 		Tx:          v.tx,
-		Queries:     queries,
+		Queries:     rewriteQueries(queries),
 		IdGenerator: v.repo.IdGenerator,
 	}
 }

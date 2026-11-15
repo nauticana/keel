@@ -230,7 +230,7 @@ func newRegistration(store *regStore) (*RegistrationService, *regUsers, *regMail
 	users := &regUsers{store: store, method: SignInExternal}
 	mail := &regMail{}
 	return &RegistrationService{
-		Repo: regRepo{store: store}, Mail: mail, Users: users,
+		Repo: regRepo{store: store}, Mail: mail, Users: users, Plan: "free",
 		Domains: &domain.Service{Verifiers: []domain.DomainVerifier{domain.VerifiedEmailVerifier{}}},
 	}, users, mail
 }
@@ -651,6 +651,16 @@ func TestRegistrationServiceConfiguration(t *testing.T) {
 	svc := &RegistrationService{Repo: regRepo{store: store}}
 	if _, _, err := svc.Register(context.Background(), "x@example.com", 1); !errors.Is(err, errNoUsers) {
 		t.Fatalf("err = %v, want errNoUsers", err)
+	}
+}
+
+func TestCreatePartnerWithoutPlanIsRefused(t *testing.T) {
+	store := newRegStore()
+	svc, _, _ := newRegistration(store)
+	svc.Plan = ""
+	writes := store.count(qAddPartner)
+	if _, err := svc.CreatePartner(context.Background(), 11, &PartnerSetup{PartnerCaption: "K"}, nil); !errors.Is(err, ErrPlanRequired) || store.count(qAddPartner) != writes {
+		t.Fatalf("err = %v, want ErrPlanRequired before any write", err)
 	}
 }
 

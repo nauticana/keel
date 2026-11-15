@@ -679,8 +679,8 @@ func TestOnboardingService_RegisterBeneficiary_Guards(t *testing.T) {
 		t.Fatalf("err=%v, want ErrProviderNotConfigured (not a panic)", err)
 	}
 	svc.Providers = NewStaticProviderResolver(&fakeProvider{})
-	if _, err := svc.RegisterBeneficiary(context.Background(), 1, 2, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "does not support") {
-		t.Fatalf("err=%v, want capability error", err)
+	if _, err := svc.RegisterBeneficiary(context.Background(), 1, 2, []byte(`{}`)); !errors.Is(err, ErrBeneficiaryUnsupported) {
+		t.Fatalf("err=%v, want ErrBeneficiaryUnsupported", err)
 	}
 }
 

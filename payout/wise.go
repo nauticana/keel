@@ -109,6 +109,9 @@ type wiseRecipientResp struct {
 //   - Currency       — Wise rejects mismatch between recipient currency
 //     and later transfer currency
 func (p *WiseProvider) StartOnboarding(ctx context.Context, in StartOnboardingInput) (*PayoutOnboardingSession, error) {
+	if in.ExternalAccountID != "" { // a recipient has no hosted flow to resume
+		return &PayoutOnboardingSession{ExternalAccountID: in.ExternalAccountID}, nil
+	}
 	if p.profileID == "" {
 		return nil, fmt.Errorf("wise: wise_profile_id required")
 	}

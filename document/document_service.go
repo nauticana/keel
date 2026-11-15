@@ -5,13 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"mime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nauticana/keel/approval"
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/dms"
@@ -37,14 +36,8 @@ type DocumentService struct {
 	// Policy decides whether an uploader may review their own document; nil
 	// refuses every self-review.
 	Policy SeparationPolicy
-	// OnStored runs inside Store's transaction after the row is written, so an
-	// application updates its own tables atomically with the document (a
-	// licence number on the holder's profile, an outbox event). An error
-	// rolls the row back and removes the objects.
-	OnStored func(ctx context.Context, tx port.TxQueryService, doc *PartnerDocument) error
-	// OnReviewed runs inside Review's transaction after the decision is
-	// written; an error rolls the decision back.
-	OnReviewed func(ctx context.Context, tx port.TxQueryService, doc *PartnerDocument) error
+	// Hooks are keyed by document type.
+	Hooks map[string]Hooks
 
 	once sync.Once
 	qs   port.QueryService
@@ -86,16 +79,6 @@ func (s *DocumentService) checkTenant(ctx context.Context, contRepID string, par
 		return fmt.Errorf("%w: %s", ErrTenantMismatch, contRepID)
 	}
 	return nil
-}
-
-// sniff returns the media type detected from the bytes, refusing one the
-// type does not allow. The client's claim is never used.
-func sniff(raw []byte, allowed []string) (string, error) {
-	mediaType, _, err := mime.ParseMediaType(common.DetectMediaType(raw))
-	if err != nil || !slices.Contains(allowed, mediaType) {
-		return "", fmt.Errorf("%w: %s", ErrMediaType, mediaType)
-	}
-	return mediaType, nil
 }
 
 // Store writes a new version of a document of up.DocumentType. It starts
@@ -185,8 +168,8 @@ func (s *DocumentService) insert(ctx context.Context, doc *PartnerDocument, typ 
 				return err
 			}
 		}
-		if s.OnStored != nil {
-			return s.OnStored(ctx, tx, doc)
+		if stored := s.Hooks[doc.DocumentType].Stored; stored != nil {
+			return stored(ctx, tx, doc)
 		}
 		return nil
 	})
@@ -239,11 +222,36 @@ func (s *DocumentService) lock(ctx context.Context, tx port.TxQueryService, part
 	return documentFromRow(res.Rows[0]), nil
 }
 
-// Review approves or rejects a pending document. An approval supersedes the
-// previously approved version of the same type and subject in the same
-// transaction, unless the type keeps every approved document. The uploader is
-// refused with ErrSelfReview unless Policy allows a single person for the type.
+// Review approves or rejects a pending document. The uploader is refused
+// with approval.ErrSeparation unless Policy allows a single person for the
+// type, and an approval must pass the type's Approve hook. An approval
+// supersedes the previously approved version of the same type and subject in
+// the same transaction, unless the type keeps every approved document.
 func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID int64, approve bool, notes string) error {
+	doc, err := s.Get(ctx, partnerID, id)
+	if err != nil {
+		return err
+	}
+	if doc.Status != StatusPending {
+		return fmt.Errorf("%w: %d is %s", ErrInvalidState, id, doc.Status)
+	}
+	if err := s.requireSeparation(ctx, doc, reviewerID); err != nil {
+		return err
+	}
+	hooks := s.Hooks[doc.DocumentType]
+	if approve && hooks.Approve != nil {
+		content, _, err := s.Docs.Read(ctx, doc.ContRepID, doc.DocKey, DataComponent)
+		if err != nil {
+			return err
+		}
+		if err := hooks.Approve(ctx, doc, content); err != nil {
+			return err
+		}
+	}
+	typ, err := s.documentType(ctx, doc.DocumentType)
+	if err != nil {
+		return err
+	}
 	return s.transact(ctx, func(tx port.TxQueryService) error {
 		doc, err := s.lock(ctx, tx, partnerID, id)
 		if err != nil {
@@ -251,21 +259,6 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 		}
 		if doc.Status != StatusPending {
 			return fmt.Errorf("%w: %d is %s", ErrInvalidState, id, doc.Status)
-		}
-		typ, err := s.documentType(ctx, doc.DocumentType)
-		if err != nil {
-			return err
-		}
-		if reviewerID == doc.UploadedBy {
-			allowed := false
-			if s.Policy != nil {
-				if allowed, err = s.Policy.AllowsSinglePerson(ctx, partnerID, doc.DocumentType); err != nil {
-					return err
-				}
-			}
-			if !allowed {
-				return fmt.Errorf("%w: %d", ErrSelfReview, id)
-			}
 		}
 		status := StatusRejected
 		if approve {
@@ -282,12 +275,27 @@ func (s *DocumentService) Review(ctx context.Context, partnerID, id, reviewerID 
 		if _, err := tx.Query(ctx, qSetReview, status, reviewerID, notes, id); err != nil {
 			return err
 		}
-		if s.OnReviewed == nil {
-			return nil
-		}
 		doc.Status, doc.ReviewerID, doc.ReviewedAt, doc.ReviewerNotes = status, reviewerID, time.Now(), notes
-		return s.OnReviewed(ctx, tx, doc)
+		if hooks.Publish {
+			if err := doc.publish(ctx, tx); err != nil {
+				return err
+			}
+		}
+		if hooks.Reviewed != nil {
+			return hooks.Reviewed(ctx, tx, doc)
+		}
+		return nil
 	})
+}
+
+func (s *DocumentService) requireSeparation(ctx context.Context, doc *PartnerDocument, reviewerID int64) error {
+	if s.Policy == nil {
+		if reviewerID == doc.UploadedBy {
+			return fmt.Errorf("%w: %s", approval.ErrSeparation, doc.DocumentType)
+		}
+		return nil
+	}
+	return s.Policy.RequireSeparation(ctx, doc.PartnerID, doc.DocumentType, doc.UploadedBy, reviewerID)
 }
 
 // Retire withdraws a document without a replacement. The row leaves the

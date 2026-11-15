@@ -672,7 +672,7 @@ func (s *RestService) GetTableDefinitions() map[string]*model.TableDefinition {
 
 // loadTableActions reads basis table_action rows and attaches them to
 // each matching TableDefinition.Actions slice. Rejects reserved
-// action_name values (list / get / post / delete / get-paginated) so a
+// action_name values (list / get / post / delete / get-paginated / export) so a
 // bad seed fails at boot instead of mis-routing requests at runtime.
 //
 // Tables missing from TableDefinitions silently skip — useful when a

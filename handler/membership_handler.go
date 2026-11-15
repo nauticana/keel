@@ -21,12 +21,33 @@ type MembershipHandler struct {
 	DB port.DatabaseRepository
 }
 
-// Routes mounts partner_user/end under apiPrefix, gated by PARTNER_USER END.
+// Routes mounts partner_user/end and partner_user/directory under apiPrefix,
+// gated by PARTNER_USER END and PARTNER_USER DIRECTORY.
 func (h *MembershipHandler) Routes(apiPrefix string) map[string]func(http.ResponseWriter, *http.Request) {
 	return map[string]func(http.ResponseWriter, *http.Request){
 		TableActionPath(apiPrefix, "partner_user", "end"): WrapTableAction(
 			h.DB, h.UserService, "PARTNER_USER", "END", "partner_user", h.End),
+		TableActionPath(apiPrefix, "partner_user", "directory"): WrapTableAction(
+			h.DB, h.UserService, "PARTNER_USER", "DIRECTORY", "partner_user", h.Directory),
 	}
+}
+
+// Directory lists the current members of the session partner, ids and
+// names only; ?q= filters by name.
+func (h *MembershipHandler) Directory(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	partnerID, ok := h.RequirePartner(w, r)
+	if !ok {
+		return
+	}
+	members, err := h.UserService.Members(partnerID, r.URL.Query().Get("q"))
+	if err != nil {
+		h.WriteServiceError(w, r, err)
+		return
+	}
+	common.WriteJSON(w, http.StatusOK, members)
 }
 
 // End ends a user's membership of the session partner and revokes the

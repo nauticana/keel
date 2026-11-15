@@ -201,7 +201,7 @@ func (s *Service) ExpireDue(ctx context.Context) (int, error) {
 }
 
 // Decide approves or rejects a pending request. The checker must differ from
-// the maker (ErrSameActor) unless the policy allows a single person.
+// the maker (ErrSeparation) unless the policy allows a single person.
 func (s *Service) Decide(ctx context.Context, partnerID, id, checkerID int64, approved bool, note string) (*Request, error) {
 	if checkerID <= 0 {
 		return nil, fmt.Errorf("approval: checker is required")
@@ -224,14 +224,8 @@ func (s *Service) Decide(ctx context.Context, partnerID, id, checkerID int64, ap
 		if req.Expired {
 			return fmt.Errorf("%w: %d", ErrExpired, id)
 		}
-		if checkerID == req.MakerID {
-			allowed, err := s.allowsSinglePerson(ctx, tx, partnerID, req.ObjectType)
-			if err != nil {
-				return err
-			}
-			if !allowed {
-				return fmt.Errorf("%w: %d", ErrSameActor, id)
-			}
+		if err := s.requireSeparation(ctx, tx, partnerID, req.ObjectType, req.MakerID, checkerID); err != nil {
+			return err
 		}
 		status, event := StatusRejected, EventRejected
 		if approved {

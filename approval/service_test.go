@@ -55,7 +55,7 @@ func TestMakerCannotDecideWithoutPolicy(t *testing.T) {
 	s, _ := newService()
 	ctx := context.Background()
 	req, _ := s.Submit(ctx, partner, "invoice", 42, maker)
-	if _, err := s.Decide(ctx, partner, req.ID, maker, true, ""); !errors.Is(err, ErrSameActor) {
+	if _, err := s.Decide(ctx, partner, req.ID, maker, true, ""); !errors.Is(err, ErrSeparation) {
 		t.Fatalf("self decision without a policy row: %v", err)
 	}
 	allowFor := func(objectType string) {
@@ -68,7 +68,7 @@ func TestMakerCannotDecideWithoutPolicy(t *testing.T) {
 		}
 	}
 	allowFor("order")
-	if _, err := s.Decide(ctx, partner, req.ID, maker, true, ""); !errors.Is(err, ErrSameActor) {
+	if _, err := s.Decide(ctx, partner, req.ID, maker, true, ""); !errors.Is(err, ErrSeparation) {
 		t.Fatalf("a policy for another kind does not apply: %v", err)
 	}
 	allowFor("invoice")
@@ -219,5 +219,22 @@ func TestPolicyConfirmationIsAnotherAdministratorsCall(t *testing.T) {
 	s.Administrators = nil
 	if err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", ChangedBy: maker}); !errors.Is(err, ErrNotAdministrator) {
 		t.Fatalf("without a resolver: %v", err)
+	}
+}
+
+func TestRequireSeparation(t *testing.T) {
+	s, _ := newService()
+	ctx := context.Background()
+	if err := s.RequireSeparation(ctx, partner, "invoice", maker, checker); err != nil {
+		t.Fatalf("a second person: %v", err)
+	}
+	if err := s.RequireSeparation(ctx, partner, "invoice", maker, maker); !errors.Is(err, ErrSeparation) {
+		t.Fatalf("no policy requires separation: %v", err)
+	}
+	if err := s.SetPolicy(ctx, Policy{ObjectType: "invoice", AllowSinglePerson: true, ChangedBy: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RequireSeparation(ctx, partner, "invoice", maker, maker); err != nil {
+		t.Fatalf("the platform allows one person: %v", err)
 	}
 }

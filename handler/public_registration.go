@@ -23,6 +23,7 @@ func handoffTTLSeconds() int { return int(config.Config().SigninHandoffTTL / tim
 func init() {
 	RegisterErrorCode(user.ErrInvalidConfirmation, http.StatusBadRequest, "invalid_confirmation")
 	RegisterErrorCode(user.ErrPublicEmail, http.StatusBadRequest, "business_email_required")
+	RegisterErrorCode(user.ErrPlanRequired, http.StatusBadRequest, "plan_required")
 	RegisterErrorMessage(user.ErrDuplicateEmail, http.StatusConflict, "email_taken", "an account already exists for this email")
 	RegisterErrorCode(user.ErrAlreadyMember, http.StatusConflict, "already_member")
 	RegisterErrorCode(user.ErrAccountExists, http.StatusConflict, "account_exists")

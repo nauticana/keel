@@ -37,7 +37,7 @@ var keelTestFlagIDs = []string{
 	human_verifier_mode, human_verifier_secret, human_verifier_timeout,
 	human_verifier_min_score, human_verifier_action, human_verifier_hostnames,
 	max_list_page_size,
-	default_list_page_size, post_write_timeout, stripe_webhook_tolerance,
+	default_list_page_size, max_export_rows, post_write_timeout, stripe_webhook_tolerance,
 	stripe_max_retries, webhook_claim_lease_seconds,
 	default_outbound_timeout, snowflake_state_persist_ms,
 	memory_cache_sweep_interval, memory_cache_max_entries,
@@ -297,5 +297,19 @@ func TestApplyKeel_OAuthClientPurgeAge(t *testing.T) {
 	m[oauth_client_purge_age] = ConfigRow{Value: "59"}
 	if err := applyKeelForTest(&KeelConfig{}, m); err == nil || !strings.Contains(err.Error(), oauth_client_purge_age) {
 		t.Fatalf("want %s validation error, got %v", oauth_client_purge_age, err)
+	}
+}
+
+func TestApplyKeel_MaxExportRows(t *testing.T) {
+	c := &KeelConfig{}
+	if err := c.Apply(keelRows()); err != nil || c.MaxExportRows != 10000 {
+		t.Fatalf("zero: %v, got %d", err, c.MaxExportRows)
+	}
+	for _, value := range []string{"-1", "1000001"} {
+		m := keelRows()
+		m[max_export_rows] = ConfigRow{Value: value}
+		if err := (&KeelConfig{}).Apply(m); err == nil || !strings.Contains(err.Error(), max_export_rows) {
+			t.Fatalf("%s: err = %v", value, err)
+		}
 	}
 }

@@ -267,6 +267,7 @@ for name, api := range apis {
         "/api/v1/" + name:          h.Get,
         "/api/v1/" + name + "/list": h.List,
         "/api/v1/" + name + "/post": h.Post,
+        "/api/v1/" + name + "/export": h.Export,
     })
 }
 ```
@@ -304,6 +305,15 @@ string, a custom `TableService.Get` must accept the comma-separated `?order=`
 grammar below to page correctly. `?order=` accepts
 comma-separated `column [ASC|DESC]` terms (`?order=amount DESC, id`); a term
 that doesn't resolve to a declared column is rejected, never silently dropped.
+
+**CSV export.** `RestHandler.Export` serves `GET …/<table>/export` with the
+filters and `?order=` of List. It requires the `TABLE` `EXPORT` grant on the
+table besides `SELECT`; keel seeds the action and grants it to no role. The
+response is `text/csv` (`<table>.csv`) with a header row of column captions,
+secret columns left out, times in RFC 3339 UTC, and a cell whose first non-blank character is
+`=`, `+`, `-` or `@` prefixed with `'` so a spreadsheet does not run it. At most `max_export_rows` rows (default 10000, 1–1000000) are written;
+`X-Export-Truncated: true` reports that more matched. Each export is
+journaled with its table, row count, user and partner.
 
 Every POST item must carry `op_code` (`I` insert, `U` update, `D` delete, `R`
 unchanged parent whose children carry their own); a missing or unknown code is

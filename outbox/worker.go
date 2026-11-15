@@ -52,9 +52,10 @@ const (
 type Worker struct {
 	worker.AbstractWorker
 	Dispatcher  Dispatcher
-	MaxAttempts int           // dead-letter after this many failed dispatches (default 5)
-	LeaseTTL    time.Duration // claim lease duration (default 5m)
-	BatchLimit  int           // pending rows fetched per tick (default 50)
+	MaxAttempts int             // dead-letter after this many failed dispatches (default 5)
+	LeaseTTL    time.Duration   // claim lease duration (default 5m)
+	BatchLimit  int             // pending rows fetched per tick (default 50)
+	Backoff     *common.Backoff // retry delay; nil is 2s doubling to one hour
 }
 
 func (w *Worker) maxAttempts() int {
@@ -146,7 +147,7 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 			journal.Error(fmt.Sprintf("outbox %d dead-lettered after %d attempts (%s): %v", jobID, attempts+1, reason, derr))
 			return nil
 		}
-		backoff := backoffSeconds(attempts + 1)
+		backoff := w.retryBackoff().Seconds(attempts + 1)
 		res, err := qs.Query(ctx, qRetry, backoff, truncErr(derr), jobID, token)
 		if err != nil {
 			return fmt.Errorf("outbox %d: retry write failed (event may stay claimed): %w", jobID, err)
@@ -168,21 +169,12 @@ func (w *Worker) HandleJob(ctx context.Context, journal logger.ApplicationLogger
 	return nil
 }
 
-// backoffSeconds is exponential (2^attempt) capped at one hour. attempt is
-// clamped before the shift so a large MaxAttempts can't overflow int into a
-// negative delay (which would schedule the retry in the past → hot loop).
-func backoffSeconds(attempt int) int {
-	if attempt < 0 {
-		attempt = 0
+// retryBackoff is the configured Backoff, else 2s doubling to one hour.
+func (w *Worker) retryBackoff() common.Backoff {
+	if w.Backoff != nil {
+		return *w.Backoff
 	}
-	if attempt >= 12 { // 2^12 = 4096 > 3600 cap; higher shifts risk overflow
-		return 3600
-	}
-	s := 1 << attempt
-	if s > 3600 {
-		return 3600
-	}
-	return s
+	return common.Backoff{Base: 2 * time.Second, Max: time.Hour}
 }
 
 func truncErr(err error) string {

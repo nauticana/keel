@@ -57,3 +57,38 @@ func TestMembershipEndUsesTheSessionPartner(t *testing.T) {
 		t.Fatalf("route without a session = %d", w.Code)
 	}
 }
+
+type directoryUsers struct {
+	user.UserService
+	partner int64
+	search  string
+}
+
+func (u *directoryUsers) Members(partnerID int64, search string) ([]user.Member, error) {
+	u.partner, u.search = partnerID, search
+	return []user.Member{{UserID: 4, Name: "Ada Lovelace"}}, nil
+}
+
+func TestMembershipDirectoryUsesTheSessionPartner(t *testing.T) {
+	users := &directoryUsers{}
+	h := &MembershipHandler{UserService: users}
+	call := func(session *model.UserSession) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/partner_user/directory?q=ada&partnerId=99", nil)
+		if session != nil {
+			stashSession(r, session)
+		}
+		w := httptest.NewRecorder()
+		h.Directory(w, r)
+		return w
+	}
+	w := call(&model.UserSession{Id: 3, PartnerId: 7})
+	if w.Code != http.StatusOK || users.partner != 7 || users.search != "ada" || !strings.Contains(w.Body.String(), `"userId":"4"`) {
+		t.Fatalf("status %d partner %d search %q body %s", w.Code, users.partner, users.search, w.Body)
+	}
+	if w := call(&model.UserSession{Id: 3}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("no partner = %d", w.Code)
+	}
+	if _, ok := h.Routes("/api/v1")["/api/v1/partner_user/directory"]; !ok {
+		t.Fatal("directory route not mounted")
+	}
+}

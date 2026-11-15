@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 
@@ -63,6 +64,26 @@ func TestRecordFromSetupIntent_MethodType(t *testing.T) {
 		}
 		if db.args[1] != want {
 			t.Errorf("%s: method_type = %v, want %s", name, db.args[1], want)
+		}
+	}
+}
+
+func TestRecordFromSetupIntent_NonCardMethods(t *testing.T) {
+	for body, want := range map[string]error{
+		`{"payment_method":{"type":"us_bank_account","us_bank_account":{"last4":"6789"}}}`: nil,
+		`{"payment_method":{"type":"link","link":{"email":"a@b"}}}`:                        ErrUnsupportedPaymentMethod,
+	} {
+		db := &insertRecorder{}
+		s := &UserPaymentMethodService{DB: db, CardClient: &StripeSetupIntentCardClient{Client: cannedStripeGet(body)}}
+		err := s.RecordFromSetupIntent(context.Background(), 7, ProviderStripe, "seti_1", "")
+		if !errors.Is(err, want) {
+			t.Fatalf("%s: err = %v, want %v", body, err, want)
+		}
+		if want == nil && db.args[1] != MethodTypeBank {
+			t.Fatalf("bank method recorded as %v", db.args[1])
+		}
+		if want != nil && db.args != nil {
+			t.Fatal("an unsupported method must not be recorded")
 		}
 	}
 }

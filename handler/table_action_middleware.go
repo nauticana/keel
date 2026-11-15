@@ -14,7 +14,7 @@ import (
 // — no `/action/` segment, no version suffix.
 //
 // action_name may not collide with the generic CRUD subpaths
-// list / get / post / delete / get-paginated; insert validation in
+// list / get / post / delete / get-paginated / export; insert validation in
 // rest.RestService.Init rejects table_action rows that try to use
 // those names at boot.
 func TableActionPath(prefix, table, action string) string {

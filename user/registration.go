@@ -69,6 +69,8 @@ type RegistrationService struct {
 	// OnPartnerTx writes the application's rows for a new partner in its
 	// transaction; bind the application's query catalog with port.TxQueryCatalog.
 	OnPartnerTx func(ctx context.Context, tx port.TxQueryService, partnerID, userID int64, setup *PartnerSetup) error
+	// Plan is the plan a setup without a PlanID takes; empty requires one.
+	Plan string
 
 	once    sync.Once
 	initErr error
@@ -389,11 +391,14 @@ func (r *RegistrationService) checkRegion(ctx context.Context, setup *PartnerSet
 }
 
 // resolvePlan resolves the plan and offer before any write, so a bad plan
-// fails without an orphan account or partner. No plan selects FREE.
+// fails without an orphan account or partner.
 func (r *RegistrationService) resolvePlan(ctx context.Context, setup *PartnerSetup) (*planChoice, error) {
 	planID := strings.ToUpper(strings.TrimSpace(setup.PlanID))
 	if planID == "" {
-		planID = "FREE"
+		planID = strings.ToUpper(strings.TrimSpace(r.Plan))
+	}
+	if planID == "" {
+		return nil, ErrPlanRequired
 	}
 	res, err := r.qs.Query(ctx, qGetPlan, planID)
 	if err != nil {

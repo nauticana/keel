@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/model"
 )
 
@@ -65,17 +67,18 @@ func writeErrorHeaders(w http.ResponseWriter, err error) {
 	}
 }
 
-// JSONFunc is the signature of an authenticated JSON business function.
-// body is nil when the request had no body; decode it with common.DecodeJSON.
+// JSONFunc is the signature of an authenticated JSON business function. body
+// is nil when the request had none; a GET's query parameters arrive as a JSON
+// object of strings (an array for a repeated name). Decode with common.DecodeJSON.
 type JSONFunc func(ctx context.Context, session *model.UserSession, body json.RawMessage) (any, error)
 
 // JSONPublicFunc is the signature of an anonymous JSON business function.
 type JSONPublicFunc func(ctx context.Context, body json.RawMessage) (any, error)
 
-// JSON wraps a typed business function with method check, auth, JSON decode,
-// dispatch, error→status mapping, and 200 response. Eliminates the 8-line
-// prologue every JSON endpoint otherwise repeats. method "" disables the
-// method check.
+// JSON wraps a business function with the method check ("" skips it), the
+// session, a body bounded by max_request_size, and a 200 response. The session
+// is bound to the context as its common.CallerSession. An *APIError sets its
+// status; any other error is written by WriteServiceError.
 func (h *AbstractHandler) JSON(method string, fn JSONFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if method != "" && !h.RequireMethod(w, r, method) {
@@ -89,13 +92,16 @@ func (h *AbstractHandler) JSON(method string, fn JSONFunc) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := fn(r.Context(), session, body)
-		writeResult(h, w, result, err)
+		ctx := r.Context()
+		ctx = common.WithCallerSession(ctx, common.CallerSession{PartnerID: session.PartnerId, UserID: int64(session.Id),
+			Subject: session.Subject, RequestID: common.RequestIDFromContext(ctx), Location: common.LocationFromContext(ctx)})
+		result, err := fn(ctx, session, body)
+		writeResult(h, w, r, result, err)
 	}
 }
 
-// JSONPublic is JSON without authentication. Use for endpoints reachable
-// before login (signup, password-reset request, public lookup).
+// JSONPublic is JSON without authentication, for endpoints reachable before
+// sign-in (signup, password-reset request, public lookup).
 func (h *AbstractHandler) JSONPublic(method string, fn JSONPublicFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if method != "" && !h.RequireMethod(w, r, method) {
@@ -106,31 +112,60 @@ func (h *AbstractHandler) JSONPublic(method string, fn JSONPublicFunc) http.Hand
 			return
 		}
 		result, err := fn(r.Context(), body)
-		writeResult(h, w, result, err)
+		writeResult(h, w, r, result, err)
 	}
 }
 
 func readJSONBody(h *AbstractHandler, w http.ResponseWriter, r *http.Request) (json.RawMessage, bool) {
+	if r.Method == http.MethodGet {
+		return queryObject(h, w, r)
+	}
 	if r.Body == nil || r.ContentLength == 0 {
 		return nil, true
 	}
-	var body json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, config.Config().MaxRequestSize))
+	if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+		h.WriteError(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", "request body exceeds max_request_size")
+		return nil, false
+	}
+	var value any
+	if err != nil || common.DecodeJSON(raw, &value) != nil {
 		h.WriteError(w, http.StatusBadRequest, "Bad Request", "invalid JSON request body")
 		return nil, false
 	}
-	return body, true
+	return raw, true
 }
 
-func writeResult(h *AbstractHandler, w http.ResponseWriter, result any, err error) {
-	if err != nil {
-		writeErrorHeaders(w, err)
-		if ae, ok := errors.AsType[*APIError](err); ok {
-			h.writeProblem(nil, w, ae.Status, http.StatusText(ae.Status), ae.Msg, "", "", ae.Details)
-			return
+func queryObject(h *AbstractHandler, w http.ResponseWriter, r *http.Request) (json.RawMessage, bool) {
+	query := r.URL.Query()
+	if len(query) == 0 {
+		return nil, true
+	}
+	object := make(map[string]any, len(query))
+	for name, values := range query {
+		if len(values) == 1 {
+			object[name] = values[0]
+		} else {
+			object[name] = values
 		}
-		h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+	}
+	raw, err := json.Marshal(object)
+	if err != nil {
+		h.WriteError(w, http.StatusBadRequest, "Bad Request", "invalid query parameters")
+		return nil, false
+	}
+	return raw, true
+}
+
+func writeResult(h *AbstractHandler, w http.ResponseWriter, r *http.Request, result any, err error) {
+	if err == nil {
+		common.WriteJSON(w, http.StatusOK, result)
 		return
 	}
-	common.WriteJSON(w, http.StatusOK, result)
+	writeErrorHeaders(w, err)
+	if ae, ok := errors.AsType[*APIError](err); ok {
+		h.writeProblem(r, w, ae.Status, http.StatusText(ae.Status), ae.Msg, "", "", ae.Details)
+		return
+	}
+	h.WriteServiceError(w, r, err)
 }

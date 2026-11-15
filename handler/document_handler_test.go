@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nauticana/keel/approval"
 	"github.com/nauticana/keel/document"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/scan"
@@ -172,7 +173,7 @@ func TestDocumentHandlerReview(t *testing.T) {
 	if w.Code != http.StatusNoContent || fmt.Sprint(docs.reviewed) != "[7 42 9 true ok]" {
 		t.Errorf("review: %d %v", w.Code, docs.reviewed)
 	}
-	for err, code := range map[error]int{document.ErrInvalidState: http.StatusConflict, document.ErrSelfReview: http.StatusForbidden} {
+	for err, code := range map[error]int{document.ErrInvalidState: http.StatusConflict, approval.ErrSeparation: http.StatusForbidden} {
 		docs.err = err
 		w = httptest.NewRecorder()
 		h.Review(w, sessionRequest(http.MethodPost, "/documents/review", body, 9))

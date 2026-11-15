@@ -12,10 +12,11 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// payment_method_type codes for a saved card; the wallet ones mark a
+// payment_method_type codes of a saved method; the wallet ones mark a
 // wallet-tokenized card.
 const (
 	MethodTypeCard      = "card"
+	MethodTypeBank      = "bank"
 	MethodTypeWallet    = "wallet"
 	MethodTypeApplePay  = "apple_pay"
 	MethodTypeGooglePay = "google_pay"
@@ -38,6 +39,10 @@ type SetupIntentCardClient interface {
 
 // ErrPaymentMethodNotFound: no saved method with that id belongs to the user.
 var ErrPaymentMethodNotFound = errors.New("payment: saved payment method not found")
+
+// ErrUnsupportedPaymentMethod: the provider saved a method keel has no
+// payment_method_type code for; it is not recorded as a card.
+var ErrUnsupportedPaymentMethod = errors.New("payment: unsupported saved payment method")
 
 // UserPaymentMethodService owns the operations on basis
 // user_payment_method that can't be served by abstract REST CRUD:
@@ -160,8 +165,12 @@ func (s *UserPaymentMethodService) RecordFromSetupIntent(ctx context.Context, us
 			card = c
 		}
 	}
-	if card.MethodType == "" {
+	switch card.MethodType {
+	case "":
 		card.MethodType = MethodTypeCard
+	case MethodTypeCard, MethodTypeBank, MethodTypeWallet, MethodTypeApplePay, MethodTypeGooglePay:
+	default:
+		return fmt.Errorf("%w: %s", ErrUnsupportedPaymentMethod, card.MethodType)
 	}
 	qs := s.DB.GetQueryService(ctx, userPaymentMethodQueries)
 	if qs == nil {
@@ -200,6 +209,7 @@ func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, se
 	}
 	var parsed struct {
 		PaymentMethod struct {
+			Type string `json:"type"`
 			Card struct {
 				Last4    string `json:"last4"`
 				Brand    string `json:"brand"`
@@ -216,6 +226,13 @@ func (c *StripeSetupIntentCardClient) GetSetupIntentCard(ctx context.Context, se
 			c.Journal.Error("stripe setup_intent fetch: parse: " + err.Error())
 		}
 		return SavedCard{}, false
+	}
+	switch parsed.PaymentMethod.Type {
+	case "", "card":
+	case "us_bank_account", "sepa_debit", "bacs_debit", "au_becs_debit", "acss_debit":
+		return SavedCard{MethodType: MethodTypeBank}, true
+	default: // e.g. link: reported as is so it is never recorded as a card
+		return SavedCard{MethodType: parsed.PaymentMethod.Type}, true
 	}
 	cd := parsed.PaymentMethod.Card
 	card := SavedCard{MethodType: MethodTypeCard, Last4: cd.Last4, Brand: cd.Brand, ExpMonth: cd.ExpMonth, ExpYear: cd.ExpYear}

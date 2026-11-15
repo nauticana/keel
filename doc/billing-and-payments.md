@@ -350,13 +350,13 @@ Mobile apps that confirm on-device need a client secret rather than a hosted che
 
 ```go
 type IntentClient interface {
-    CreateSetupIntent(ctx, IntentRequest) (*IntentResult, error)   // save a card, usage=off_session
+    CreateSetupIntent(ctx, IntentRequest) (*IntentResult, error)   // save a method, usage=off_session; PaymentMethodTypes empty = card
     CreatePaymentIntent(ctx, IntentRequest) (*IntentResult, error) // Amount (minor units) + Currency
 }
 // IntentResult{IntentID, ClientSecret, CustomerID, EphemeralKey}
 ```
 
-Set `AbstractPaymentHandler.Intents` and mount `CreateSetupIntent`, by convention at `POST /api/billing/setup-intent`. It is always JWT-gated, takes no body, derives the email and `metadata[user_id]` from the authenticated session, and answers `{setupIntentId, clientSecret, customerId, ephemeralKey}` with `Cache-Control: no-store`. It never accepts a caller-supplied provider customer ID. The `CustomerID` and `LinkCustomer` hooks take the session and decide whose customer it is: `payment.UserCustomerService{DB, Provider}` keeps one per user in `user_billing_customer`, and `billing.PartnerCustomerService{Store, Provider}` one per partner in `partner_billing_customer`, the table the webhook mapping links and resolves invoices through. `CreateCheckout` resolves the same hook for a signed-in payer and passes it as `CheckoutRequest.CustomerID` (Stripe `customer`, without `customer_email`), so a partner paying again stays on its customer; a guest checkout resolves none. With `CustomerID` unset every call creates a new provider customer, and a partner billed through a second customer cannot be resolved from its invoices. `UserPaymentMethodService.RecordFromSetupIntent` stores `currency` as NULL unless one is passed: a SetupIntent carries none, so charge in the order's currency, not the card's. With `CardClient` wired (`StripeSetupIntentCardClient`), a wallet-tokenized card is recorded with `method_type` `apple_pay`, `google_pay` or `wallet` instead of `card`. Payment intents carry an amount, so there is no HTTP route for them: the service that knows the price calls `CreatePaymentIntent` and hands the client secret to the app only when Stripe reports `requires_action` (3DS). `StripeCheckoutClient.APIVersion` pins the `Stripe-Version` header used to create ephemeral keys; other Stripe calls retain the account's configured API version.
+Set `AbstractPaymentHandler.Intents` and mount `CreateSetupIntent`, by convention at `POST /api/billing/setup-intent`. It is always JWT-gated, takes no body, derives the email and `metadata[user_id]` from the authenticated session, and answers `{setupIntentId, clientSecret, customerId, ephemeralKey}` with `Cache-Control: no-store`. It never accepts a caller-supplied provider customer ID. The `CustomerID` and `LinkCustomer` hooks take the session and decide whose customer it is: `payment.UserCustomerService{DB, Provider}` keeps one per user in `user_billing_customer`, and `billing.PartnerCustomerService{Store, Provider}` one per partner in `partner_billing_customer`, the table the webhook mapping links and resolves invoices through. `CreateCheckout` resolves the same hook for a signed-in payer and passes it as `CheckoutRequest.CustomerID` (Stripe `customer`, without `customer_email`), so a partner paying again stays on its customer; a guest checkout resolves none. With `CustomerID` unset every call creates a new provider customer, and a partner billed through a second customer cannot be resolved from its invoices. `UserPaymentMethodService.RecordFromSetupIntent` stores `currency` as NULL unless one is passed: a SetupIntent carries none, so charge in the order's currency, not the card's. A setup intent offers only the `IntentRequest.PaymentMethodTypes` it is given, `card` when none, so the mobile sheet does not offer the dashboard's automatic methods. With `CardClient` wired (`StripeSetupIntentCardClient`), a wallet-tokenized card is recorded with `method_type` `apple_pay`, `google_pay` or `wallet` instead of `card`, a bank debit as `bank`, and any other type is refused with `payment.ErrUnsupportedPaymentMethod` rather than recorded as a card. Payment intents carry an amount, so there is no HTTP route for them: the service that knows the price calls `CreatePaymentIntent` and hands the client secret to the app only when Stripe reports `requires_action` (3DS). `StripeCheckoutClient.APIVersion` pins the `Stripe-Version` header used to create ephemeral keys; other Stripe calls retain the account's configured API version.
 
 **Removing a saved method.** `UserPaymentMethodService.Remove(ctx, userID, id)` detaches the method at the provider through `Detacher` (`payment.PaymentMethodDetacher`, implemented by `StripeChargeClient`; a `seti_…` token is resolved to its PaymentMethod, and an already-detached or missing method is success), then deletes the row; a failed detach keeps it. `UserPaymentMethodHandler` serves it as the `remove` table action (`POST …/user_payment_method/remove`, `{id}`, 404 for a method the user does not own). Generic REST DELETE on `user_payment_method` is not granted, so a client cannot skip the detach. Removing the default leaves none; the charge path takes the newest method. A restricted Stripe key needs **Payment Methods: write**.
 
@@ -392,6 +392,8 @@ type PayoutProvider interface {
     GetPayoutStatus(ctx, providerPayoutID) (*InstantPayoutResult, error)
 }
 ```
+
+`OnboardingService.StartOnboarding` returns a fresh hosted link while the linked account has not finished onboarding (`StartOnboardingInput.ExternalAccountID` names it; Stripe and Airwallex mint a new link for it, Wise returns the recipient without a URL) and refuses an onboarded account with `payout.ErrAlreadyOnboarded`.
 
 `RequestInstantPayout` takes integer minor units (`599` = $5.99 USD); each provider converts to its native wire representation with exact integer math — Wise and Airwallex send ordinary currency decimals (`5.99`) at `InstantPayoutInput.Exponent` and refuse a nil one, Stripe sends minor units unchanged. keel's services fill `Exponent` from the `currency` table. `GetPayoutStatus` is the reconciliation path when a transfer webhook was missed; provider idempotency-key retention is finite, so look up before reissuing an old key.
 
@@ -438,6 +440,22 @@ Routes registered:
 | POST | `/api/v1/payout/bank/replace`  | session | Atomic bank-info version replacement (wire `SealTaxID` on the handler) |
 | POST | `/api/v1/payout/beneficiary/register` | session | Create provider Beneficiary from app-collected details, link as destination |
 | POST | `/api/v1/webhook/payout/{AW\|SC\|WI}` | signature | Provider webhook intake |
+
+Errors carry a stable `code` and client-safe wording, never the service's or provider's text:
+
+| Sentinel | Status | `code` |
+|---|---|---|
+| `payout.ErrInvalidBankInfo` | 400 | `payout_invalid_bank_info` |
+| `payout.ErrAlreadyOnboarded` | 409 | `payout_already_onboarded` |
+| `payout.ErrBankInfoRequired` | 409 | `payout_bank_info_required` |
+| `payout.ErrProviderMismatch` | 409 | `payout_provider_mismatch` |
+| `payout.ErrAccountNotReusable` | 409 | `payout_account_not_reusable` |
+| `payout.ErrDestinationRegistered` | 409 | `payout_destination_registered` |
+| `payout.ErrBeneficiaryUnsupported` | 409 | `payout_beneficiary_unsupported` |
+| `payout.ErrProviderNotConfigured` | 409 | `payout_provider_not_configured` |
+| `payout.ErrProvider` (a failed provider call) | 502 | `payout_provider_error` |
+
+Any other failure is a sanitized 500. A refused webhook answers 401 `webhook rejected` with the cause logged, and its body is capped at 256 KiB.
 
 ### Flags
 

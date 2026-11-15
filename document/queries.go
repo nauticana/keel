@@ -1,6 +1,11 @@
 package document
 
-import "strings"
+import (
+	"maps"
+	"strings"
+
+	"github.com/nauticana/keel/outbox"
+)
 
 const (
 	qGetType          = "get_type"
@@ -67,3 +72,5 @@ SELECT d.id, d.contrep_id, d.doc_key, d.retired_at,
  ORDER BY d.retired_at, d.id LIMIT ?`,
 	qSetPurged: `UPDATE partner_document SET purged_at = CURRENT_TIMESTAMP WHERE id = ?`,
 }
+
+func init() { maps.Copy(queries, outbox.WriteQueries()) }

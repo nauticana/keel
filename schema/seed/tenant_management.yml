@@ -94,6 +94,7 @@ seeds:
       - [PARTNER_DOMAIN, VERIFY, Verify a partner domain]
       - [PARTNER_DOMAIN, CANCEL, Cancel a partner domain verification]
       - [PARTNER_USER, END, End a partner membership]
+      - [PARTNER_USER, DIRECTORY, Read the member directory]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
@@ -143,6 +144,7 @@ seeds:
       - [PARTNER_ADMIN, PARTNER_DOMAIN, VERIFY, partner_domain]
       - [PARTNER_ADMIN, PARTNER_DOMAIN, CANCEL, partner_domain]
       - [PARTNER_ADMIN, PARTNER_USER, END, partner_user]
+      - [PARTNER_ADMIN, PARTNER_USER, DIRECTORY, partner_user]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
