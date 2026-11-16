@@ -281,4 +281,18 @@ func TestAdministratorRoleDefault(t *testing.T) {
 	if _, err := s.SetPolicy(ctx, Policy{ObjectType: "invoice", ChangedBy: maker}); !errors.Is(err, ErrNotAdministrator) {
 		t.Fatalf("the role does not reach the platform policy: %v", err)
 	}
+	s.PlatformPartnerID, s.PlatformAdministratorRole = 1, "SECURITY_ADMIN"
+	store.roles[1] = map[string][]int64{"SECURITY_ADMIN": {20, 21}, "PARTNER_ADMIN": {maker}}
+	if _, err := s.SetPolicy(ctx, Policy{ObjectType: "invoice", ChangedBy: maker}); !errors.Is(err, ErrNotAdministrator) {
+		t.Fatalf("a platform member without the platform role: %v", err)
+	}
+	if inForce, err := s.SetPolicy(ctx, Policy{ObjectType: "invoice", AllowSinglePerson: true, ChangedBy: 20}); err != nil || inForce {
+		t.Fatalf("platform change with a second administrator: in force %v, %v", inForce, err)
+	}
+	if err := s.ConfirmPolicy(ctx, 0, "invoice", 21); err != nil {
+		t.Fatalf("platform confirmation: %v", err)
+	}
+	if _, err := s.SetPolicy(ctx, Policy{PartnerID: partner, ObjectType: "invoice", ChangedBy: 20}); !errors.Is(err, ErrNotAdministrator) {
+		t.Fatalf("the platform role does not reach a partner policy: %v", err)
+	}
 }

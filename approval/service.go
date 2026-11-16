@@ -29,10 +29,13 @@ type Service struct {
 	OnDecided func(ctx context.Context, tx port.TxQueryService, req *Request) error
 	// Administrators names the users who may change the owner's policy;
 	// partnerID 0 is the platform. While it is nil, a partner's administrators
-	// are its current active members holding AdministratorRole, and with neither set
-	// the policy is refused to everyone.
-	Administrators    func(ctx context.Context, partnerID int64) ([]int64, error)
-	AdministratorRole string
+	// are its current active members holding AdministratorRole, the platform's
+	// those of PlatformPartnerID holding PlatformAdministratorRole, and an owner
+	// left unresolved refuses its policy to everyone.
+	Administrators            func(ctx context.Context, partnerID int64) ([]int64, error)
+	AdministratorRole         string
+	PlatformPartnerID         int64
+	PlatformAdministratorRole string
 
 	once sync.Once
 	qs   port.QueryService

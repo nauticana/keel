@@ -102,14 +102,18 @@ func (s *Service) ConfirmPolicy(ctx context.Context, partnerID int64, objectType
 // userID is one of them.
 func (s *Service) administrators(ctx context.Context, partnerID, userID int64) ([]int64, error) {
 	var admins []int64
+	owner, role := partnerID, s.AdministratorRole
+	if partnerID == 0 {
+		owner, role = s.PlatformPartnerID, s.PlatformAdministratorRole
+	}
 	switch {
 	case s.Administrators != nil:
 		var err error
 		if admins, err = s.Administrators(ctx, partnerID); err != nil {
 			return nil, err
 		}
-	case s.AdministratorRole != "" && partnerID > 0:
-		res, err := s.query(ctx).Query(ctx, qAdministrators, partnerID, s.AdministratorRole)
+	case role != "" && owner > 0:
+		res, err := s.query(ctx).Query(ctx, qAdministrators, owner, role)
 		if err != nil {
 			return nil, err
 		}

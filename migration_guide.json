@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.3.7",
+   "title": "Platform approval administrators by role",
+   "tags": [
+    "additive"
+   ],
+   "summary": "approval.Service resolves the platform's policy administrators from a partner and role, as it does a partner's, without an Administrators callback.",
+   "body_markdown": "### Additive\n\n- `approval.Service.PlatformPartnerID` and `PlatformAdministratorRole`: while `Administrators` is nil, the platform's (owner 0) administrators are the current active members of that partner holding that role. A callback that only queried `partner_user` and `user_permission` for the platform can be replaced by these two fields."
+  },
+  {
    "version": "v1.3.6",
    "title": "Platform approval policy routes, approval_policy over generic REST, SVG documents",
    "tags": [
