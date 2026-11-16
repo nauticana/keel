@@ -1,4 +1,9 @@
 {
+  "approval.OpenPolicy": {
+    "allowSinglePerson": "boolean",
+    "inForce": "boolean",
+    "objectType": "string"
+  },
   "authserver.Grant": {
     "authorizedAt": "time.Time",
     "clientId": "string",

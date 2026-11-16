@@ -21,6 +21,31 @@ type Policy struct {
 	ChangedBy         int64
 }
 
+// OpenPolicy is an owner's open rule for one review kind; InForce is false
+// while allowing a single person awaits confirmation.
+type OpenPolicy struct {
+	ObjectType        string `json:"objectType"`
+	AllowSinglePerson bool   `json:"allowSinglePerson"`
+	InForce           bool   `json:"inForce"`
+}
+
+// OpenPolicies lists the owner's open rules by object type; partnerID 0 is
+// the platform.
+func (s *Service) OpenPolicies(ctx context.Context, partnerID int64) ([]OpenPolicy, error) {
+	if partnerID < 0 {
+		return nil, model.NewBadRequest("approval: owner is required")
+	}
+	res, err := s.query(ctx).Query(ctx, qOpenPolicies, ownerArg(partnerID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]OpenPolicy, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		out = append(out, OpenPolicy{ObjectType: common.AsString(row[0]), AllowSinglePerson: common.AsBool(row[1]), InForce: common.AsBool(row[2])})
+	}
+	return out, nil
+}
+
 // SetPolicy records the next policy of the owner, closes the previous row
 // and reports whether the new one is in force. ChangedBy must be one of the
 // owner's administrators. Requiring separation is in force at once; allowing

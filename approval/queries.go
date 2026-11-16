@@ -15,6 +15,7 @@ const (
 	qInsertPolicy      = "insert_policy"
 	qLockPendingPolicy = "lock_pending_policy"
 	qConfirmPolicy     = "confirm_policy"
+	qOpenPolicies      = "open_policies"
 	qAdministrators    = "administrators"
 	qSetDecision       = "set_decision"
 	qClose             = "close"
@@ -51,6 +52,7 @@ SELECT allow_single_person AND begda IS NOT NULL FROM approval_policy
 	qInsertPolicy:      `INSERT INTO approval_policy (id, partner_id, object_type, allow_single_person, changed_by, begda) VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP END)`,
 	qLockPendingPolicy: `SELECT id, changed_by FROM approval_policy WHERE partner_id IS NOT DISTINCT FROM ? AND object_type = ? AND begda IS NULL AND endda IS NULL FOR UPDATE`,
 	qConfirmPolicy:     `UPDATE approval_policy SET confirmed_by = ?, begda = CURRENT_TIMESTAMP WHERE id = ?`,
+	qOpenPolicies:      `SELECT object_type, allow_single_person, begda IS NOT NULL FROM approval_policy WHERE partner_id IS NOT DISTINCT FROM ? AND endda IS NULL ORDER BY object_type`,
 	qAdministrators: `
 SELECT p.user_id FROM partner_user p
   JOIN user_permission r ON r.user_id = p.user_id

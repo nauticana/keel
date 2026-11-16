@@ -27,6 +27,41 @@ func (f *fakeApprovalPolicies) ConfirmPolicy(_ context.Context, partnerID int64,
 	return f.err
 }
 
+func (f *fakeApprovalPolicies) OpenPolicies(_ context.Context, partnerID int64) ([]approval.OpenPolicy, error) {
+	return []approval.OpenPolicy{{ObjectType: "driver", InForce: partnerID == 0}}, f.err
+}
+
+func TestApprovalPolicyPlatformRoutesUseOwnerZero(t *testing.T) {
+	policies := &fakeApprovalPolicies{}
+	h := &ApprovalPolicyHandler{Policies: policies}
+	call := func(method string, fn JSONFunc, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/api/v1/approval_policy/platform", strings.NewReader(body))
+		stashSession(r, &model.UserSession{Id: 3, PartnerId: 7})
+		w := httptest.NewRecorder()
+		h.JSON(method, fn)(w, r)
+		return w
+	}
+	w := call(http.MethodPost, h.SetPlatform, `{"objectType":"driver","allowSinglePerson":true}`)
+	if w.Code != http.StatusOK || policies.set != (approval.Policy{ObjectType: "driver", AllowSinglePerson: true, ChangedBy: 3}) {
+		t.Fatalf("set = %d %s, service saw %+v", w.Code, w.Body, policies.set)
+	}
+	if w := call(http.MethodPost, h.ConfirmPlatform, `{"objectType":"driver"}`); w.Code != http.StatusOK || policies.confirmed != [3]any{int64(0), "driver", int64(3)} {
+		t.Fatalf("confirm = %d, service saw %v", w.Code, policies.confirmed)
+	}
+	if w := call(http.MethodGet, h.Platform, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"objectType":"driver","allowSinglePerson":false,"inForce":true`) {
+		t.Fatalf("platform = %d %s", w.Code, w.Body)
+	}
+	h.Policies = nil
+	if w := call(http.MethodGet, h.Platform, ""); w.Code != http.StatusInternalServerError {
+		t.Fatalf("unconfigured = %d", w.Code)
+	}
+	for _, name := range []string{"set", "confirm", "set_platform", "confirm_platform", "platform"} {
+		if h.Routes("/api/v1")["/api/v1/approval_policy/"+name] == nil {
+			t.Errorf("route %s is not mounted", name)
+		}
+	}
+}
+
 func TestApprovalPolicyUsesTheSessionPartner(t *testing.T) {
 	policies := &fakeApprovalPolicies{}
 	h := &ApprovalPolicyHandler{Policies: policies}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/approval"
 	"github.com/nauticana/keel/billing"
 	"github.com/nauticana/keel/document"
 	"github.com/nauticana/keel/model"
@@ -23,6 +24,7 @@ var updateWire = flag.Bool("update-wire", false, "rewrite testdata/wire_contract
 
 // wireTypes are the typed bodies handlers answer with; their JSON members are clients' contract.
 var wireTypes = []any{
+	approval.OpenPolicy{},
 	authserver.Grant{},
 	billing.Invoice{},
 	billing.Plan{},

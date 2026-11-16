@@ -546,6 +546,29 @@ func TestTextFormatsAreAdmittedByDeclaration(t *testing.T) {
 	}
 }
 
+func TestSVGIsAdmittedByItsRootElement(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	const svg = `<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>`
+	for _, body := range []string{svg, `<?xml version="1.0" encoding="UTF-8"?>` + "\n<!-- chart -->\n" + svg} {
+		doc, err := s.Store(ctx, upload("chart", 0, []byte(body)))
+		if err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		if _, comp, _ := s.Docs.Read(ctx, doc.ContRepID, doc.DocKey, DataComponent); comp.ContentType != "image/svg+xml" {
+			t.Errorf("stored as %q", comp.ContentType)
+		}
+	}
+	for _, body := range []string{`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"/>`, `<svg><rect/></svg>`, "svg"} {
+		if _, err := s.Store(ctx, upload("chart", 0, []byte(body))); !errors.Is(err, ErrMediaType) {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+	if _, err := s.Store(ctx, upload("notes", 0, []byte(`<?xml version="1.0"?>`+svg))); !errors.Is(err, ErrMediaType) {
+		t.Errorf("XML is not a text/plain format: %v", err)
+	}
+}
+
 func TestPartnerDocumentJSONNames(t *testing.T) {
 	raw, err := json.Marshal(&PartnerDocument{ID: 1 << 60, ContRepID: "docs", Subject: Subject{UserID: 5}, Status: StatusPending, Content: &dms.Component{}})
 	if err != nil {

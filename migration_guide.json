@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.3.6",
+   "title": "Platform approval policy routes, approval_policy over generic REST, SVG documents",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "The platform's separation-of-duties policy is set, confirmed and listed over HTTP, a partner reads its approval_policy rows through generic REST, and a document type that lists image/svg+xml admits SVG.",
+   "body_markdown": "### Compile breaks\n\n- `handler.ApprovalPolicies` gains `OpenPolicies`; `approval.Service` has it, add it to any other implementation.\n\n### Wire\n\n- `approval_policy/confirm` answers `allowSinglePerson` (always true) beside `objectType` and `inForce`; no member was removed or renamed.\n\n### Seed\n\n- `rest_api_header` registers `approval_policy`; drop your own row for it.\n- `PARTNER_ADMIN` holds `TABLE` `SELECT` on `approval_policy`.\n- `APPROVAL_POLICY` `CHANGE_PLATFORM` is a new action, granted to `SECURITY_ADMIN`.\n\n### Additive\n\n- `approval.Service.OpenPolicies(ctx, partnerID)` lists an owner's open rules as `[]approval.OpenPolicy{ObjectType, AllowSinglePerson, InForce}`; 0 is the platform.\n- `handler.ApprovalPolicyHandler` mounts `approval_policy/set_platform`, `approval_policy/confirm_platform` and `GET approval_policy/platform`, gated by `APPROVAL_POLICY` `CHANGE_PLATFORM`. They pass owner 0, so `approval.Service.Administrators` must name the platform's administrators.\n- `document.DocumentService.Store` admits a UTF-8 body sniffed as `text/plain` or `text/xml` whose root element is `svg` in the SVG namespace as `image/svg+xml`, for a type that lists it."
+  },
+  {
    "version": "v1.3.5",
    "title": "Approval policy routes, bank and Link method labels, settling charges, wire contract",
    "tags": [

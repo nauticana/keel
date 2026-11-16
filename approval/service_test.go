@@ -239,6 +239,34 @@ func TestRequireSeparation(t *testing.T) {
 	}
 }
 
+func TestOpenPoliciesAreTheOwnersOpenRows(t *testing.T) {
+	s, _ := newService()
+	ctx := context.Background()
+	for _, p := range []Policy{
+		{ObjectType: "invoice", AllowSinglePerson: true, ChangedBy: 1},
+		{ObjectType: "invoice", ChangedBy: 1},
+		{PartnerID: partner, ObjectType: "invoice", AllowSinglePerson: true, ChangedBy: maker},
+	} {
+		if _, err := s.SetPolicy(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for owner, want := range map[int64]OpenPolicy{
+		0:       {ObjectType: "invoice", InForce: true},
+		partner: {ObjectType: "invoice", AllowSinglePerson: true},
+	} {
+		if got, err := s.OpenPolicies(ctx, owner); err != nil || len(got) != 1 || got[0] != want {
+			t.Errorf("owner %d = %+v, %v; want %+v", owner, got, err, want)
+		}
+	}
+	if got, err := s.OpenPolicies(ctx, 99); err != nil || got == nil || len(got) != 0 {
+		t.Errorf("an owner without rows = %v, %v", got, err)
+	}
+	if _, err := s.OpenPolicies(ctx, -1); err == nil {
+		t.Error("a negative owner was accepted")
+	}
+}
+
 func TestAdministratorRoleDefault(t *testing.T) {
 	s, store := newService()
 	ctx := context.Background()

@@ -120,6 +120,12 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 				p[5], p[6] = args[0], m.now()
 			}
 		}
+	case qOpenPolicies:
+		for _, p := range m.policies {
+			if p[1] == args[0] && p[7] == nil {
+				out.Rows = append(out.Rows, []any{p[2], p[3], p[6] != nil})
+			}
+		}
 	case qAdministrators:
 		for _, id := range m.roles[args[0].(int64)][args[1].(string)] {
 			out.Rows = append(out.Rows, []any{id})

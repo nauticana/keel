@@ -32,7 +32,14 @@ seeds:
     columns: [authorization_object_id, action, caption]
     rows:
       - [APPROVAL_POLICY, CHANGE, Change a separation-of-duties policy]
+      - [APPROVAL_POLICY, CHANGE_PLATFORM, Change the platform's separation-of-duties policy]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
       - [PARTNER_ADMIN, APPROVAL_POLICY, CHANGE, approval_policy]
+      - [PARTNER_ADMIN, TABLE, SELECT, approval_policy]
+      - [SECURITY_ADMIN, APPROVAL_POLICY, CHANGE_PLATFORM, approval_policy]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [approval_policy, approval_policy]
