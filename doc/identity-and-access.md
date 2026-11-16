@@ -183,7 +183,7 @@ Table actions on `partner_identity_provider`. They are granted to `PARTNER_ADMIN
 
 | Action | What it does |
 |---|---|
-| `configure` | Creates a draft or edits a connection. Takes JSON, or multipart when `private_key` or `idp_metadata` is an uploaded file. Partner credentials are sealed. An active connection may only rotate its credential and edit its claims; changing its issuer or client needs a disable first, and a changed issuer or client voids the last test. |
+| `configure` | Creates a draft, or edits the connection `connection_id` names. Takes JSON, or multipart when `private_key` or `idp_metadata` is an uploaded file. Partner credentials are sealed. An active connection may only rotate its credential and edit its claims; changing its issuer or client needs a disable first, and a changed issuer or client voids the last test. |
 | `test` | Kind `R`: returns a launch URL for a sign-in by the calling administrator, who must be asserted with their own email. It records nothing but the test, except that Entra ID and Google connections also ask for the grant that records `ME` or `GW` domain evidence in the same round trip. |
 | `activate` | Needs a passed test and a held identity domain. A connection it replaces is disabled, its mapped roles end, and its sessions are revoked; provisioned users' groups are mapped through the new connection. |
 | `disable` | Stops routing at once and ends the connection's mapped roles. Disabling the active connection also signs out every session it signed in. |

@@ -82,9 +82,9 @@ UPDATE user_account
 `,
 	qAddPartnerUser: `
 INSERT INTO partner_user
- (partner_id, user_id, begda)
+ (partner_id, user_id, begda, endda)
 VALUES
- (?, ?, CURRENT_TIMESTAMP)
+ (?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
 `,
 	// Only a partner-scoped role can be granted to a partner's creator.
 	qAddPartnerRole: `

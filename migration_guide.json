@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.3.8",
+   "title": "Dated partner joins, SSO configure connection_id",
+   "tags": [
+    "breaking"
+   ],
+   "summary": "user.TenantAccountCreator.JoinPartnerTx takes an optional membership start and end; the SSO configure action selects a connection by connection_id, and seed validation rejects an action parameter named like a key column.",
+   "body_markdown": "### Breaking\n\n- `JoinPartnerTx(ctx, tx, partnerID, userID)` becomes `JoinPartnerTx(ctx, tx, partnerID, userID, begda, endda *time.Time)`. A nil `begda` starts the membership at the database's current time; a nil `endda` leaves it open-ended. Pass `nil, nil` for the previous behavior. An `endda` not after the start returns `user.ErrInvalidMembershipPeriod`; a period overlapping another membership of the account returns `user.ErrAlreadyMember`. Implementations of `TenantAccountCreator` add the two parameters.\n\n- The `partner_identity_provider` `configure` action's parameter `id` is renamed `connection_id`, in JSON and multipart bodies. The REST metadata loader refused the old name because it collides with the table's key column. A body that still sends `id` creates a new draft. The response keeps `{\"id\": ...}`.\n\n### Behavior\n\n- `EndMembership` and the SSO tenant-session lookup treat a membership as current when it has begun and its `endda` is unset or in the future, so a membership with a scheduled end can still be ended early and its sessions revoked.\n- `schema.ValidateSeeds`, and so schemagen with `-seed`, rejects a `table_action_parameter` named like a key column of its table or declared twice for one action, the metadata the REST loader refuses at start."
+  },
+  {
    "version": "v1.3.7",
    "title": "Platform approval administrators by role",
    "tags": [

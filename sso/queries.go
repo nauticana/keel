@@ -74,7 +74,8 @@ RETURNING id`,
 	qTenantSessionUsers: `
 SELECT DISTINCT rt.user_id
   FROM user_refresh_token rt
-  JOIN partner_user pu ON pu.user_id = rt.user_id AND pu.partner_id = ? AND pu.endda IS NULL
+  JOIN partner_user pu ON pu.user_id = rt.user_id AND pu.partner_id = ?
+   AND pu.begda <= CURRENT_TIMESTAMP AND (pu.endda IS NULL OR pu.endda > CURRENT_TIMESTAMP)
  WHERE rt.sign_in_method = 'T' AND rt.revoked_at IS NULL`,
 	qRoleMappings: `SELECT claim_name, claim_value, role_id FROM partner_idp_role_mapping WHERE partner_id = ? AND provider_id = ?`,
 	qOpenRoles:    `SELECT role_id FROM user_permission WHERE user_id = ? AND endda IS NULL`,

@@ -7,8 +7,9 @@ import (
 var (
 	// ErrInvalidConfirmation answers every bad, expired or unknown code alike,
 	// so a probe cannot tell whether an email registered.
-	ErrInvalidConfirmation = errors.New("invalid or expired confirmation")
-	ErrAlreadyMember       = errors.New("user: the account already belongs to a partner")
+	ErrInvalidConfirmation     = errors.New("invalid or expired confirmation")
+	ErrAlreadyMember           = errors.New("user: the account already belongs to a partner")
+	ErrInvalidMembershipPeriod = errors.New("user: a membership must end after it begins")
 	// ErrAccountExists: an identity signup matched an existing account, which
 	// signs in and adds its partner with CreatePartner.
 	ErrAccountExists = errors.New("user: an account already exists for this identity")

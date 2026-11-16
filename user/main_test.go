@@ -41,6 +41,7 @@ type memStore struct {
 	networks   map[int64][]string       // partner_signin_network
 	clock      time.Duration            // offset added to the wall clock
 	calls      []string
+	joins      [][]any // qAddPartnerUser arguments
 	failQuery  map[string]error
 	commits    int
 	rollbacks  int
@@ -117,6 +118,8 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	}
 	out := &model.QueryResult{}
 	switch name {
+	case qAddPartnerUser:
+		m.joins = append(m.joins, args)
 	case qTokensValidAfter:
 		if at, ok := m.cutoffs[args[0].(int)]; ok {
 			out.Rows = [][]any{{at}}

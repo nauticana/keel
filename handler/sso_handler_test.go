@@ -142,7 +142,7 @@ func TestSSORedirectCodes(t *testing.T) {
 }
 
 func TestReadConfigurationJSONAndMultipart(t *testing.T) {
-	body := `{"id":"12","caption":"Acme","issuer":"https://idp.acme.example","client_id":"c","client_auth":"P","client_secret":"s","require_mfa":true}`
+	body := `{"connection_id":"12","caption":"Acme","issuer":"https://idp.acme.example","client_id":"c","client_auth":"P","client_secret":"s","require_mfa":true}`
 	r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	cfg, err := readConfiguration(httptest.NewRecorder(), r)
@@ -152,7 +152,7 @@ func TestReadConfigurationJSONAndMultipart(t *testing.T) {
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	for k, v := range map[string]string{"caption": "Acme", "issuer": "https://idp.acme.example", "client_id": "c", "client_auth": "J", "require_mfa": "false"} {
+	for k, v := range map[string]string{"connection_id": "7", "caption": "Acme", "issuer": "https://idp.acme.example", "client_id": "c", "client_auth": "J", "require_mfa": "false"} {
 		_ = mw.WriteField(k, v)
 	}
 	fw, _ := mw.CreateFormFile("private_key", "key.pem")
@@ -161,13 +161,13 @@ func TestReadConfigurationJSONAndMultipart(t *testing.T) {
 	r = httptest.NewRequest(http.MethodPost, "/x", &buf)
 	r.Header.Set("Content-Type", mw.FormDataContentType())
 	cfg, err = readConfiguration(httptest.NewRecorder(), r)
-	if err != nil || cfg.ClientAuth != "J" || cfg.Credential != "-----BEGIN PRIVATE KEY-----" || cfg.RequireMFA {
+	if err != nil || cfg.ID != 7 || cfg.ClientAuth != "J" || cfg.Credential != "-----BEGIN PRIVATE KEY-----" || cfg.RequireMFA {
 		t.Fatalf("multipart = %+v, %v", cfg, err)
 	}
 
 	for name, bad := range map[string]string{
 		"both credentials": `{"client_secret":"s","private_key":"k"}`,
-		"negative id":      `{"id":"-1"}`,
+		"negative id":      `{"connection_id":"-1"}`,
 		"bad mfa":          `{"require_mfa":"maybe"}`,
 		"not json":         `{`,
 		"trailing value":   `{"caption":"x"}{}`,

@@ -347,7 +347,7 @@ func (u *fakeUsers) UpdateTenantMemberTx(_ context.Context, _ port.TxQueryServic
 	return nil
 }
 
-func (u *fakeUsers) JoinPartnerTx(_ context.Context, _ port.TxQueryService, partnerID int64, userID int) error {
+func (u *fakeUsers) JoinPartnerTx(_ context.Context, _ port.TxQueryService, partnerID int64, userID int, _, _ *time.Time) error {
 	u.joined = append(u.joined, userID)
 	u.accounts[userID].PartnerId = partnerID
 	return nil

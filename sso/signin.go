@@ -121,7 +121,7 @@ func (s *Service) commitMembership(ctx context.Context, conn *connection, a *por
 				return 0, err
 			}
 			userID = session.Id
-		} else if err := accounts.JoinPartnerTx(ctx, tx, conn.PartnerID, userID); err != nil {
+		} else if err := accounts.JoinPartnerTx(ctx, tx, conn.PartnerID, userID, nil, nil); err != nil {
 			if errors.Is(err, user.ErrAlreadyMember) {
 				return 0, ErrOtherPartner
 			}

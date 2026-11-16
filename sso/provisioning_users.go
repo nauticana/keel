@@ -76,7 +76,7 @@ func (p *Provisioning) CreateUser(ctx context.Context, partnerID int64, in *SCIM
 				return accountError(err)
 			}
 			if existing.PartnerId == 0 && v.active {
-				if err := accounts.JoinPartnerTx(ctx, tx, partnerID, existing.Id); err != nil {
+				if err := accounts.JoinPartnerTx(ctx, tx, partnerID, existing.Id, nil, nil); err != nil {
 					return accountError(err)
 				}
 			}
@@ -132,7 +132,7 @@ func (p *Provisioning) ReplaceUser(ctx context.Context, partnerID int64, id stri
 			return accountError(err)
 		}
 		if !wasActive && v.active {
-			if err := accounts.JoinPartnerTx(ctx, tx, partnerID, userID); err != nil {
+			if err := accounts.JoinPartnerTx(ctx, tx, partnerID, userID, nil, nil); err != nil {
 				return accountError(err)
 			}
 		}

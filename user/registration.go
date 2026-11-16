@@ -476,7 +476,7 @@ func (r *RegistrationService) createPartnerTx(ctx context.Context, tx port.TxQue
 			return nil, fmt.Errorf("add domain: %w", err)
 		}
 	}
-	if _, err := tx.Query(ctx, qAddPartnerUser, partnerID, userID); err != nil {
+	if _, err := tx.Query(ctx, qAddPartnerUser, partnerID, userID, nil, nil); err != nil {
 		if pgsql.IsExclusionViolation(err) {
 			return nil, ErrAlreadyMember
 		}

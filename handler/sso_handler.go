@@ -353,7 +353,7 @@ func readConfiguration(w http.ResponseWriter, r *http.Request) (sso.Configuratio
 	limit := config.Config().MaxRequestSize
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	var in struct {
-		ID             json.Number `json:"id"`
+		ConnectionID   json.Number `json:"connection_id"`
 		Caption        string      `json:"caption"`
 		Issuer         string      `json:"issuer"`
 		ClientID       string      `json:"client_id"`
@@ -373,7 +373,7 @@ func readConfiguration(w http.ResponseWriter, r *http.Request) (sso.Configuratio
 			return sso.Configuration{}, fmt.Errorf("%w: form: %v", sso.ErrInvalidConfiguration, err)
 		}
 		f := r.FormValue
-		in.ID, in.Caption, in.Issuer, in.ClientID, in.ClientAuth = json.Number(f("id")), f("caption"), f("issuer"), f("client_id"), f("client_auth")
+		in.ConnectionID, in.Caption, in.Issuer, in.ClientID, in.ClientAuth = json.Number(f("connection_id")), f("caption"), f("issuer"), f("client_id"), f("client_auth")
 		in.ClientSecret, in.OperatorClient, in.SubjectClaim, in.EmailClaim, in.Scopes, in.RequireMFA = f("client_secret"), f("operator_client"), f("subject_claim"), f("email_claim"), f("scopes"), f("require_mfa")
 		in.Protocol, in.IdPMetadata = f("protocol"), f("idp_metadata")
 		for field, target := range map[string]*string{"private_key": &in.PrivateKey, "idp_metadata": &in.IdPMetadata} {
@@ -399,10 +399,10 @@ func readConfiguration(w http.ResponseWriter, r *http.Request) (sso.Configuratio
 		}
 	}
 	var id int64
-	if in.ID != "" {
-		v, err := strconv.ParseInt(string(in.ID), 10, 64)
+	if in.ConnectionID != "" {
+		v, err := strconv.ParseInt(string(in.ConnectionID), 10, 64)
 		if err != nil || v < 0 {
-			return sso.Configuration{}, fmt.Errorf("%w: id", sso.ErrInvalidConfiguration)
+			return sso.Configuration{}, fmt.Errorf("%w: connection_id", sso.ErrInvalidConfiguration)
 		}
 		id = v
 	}

@@ -535,7 +535,8 @@ SELECT u.id, TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS name
 `,
 	qEndMembership: `
 UPDATE partner_user SET endda = CURRENT_TIMESTAMP
- WHERE user_id = ? AND partner_id = ? AND endda IS NULL
+ WHERE user_id = ? AND partner_id = ?
+   AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
 RETURNING partner_id
 `,
 	qEndPermissions: `

@@ -30,7 +30,7 @@ type TenantAccountCreator interface {
 	CreateTenantAccountTx(ctx context.Context, tx port.TxQueryService, partnerID int64, identity ExternalIdentity) (*model.UserSession, error)
 	CreateTenantMemberTx(ctx context.Context, tx port.TxQueryService, partnerID int64, member TenantMember, join bool) (int, error)
 	UpdateTenantMemberTx(ctx context.Context, tx port.TxQueryService, userID int, member TenantMember) error
-	JoinPartnerTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int) error
+	JoinPartnerTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int, begda, endda *time.Time) error
 }
 
 var _ TenantAccountCreator = (*LocalUserService)(nil)
@@ -99,7 +99,7 @@ func (s *LocalUserService) CreateTenantMemberTx(ctx context.Context, tx port.TxQ
 		return 0, err
 	}
 	if join {
-		if _, err := register.Query(ctx, qAddPartnerUser, partnerID, userID); err != nil {
+		if _, err := register.Query(ctx, qAddPartnerUser, partnerID, userID, nil, nil); err != nil {
 			return 0, fmt.Errorf("user: add membership: %w", err)
 		}
 	}
@@ -129,17 +129,30 @@ func (s *LocalUserService) UpdateTenantMemberTx(ctx context.Context, tx port.TxQ
 	return nil
 }
 
-// JoinPartnerTx makes an existing account without a current membership a
-// member of partnerID; a member of any partner returns ErrAlreadyMember.
-func (s *LocalUserService) JoinPartnerTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int) error {
+// JoinPartnerTx makes an existing account a member of partnerID from begda
+// (nil: now) until endda (nil: open-ended). A membership overlapping another
+// of the account returns ErrAlreadyMember; an endda not after the start
+// returns ErrInvalidMembershipPeriod.
+func (s *LocalUserService) JoinPartnerTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int, begda, endda *time.Time) error {
 	if partnerID <= 0 || userID <= 0 {
 		return ErrNoMembership
+	}
+	start := time.Now()
+	var from, until any
+	if begda != nil {
+		start, from = *begda, begda.UTC()
+	}
+	if endda != nil {
+		if !endda.After(start) {
+			return ErrInvalidMembershipPeriod
+		}
+		until = endda.UTC()
 	}
 	_, register, err := tenantCatalogs(tx)
 	if err != nil {
 		return err
 	}
-	if _, err := register.Query(ctx, qAddPartnerUser, partnerID, userID); err != nil {
+	if _, err := register.Query(ctx, qAddPartnerUser, partnerID, userID, from, until); err != nil {
 		if pgsql.IsExclusionViolation(err) {
 			return ErrAlreadyMember
 		}
