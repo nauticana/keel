@@ -790,7 +790,7 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     trial_days                           INT          ,
     PRIMARY KEY (id),
     CONSTRAINT subscription_plan_currency FOREIGN KEY (currency) REFERENCES currency(code),
-    CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F'))
+    CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F', 'M'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.

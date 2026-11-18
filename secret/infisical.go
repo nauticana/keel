@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nauticana/keel/common"
-
 	infisical "github.com/infisical/go-sdk"
 	infisicalerrors "github.com/infisical/go-sdk/packages/errors"
 )
@@ -23,21 +21,20 @@ type SecretProviderInfisical struct {
 	environment string
 }
 
-// NewSecretProviderInfisical builds the Infisical backend from the non-secret
-// project, environment and host flags. The machine-identity credentials come
+// NewSecretProviderInfisical opens an Infisical project environment on host. The machine-identity credentials come
 // from INFISICAL_UNIVERSAL_AUTH_CLIENT_ID / _CLIENT_SECRET, read by the SDK,
 // and the SDK keeps the login token refreshed.
-func NewSecretProviderInfisical(ctx context.Context) (*SecretProviderInfisical, error) {
-	projectID := strings.TrimSpace(*common.InfisicalProjectID)
+func NewSecretProviderInfisical(ctx context.Context, projectID, environment, host string) (*SecretProviderInfisical, error) {
+	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, fmt.Errorf("infisical secret provider: --infisical_project_id is required")
 	}
-	environment := strings.TrimSpace(*common.InfisicalEnvironment)
+	environment = strings.TrimSpace(environment)
 	if environment == "" {
 		return nil, fmt.Errorf("infisical secret provider: --infisical_environment is required")
 	}
 
-	client := infisical.NewInfisicalClient(ctx, infisical.Config{SiteUrl: strings.TrimSpace(*common.InfisicalHost)})
+	client := infisical.NewInfisicalClient(ctx, infisical.Config{SiteUrl: strings.TrimSpace(host)})
 	if _, err := client.Auth().UniversalAuthLogin("", ""); err != nil {
 		return nil, fmt.Errorf("infisical universal-auth login failed: %w", err)
 	}

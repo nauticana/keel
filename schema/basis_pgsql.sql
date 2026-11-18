@@ -783,7 +783,7 @@ CREATE TABLE IF NOT EXISTS subscription_plan (
     activation_mode                      CHAR(1)       NOT NULL DEFAULT 'A',
     trial_days                           INTEGER      ,
     CONSTRAINT subscription_plan_pk PRIMARY KEY (id),
-    CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F'))
+    CONSTRAINT chk_subscription_plan_activation_mode CHECK (activation_mode IN ('A', 'P', 'T', 'F', 'M'))
 );
 
 -- Per-offer price points for a plan. Three independent axes — billing_cycle (how often charged), term_count×term_type (the commitment), and amount_minor (price for ONE term_type unit). The same plan can offer e.g. monthly, annual-paid-monthly, and annual-paid-once as distinct rows with their own provider_price_id.

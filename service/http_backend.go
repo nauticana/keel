@@ -78,7 +78,9 @@ type HttpBackend struct {
 	UserService   user.UserService
 	QuotaService  port.QuotaService
 	ApiKeyService *APIKeyService
-	handler       http.Handler
+	// PubapiUnmetered authenticates /pubapi calls without consuming quota.
+	PubapiUnmetered bool
+	handler         http.Handler
 
 	// mux is per-instance so two HttpBackend objects (test fixtures,
 	// admin / public split deployments) can coexist in one process
@@ -513,8 +515,11 @@ func (h *HttpBackend) APIKeyMiddleware(next http.Handler) http.Handler {
 	if h.ApiKeyService == nil {
 		return next
 	}
-	quotaed := QuotaMiddleware(h.QuotaService, h.ApiKeyService.QuotaResource, h.ApiKeyService.QuotaCaption, h.Journal)(next)
-	authed := APIKeyAuthMiddleware(h.ApiKeyService, h.Journal)(quotaed)
+	gated := next
+	if !h.PubapiUnmetered {
+		gated = QuotaMiddleware(h.QuotaService, h.ApiKeyService.QuotaResource, h.ApiKeyService.QuotaCaption, h.Journal)(next)
+	}
+	authed := APIKeyAuthMiddleware(h.ApiKeyService, h.Journal)(gated)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, common.PubapiPrefix) {
 			next.ServeHTTP(w, r)

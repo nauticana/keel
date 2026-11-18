@@ -26,16 +26,16 @@ apiKeys := &service.APIKeyService{
 apiKeys.Init(ctx)
 
 // Issuing a key (typically from a JWT-authed admin handler):
-plainKey, prefix, err := apiKeys.InsertKey(ctx, service.NewAPIKey{
+issued, err := apiKeys.InsertKey(ctx, service.NewAPIKey{
 	PartnerID: partnerID, UserID: userID, Name: "production-key",
 	Scopes: "businesses,search", AllowedCIDRs: "203.0.113.0/24", ExpiresAt: expiresAt,
 })
-// plainKey is "myapp_<32-hex>"; show to user once and discard.
+// issued.Key is "myapp_<32-hex>"; show to user once and discard. issued.ID is the api_key row.
 ```
 
 `KeyPrefix` is required. `ScopePolicy(ctx, userID, partnerID, scopes)` returns normalized scopes or refuses them with an error returned unchanged, so a product sentinel keeps its registered status; `ConstantScopePolicy{DB, Constant, Default}.Policy` allows the `constant_value` codes of `Constant`, refuses others with `ErrInvalidScopes` (400), and fails closed while the catalog is unreadable. Without a policy, blank or overlong scopes are refused. Blank or overlong names and past expiries return `ErrInvalidAPIKey` (400); zero `ExpiresAt` never expires. `AllowedCIDRs` accepts a CSV of CIDRs or addresses; empty allows any address.
 
-Rolling preserves scopes, ownership, allow-list, and expiry without reapplying the scope policy. The old key gets at most 24 hours of grace, and expired keys cannot be rolled. `api_key_max_per_partner` limits usable keys (`0` is unbounded); rolling does not count against it. `LookupKey` caches successful lookups for `CacheTTL` and carries `UserID` (`0` for partner-only keys).
+Rolling preserves scopes, ownership, allow-list, and expiry without reapplying the scope policy. The old key gets at most 24 hours of grace, and expired keys cannot be rolled. `api_key_max_per_partner` limits usable keys (`0` is unbounded); rolling does not count against it. `DeactivateKey(ctx, keyID, partnerID)` revokes an active key of the partner and reports false when there is none. `LookupKey` caches successful lookups for `CacheTTL` and carries `UserID` (`0` for partner-only keys).
 
 ### `service.APIKeyAuthMiddleware` — the reusable factory
 
@@ -58,7 +58,7 @@ The same context-key constants (`common.PartnerID` etc.) are read by `AbstractHa
 
 ### `service.HttpBackend.APIKeyMiddleware` — `/pubapi/*` path gate
 
-`HttpBackend` automatically wraps the inbound chain with `APIKeyMiddleware`, which path-gates on `common.PubapiPrefix` and delegates to `APIKeyAuthMiddleware` for actual validation. Non-`/pubapi/*` requests pass through to `SSOMiddleware` (JWT auth). This is the standard wiring for any consumer using `HttpBackend.Run`:
+`HttpBackend` automatically wraps the inbound chain with `APIKeyMiddleware`, which path-gates on `common.PubapiPrefix` and delegates to `APIKeyAuthMiddleware` for actual validation. Non-`/pubapi/*` requests pass through to `SSOMiddleware` (JWT auth). The gate consumes the key service's `QuotaResource` per call; set `HttpBackend.PubapiUnmetered` to authenticate without metering. This is the standard wiring for any consumer using `HttpBackend.Run`:
 
 ```go
 srv := service.HttpBackend{

@@ -328,3 +328,16 @@ func TestCurrentSubscriptionAndPrice(t *testing.T) {
 		t.Fatalf("manual subscription: sub=%+v err=%v", sub, err)
 	}
 }
+
+func TestChangePlanRefusesManualPlanBeforeTheProvider(t *testing.T) {
+	store := &fakeSubStore{sub: &ProviderSubscription{ID: "sub_1", PlanID: "PRO"}, prices: map[string]string{"CONTRACT": "price_c"},
+		modes: map[string]ActivationMode{"CONTRACT": ActivateManual}}
+	client := &fakeSubClient{}
+	svc, life, _ := newSubService(store, client)
+	if _, err := svc.ChangePlan(context.Background(), 7, "CONTRACT", BillingTerms{}); !errors.Is(err, ErrManualPlan) {
+		t.Fatalf("err = %v", err)
+	}
+	if client.to != "" || life.changedTo != "" {
+		t.Fatalf("a refused change reached the provider (%q) or the lifecycle (%q)", client.to, life.changedTo)
+	}
+}

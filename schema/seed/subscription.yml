@@ -30,6 +30,7 @@ seeds:
       - [subscription_activation_mode, P, "ACTIVATE PENDING"]
       - [subscription_activation_mode, T, "TRIAL"]
       - [subscription_activation_mode, F, "FREE"]
+      - [subscription_activation_mode, M, "MANUAL"]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

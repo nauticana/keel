@@ -353,6 +353,15 @@ func (u *fakeUsers) JoinPartnerTx(_ context.Context, _ port.TxQueryService, part
 	return nil
 }
 
+func (u *fakeUsers) IsMemberTx(_ context.Context, _ port.TxQueryService, partnerID int64, userID int) (bool, error) {
+	a := u.accounts[userID]
+	return a != nil && a.PartnerId == partnerID, nil
+}
+
+func (u *fakeUsers) MoveMembershipEndTx(context.Context, port.TxQueryService, int64, int, *time.Time, *time.Time) error {
+	return nil
+}
+
 // fakeProvider returns the assertion the test sets.
 type fakeProvider struct {
 	assertion *port.IdentityAssertion

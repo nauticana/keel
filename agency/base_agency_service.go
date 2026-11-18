@@ -365,7 +365,6 @@ type BaseAgencyServiceOptions struct {
 // client is narrower than business_partner.
 type BaseAgencyService struct {
 	service.AbstractService
-	db        port.DatabaseRepository
 	inviteTTL time.Duration
 	now       func() time.Time
 }
@@ -378,8 +377,7 @@ func NewBaseAgencyService(db port.DatabaseRepository, opts BaseAgencyServiceOpti
 		opts.Now = func() time.Time { return time.Now().UTC() }
 	}
 	return &BaseAgencyService{
-		AbstractService: service.NewAbstractService(db, baseAgencyQueries),
-		db:              db,
+		AbstractService: service.AbstractService{DB: db, Queries: baseAgencyQueries},
 		inviteTTL:       opts.InviteTTL,
 		now:             opts.Now,
 	}
@@ -389,7 +387,7 @@ func (s *BaseAgencyService) AddClients(ctx context.Context, agencyPartnerID int6
 	if err := s.requireActive(ctx, agencyPartnerID); err != nil {
 		return 0, err
 	}
-	tx, err := s.db.BeginTx(ctx, baseAgencyQueries)
+	tx, err := s.DB.BeginTx(ctx, baseAgencyQueries)
 	if err != nil {
 		return 0, fmt.Errorf("agency: begin add-clients transaction: %w", err)
 	}
@@ -520,7 +518,7 @@ func (s *BaseAgencyService) AcceptInvite(ctx context.Context, token string, user
 	if clientPartnerID <= 0 {
 		return port.ErrNoPartnerYet
 	}
-	tx, err := s.db.BeginTx(ctx, baseAgencyQueries)
+	tx, err := s.DB.BeginTx(ctx, baseAgencyQueries)
 	if err != nil {
 		return fmt.Errorf("agency: begin accept transaction: %w", err)
 	}
@@ -614,7 +612,7 @@ func (s *BaseAgencyService) ClientDelegation(ctx context.Context, clientPartnerI
 }
 
 func (s *BaseAgencyService) RevokeDelegation(ctx context.Context, clientPartnerID, callerPartnerID, callerUserID int64) error {
-	tx, err := s.db.BeginTx(ctx, baseAgencyQueries)
+	tx, err := s.DB.BeginTx(ctx, baseAgencyQueries)
 	if err != nil {
 		return fmt.Errorf("agency: begin revoke transaction: %w", err)
 	}
@@ -662,7 +660,7 @@ func (s *BaseAgencyService) SetBillingModel(ctx context.Context, agencyPartnerID
 	if model != "R" && model != "W" {
 		return port.ErrInvalidBillingModel
 	}
-	tx, err := s.db.BeginTx(ctx, baseAgencyQueries)
+	tx, err := s.DB.BeginTx(ctx, baseAgencyQueries)
 	if err != nil {
 		return fmt.Errorf("agency: begin billing-model transaction: %w", err)
 	}
@@ -724,7 +722,7 @@ func (s *BaseAgencyService) CountActiveDelegations(ctx context.Context, agencyPa
 }
 
 func (s *BaseAgencyService) Enroll(ctx context.Context, agencyPartnerID, userID int64) error {
-	tx, err := s.db.BeginTx(ctx, baseAgencyQueries)
+	tx, err := s.DB.BeginTx(ctx, baseAgencyQueries)
 	if err != nil {
 		return fmt.Errorf("agency: begin enrollment transaction: %w", err)
 	}

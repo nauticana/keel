@@ -16,3 +16,12 @@ const (
 	PaymentStatusFailed   = "F"
 	PaymentStatusRefunded = "R"
 )
+
+// partner_plan_subscription.status codes (constant subscription_status).
+const (
+	SubscriptionStatusActive    = "A"
+	SubscriptionStatusPending   = "P" // awaiting payment or an administrator's activation
+	SubscriptionStatusTrialing  = "T"
+	SubscriptionStatusCancelled = "C"
+	SubscriptionStatusPastDue   = "X" // expired or past due
+)

@@ -25,6 +25,15 @@ func TestResolveSubscriptionOffer(t *testing.T) {
 		}
 	})
 
+	t.Run("manual plan is pending without payment", func(t *testing.T) {
+		for _, prices := range [][][]any{nil, rows} {
+			off, err := resolveSubscriptionOffer(prices, &PartnerSetup{}, billing.ActivateManual, 14, now)
+			if err != nil || off.paymentRequired || off.status != billing.SubscriptionStatusPending {
+				t.Fatalf("%d price rows: got %+v err %v", len(prices), off, err)
+			}
+		}
+	})
+
 	t.Run("cheapest when no terms requested", func(t *testing.T) {
 		off, err := resolveSubscriptionOffer(rows, &PartnerSetup{}, "P", 14, now)
 		if err != nil {

@@ -1,5 +1,7 @@
 package user
 
+import "github.com/nauticana/keel/billing"
+
 const (
 	qAddUserRegistration      = "add_user_registration"
 	qGetUserRegistration      = "get_user_registration"
@@ -15,6 +17,8 @@ const (
 	qRegistrantEmail          = "registrant_email"
 	qMarkEmailVerifiedByEmail = "mark_email_verified_by_email"
 	qAddPartnerUser           = "add_partner_user"
+	qCurrentMembershipStart   = "current_membership_start"
+	qMoveMembershipEnd        = "move_membership_end"
 	qAddPartnerRole           = "add_partner_role"
 	qGetPlan                  = "get_plan"
 	qPlanPrices               = "plan_prices"
@@ -86,6 +90,16 @@ INSERT INTO partner_user
 VALUES
  (?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
 `,
+	qCurrentMembershipStart: `
+SELECT begda FROM partner_user
+ WHERE partner_id = ? AND user_id = ?
+   AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
+`,
+	qMoveMembershipEnd: `
+UPDATE partner_user SET endda = ?
+ WHERE partner_id = ? AND user_id = ? AND begda = ?
+RETURNING partner_id
+`,
 	// Only a partner-scoped role can be granted to a partner's creator.
 	qAddPartnerRole: `
 INSERT INTO user_permission
@@ -111,8 +125,8 @@ VALUES
 `,
 	qActivateSubscription: `
 UPDATE partner_plan_subscription
-   SET status = 'A'
- WHERE partner_id = ? AND plan_id = ? AND status = 'P'
+   SET status = '` + billing.SubscriptionStatusActive + `'
+ WHERE partner_id = ? AND plan_id = ? AND status = '` + billing.SubscriptionStatusPending + `'
 `,
 	qListActivePlans: `
 SELECT sp.id, sp.caption, sp.activation_mode, sp.trial_days,

@@ -79,17 +79,8 @@ var (
 	AzureLogsEndpoint = flag.String("azure_logs_endpoint", "", "Azure Monitor Data Collection Endpoint URL (e.g. https://my-dce-xxxx.region.ingest.monitor.azure.com)")
 	AzureLogsRuleID   = flag.String("azure_logs_dcr", "", "Azure Monitor Data Collection Rule immutable ID (e.g. dcr-xxxxxxxx)")
 	AzureLogsStream   = flag.String("azure_logs_stream", "", "Azure Monitor DCR stream name (e.g. Custom-AppLogs_CL)")
-	// Keystore is the JSON file path consulted by the local secret
-	// provider. AWS-Secrets-Manager / GSM consumers ignore this flag.
-	// Previously this same flag was overloaded as the AWS region for
-	// secret_mode=aws — see AWSRegion below for the v0.4.1 split.
-	Keystore = flag.String("keystore", "/opt/app/sec/secrets.json", "Local secret provider: JSON file path")
-	// AWSRegion is the region for AWS Secrets Manager. Required when
-	// --secret_mode=aws. Falling back to the AWS SDK's default chain
-	// would silently pick "us-east-1" or whatever AWS_REGION sits in
-	// the environment, which is the wrong behavior for a multi-region
-	// deployment. Empty + secret_mode=aws is a configuration error.
-	AWSRegion = flag.String("aws_region", "", "AWS region for Secrets Manager")
+	Keystore          = flag.String("keystore", "/opt/app/sec/secrets.json", "Local secret provider: JSON file path")
+	AWSRegion         = flag.String("aws_region", "", "AWS region for Secrets Manager; empty uses the SDK's region chain, else us-east-1")
 	// NodeId identifies this runtime node/process. It seeds the bigint ID
 	// generator and selects this node's application_config_value rows.
 	NodeId      = flag.Int("node_id", 0, "Node ID for the bigint ID generator and per-node config rows")
@@ -106,7 +97,8 @@ var (
 	SecretMode = flag.String("secret_mode", "local", "Secret provider: local, gsm, aws, azure, or infisical")
 	// ProjectID is the GCP project consulted by the GSM secret provider
 	// (bootstrap) and GCP Pub/Sub messaging.
-	ProjectID = flag.String("gcp_project_id", "", "Google Cloud project ID")
+	ProjectID       = flag.String("gcp_project_id", "", "Google Cloud project ID")
+	GCPSecretRegion = flag.String("gcp_secret_region", "", "Secret Manager location for regional secrets; empty uses global secrets")
 	// AzureKeyVaultURL is the vault endpoint consulted when
 	// --secret_mode=azure, e.g. "https://my-vault.vault.azure.net/".
 	// Authentication uses azidentity.DefaultAzureCredential (the same

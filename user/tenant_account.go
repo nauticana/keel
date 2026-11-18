@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/pgsql"
 	"github.com/nauticana/keel/port"
@@ -31,6 +32,8 @@ type TenantAccountCreator interface {
 	CreateTenantMemberTx(ctx context.Context, tx port.TxQueryService, partnerID int64, member TenantMember, join bool) (int, error)
 	UpdateTenantMemberTx(ctx context.Context, tx port.TxQueryService, userID int, member TenantMember) error
 	JoinPartnerTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int, begda, endda *time.Time) error
+	MoveMembershipEndTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int, begda, endda *time.Time) error
+	IsMemberTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int) (bool, error)
 }
 
 var _ TenantAccountCreator = (*LocalUserService)(nil)
@@ -159,6 +162,65 @@ func (s *LocalUserService) JoinPartnerTx(ctx context.Context, tx port.TxQuerySer
 		return fmt.Errorf("user: add membership: %w", err)
 	}
 	return nil
+}
+
+// MoveMembershipEndTx sets the end (nil: open-ended) of the membership starting
+// at begda, or of the current one when begda is nil. An end not after the
+// start returns ErrInvalidMembershipPeriod; an overlap ErrAlreadyMember.
+func (s *LocalUserService) MoveMembershipEndTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int, begda, endda *time.Time) error {
+	if partnerID <= 0 || userID <= 0 {
+		return ErrNoMembership
+	}
+	_, register, err := tenantCatalogs(tx)
+	if err != nil {
+		return err
+	}
+	var start time.Time
+	if begda != nil {
+		start = begda.UTC()
+	} else {
+		current, err := register.Query(ctx, qCurrentMembershipStart, partnerID, userID)
+		if err != nil {
+			return fmt.Errorf("user: current membership: %w", err)
+		}
+		if len(current.Rows) == 0 {
+			return ErrNoMembership
+		}
+		start = common.AsTime(current.Rows[0][0])
+	}
+	var until any
+	if endda != nil {
+		if !endda.After(start) {
+			return ErrInvalidMembershipPeriod
+		}
+		until = endda.UTC()
+	}
+	res, err := register.Query(ctx, qMoveMembershipEnd, until, partnerID, userID, start)
+	switch {
+	case pgsql.IsExclusionViolation(err):
+		return ErrAlreadyMember
+	case err != nil:
+		return fmt.Errorf("user: move membership end: %w", err)
+	case len(res.Rows) == 0:
+		return ErrNoMembership
+	}
+	return nil
+}
+
+// IsMemberTx reports whether the account is a current member of partnerID.
+func (s *LocalUserService) IsMemberTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int) (bool, error) {
+	if partnerID <= 0 || userID <= 0 {
+		return false, nil
+	}
+	_, register, err := tenantCatalogs(tx)
+	if err != nil {
+		return false, err
+	}
+	current, err := register.Query(ctx, qCurrentMembershipStart, partnerID, userID)
+	if err != nil {
+		return false, fmt.Errorf("user: current membership: %w", err)
+	}
+	return len(current.Rows) > 0, nil
 }
 
 func tenantCatalogs(tx port.TxQueryService) (port.QueryService, port.QueryService, error) {

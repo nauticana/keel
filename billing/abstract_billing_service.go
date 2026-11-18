@@ -94,6 +94,8 @@ var (
 	ErrPriceNotFound   = errors.New("plan does not offer this billing interval")
 	ErrUnknownResource = errors.New("usage resource is not in subscription_resource")
 	ErrNotFreePlan     = errors.New("plan is not a free plan")
+	// ErrManualPlan: only an administrator's activation starts a manual plan.
+	ErrManualPlan = errors.New("plan is activated by an administrator")
 	// ErrProviderSubscription: the provider holds the subscription, so it must cancel it first.
 	ErrProviderSubscription = errors.New("subscription is held by the payment provider")
 	// ErrSubscriptionActive: the partner already holds a paid subscription; upgrades go through ChangePlan.

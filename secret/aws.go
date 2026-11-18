@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nauticana/keel/common"
-
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
@@ -23,21 +21,19 @@ type SecretProviderAWS struct {
 	client awsSecretsClient
 }
 
-// NewSecretProviderAWS constructs the AWS Secrets Manager backend.
-//
-// The region comes from the dedicated --aws_region flag (P1-26).
-// The previous implementation read --keystore here, overloading a
-// single flag as both "local JSON path" and "AWS region" — a footgun
-// that produced cryptic SDK errors when an operator copied a
-// keystore-path config into an AWS deployment.
-func NewSecretProviderAWS(ctx context.Context) (*SecretProviderAWS, error) {
-	region := strings.TrimSpace(*common.AWSRegion)
-	if region == "" {
-		return nil, fmt.Errorf("aws secret provider: --aws_region is required")
+// NewSecretProviderAWS opens AWS Secrets Manager in region; an empty region
+// takes the SDK's region chain, else us-east-1. AWS secrets are always regional.
+func NewSecretProviderAWS(ctx context.Context, region string) (*SecretProviderAWS, error) {
+	var opts []func(*config.LoadOptions) error
+	if region = strings.TrimSpace(region); region != "" {
+		opts = append(opts, config.WithRegion(region))
 	}
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	if cfg.Region == "" {
+		cfg.Region = "us-east-1"
 	}
 	return &SecretProviderAWS{client: secretsmanager.NewFromConfig(cfg)}, nil
 }

@@ -3,40 +3,39 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 )
 
-var errUninitialized = errors.New("service: AbstractService is not initialized; build it with NewAbstractService")
+var errUninitialized = errors.New("service: AbstractService has no DB")
 
-// AbstractService is the base a downstream service embeds by value to run its
-// named-query catalog:
+// AbstractService is the base a downstream service embeds to run its
+// named-query catalog, prepared on first use:
 //
 //	type FooService struct {
 //	    service.AbstractService
 //	}
 //
 //	func NewFooService(db port.DatabaseRepository) *FooService {
-//	    return &FooService{AbstractService: service.NewAbstractService(db, fooQueries)}
+//	    return &FooService{AbstractService: service.AbstractService{DB: db, Queries: fooQueries}}
 //	}
 type AbstractService struct {
-	QS      port.QueryService
-	db      port.DatabaseRepository
-	queries map[string]string
-}
+	DB      port.DatabaseRepository
+	Queries map[string]string
 
-// NewAbstractService prepares the catalog once; Query calls are lookups.
-func NewAbstractService(db port.DatabaseRepository, queries map[string]string) AbstractService {
-	return AbstractService{QS: db.GetQueryService(context.Background(), queries), db: db, queries: queries}
+	once sync.Once
+	qs   port.QueryService
 }
 
 func (s *AbstractService) Query(ctx context.Context, name string, args ...any) (*model.QueryResult, error) {
-	if s.QS == nil {
+	if s.DB == nil {
 		return nil, errUninitialized
 	}
-	return s.QS.Query(ctx, name, args...)
+	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, s.Queries) })
+	return s.qs.Query(ctx, name, args...)
 }
 
 // QueryRows runs the named query and returns every row.
@@ -63,15 +62,13 @@ func (s *AbstractService) Exec(ctx context.Context, name string, args ...any) er
 	return err
 }
 
-func (s *AbstractService) QueryService() port.QueryService { return s.QS }
-
 // Atomic runs fn over the service's catalog in one transaction, committed when
 // fn returns nil and rolled back otherwise, even after the context is cancelled.
 func (s *AbstractService) Atomic(ctx context.Context, fn func(tx port.TxQueryService) error) (err error) {
-	if s.db == nil {
+	if s.DB == nil {
 		return errUninitialized
 	}
-	tx, err := s.db.BeginTx(ctx, s.queries)
+	tx, err := s.DB.BeginTx(ctx, s.Queries)
 	if err != nil {
 		return err
 	}

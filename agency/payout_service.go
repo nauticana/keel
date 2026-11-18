@@ -34,7 +34,6 @@ type BaseAgencyPayoutOptions struct {
 // provider calls never run while a database transaction is open.
 type BaseAgencyPayoutService struct {
 	service.AbstractService
-	DB       port.DatabaseRepository
 	Provider payout.PayoutProvider
 	Ledger   port.AgencyCommissionLedger
 	Journal  logger.ApplicationLogger
@@ -59,8 +58,7 @@ func NewBaseAgencyPayoutService(db port.DatabaseRepository, provider payout.Payo
 		opts.MaxDispatchAttempts = 3
 	}
 	return &BaseAgencyPayoutService{
-		AbstractService:      service.NewAbstractService(db, agencyPayoutQueries),
-		DB:                   db,
+		AbstractService:      service.AbstractService{DB: db, Queries: agencyPayoutQueries},
 		Provider:             provider,
 		Ledger:               ledger,
 		Journal:              opts.Journal,

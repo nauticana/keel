@@ -70,6 +70,7 @@ const (
 	rotateAPIKey      = "rotate_api_key"
 	countActiveKeys   = "count_active_api_keys"
 	restrictAPIKey    = "restrict_api_key"
+	deactivateAPIKey  = "deactivate_api_key"
 	apiKeyPartnerLock = "api_key:partner:"
 )
 
@@ -105,6 +106,11 @@ SELECT COUNT(*) FROM api_key
 
 	restrictAPIKey: `
 UPDATE api_key SET allowed_cidrs = ?
+ WHERE id = ? AND partner_id = ? AND is_active = TRUE
+RETURNING key_hash`,
+
+	deactivateAPIKey: `
+UPDATE api_key SET is_active = FALSE
  WHERE id = ? AND partner_id = ? AND is_active = TRUE
 RETURNING key_hash`,
 }
@@ -162,25 +168,25 @@ type NewAPIKey struct {
 
 // InsertKey mints a key. A partner holding api_key_max_per_partner usable keys
 // gets ErrAPIKeyLimit.
-func (m *APIKeyService) InsertKey(ctx context.Context, req NewAPIKey) (key string, prefix string, err error) {
+func (m *APIKeyService) InsertKey(ctx context.Context, req NewAPIKey) (issued IssuedAPIKey, err error) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || utf8.RuneCountInString(req.Name) > apiKeyNameMax {
-		return "", "", fmt.Errorf("%w: key name must be 1 to %d characters", ErrInvalidAPIKey, apiKeyNameMax)
+		return IssuedAPIKey{}, fmt.Errorf("%w: key name must be 1 to %d characters", ErrInvalidAPIKey, apiKeyNameMax)
 	}
 	if !req.ExpiresAt.IsZero() && !req.ExpiresAt.After(time.Now()) {
-		return "", "", fmt.Errorf("%w: expiry %s is not in the future", ErrInvalidAPIKey, req.ExpiresAt)
+		return IssuedAPIKey{}, fmt.Errorf("%w: expiry %s is not in the future", ErrInvalidAPIKey, req.ExpiresAt)
 	}
 	if m.ScopePolicy != nil {
 		if req.Scopes, err = m.ScopePolicy(ctx, req.UserID, req.PartnerID, req.Scopes); err != nil {
-			return "", "", err
+			return IssuedAPIKey{}, err
 		}
 	}
 	if strings.TrimSpace(req.Scopes) == "" || utf8.RuneCountInString(req.Scopes) > apiKeyScopesMax {
-		return "", "", fmt.Errorf("%w: scopes must be 1 to %d characters", ErrInvalidScopes, apiKeyScopesMax)
+		return IssuedAPIKey{}, fmt.Errorf("%w: scopes must be 1 to %d characters", ErrInvalidScopes, apiKeyScopesMax)
 	}
 	nets, err := common.ParseCIDRList(req.AllowedCIDRs)
 	if err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	req.AllowedCIDRs = common.FormatCIDRList(nets)
 	limit := config.Config().APIKeyMaxPerPartner
@@ -189,7 +195,7 @@ func (m *APIKeyService) InsertKey(ctx context.Context, req NewAPIKey) (key strin
 	}
 	tx, err := m.DB.BeginTx(ctx, apiKeyTxQueries)
 	if err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	committed := false
 	defer func() {
@@ -198,31 +204,30 @@ func (m *APIKeyService) InsertKey(ctx context.Context, req NewAPIKey) (key strin
 		}
 	}()
 	if err := guard.Lock(ctx, tx, apiKeyPartnerLock+strconv.FormatInt(req.PartnerID, 10)); err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	res, err := tx.Query(ctx, countActiveKeys, req.PartnerID)
 	if err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	if len(res.Rows) != 1 || len(res.Rows[0]) != 1 {
-		return "", "", fmt.Errorf("api key count returned %d rows", len(res.Rows))
+		return IssuedAPIKey{}, fmt.Errorf("api key count returned %d rows", len(res.Rows))
 	}
 	active, ok := common.AsInt64OK(res.Rows[0][0])
 	if !ok {
-		return "", "", fmt.Errorf("api key count has type %T", res.Rows[0][0])
+		return IssuedAPIKey{}, fmt.Errorf("api key count has type %T", res.Rows[0][0])
 	}
 	if active >= int64(limit) {
-		return "", "", ErrAPIKeyLimit
+		return IssuedAPIKey{}, ErrAPIKeyLimit
 	}
-	key, prefix, err = m.insertKey(ctx, tx, req)
-	if err != nil {
-		return "", "", err
+	if issued, err = m.insertKey(ctx, tx, req); err != nil {
+		return IssuedAPIKey{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	committed = true
-	return key, prefix, nil
+	return issued, nil
 }
 
 // RestrictKey replaces the networks an active key of the partner may be used
@@ -240,10 +245,21 @@ func (m *APIKeyService) RestrictKey(ctx context.Context, keyID, partnerID int64,
 	return true, nil
 }
 
-func (m *APIKeyService) insertKey(ctx context.Context, qs port.QueryService, req NewAPIKey) (string, string, error) {
+// DeactivateKey revokes an active key of the partner at once in this process
+// and within CacheTTL in others. It reports false when no such key exists.
+func (m *APIKeyService) DeactivateKey(ctx context.Context, keyID, partnerID int64) (bool, error) {
+	res, err := m.qs.Query(ctx, deactivateAPIKey, keyID, partnerID)
+	if err != nil || len(res.Rows) == 0 {
+		return false, err
+	}
+	m.InvalidateKey(common.AsString(res.Rows[0][0]))
+	return true, nil
+}
+
+func (m *APIKeyService) insertKey(ctx context.Context, qs port.QueryService, req NewAPIKey) (IssuedAPIKey, error) {
 	randomBytes := make([]byte, 16)
 	if _, err := rand.Read(randomBytes); err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	hexStr := hex.EncodeToString(randomBytes)
 	plainKey := m.KeyPrefix + hexStr
@@ -261,12 +277,16 @@ func (m *APIKeyService) insertKey(ctx context.Context, qs port.QueryService, req
 	}
 	res, err := qs.Query(ctx, insertAPIKey, req.PartnerID, userID, req.Name, prefix, keyHash, req.Scopes, common.NullIfEmpty(req.AllowedCIDRs), expiresAt)
 	if err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	if len(res.Rows) == 0 {
-		return "", "", fmt.Errorf("api key insert returned no row for partner %d", req.PartnerID)
+		return IssuedAPIKey{}, fmt.Errorf("api key insert returned no row for partner %d", req.PartnerID)
 	}
-	return plainKey, prefix, nil
+	id, ok := common.AsInt64OK(res.Rows[0][0])
+	if !ok {
+		return IssuedAPIKey{}, fmt.Errorf("api key insert returned id %T", res.Rows[0][0])
+	}
+	return IssuedAPIKey{ID: id, Key: plainKey, Prefix: prefix}, nil
 }
 
 // LookupKey resolves a hashed API key to its partner / key id / scopes,
@@ -352,11 +372,11 @@ func (m *APIKeyService) TouchLastUsed(ctx context.Context, keyID int64) error {
 
 // RotateKey gives the old key at most 24 hours of grace and atomically issues
 // a replacement with the same attributes and original expiry. It returns no
-// key when the old key is not owned by the partner, active, and unexpired.
-func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID int64) (key, prefix string, err error) {
+// zero IssuedAPIKey when the old key is not owned by the partner, active, and unexpired.
+func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID int64) (issued IssuedAPIKey, err error) {
 	tx, err := m.DB.BeginTx(ctx, apiKeyQueries)
 	if err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	committed := false
 	defer func() {
@@ -366,31 +386,31 @@ func (m *APIKeyService) RotateKey(ctx context.Context, keyID int64, partnerID in
 	}()
 	res, err := tx.Query(ctx, rotateAPIKey, keyID, partnerID)
 	if err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	if len(res.Rows) == 0 {
-		return "", "", nil
+		return IssuedAPIKey{}, nil
 	}
 	row := res.Rows[0]
 	if len(row) != 6 {
-		return "", "", fmt.Errorf("api key rotation returned %d columns", len(row))
+		return IssuedAPIKey{}, fmt.Errorf("api key rotation returned %d columns", len(row))
 	}
 	userID, userOK := common.AsInt64OK(row[3])
 	expiresAt, expiresOK := common.AsTimeOK(row[5])
 	if (row[3] != nil && !userOK) || (row[5] != nil && !expiresOK) {
-		return "", "", fmt.Errorf("api key rotation returned user %T, expiry %T", row[3], row[5])
+		return IssuedAPIKey{}, fmt.Errorf("api key rotation returned user %T, expiry %T", row[3], row[5])
 	}
-	key, prefix, err = m.insertKey(ctx, tx, NewAPIKey{
+	issued, err = m.insertKey(ctx, tx, NewAPIKey{
 		PartnerID: partnerID, UserID: userID, Name: common.AsString(row[1]), Scopes: common.AsString(row[2]),
 		AllowedCIDRs: common.AsString(row[4]), ExpiresAt: expiresAt,
 	})
 	if err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return "", "", err
+		return IssuedAPIKey{}, err
 	}
 	committed = true
 	m.InvalidateKey(common.AsString(row[0]))
-	return key, prefix, nil
+	return issued, nil
 }

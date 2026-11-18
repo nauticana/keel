@@ -196,7 +196,7 @@ func (h *BillingHandler) subscriptionError(action string, err error) error {
 	case errors.Is(err, billing.ErrNoProviderSubscription), errors.Is(err, billing.ErrNoProviderCustomer),
 		errors.Is(err, billing.ErrSubscriptionPending), errors.Is(err, billing.ErrProviderSubscription):
 		return NewAPIError(http.StatusConflict, err.Error())
-	case errors.Is(err, billing.ErrPriceNotFound), errors.Is(err, billing.ErrPlanNotFound), errors.Is(err, billing.ErrNotFreePlan):
+	case errors.Is(err, billing.ErrPriceNotFound), errors.Is(err, billing.ErrPlanNotFound), errors.Is(err, billing.ErrNotFreePlan), errors.Is(err, billing.ErrManualPlan):
 		return NewAPIError(http.StatusBadRequest, "plan is not offered on these billing terms")
 	}
 	if h.Journal != nil {

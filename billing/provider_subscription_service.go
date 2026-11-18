@@ -89,6 +89,9 @@ func (s *ProviderSubscriptionService) ChangePlan(ctx context.Context, partnerID 
 	if err != nil {
 		return "", err
 	}
+	if mode == ActivateManual {
+		return "", fmt.Errorf("%w: %s", ErrManualPlan, planID)
+	}
 	sub, err := s.Store.CurrentSubscription(ctx, partnerID)
 	if mode == ActivateFree && errors.Is(err, ErrNoSubscription) {
 		return ChangeApplied, s.Lifecycle.ChangePlan(ctx, partnerID, planID, BillingTerms{})

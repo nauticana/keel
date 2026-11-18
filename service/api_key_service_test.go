@@ -76,15 +76,15 @@ func TestInsertKeyAppliesScopePolicy(t *testing.T) {
 		return "", errForbidden
 	}
 	// The policy's own sentinel keeps its registered status.
-	if _, _, err := svc.InsertKey(ctx, newKey("admin", "")); !errors.Is(err, errForbidden) || errors.Is(err, ErrInvalidScopes) {
+	if _, err := svc.InsertKey(ctx, newKey("admin", "")); !errors.Is(err, errForbidden) || errors.Is(err, ErrInvalidScopes) {
 		t.Fatalf("err = %v", err)
 	}
 	if qs.callIndex(insertAPIKey) >= 0 {
 		t.Fatal("a refused scope must not be stored")
 	}
 	for _, asked := range []string{"", "read,read"} {
-		if key, _, err := svc.InsertKey(ctx, newKey(asked, "")); err != nil || key[:2] != "t_" {
-			t.Fatalf("key %q, %v", key, err)
+		if issued, err := svc.InsertKey(ctx, newKey(asked, "")); err != nil || issued.Key[:2] != "t_" || issued.ID != 1 {
+			t.Fatalf("key %+v, %v", issued, err)
 		}
 		if args := qs.calls[len(qs.calls)-1].args; args[5] != "read" {
 			t.Fatalf("stored scopes %v, want the policy's", args[5])
@@ -93,8 +93,8 @@ func TestInsertKeyAppliesScopePolicy(t *testing.T) {
 	// A rolled key keeps scopes the policy no longer admits, and its expiry.
 	expires := time.Now().Add(time.Hour)
 	qs.rows[rotateAPIKey] = [][]any{{"old", "k", "admin", nil, "10.0.0.0/8", expires}}
-	if key, _, err := svc.RotateKey(ctx, 5, 7); err != nil || key == "" {
-		t.Fatalf("roll = %q, %v", key, err)
+	if issued, err := svc.RotateKey(ctx, 5, 7); err != nil || issued.Key == "" {
+		t.Fatalf("roll = %+v, %v", issued, err)
 	}
 	if args := qs.calls[len(qs.calls)-1].args; args[1] != nil || args[5] != "admin" || args[6] != "10.0.0.0/8" || args[7] != expires {
 		t.Fatalf("rolled key args = %v", args)
@@ -109,12 +109,12 @@ func TestInsertKeyValidatesNameScopesAndExpiry(t *testing.T) {
 		{PartnerID: 7, Name: strings.Repeat("ü", apiKeyNameMax+1), Scopes: "query"},
 		{PartnerID: 7, Name: "k", Scopes: "query", ExpiresAt: time.Now().Add(-time.Second)},
 	} {
-		if _, _, err := svc.InsertKey(ctx, req); !errors.Is(err, ErrInvalidAPIKey) {
+		if _, err := svc.InsertKey(ctx, req); !errors.Is(err, ErrInvalidAPIKey) {
 			t.Errorf("%+v = %v", req, err)
 		}
 	}
 	for _, scopes := range []string{"", strings.Repeat("ü", apiKeyScopesMax+1)} {
-		if _, _, err := svc.InsertKey(ctx, NewAPIKey{PartnerID: 7, Name: "k", Scopes: scopes}); !errors.Is(err, ErrInvalidScopes) {
+		if _, err := svc.InsertKey(ctx, NewAPIKey{PartnerID: 7, Name: "k", Scopes: scopes}); !errors.Is(err, ErrInvalidScopes) {
 			t.Errorf("scopes %d chars = %v", len(scopes), err)
 		}
 	}
@@ -122,7 +122,7 @@ func TestInsertKeyValidatesNameScopesAndExpiry(t *testing.T) {
 		t.Fatal("a refused key must not be stored")
 	}
 	expires := time.Now().Add(time.Hour)
-	if _, _, err := svc.InsertKey(ctx, NewAPIKey{PartnerID: 7, Name: "  " + strings.Repeat("ü", apiKeyNameMax) + "  ", Scopes: "query", ExpiresAt: expires}); err != nil {
+	if _, err := svc.InsertKey(ctx, NewAPIKey{PartnerID: 7, Name: "  " + strings.Repeat("ü", apiKeyNameMax) + "  ", Scopes: "query", ExpiresAt: expires}); err != nil {
 		t.Fatal(err)
 	}
 	if args := qs.calls[len(qs.calls)-1].args; args[1] != nil || args[2] != strings.Repeat("ü", apiKeyNameMax) || args[7] != expires {
@@ -138,7 +138,7 @@ func TestRotateKeyRefusesMalformedRow(t *testing.T) {
 		{"old", "k", "query", nil, nil, struct{}{}},
 	} {
 		qs.rows[rotateAPIKey] = [][]any{row}
-		if _, _, err := svc.RotateKey(context.Background(), 5, 7); err == nil {
+		if _, err := svc.RotateKey(context.Background(), 5, 7); err == nil {
 			t.Errorf("rotation row %v must fail", row)
 		}
 	}
@@ -149,7 +149,7 @@ func TestInsertKeyCapPerPartner(t *testing.T) {
 	ctx := context.Background()
 	repo := svc.DB.(*quotaFakeRepo)
 	qs.rows[countActiveKeys] = [][]any{{int64(config.Config().APIKeyMaxPerPartner)}}
-	if _, _, err := svc.InsertKey(ctx, newKey("query", "")); !errors.Is(err, ErrAPIKeyLimit) {
+	if _, err := svc.InsertKey(ctx, newKey("query", "")); !errors.Is(err, ErrAPIKeyLimit) {
 		t.Fatalf("at the cap = %v", err)
 	}
 	if qs.callIndex(insertAPIKey) >= 0 || repo.tx.rollbacks != 1 {
@@ -161,24 +161,24 @@ func TestInsertKeyCapPerPartner(t *testing.T) {
 
 	qs.calls = nil
 	qs.rows[countActiveKeys] = [][]any{{int64(config.Config().APIKeyMaxPerPartner - 1)}}
-	if _, _, err := svc.InsertKey(ctx, newKey("query", "")); err != nil || repo.tx.commits != 1 {
+	if _, err := svc.InsertKey(ctx, newKey("query", "")); err != nil || repo.tx.commits != 1 {
 		t.Fatalf("under the cap = %v, commits %d", err, repo.tx.commits)
 	}
 	// Rolling replaces a key, so it is never refused by the cap.
 	qs.rows[rotateAPIKey] = [][]any{{"old", "k", "query", nil, nil, nil}}
 	qs.rows[countActiveKeys] = [][]any{{int64(1000)}}
-	if key, _, err := svc.RotateKey(ctx, 5, 7); err != nil || key == "" {
-		t.Fatalf("roll at the cap = %q, %v", key, err)
+	if issued, err := svc.RotateKey(ctx, 5, 7); err != nil || issued.Key == "" {
+		t.Fatalf("roll at the cap = %+v, %v", issued, err)
 	}
 }
 
 func TestKeyNetworkAllowList(t *testing.T) {
 	svc, qs := newAPIKeys(t)
 	ctx := context.Background()
-	if _, _, err := svc.InsertKey(ctx, newKey("query", "10.0.0.0/33")); !errors.Is(err, common.ErrInvalidCIDRList) {
+	if _, err := svc.InsertKey(ctx, newKey("query", "10.0.0.0/33")); !errors.Is(err, common.ErrInvalidCIDRList) {
 		t.Fatalf("bad list = %v", err)
 	}
-	if _, _, err := svc.InsertKey(ctx, newKey("query", " 192.0.2.9 , 10.1.0.0/16")); err != nil {
+	if _, err := svc.InsertKey(ctx, newKey("query", " 192.0.2.9 , 10.1.0.0/16")); err != nil {
 		t.Fatal(err)
 	}
 	if args := qs.calls[len(qs.calls)-1].args; args[6] != "192.0.2.9/32,10.1.0.0/16" {
@@ -226,5 +226,28 @@ func TestRestrictKey(t *testing.T) {
 	}
 	if _, err := svc.RestrictKey(ctx, 5, 7, "nope"); !errors.Is(err, common.ErrInvalidCIDRList) {
 		t.Fatalf("bad list = %v", err)
+	}
+}
+
+func TestDeactivateKeyInvalidatesCache(t *testing.T) {
+	svc, qs := newAPIKeys(t)
+	ctx := context.Background()
+	qs.rows[validateAPIKey] = [][]any{{int64(5), int64(7), "query", time.Time{}, nil, nil}}
+	if entry, err := svc.LookupKey(ctx, "h5"); err != nil || entry == nil {
+		t.Fatalf("lookup = %+v, %v", entry, err)
+	}
+	if found, err := svc.DeactivateKey(ctx, 5, 7); err != nil || found {
+		t.Fatalf("no row = %v, %v; want not found", found, err)
+	}
+	qs.rows[deactivateAPIKey] = [][]any{{"h5"}}
+	qs.rows[validateAPIKey] = nil
+	if found, err := svc.DeactivateKey(ctx, 5, 7); err != nil || !found {
+		t.Fatalf("deactivate = %v, %v", found, err)
+	}
+	if args := qs.calls[len(qs.calls)-1].args; args[0] != int64(5) || args[1] != int64(7) {
+		t.Fatalf("deactivate args = %v; the key must be scoped to its partner", args)
+	}
+	if entry, err := svc.LookupKey(ctx, "h5"); err != nil || entry != nil {
+		t.Fatalf("a deactivated key must not stay cached: %+v, %v", entry, err)
 	}
 }

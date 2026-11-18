@@ -113,6 +113,7 @@ func TestBillingHandler(t *testing.T) {
 		billing.ErrSubscriptionPending:  http.StatusConflict,
 		billing.ErrProviderSubscription: http.StatusConflict,
 		billing.ErrNotFreePlan:          http.StatusBadRequest,
+		billing.ErrManualPlan:           http.StatusBadRequest,
 	} {
 		manager.err = err
 		if code := billingRequest(change, "/api/billing/subscription/change", `{"planId":"FREE"}`); code != want {

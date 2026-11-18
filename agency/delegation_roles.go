@@ -36,7 +36,7 @@ func (s *BaseAgencyService) SetDelegationRoles(ctx context.Context, clientPartne
 		return err
 	}
 
-	tx, err := s.db.BeginTx(ctx, baseAgencyQueries)
+	tx, err := s.DB.BeginTx(ctx, baseAgencyQueries)
 	if err != nil {
 		return fmt.Errorf("agency: begin delegation-roles transaction: %w", err)
 	}

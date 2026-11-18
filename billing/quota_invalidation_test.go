@@ -85,6 +85,23 @@ func TestRefusedActivationInvalidatesNothing(t *testing.T) {
 	}
 }
 
+func TestManualPlanRefusesSelfService(t *testing.T) {
+	ctx := context.Background()
+	svc, qs, tx := newTxSvc(map[string][][]any{
+		qLcPlanPolicy: {{string(ActivateManual), int64(0)}},
+		qLcPlanPrice:  {{int64(10000), "USD"}},
+	}, nil)
+	if err := svc.Activate(ctx, 7, "CONTRACT", BillingTerms{}, "sub_1", 0); !errors.Is(err, ErrManualPlan) {
+		t.Fatalf("Activate = %v", err)
+	}
+	if err := svc.ChangePlan(ctx, 7, "CONTRACT", BillingTerms{}); !errors.Is(err, ErrManualPlan) {
+		t.Fatalf("ChangePlan = %v", err)
+	}
+	if callCount(qs, qLcInsertActive)+callCount(&tx.fakeQS, qLcInsertActive)+callCount(&tx.fakeQS, qLcFlipPending) != 0 {
+		t.Fatal("a manual plan must not become active without an administrator")
+	}
+}
+
 type overageQuotas struct {
 	recordingQuotas
 	overages []port.QuotaOverage

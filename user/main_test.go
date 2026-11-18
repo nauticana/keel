@@ -25,27 +25,28 @@ func TestMain(m *testing.M) {
 // memStore is an in-memory stand-in for the account tables, driven by query name.
 // Queries it does not model are recorded in calls and return no rows.
 type memStore struct {
-	users      map[int]bool      // existing user_account ids
-	cutoffs    map[int]time.Time // tokens_valid_after
-	holds      map[int]bool      // users with an unreleased legal hold
-	deleted    map[int]bool
-	partners   map[int][][]any // qListPartners rows per user
-	accounts   map[int]*account
-	links      map[string]int    // issuer|subject → user id
-	grants     map[string]string // issuer|subject → provider_grant
-	members    map[[2]int64]bool // {user, partner} with an open membership
-	tokens     map[string]*refreshRow
-	loginRow   []any                    // qUserByLogin row
-	endedRoles []int                    // users whose open role assignments were ended
-	policies   map[int64]map[string]int // user_account_policy by partner; 0 = global
-	networks   map[int64][]string       // partner_signin_network
-	clock      time.Duration            // offset added to the wall clock
-	calls      []string
-	joins      [][]any // qAddPartnerUser arguments
-	failQuery  map[string]error
-	commits    int
-	rollbacks  int
-	nextID     int64
+	users       map[int]bool      // existing user_account ids
+	cutoffs     map[int]time.Time // tokens_valid_after
+	holds       map[int]bool      // users with an unreleased legal hold
+	deleted     map[int]bool
+	partners    map[int][][]any // qListPartners rows per user
+	accounts    map[int]*account
+	links       map[string]int    // issuer|subject → user id
+	grants      map[string]string // issuer|subject → provider_grant
+	members     map[[2]int64]bool // {user, partner} with an open membership
+	tokens      map[string]*refreshRow
+	loginRow    []any                    // qUserByLogin row
+	endedRoles  []int                    // users whose open role assignments were ended
+	policies    map[int64]map[string]int // user_account_policy by partner; 0 = global
+	networks    map[int64][]string       // partner_signin_network
+	clock       time.Duration            // offset added to the wall clock
+	calls       []string
+	joins       [][]any                // qAddPartnerUser arguments
+	memberSince map[[2]int64]time.Time // {user, partner} → begda, for the membership-end queries
+	failQuery   map[string]error
+	commits     int
+	rollbacks   int
+	nextID      int64
 }
 
 func newMemStore(userIDs ...int) *memStore {
@@ -120,6 +121,14 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	switch name {
 	case qAddPartnerUser:
 		m.joins = append(m.joins, args)
+	case qCurrentMembershipStart:
+		if start, ok := m.memberSince[[2]int64{int64(args[1].(int)), args[0].(int64)}]; ok {
+			out.Rows = [][]any{{start}}
+		}
+	case qMoveMembershipEnd:
+		if start, ok := m.memberSince[[2]int64{int64(args[2].(int)), args[1].(int64)}]; ok && args[3] == start {
+			out.Rows = [][]any{{args[1]}}
+		}
 	case qTokensValidAfter:
 		if at, ok := m.cutoffs[args[0].(int)]; ok {
 			out.Rows = [][]any{{at}}

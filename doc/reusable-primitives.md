@@ -36,7 +36,7 @@ mux.Handle("/public/lookup", h.JSONPublic("GET", func(ctx context.Context, query
 
 ### `service.AbstractService` and `service.Access` — the base of a downstream service
 
-`NewAbstractService(db, queries)` prepares a named-query catalog once; the embedding service gets `Query`, `QueryRows`, `QueryFirst`, `Exec`, and `Atomic(ctx, fn)`, which runs `fn` over the same catalog in one transaction, committed when it returns nil and rolled back otherwise.
+A service embeds `service.AbstractService{DB, Queries}`, which prepares the named-query catalog on first use; the embedding service gets `Query`, `QueryRows`, `QueryFirst`, `Exec`, and `Atomic(ctx, fn)`, which runs `fn` over the same catalog in one transaction, committed when it returns nil and rolled back otherwise.
 
 `Access{DB, Role}` authorizes an operation for the caller bound to the context:
 
@@ -302,7 +302,7 @@ point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
 
 ### Session partner for multi-partner users
 
-Login, `GetUserById`, token refresh and the phone, email and social lookups put the user's earliest current `partner_user` membership in the session (ordered by `begda`, then `partner_id`; ended memberships are ignored), so the partner does not change between refreshes. `UserService.ListPartners(userID)` returns every current membership in the same order.
+Login, `GetUserById`, token refresh and the phone, email and social lookups put the user's earliest current `partner_user` membership in the session (ordered by `begda`, then `partner_id`; ended memberships are ignored), so the partner does not change between refreshes. `UserService.ListPartners(userID)` returns every current membership in the same order. In a caller's transaction, `user.TenantAccountCreator.IsMemberTx(ctx, tx, partnerID, userID)` reports a current membership, `JoinPartnerTx` opens a dated membership and `MoveMembershipEndTx(ctx, tx, partnerID, userID, begda, endda)` sets the end (nil: open-ended) of the membership starting at `begda`, or of the current one when `begda` is nil; the end must be after the start (`ErrInvalidMembershipPeriod`) and not overlap another membership (`ErrAlreadyMember`). It writes the date only; `EndMembership` also ends role assignments and revokes tokens.
 
 A user belongs to at most one partner at a time. PostgreSQL enforces it with the exclusion constraint `partner_user_no_overlap` (needs the `btree_gist` extension), so two memberships of one user can never overlap; an insert that would overlap fails with SQLSTATE 23P01 (`pgsql.IsExclusionViolation`). To move a user, end the membership and create a new row.
 

@@ -60,6 +60,7 @@ const (
 	ActivatePending      ActivationMode = "P" // flip a pre-seeded status='P' row to 'A'
 	ActivateTrial        ActivationMode = "T" // start status='T' + trial_end; convert on first paid invoice
 	ActivateFree         ActivationMode = "F" // free plan: active immediately, no provider sub / charge
+	ActivateManual       ActivationMode = "M" // signed contract: pending until an administrator activates it
 )
 
 // CancelMode selects immediate vs at-period-end cancellation (routes the UPDATE).
@@ -336,6 +337,8 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 	}
 	switch pol.mode {
 	case ActivateCreateActive, ActivatePending, ActivateTrial, ActivateFree:
+	case ActivateManual:
+		return fmt.Errorf("%w: %s", ErrManualPlan, planID)
 	default:
 		return fmt.Errorf("unknown activation_mode %q for plan %s", pol.mode, planID)
 	}
@@ -369,9 +372,9 @@ func (s *AbstractBillingService) Activate(ctx context.Context, partnerID int64, 
 			mode:          ActivationMode(common.AsString(row[4])),
 		}
 		switch {
-		case r.status == "P":
+		case r.status == SubscriptionStatusPending:
 			pending = pending || r.planID == planID
-		case r.mode == ActivateFree || r.status == "T" && r.providerSubID == "":
+		case r.mode == ActivateFree || r.status == SubscriptionStatusTrialing && r.providerSubID == "":
 			closing = append(closing, endingRow{partnerID: partnerID, planID: r.planID, begda: r.begda})
 		case providerSubID != "" && r.providerSubID == providerSubID:
 			s.quotasChanged(ctx, partnerID) // a replay may follow a lost invalidation
@@ -461,6 +464,9 @@ func (s *AbstractBillingService) ChangePlanTx(ctx context.Context, tx port.TxQue
 	pol, err := s.loadPlanPolicy(ctx, newPlanID)
 	if err != nil {
 		return err
+	}
+	if pol.mode == ActivateManual {
+		return fmt.Errorf("%w: %s", ErrManualPlan, newPlanID)
 	}
 	current, err := tx.Query(ctx, qLcChangePlanCurrent, partnerID)
 	if err != nil {

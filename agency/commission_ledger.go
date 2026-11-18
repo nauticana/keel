@@ -26,7 +26,7 @@ type BaseCommissionLedger struct {
 
 func NewBaseCommissionLedger(db port.DatabaseRepository) *BaseCommissionLedger {
 	return &BaseCommissionLedger{
-		AbstractService: service.NewAbstractService(db, commissionLedgerQueries),
+		AbstractService: service.AbstractService{DB: db, Queries: commissionLedgerQueries},
 		now:             func() time.Time { return time.Now().UTC() },
 	}
 }

@@ -3,6 +3,7 @@ package agency
 import (
 	"context"
 	"errors"
+	"github.com/nauticana/keel/service"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func TestDispatchOutsideIdempotencyWindowParksManual(t *testing.T) {
 	qs := &payoutServiceQueryStub{now: now}
 	provider := &payoutProviderStub{}
 	svc := &BaseAgencyPayoutService{
-		QS:                   qs,
+		AbstractService:      service.AbstractService{DB: fakeQueryRepository{qs: qs}},
 		Provider:             provider,
 		now:                  func() time.Time { return now },
 		maxDispatchAttempts:  3,

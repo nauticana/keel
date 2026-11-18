@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -15,7 +16,6 @@ import (
 	infisical "github.com/infisical/go-sdk"
 	infisicalerrors "github.com/infisical/go-sdk/packages/errors"
 	"github.com/infisical/go-sdk/packages/models"
-	"github.com/nauticana/keel/common"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -133,17 +133,17 @@ func (f *fakeGSM) CreateSecret(_ context.Context, req *secretmanagerpb.CreateSec
 	if f.createdBehind {
 		return nil, status.Error(codes.AlreadyExists, "exists")
 	}
-	if req.Secret.GetReplication().GetAutomatic() == nil {
-		return nil, status.Error(codes.InvalidArgument, "replication required")
+	if regional := strings.Contains(req.Parent, "/locations/"); regional != (req.Secret.GetReplication() == nil) {
+		return nil, status.Error(codes.InvalidArgument, "global secrets replicate; regional ones do not")
 	}
 	return &secretmanagerpb.Secret{}, nil
 }
 
 func TestGSMPutSecret(t *testing.T) {
-	name := "projects/" + *common.ProjectID + "/secrets/k"
+	name := "projects/p1/secrets/k"
 
 	existing := &fakeGSM{secrets: map[string][]string{name: {"old"}}}
-	if err := (&SecretProviderGSM{client: existing}).PutSecret(ctx, "k", "new"); err != nil {
+	if err := (&SecretProviderGSM{client: existing, parent: "projects/p1"}).PutSecret(ctx, "k", "new"); err != nil {
 		t.Fatalf("existing secret: %v", err)
 	}
 	if got := existing.secrets[name]; len(got) != 2 || got[1] != "new" {
@@ -151,12 +151,20 @@ func TestGSMPutSecret(t *testing.T) {
 	}
 
 	for label, fake := range map[string]*fakeGSM{"missing": {}, "lost create race": {createdBehind: true}} {
-		if err := (&SecretProviderGSM{client: fake}).PutSecret(ctx, "k", "v"); err != nil {
+		if err := (&SecretProviderGSM{client: fake, parent: "projects/p1"}).PutSecret(ctx, "k", "v"); err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}
 		if got := fake.secrets[name]; len(got) != 1 || got[0] != "v" {
 			t.Fatalf("%s: versions = %v, want [v]", label, got)
 		}
+	}
+
+	regional := &fakeGSM{}
+	if err := (&SecretProviderGSM{client: regional, parent: "projects/p1/locations/europe-west1"}).PutSecret(ctx, "k", "v"); err != nil {
+		t.Fatalf("regional: %v", err)
+	}
+	if got := regional.secrets["projects/p1/locations/europe-west1/secrets/k"]; len(got) != 1 {
+		t.Fatalf("regional versions = %v", regional.secrets)
 	}
 
 	denied := &fakeGSM{createErr: status.Error(codes.PermissionDenied, "no secrets.create")}
@@ -214,8 +222,12 @@ type fakeAzure struct {
 	err     error
 }
 
-func (f *fakeAzure) GetSecret(context.Context, string, string, *azsecrets.GetSecretOptions) (azsecrets.GetSecretResponse, error) {
-	return azsecrets.GetSecretResponse{}, errors.New("unused")
+func (f *fakeAzure) GetSecret(_ context.Context, name string, _ string, _ *azsecrets.GetSecretOptions) (azsecrets.GetSecretResponse, error) {
+	v, ok := f.secrets[name]
+	if !ok {
+		return azsecrets.GetSecretResponse{}, errors.New("404 SecretNotFound")
+	}
+	return azsecrets.GetSecretResponse{Secret: azsecrets.Secret{Value: &v}}, nil
 }
 
 func (f *fakeAzure) SetSecret(_ context.Context, name string, p azsecrets.SetSecretParameters, _ *azsecrets.SetSecretOptions) (azsecrets.SetSecretResponse, error) {
@@ -236,6 +248,13 @@ func TestAzurePutSecret(t *testing.T) {
 	}
 	if fake.secrets["k"] != "v" {
 		t.Fatalf("stored %q, want v", fake.secrets["k"])
+	}
+	p := &SecretProviderAzure{client: fake}
+	if err := p.PutSecret(ctx, "jwt_secret", "s"); err != nil || fake.secrets["jwt-secret"] != "s" {
+		t.Fatalf("underscore name stored as %v, err %v; want jwt-secret", fake.secrets, err)
+	}
+	if got, err := p.GetSecret(ctx, "jwt_secret"); err != nil || got != "s" {
+		t.Fatalf("GetSecret(jwt_secret) = %q, %v", got, err)
 	}
 	forbidden := errors.New("403 Forbidden")
 	if err := (&SecretProviderAzure{client: &fakeAzure{err: forbidden}}).PutSecret(ctx, "k", "v"); !errors.Is(err, forbidden) {

@@ -11,7 +11,7 @@ import (
 
 func TestAtomicCommitsAndRollsBack(t *testing.T) {
 	db := keeltest.NewDatabase()
-	svc := NewAbstractService(db, map[string]string{"write": "UPDATE t SET a = ?"})
+	svc := &AbstractService{DB: db, Queries: map[string]string{"write": "UPDATE t SET a = ?"}}
 	if err := svc.Atomic(context.Background(), func(tx port.TxQueryService) error {
 		_, err := tx.Query(context.Background(), "write", 1)
 		return err
@@ -20,7 +20,7 @@ func TestAtomicCommitsAndRollsBack(t *testing.T) {
 	}
 
 	db = keeltest.NewDatabase()
-	svc = NewAbstractService(db, nil)
+	svc = &AbstractService{DB: db, Queries: nil}
 	boom := errors.New("boom")
 	if err := svc.Atomic(context.Background(), func(port.TxQueryService) error { return boom }); !errors.Is(err, boom) || db.Tx.Committed || !db.Tx.RolledBack {
 		t.Fatalf("rollback: err %v, tx %+v", err, db.Tx)
@@ -31,7 +31,7 @@ func TestAtomicReportsRollbackAndCommitFailures(t *testing.T) {
 	boom, stuck := errors.New("boom"), errors.New("stuck")
 	db := keeltest.NewDatabase()
 	db.Tx.RollbackErr = stuck
-	svc := NewAbstractService(db, nil)
+	svc := &AbstractService{DB: db, Queries: nil}
 	if err := svc.Atomic(context.Background(), func(port.TxQueryService) error { return boom }); !errors.Is(err, boom) || !errors.Is(err, stuck) {
 		t.Fatalf("failed rollback: %v, want both errors", err)
 	}

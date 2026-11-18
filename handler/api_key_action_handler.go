@@ -66,7 +66,7 @@ func (h *APIKeyActionHandler) generate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	key, prefix, err := h.Keys.InsertKey(r.Context(), service.NewAPIKey{
+	issued, err := h.Keys.InsertKey(r.Context(), service.NewAPIKey{
 		PartnerID: session.PartnerId, UserID: int64(session.Id), Name: req.KeyName,
 		Scopes: req.Scopes, AllowedCIDRs: req.AllowedCIDRs, ExpiresAt: expiresAt,
 	})
@@ -74,7 +74,7 @@ func (h *APIKeyActionHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.WriteServiceError(w, r, err)
 		return
 	}
-	kcommon.WriteJSON(w, http.StatusCreated, map[string]string{"api_key": key, "key_prefix": prefix})
+	kcommon.WriteJSON(w, http.StatusCreated, issued)
 }
 
 type rollKeyRequest struct {
@@ -87,16 +87,16 @@ func (h *APIKeyActionHandler) roll(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	key, prefix, err := h.Keys.RotateKey(r.Context(), req.ID, session.PartnerId)
+	issued, err := h.Keys.RotateKey(r.Context(), req.ID, session.PartnerId)
 	if err != nil {
 		h.WriteServiceError(w, r, err)
 		return
 	}
-	if key == "" {
+	if issued.Key == "" {
 		h.WriteError(w, http.StatusNotFound, "Not Found", "key not found, inactive or expired")
 		return
 	}
-	kcommon.WriteJSON(w, http.StatusOK, map[string]string{"api_key": key, "key_prefix": prefix})
+	kcommon.WriteJSON(w, http.StatusOK, issued)
 }
 
 type restrictKeyRequest struct {

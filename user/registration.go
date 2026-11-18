@@ -644,8 +644,9 @@ func (r *RegistrationService) expireConfirmation(ctx context.Context, email stri
 	return ErrInvalidConfirmation
 }
 
-// ActivateSubscription flips a pending subscription to active, for a payment
-// confirmation outside billing.NewProviderSubscriptionEventHandler.
+// ActivateSubscription flips a pending subscription to active: an
+// administrator's activation of a manual plan, or a payment confirmation
+// outside billing.NewProviderSubscriptionEventHandler.
 func (r *RegistrationService) ActivateSubscription(ctx context.Context, partnerID int64, planID string) error {
 	if err := r.init(ctx); err != nil {
 		return err

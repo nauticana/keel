@@ -55,8 +55,11 @@ checkout creation to `PaymentEvent.InvoiceLines[i].Metadata`.
 | activate-pending | `P` | flip a pre-seeded `status='P'` row → `'A'` (register-then-pay flows); without one, a fresh active row is inserted |
 | trial | `T` | start `status='T'` + `trial_end` (from `subscription_plan.trial_days`); `ConvertTrial` flips `T→A` on the first paid invoice. A free offer starts the trial at registration without a card; `EndDue` ends it at `trial_end` and a checkout closes it |
 | free | `F` | active immediately, no provider sub / charge |
+| manual | `M` | a signed contract: registration records `status='P'` without checkout, and an administrator activates it (`RegistrationService.ActivateSubscription`); `Activate` and `ChangePlan` refuse it with `ErrManualPlan` (400) |
 
-These four are mutually-exclusive **policies**. Orthogonal to them are **modifiers** that overlay any policy, so they are *columns, not enum values*: `seats` (seat-based pricing — pairs with `AddonReconciler`), `trial_end`/start-date (scheduling), the engine choice (`ProviderSubscriptionEngine` vs `SelfScheduledEngine`), and the collection method (charge-now vs send-invoice). Putting `seats` in the mode enum would make "seat-based trial" inexpressible — keep it a modifier.
+These five are mutually-exclusive **policies**. Orthogonal to them are **modifiers** that overlay any policy, so they are *columns, not enum values*: `seats` (seat-based pricing — pairs with `AddonReconciler`), `trial_end`/start-date (scheduling), the engine choice (`ProviderSubscriptionEngine` vs `SelfScheduledEngine`), and the collection method (charge-now vs send-invoice). Putting `seats` in the mode enum would make "seat-based trial" inexpressible — keep it a modifier.
+
+`partner_plan_subscription.status` codes are `billing.SubscriptionStatusActive` (`A`), `Pending` (`P`), `Trialing` (`T`), `Cancelled` (`C`) and `PastDue` (`X`).
 
 **Billing is three independent axes — payment cadence, commitment term, and price — not one "interval".** Conflating them is the classic billing bug; keel keeps them separate (`billing.BillingTerms`):
 

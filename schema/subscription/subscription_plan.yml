@@ -13,8 +13,7 @@ columns:
   - name: currency
     type: CHAR(3)
   # activation_mode (SUBSCRIPTION_ACTIVATION_MODE dict): how a checkout activates
-  # the sub. A=create-active, P=activate-pending, T=trial, F=free. Open dictionary
-  # — one_time/invoice_terms/manual_approval slot in later as rows, no schema break.
+  # the sub. A=create-active, P=activate-pending, T=trial, F=free, M=manual.
   - name: activation_mode
     type: CHAR(1)
     default: A
@@ -30,4 +29,4 @@ foreign_keys:
       columns: [code]
 checks:
   - name: chk_subscription_plan_activation_mode
-    expression: "activation_mode IN ('A', 'P', 'T', 'F')"
+    expression: "activation_mode IN ('A', 'P', 'T', 'F', 'M')"

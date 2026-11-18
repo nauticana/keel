@@ -27,24 +27,29 @@ type subscriptionOffer struct {
 }
 
 // freeOffer is active at once, except on a trial plan, where it is a trial
-// without a card that EndDue ends at trial_end.
+// without a card that EndDue ends at trial_end, and on a manual plan, where it
+// is pending until an administrator activates it.
 func freeOffer(mode billing.ActivationMode, trialDays int, now time.Time) subscriptionOffer {
-	if mode == billing.ActivateTrial {
-		return subscriptionOffer{status: "T", trialEnd: now.AddDate(0, 0, trialDays)}
+	switch mode {
+	case billing.ActivateTrial:
+		return subscriptionOffer{status: billing.SubscriptionStatusTrialing, trialEnd: now.AddDate(0, 0, trialDays)}
+	case billing.ActivateManual:
+		return subscriptionOffer{status: billing.SubscriptionStatusPending}
 	}
-	return subscriptionOffer{status: "A"}
+	return subscriptionOffer{status: billing.SubscriptionStatusActive}
 }
 
 // resolveSubscriptionOffer picks the offer from a plan's subscription_plan_price
 // rows: the requested terms, else the cheapest; no rows or a zero price is
 // freeOffer. A priced offer follows the plan's activation mode as
 // billing.SubscriptionLifecycle.Activate does at checkout: a pending plan gets
-// a 'P' row that checkout activates, a create-active or trial plan gets its row
-// from checkout, and a free-mode plan is active at once. The first installment
+// a 'P' row that checkout activates, a manual plan a 'P' row an administrator
+// activates, a create-active or trial plan gets its row from checkout, and a
+// free-mode plan is active at once. The first installment
 // is collected at checkout, so next_charge_date is the second.
 func resolveSubscriptionOffer(rows [][]any, setup *PartnerSetup, mode billing.ActivationMode, trialDays int, now time.Time) (subscriptionOffer, error) {
 	switch mode {
-	case billing.ActivateCreateActive, billing.ActivatePending, billing.ActivateTrial, billing.ActivateFree:
+	case billing.ActivateCreateActive, billing.ActivatePending, billing.ActivateTrial, billing.ActivateFree, billing.ActivateManual:
 	default:
 		return subscriptionOffer{}, fmt.Errorf("unknown activation_mode %q", mode)
 	}
@@ -107,9 +112,11 @@ func resolveSubscriptionOffer(rows [][]any, setup *PartnerSetup, mode billing.Ac
 	}
 	switch mode {
 	case billing.ActivateFree:
-		offer.status = "A"
+		offer.status = billing.SubscriptionStatusActive
+	case billing.ActivateManual:
+		offer.status = billing.SubscriptionStatusPending
 	case billing.ActivatePending:
-		offer.status, offer.paymentRequired = "P", true
+		offer.status, offer.paymentRequired = billing.SubscriptionStatusPending, true
 	default:
 		offer.paymentRequired = true
 	}

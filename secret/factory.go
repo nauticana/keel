@@ -8,6 +8,7 @@ import (
 	"github.com/nauticana/keel/common"
 )
 
+// NewSecretProvider opens the store the bootstrap flags select.
 func NewSecretProvider(ctx context.Context) (SecretProvider, error) {
 	return NewSecretRWProvider(ctx)
 }
@@ -15,39 +16,39 @@ func NewSecretProvider(ctx context.Context) (SecretProvider, error) {
 // NewSecretRWProvider is for the few components that mint or rotate secrets;
 // everything else takes the read-only SecretProvider.
 func NewSecretRWProvider(ctx context.Context) (SecretRWProvider, error) {
-	switch *common.SecretMode {
+	return NewSecretProviderFor(ctx, Settings{
+		Mode:                 *common.SecretMode,
+		Keystore:             *common.Keystore,
+		GCPProjectID:         *common.ProjectID,
+		GCPSecretRegion:      *common.GCPSecretRegion,
+		AWSRegion:            *common.AWSRegion,
+		AzureKeyVaultURL:     *common.AzureKeyVaultURL,
+		InfisicalProjectID:   *common.InfisicalProjectID,
+		InfisicalEnvironment: *common.InfisicalEnvironment,
+		InfisicalHost:        *common.InfisicalHost,
+	})
+}
+
+// NewSecretProviderFor opens the store s selects, independent of the flags.
+func NewSecretProviderFor(ctx context.Context, s Settings) (SecretRWProvider, error) {
+	switch s.Mode {
 	case "local":
-		return &SecretProviderLocal{Filename: *common.Keystore}, nil
+		return &SecretProviderLocal{Filename: s.Keystore}, nil
 	case "gsm":
-		return NewSecretProviderGSM(ctx)
+		return NewSecretProviderGSM(ctx, s.GCPProjectID, s.GCPSecretRegion)
 	case "aws":
-		return NewSecretProviderAWS(ctx)
+		return NewSecretProviderAWS(ctx, s.AWSRegion)
 	case "azure":
-		return NewSecretProviderAzure(ctx)
+		return NewSecretProviderAzure(ctx, s.AzureKeyVaultURL)
 	case "infisical":
-		return NewSecretProviderInfisical(ctx)
+		return NewSecretProviderInfisical(ctx, s.InfisicalProjectID, s.InfisicalEnvironment, s.InfisicalHost)
 	default:
-		return nil, fmt.Errorf("unknown secret_mode: %s", *common.SecretMode)
+		return nil, fmt.Errorf("unknown secret_mode: %s", s.Mode)
 	}
 }
 
-// MustGet returns the value of the named secret or terminates the
-// process via log.Fatalf when the lookup fails. Use this only at
-// process boot for genuinely-required keys (Stripe secret key, JWT
-// secret, DB password) where there is no useful runtime fallback —
-// every consumer was previously reimplementing
-//
-//	v, err := secrets.GetSecret(ctx, name)
-//	if err != nil { log.Fatalf(...) }
-//
-// for those values; this helper dedups the pattern and matches the
-// existing common.MustRequireTrustedProxyCIDR precedent (downstream
-// feedback v0.5.1-G).
-//
-// NEVER call MustGet from a hot request path. A transient secret-
-// provider outage would Fatalf the whole process for one bad lookup.
-// For runtime / per-request reads keep using SecretProvider.GetSecret
-// and surface the error to the caller.
+// MustGet returns the named secret or terminates the process. Use it only at
+// boot for required keys; never on a request path.
 func MustGet(ctx context.Context, p SecretProvider, name string) string {
 	v, err := p.GetSecret(ctx, name)
 	if err != nil {

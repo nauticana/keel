@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nauticana/keel/common"
-
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 )
@@ -20,20 +18,11 @@ type SecretProviderAzure struct {
 	client azureSecretsClient
 }
 
-// NewSecretProviderAzure constructs the Azure Key Vault backend.
-//
-// The vault endpoint comes from the dedicated --azure_keyvault_url flag.
-// Authentication uses azidentity.DefaultAzureCredential — identical to
-// the chain in storage/azure.go — so a managed identity (Azure VM / AKS)
-// or the standard AZURE_* environment fallback is honored without any
-// secret material being passed through this process's own config.
-//
-// Empty --azure_keyvault_url is a configuration error rather than a
-// silent default: there is no sensible vault to guess, and falling
-// through to an unrelated vault would surface as cryptic 404s on the
-// first GetSecret instead of a clear boot-time failure.
-func NewSecretProviderAzure(ctx context.Context) (*SecretProviderAzure, error) {
-	vaultURL := strings.TrimSpace(*common.AzureKeyVaultURL)
+// NewSecretProviderAzure opens the Key Vault at vaultURL with
+// azidentity.DefaultAzureCredential. Key Vault names hold letters, digits and
+// dashes only, so the provider stores a name with each '_' as '-'.
+func NewSecretProviderAzure(ctx context.Context, vaultURL string) (*SecretProviderAzure, error) {
+	vaultURL = strings.TrimSpace(vaultURL)
 	if vaultURL == "" {
 		return nil, fmt.Errorf("azure secret provider: --azure_keyvault_url is required")
 	}
@@ -48,14 +37,9 @@ func NewSecretProviderAzure(ctx context.Context) (*SecretProviderAzure, error) {
 	return &SecretProviderAzure{client: client}, nil
 }
 
-// GetSecret fetches the latest version of the named secret. The empty
-// version string asks Key Vault for the current version, matching the
-// "latest"-style semantics of the GSM backend.
-//
-// Trims trailing whitespace (P1-27) so Azure, AWS, GSM, and local all
-// return the same canonical string for the same secret value.
+// GetSecret reads the current version.
 func (s *SecretProviderAzure) GetSecret(ctx context.Context, path string) (string, error) {
-	resp, err := s.client.GetSecret(ctx, path, "", nil)
+	resp, err := s.client.GetSecret(ctx, s.vaultName(path), "", nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to get secret %s: %w", path, err)
 	}
@@ -70,10 +54,14 @@ func (s *SecretProviderAzure) PutSecret(ctx context.Context, path string, value 
 	if err := validatePut(path, value); err != nil {
 		return err
 	}
-	if _, err := s.client.SetSecret(ctx, path, azsecrets.SetSecretParameters{Value: &value}, nil); err != nil {
+	if _, err := s.client.SetSecret(ctx, s.vaultName(path), azsecrets.SetSecretParameters{Value: &value}, nil); err != nil {
 		return fmt.Errorf("failed to put secret %s: %w", path, err)
 	}
 	return nil
+}
+
+func (s *SecretProviderAzure) vaultName(path string) string {
+	return strings.ReplaceAll(path, "_", "-")
 }
 
 var _ SecretRWProvider = (*SecretProviderAzure)(nil)

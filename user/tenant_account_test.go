@@ -103,3 +103,56 @@ func TestJoinPartnerTx(t *testing.T) {
 		t.Fatalf("no partner: %v", err)
 	}
 }
+
+func TestMoveMembershipEndTx(t *testing.T) {
+	store := newMemStore(5)
+	begda := time.Now().Add(-48 * time.Hour).UTC()
+	store.memberSince = map[[2]int64]time.Time{{5, 42}: begda}
+	svc := newLocalUserService(t, store)
+	ctx := context.Background()
+	later, now, other := time.Now().Add(90*24*time.Hour), time.Now(), begda.Add(time.Hour)
+	beforeStart := begda.Add(-time.Hour)
+
+	for name, c := range map[string]struct {
+		begda, endda *time.Time
+		want         error
+	}{
+		"extend the current":   {nil, &later, nil},
+		"end the current now":  {nil, &now, nil},
+		"open-ended by start":  {&begda, nil, nil},
+		"end before the start": {nil, &beforeStart, ErrInvalidMembershipPeriod},
+		"end at the start":     {&begda, &begda, ErrInvalidMembershipPeriod},
+		"unknown start":        {&other, &later, ErrNoMembership},
+	} {
+		if err := svc.MoveMembershipEndTx(ctx, store, 42, 5, c.begda, c.endda); !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", name, err, c.want)
+		}
+	}
+	if err := svc.MoveMembershipEndTx(ctx, store, 43, 5, nil, &later); !errors.Is(err, ErrNoMembership) {
+		t.Fatalf("other partner: %v", err)
+	}
+	store.failQuery[qMoveMembershipEnd] = &pgconn.PgError{Code: "23P01"}
+	if err := svc.MoveMembershipEndTx(ctx, store, 42, 5, nil, &later); !errors.Is(err, ErrAlreadyMember) {
+		t.Fatalf("overlap: %v", err)
+	}
+}
+
+func TestIsMemberTx(t *testing.T) {
+	store := newMemStore(5)
+	store.memberSince = map[[2]int64]time.Time{{5, 42}: time.Now().Add(-time.Hour)}
+	svc := newLocalUserService(t, store)
+	ctx := context.Background()
+	for _, c := range []struct {
+		partner int64
+		user    int
+		want    bool
+	}{{42, 5, true}, {43, 5, false}, {42, 6, false}, {0, 5, false}, {42, 0, false}} {
+		if got, err := svc.IsMemberTx(ctx, store, c.partner, c.user); err != nil || got != c.want {
+			t.Errorf("IsMemberTx(%d, %d) = %v, %v; want %v", c.partner, c.user, got, err, c.want)
+		}
+	}
+	store.failQuery[qCurrentMembershipStart] = errors.New("down")
+	if ok, err := svc.IsMemberTx(ctx, store, 42, 5); err == nil || ok {
+		t.Fatalf("a failed read must not report a member: %v, %v", ok, err)
+	}
+}

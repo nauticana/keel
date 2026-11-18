@@ -48,3 +48,35 @@ func TestRedactForStorageKeepsOrdinaryText(t *testing.T) {
 		}
 	}
 }
+
+func TestLooksLikeCredential(t *testing.T) {
+	for _, in := range []string{
+		"-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
+		"AKIAIOSFODNN7EXAMPLE",
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJl",
+		"postgres://app:s3cret@db.internal:5432/app",
+		"sk-ant-api03-abcdef1234567890",
+		"password=hunter2",
+		"x9Kq2LmN8pR4tV7wY1zA3bC5dE6fG0hJ",
+	} {
+		if !LooksLikeCredential(in) {
+			t.Errorf("LooksLikeCredential(%q) = false", in)
+		}
+	}
+	for _, in := range []string{
+		"jwt_secret", "db_password_name", "ops@example.com", "+14085551212",
+		"https://vault.example.com/v1/secret", "postgres://db.internal:5432/app",
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"0b5e8f9c-3d2a-4f6b-9c1e-7a8d2f4b6c0e",
+	} {
+		if LooksLikeCredential(in) {
+			t.Errorf("LooksLikeCredential(%q) = true", in)
+		}
+	}
+}
+
+func TestRedactForStorageMasksURLPassword(t *testing.T) {
+	if got := RedactForStorage("dial postgres://app:s3cret@db:5432"); strings.Contains(got, "s3cret") || !strings.Contains(got, "postgres://app:") {
+		t.Fatalf("got %q", got)
+	}
+}

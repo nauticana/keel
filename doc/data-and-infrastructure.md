@@ -152,9 +152,11 @@ graph LR
 
 Selection is driven by flag variables:
 - `--secret_mode=local|gsm|aws|azure|infisical`
-  - `azure` reads from Azure Key Vault; set `--azure_keyvault_url=https://<vault>.vault.azure.net/`. Auth uses `azidentity.DefaultAzureCredential` (managed identity on Azure VM/AKS, or the `AZURE_*` env fallback), so no secret material passes through the process config.
+  - `gsm` reads the `--gcp_project_id` project's global secrets, or its regional secrets when `--gcp_secret_region` names a location.
+  - `aws` reads Secrets Manager in `--aws_region`; empty takes the SDK's region chain, else `us-east-1`. An AWS secret always lives in that one region; the provider creates no global or replicated secret.
+  - `azure` reads from Azure Key Vault; set `--azure_keyvault_url=https://<vault>.vault.azure.net/`. Key Vault names hold letters, digits and dashes, so the provider stores each `_` in a name as `-`. Auth uses `azidentity.DefaultAzureCredential` (managed identity on Azure VM/AKS, or the `AZURE_*` env fallback), so no secret material passes through the process config.
   - `infisical` reads from [Infisical](https://infisical.com) — the production-grade option for deployments **not** on AWS/GCP/Azure (so they need not fall back to the local `secrets.json` file). Set `--infisical_project_id`, `--infisical_environment` (default `prod`), and `--infisical_host` (default `https://app.infisical.com`; override for a self-hosted instance). Auth uses an Infisical **machine identity** via Universal Auth: the SDK reads `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` / `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` from the environment, so — like the gsm/aws/azure backends — the credential is owned by the vendor SDK's chain and never passes through a keel flag. Universal Auth is chosen because it is platform-agnostic; the native AWS/Azure/GCP/Kubernetes machine-identity methods only apply when running on that platform.
-  - **Writing secrets.** Every backend also implements `secret.SecretRWProvider`, which adds `PutSecret(ctx, path, value)`: create the secret or make `value` its current version. Build it with `secret.NewSecretRWProvider(ctx)` (same `--secret_mode` switch) and hand it only to the component that mints or rotates a secret — per-tenant signing keys, provider-issued tokens; everything else keeps taking the read-only `SecretProvider`. Blank paths and values are refused with `ErrInvalidSecretWrite`, since `GetSecret` trims and could never read them back. Readers that cached a value, including `MustGet` results held since boot, do not see a later write.
+  - **Writing secrets.** Every backend also implements `secret.SecretRWProvider`, which adds `PutSecret(ctx, path, value)`: create the secret or make `value` its current version. Build it with `secret.NewSecretRWProvider(ctx)` (same `--secret_mode` switch), or `secret.NewSecretProviderFor(ctx, secret.Settings{…})` to open a store named by explicit settings instead of the flags, and hand it only to the component that mints or rotates a secret — per-tenant signing keys, provider-issued tokens; everything else keeps taking the read-only `SecretProvider`. Blank paths and values are refused with `ErrInvalidSecretWrite`, since `GetSecret` trims and could never read them back. Readers that cached a value, including `MustGet` results held since boot, do not see a later write.
 
     | Backend | `PutSecret` | Write permission the runtime identity needs |
     |---|---|---|
@@ -309,7 +311,7 @@ Every read takes `partnerID` / `ownerID` with **`0` meaning unrestricted** — t
 
 Handlers never call the logger with raw session values; one service method makes the collapse so no read path can skip it. A `GetChange` outside the caller's scope returns `port.ErrChangeNotFound`, identical to a missing id, so ids are not an oracle for other partners' history. Do **not** widen the filter to `partner_id = $1 OR partner_id = 0` to let partner users see global-table rows — pass `0` for non-partner tables instead, or a partner-table row whose snapshot happened to be `0` leaks.
 
-Pass `OldData` through `common.RedactForStorage` before `LogChange` so secret-bearing columns never reach the audit trail.
+Pass `OldData` through `common.RedactForStorage` before `LogChange` so secret-bearing columns never reach the audit trail. `common.LooksLikeCredential(text)` reports whether text holds a credential (keys, tokens, PEM private keys, URL passwords, `password=`-style pairs, long mixed-case key runs) without flagging email addresses or phone numbers; use it to refuse a pasted secret where only a secret name belongs.
 
 ## Bigint ID Generation
 
@@ -576,8 +578,9 @@ through `config.Config()` (see [Runtime Configuration](configuration-and-getting
 | `--azure_logs_stream` | `` | Azure Monitor DCR stream name (required when `--log_type=azure`) |
 | `--keystore` | `/opt/app/sec/secrets.json` | Secrets file path (local secret provider) |
 | `--secret_mode` | `local` | Secret provider: local, gsm, aws, azure, infisical |
-| `--aws_region` | `` | AWS region for Secrets Manager (required when `--secret_mode=aws`) |
+| `--aws_region` | `` | AWS region for Secrets Manager; empty takes the SDK's region chain, else `us-east-1` |
 | `--gcp_project_id` | `` | GCP project for the GSM secret provider and Pub/Sub messaging |
+| `--gcp_secret_region` | `` | Secret Manager location for regional secrets; empty uses global secrets |
 | `--azure_keyvault_url` | `` | Azure Key Vault URL (required when `--secret_mode=azure`) |
 | `--infisical_project_id` | `` | Infisical project (workspace) ID (required when `--secret_mode=infisical`) |
 | `--infisical_environment` | `prod` | Infisical environment slug: dev, staging, prod (used when `--secret_mode=infisical`) |
