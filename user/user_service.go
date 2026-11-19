@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"github.com/nauticana/keel/model"
 )
 
@@ -25,6 +26,7 @@ type UserService interface {
 	// ListPartners returns the user's current partner memberships; the first is
 	// the session partner.
 	ListPartners(userID int) ([]model.PartnerMembership, error)
+	IsMember(ctx context.Context, partnerID int64, userID int) (bool, error)
 	SetPassword(userid int, password string) error
 	GetUserMenu(userid int) ([]model.UserMenu, error)
 

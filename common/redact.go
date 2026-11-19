@@ -9,28 +9,35 @@ import (
 type redactionRule struct {
 	pattern *regexp.Regexp
 	mask    string
+	// accept, when set, rejects matches that only resemble the credential.
+	accept func(string) bool
 }
 
 // credentialRules mask secrets; contactRules mask personal contact data.
 // RedactForStorage applies both before operator-visible text reaches a row.
 var (
 	credentialRules = []redactionRule{
-		{regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`), "[redacted-key]"},
-		{regexp.MustCompile(`(?i)\b(?:sk|rk)-[a-z0-9][a-z0-9-]{14,}`), "[redacted-key]"},
-		{regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{20,}`), "[redacted-key]"},
-		{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), "[redacted-key]"},
-		{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+`), "[redacted-token]"},
-		{regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{16,}`), "bearer [redacted]"},
-		{regexp.MustCompile(`\benc:v1:[A-Za-z0-9+/=]{8,}`), "[redacted-secret]"},
-		{regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)[^/\s@]+@`), "${1}[redacted]@"},
-		{regexp.MustCompile(`(?i)((?:password|passwd|secret|token|api[_-]?key|authorization|client[_-]?secret)\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`), "${1}[redacted]"},
-		{regexp.MustCompile(`(?i)((?:authorization)\s*[=:]\s*)(?:[a-z][a-z0-9_-]*\s+)?[^"\\\s,;]+`), "${1}[redacted]"},
-		{regexp.MustCompile(`(?i)((?:password|passwd|secret|token|api[_-]?key|authorization|client[_-]?secret)\s*[=:]\s*)[^"\\\s,;]+`), "${1}[redacted]"},
+		{regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`), "[redacted-key]", nil},
+		{regexp.MustCompile(`(?i)\b(?:sk|rk)-[a-z0-9][a-z0-9_-]{14,}`), "[redacted-key]", randomKey},
+		{regexp.MustCompile(`\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{10,}`), "[redacted-key]", nil},
+		{regexp.MustCompile(`\bxox[abeoprs]-[0-9A-Za-z-]{10,}`), "[redacted-token]", nil},
+		{regexp.MustCompile(`\b(?:gh[oprsu]_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,})`), "[redacted-token]", nil},
+		{regexp.MustCompile(`\bglpat-[0-9A-Za-z_-]{20,}`), "[redacted-token]", nil},
+		{regexp.MustCompile(`\bya29\.[0-9A-Za-z._-]{20,}`), "[redacted-token]", nil},
+		{regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{20,}`), "[redacted-key]", nil},
+		{regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`), "[redacted-key]", nil},
+		{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+`), "[redacted-token]", nil},
+		{regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{16,}`), "bearer [redacted]", nil},
+		{regexp.MustCompile(`\benc:v1:[A-Za-z0-9+/=]{8,}`), "[redacted-secret]", nil},
+		{regexp.MustCompile(`(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)[^/\s@]+@`), "${1}[redacted]@", nil},
+		{regexp.MustCompile(`(?i)((?:password|passwd|secret|token|api[_-]?key|authorization|client[_-]?secret)\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`), "${1}[redacted]", nil},
+		{regexp.MustCompile(`(?i)((?:authorization)\s*[=:]\s*)(?:[a-z][a-z0-9_-]*\s+)?[^"\\\s,;]+`), "${1}[redacted]", nil},
+		{regexp.MustCompile(`(?i)((?:password|passwd|secret|token|api[_-]?key|authorization|client[_-]?secret)\s*[=:]\s*)[^"\\\s,;]+`), "${1}[redacted]", nil},
 	}
 	contactRules = []redactionRule{
-		{regexp.MustCompile(`\b[0-9A-Za-z._%+-]+@[0-9A-Za-z.-]+\.[A-Za-z]{2,}\b`), "[redacted-email]"},
-		{regexp.MustCompile(`\b(?:\d{4}[ -]){3}\d{4}\b`), "[redacted-number]"},
-		{regexp.MustCompile(`\+?\b\d{10,15}\b`), "[redacted-number]"},
+		{regexp.MustCompile(`\b[0-9A-Za-z._%+-]+@[0-9A-Za-z.-]+\.[A-Za-z]{2,}\b`), "[redacted-email]", nil},
+		{regexp.MustCompile(`\b(?:\d{4}[ -]){3}\d{4}\b`), "[redacted-number]", nil},
+		{regexp.MustCompile(`\+?\b\d{10,15}\b`), "[redacted-number]", nil},
 	}
 	opaqueRun = regexp.MustCompile(`[A-Za-z0-9+/=_-]{32,}`)
 )
@@ -39,7 +46,7 @@ var (
 func RedactForStorage(text string) string {
 	for _, rules := range [][]redactionRule{credentialRules, contactRules} {
 		for _, rule := range rules {
-			text = rule.pattern.ReplaceAllString(text, rule.mask)
+			text = rule.replace(text)
 		}
 	}
 	return text
@@ -50,7 +57,7 @@ func RedactForStorage(text string) string {
 // and digits. Email addresses and phone numbers are not credentials.
 func LooksLikeCredential(text string) bool {
 	for _, rule := range credentialRules {
-		if rule.pattern.MatchString(text) {
+		if rule.replace(text) != text {
 			return true
 		}
 	}
@@ -60,4 +67,27 @@ func LooksLikeCredential(text string) bool {
 		}
 	}
 	return false
+}
+
+func (r redactionRule) replace(text string) string {
+	if r.accept == nil {
+		return r.pattern.ReplaceAllString(text, r.mask)
+	}
+	return r.pattern.ReplaceAllStringFunc(text, func(m string) string {
+		if r.accept(m) {
+			return r.mask
+		}
+		return m
+	})
+}
+
+// randomKey tells an sk-/rk- key from a hyphenated name: three or more digits.
+func randomKey(s string) bool {
+	digits := 0
+	for _, c := range s {
+		if unicode.IsDigit(c) {
+			digits++
+		}
+	}
+	return digits >= 3
 }

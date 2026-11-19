@@ -251,3 +251,23 @@ func TestDeactivateKeyInvalidatesCache(t *testing.T) {
 		t.Fatalf("a deactivated key must not stay cached: %+v, %v", entry, err)
 	}
 }
+
+func TestDeactivateKeyTx(t *testing.T) {
+	svc, qs := newAPIKeys(t)
+	ctx := context.Background()
+	qs.rows[validateAPIKey] = [][]any{{int64(5), int64(7), "query", time.Time{}, nil, nil}}
+	if entry, err := svc.LookupKey(ctx, "h5"); err != nil || entry == nil {
+		t.Fatalf("lookup = %+v, %v", entry, err)
+	}
+	qs.rows[deactivateAPIKey] = [][]any{{"h5"}}
+	qs.rows[validateAPIKey] = nil
+	if found, err := svc.DeactivateKeyTx(ctx, &quotaFakeTx{quotaFakeQS: qs}, 5, 7); err != nil || !found {
+		t.Fatalf("deactivate = %v, %v", found, err)
+	}
+	if entry, err := svc.LookupKey(ctx, "h5"); err != nil || entry != nil {
+		t.Fatalf("a deactivated key must not stay cached: %+v, %v", entry, err)
+	}
+	if _, err := svc.DeactivateKeyTx(ctx, fakePlainTx{qs}, 5, 7); !errors.Is(err, ErrTxCatalog) {
+		t.Fatal("a transaction without a query catalog must be refused")
+	}
+}

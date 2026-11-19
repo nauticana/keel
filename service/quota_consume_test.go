@@ -51,6 +51,9 @@ type quotaFakeTx struct {
 
 func (f *quotaFakeTx) Commit(context.Context) error   { f.commits++; return nil }
 func (f *quotaFakeTx) Rollback(context.Context) error { f.rollbacks++; return nil }
+func (f *quotaFakeTx) QueryService(string, map[string]string) port.QueryService {
+	return f.quotaFakeQS
+}
 
 type quotaFakeRepo struct {
 	port.DatabaseRepository

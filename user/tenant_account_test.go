@@ -137,7 +137,7 @@ func TestMoveMembershipEndTx(t *testing.T) {
 	}
 }
 
-func TestIsMemberTx(t *testing.T) {
+func TestIsMember(t *testing.T) {
 	store := newMemStore(5)
 	store.memberSince = map[[2]int64]time.Time{{5, 42}: time.Now().Add(-time.Hour)}
 	svc := newLocalUserService(t, store)
@@ -147,12 +147,12 @@ func TestIsMemberTx(t *testing.T) {
 		user    int
 		want    bool
 	}{{42, 5, true}, {43, 5, false}, {42, 6, false}, {0, 5, false}, {42, 0, false}} {
-		if got, err := svc.IsMemberTx(ctx, store, c.partner, c.user); err != nil || got != c.want {
-			t.Errorf("IsMemberTx(%d, %d) = %v, %v; want %v", c.partner, c.user, got, err, c.want)
+		if got, err := svc.IsMember(ctx, c.partner, c.user); err != nil || got != c.want {
+			t.Errorf("IsMember(%d, %d) = %v, %v; want %v", c.partner, c.user, got, err, c.want)
 		}
 	}
 	store.failQuery[qCurrentMembershipStart] = errors.New("down")
-	if ok, err := svc.IsMemberTx(ctx, store, 42, 5); err == nil || ok {
+	if ok, err := svc.IsMember(ctx, 42, 5); err == nil || ok {
 		t.Fatalf("a failed read must not report a member: %v, %v", ok, err)
 	}
 }

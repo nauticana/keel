@@ -33,7 +33,6 @@ type TenantAccountCreator interface {
 	UpdateTenantMemberTx(ctx context.Context, tx port.TxQueryService, userID int, member TenantMember) error
 	JoinPartnerTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int, begda, endda *time.Time) error
 	MoveMembershipEndTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int, begda, endda *time.Time) error
-	IsMemberTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int) (bool, error)
 }
 
 var _ TenantAccountCreator = (*LocalUserService)(nil)
@@ -171,7 +170,7 @@ func (s *LocalUserService) MoveMembershipEndTx(ctx context.Context, tx port.TxQu
 	if partnerID <= 0 || userID <= 0 {
 		return ErrNoMembership
 	}
-	_, register, err := tenantCatalogs(tx)
+	local, register, err := tenantCatalogs(tx)
 	if err != nil {
 		return err
 	}
@@ -179,7 +178,7 @@ func (s *LocalUserService) MoveMembershipEndTx(ctx context.Context, tx port.TxQu
 	if begda != nil {
 		start = begda.UTC()
 	} else {
-		current, err := register.Query(ctx, qCurrentMembershipStart, partnerID, userID)
+		current, err := local.Query(ctx, qCurrentMembershipStart, partnerID, userID)
 		if err != nil {
 			return fmt.Errorf("user: current membership: %w", err)
 		}
@@ -207,16 +206,12 @@ func (s *LocalUserService) MoveMembershipEndTx(ctx context.Context, tx port.TxQu
 	return nil
 }
 
-// IsMemberTx reports whether the account is a current member of partnerID.
-func (s *LocalUserService) IsMemberTx(ctx context.Context, tx port.TxQueryService, partnerID int64, userID int) (bool, error) {
+// IsMember reports whether the account is a current member of partnerID.
+func (s *LocalUserService) IsMember(ctx context.Context, partnerID int64, userID int) (bool, error) {
 	if partnerID <= 0 || userID <= 0 {
 		return false, nil
 	}
-	_, register, err := tenantCatalogs(tx)
-	if err != nil {
-		return false, err
-	}
-	current, err := register.Query(ctx, qCurrentMembershipStart, partnerID, userID)
+	current, err := s.queryService.Query(ctx, qCurrentMembershipStart, partnerID, userID)
 	if err != nil {
 		return false, fmt.Errorf("user: current membership: %w", err)
 	}

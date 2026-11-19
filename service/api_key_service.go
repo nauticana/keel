@@ -248,7 +248,22 @@ func (m *APIKeyService) RestrictKey(ctx context.Context, keyID, partnerID int64,
 // DeactivateKey revokes an active key of the partner at once in this process
 // and within CacheTTL in others. It reports false when no such key exists.
 func (m *APIKeyService) DeactivateKey(ctx context.Context, keyID, partnerID int64) (bool, error) {
-	res, err := m.qs.Query(ctx, deactivateAPIKey, keyID, partnerID)
+	return m.deactivate(ctx, m.qs, keyID, partnerID)
+}
+
+// DeactivateKeyTx is DeactivateKey in the caller's transaction, which must
+// implement port.TxQueryCatalog (ErrTxCatalog otherwise); the revocation
+// reaches every process within CacheTTL of the commit.
+func (m *APIKeyService) DeactivateKeyTx(ctx context.Context, tx port.TxQueryService, keyID, partnerID int64) (bool, error) {
+	catalog, ok := tx.(port.TxQueryCatalog)
+	if !ok {
+		return false, ErrTxCatalog
+	}
+	return m.deactivate(ctx, catalog.QueryService("service.api_key", apiKeyQueries), keyID, partnerID)
+}
+
+func (m *APIKeyService) deactivate(ctx context.Context, qs port.QueryService, keyID, partnerID int64) (bool, error) {
+	res, err := qs.Query(ctx, deactivateAPIKey, keyID, partnerID)
 	if err != nil || len(res.Rows) == 0 {
 		return false, err
 	}

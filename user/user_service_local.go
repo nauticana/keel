@@ -139,6 +139,8 @@ const (
 	qAddUserActivity    = "add_user_activity"
 	qSetLockStatus      = "set_lock_status"
 
+	qCurrentMembershipStart = "current_membership_start"
+
 	// 2FA queries
 	qGet2FASecret      = "get_2fa_secret"
 	qSet2FALastStep    = "set_2fa_last_step"
@@ -318,6 +320,11 @@ SELECT U.id, U.first_name, U.last_name, U.user_email, U.status, U.passdate, U.pa
  WHERE U.user_email = ?
 `,
 
+	qCurrentMembershipStart: `
+SELECT begda FROM partner_user
+ WHERE partner_id = ? AND user_id = ?
+   AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
+`,
 	qListPartners: `
 SELECT partner_id, begda, endda
   FROM partner_user

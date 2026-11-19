@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.3.10",
+   "title": "Membership check without a transaction, API key deactivation in a caller's transaction, vendor token prefixes, signed entitlements",
+   "tags": [
+    "breaking",
+    "additive"
+   ],
+   "summary": "UserService.IsMember replaces TenantAccountCreator.IsMemberTx and checks a current membership without a transaction, APIKeyService.DeactivateKeyTx revokes a key in the caller's transaction, the credential screen recognizes more vendor token prefixes and no longer flags hyphenated sk-/rk- names, and the new entitlement package signs and verifies offline entitlements.",
+   "body_markdown": "### Breaking\n\n- `user.TenantAccountCreator.IsMemberTx(ctx, tx, partnerID, userID)` is removed; use `user.UserService.IsMember(ctx, partnerID, userID)`, which reads outside a transaction. Other `UserService` implementations add it.\n\n### Additive\n\n- `service.APIKeyService.DeactivateKeyTx(ctx, tx, keyID, partnerID)` revokes a key in the caller's transaction, which must implement `port.TxQueryCatalog` (`service.ErrTxCatalog` otherwise).\n- `common.LooksLikeCredential` and `RedactForStorage` recognize Stripe `sk_live_`/`sk_test_`/`rk_live_`, Slack `xox?-`, GitHub `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_`, GitLab `glpat-` and Google OAuth `ya29.` tokens. An `sk-`/`rk-` key now needs three or more digits, so hyphenated names are not flagged, and is masked through its `_` characters.\n- New `entitlement` package: `Signer` (`NewSigner`, `NewSignerFromPEM`) signs a `Document` into a `File` with RSA-PSS SHA-256 and a key id; `NewVerifier(publicKeyPEMs...)` verifies a file offline; `Document.StateAt`, `RenewalDue` and `Admits` read its state, renewal window and quotas.\n"
+  },
+  {
    "version": "v1.3.9",
    "title": "API key ids and revocation, membership ends, AbstractService without a constructor, secret settings and regions, manual activation",
    "tags": [

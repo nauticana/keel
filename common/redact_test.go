@@ -58,6 +58,10 @@ func TestLooksLikeCredential(t *testing.T) {
 		"sk-ant-api03-abcdef1234567890",
 		"password=hunter2",
 		"x9Kq2LmN8pR4tV7wY1zA3bC5dE6fG0hJ",
+		"sk_live_abcdefghijklmn", "rk_live_51Habcdefgh", "sk_test_abcdefghij",
+		"xoxb-123456789012-abcdefghij", "ghp_abcdefghijklmnopqrstuvwxyz",
+		"github_pat_11ABCDEFG_abcdefghijklmno", "glpat-abcdefghijklmnopqrst",
+		"ya29.a0AfH6SMBabcdefghijklmnop",
 	} {
 		if !LooksLikeCredential(in) {
 			t.Errorf("LooksLikeCredential(%q) = false", in)
@@ -68,6 +72,7 @@ func TestLooksLikeCredential(t *testing.T) {
 		"https://vault.example.com/v1/secret", "postgres://db.internal:5432/app",
 		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		"0b5e8f9c-3d2a-4f6b-9c1e-7a8d2f4b6c0e",
+		"sk-telecom-gateway-west.example.com", "sk-engineering-portal", "rk-prod-cluster-node1",
 	} {
 		if LooksLikeCredential(in) {
 			t.Errorf("LooksLikeCredential(%q) = true", in)
@@ -78,5 +83,23 @@ func TestLooksLikeCredential(t *testing.T) {
 func TestRedactForStorageMasksURLPassword(t *testing.T) {
 	if got := RedactForStorage("dial postgres://app:s3cret@db:5432"); strings.Contains(got, "s3cret") || !strings.Contains(got, "postgres://app:") {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRedactForStorageMasksWholeKey(t *testing.T) {
+	for _, in := range []string{
+		"failed with sk-ant-api03-abcdef1234567890. Retrying",
+		"key sk-proj-ab12_cd34_ef56_gh78 refused",
+		"token ghp_abcdefghijklmnopqrstuvwxyz, sk_live_abcdefghijklmn",
+	} {
+		got := RedactForStorage(in)
+		for _, leak := range []string{"abcdef", "cd34", "gh78"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("RedactForStorage(%q) = %q", in, got)
+			}
+		}
+	}
+	if in := "host sk-telecom-gateway-west.example.com is down"; RedactForStorage(in) != in {
+		t.Errorf("a host name was masked: %q", RedactForStorage(in))
 	}
 }

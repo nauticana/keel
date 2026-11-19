@@ -302,7 +302,7 @@ point, err := addresses.EnsureCoordinates(ctx, partnerID, street)
 
 ### Session partner for multi-partner users
 
-Login, `GetUserById`, token refresh and the phone, email and social lookups put the user's earliest current `partner_user` membership in the session (ordered by `begda`, then `partner_id`; ended memberships are ignored), so the partner does not change between refreshes. `UserService.ListPartners(userID)` returns every current membership in the same order. In a caller's transaction, `user.TenantAccountCreator.IsMemberTx(ctx, tx, partnerID, userID)` reports a current membership, `JoinPartnerTx` opens a dated membership and `MoveMembershipEndTx(ctx, tx, partnerID, userID, begda, endda)` sets the end (nil: open-ended) of the membership starting at `begda`, or of the current one when `begda` is nil; the end must be after the start (`ErrInvalidMembershipPeriod`) and not overlap another membership (`ErrAlreadyMember`). It writes the date only; `EndMembership` also ends role assignments and revokes tokens.
+Login, `GetUserById`, token refresh and the phone, email and social lookups put the user's earliest current `partner_user` membership in the session (ordered by `begda`, then `partner_id`; ended memberships are ignored), so the partner does not change between refreshes. `UserService.ListPartners(userID)` returns every current membership in the same order and `UserService.IsMember(ctx, partnerID, userID)` reports one. In a caller's transaction, `user.TenantAccountCreator.JoinPartnerTx` opens a dated membership and `MoveMembershipEndTx(ctx, tx, partnerID, userID, begda, endda)` sets the end (nil: open-ended) of the membership starting at `begda`, or of the current one when `begda` is nil; the end must be after the start (`ErrInvalidMembershipPeriod`) and not overlap another membership (`ErrAlreadyMember`). It writes the date only; `EndMembership` also ends role assignments and revokes tokens.
 
 A user belongs to at most one partner at a time. PostgreSQL enforces it with the exclusion constraint `partner_user_no_overlap` (needs the `btree_gist` extension), so two memberships of one user can never overlap; an insert that would overlap fails with SQLSTATE 23P01 (`pgsql.IsExclusionViolation`). To move a user, end the membership and create a new row.
 
@@ -319,6 +319,10 @@ A `partner_user` or `user_permission` row is read-only once `endda` is set (`dat
 ### `common.Period` — effective dating in Go
 
 `Period{From, To}` is the `begda`/`endda` convention: `From` inclusive, `To` exclusive, zero `To` open-ended. `Contains(t)` and `Ordered()` replace the per-project copies of the same three lines.
+
+### `entitlement` — signed entitlements verified offline
+
+A vendor's `entitlement.Signer` (`NewSignerFromPEM`, RSA 2048 bits or more) signs a `Document` into a `File`: the canonical JSON payload, `PS256` signature and key id. The document names the product, customer, installation, plan, quotas (keys the product defines; `Unlimited` sets no limit, an unnamed key admits nothing), issue, expiry and grace days. An installation builds `NewVerifier` over the public keys it embeds, several during a key rotation, and `Verify(data)` returns the document without reading the clock. `Document.StateAt(now)` is active, grace or expired, `RenewalDue(now, window)` reports the renewal window and `Admits(key, count)` checks a quota.
 
 ### `idempotency` — replay-safe mutating operations
 

@@ -311,7 +311,7 @@ Every read takes `partnerID` / `ownerID` with **`0` meaning unrestricted** — t
 
 Handlers never call the logger with raw session values; one service method makes the collapse so no read path can skip it. A `GetChange` outside the caller's scope returns `port.ErrChangeNotFound`, identical to a missing id, so ids are not an oracle for other partners' history. Do **not** widen the filter to `partner_id = $1 OR partner_id = 0` to let partner users see global-table rows — pass `0` for non-partner tables instead, or a partner-table row whose snapshot happened to be `0` leaks.
 
-Pass `OldData` through `common.RedactForStorage` before `LogChange` so secret-bearing columns never reach the audit trail. `common.LooksLikeCredential(text)` reports whether text holds a credential (keys, tokens, PEM private keys, URL passwords, `password=`-style pairs, long mixed-case key runs) without flagging email addresses or phone numbers; use it to refuse a pasted secret where only a secret name belongs.
+Pass `OldData` through `common.RedactForStorage` before `LogChange` so secret-bearing columns never reach the audit trail. `common.LooksLikeCredential(text)` reports whether text holds a credential (provider keys and tokens such as `sk-`, `sk_live_`, `xoxb-`, `ghp_`, `glpat-`, `ya29.`, AWS and Google keys, JWTs, PEM private keys, URL passwords, `password=`-style pairs, long mixed-case key runs) without flagging email addresses or phone numbers; use it to refuse a pasted secret where only a secret name belongs.
 
 ## Bigint ID Generation
 

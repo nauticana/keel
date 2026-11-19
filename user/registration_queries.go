@@ -17,7 +17,6 @@ const (
 	qRegistrantEmail          = "registrant_email"
 	qMarkEmailVerifiedByEmail = "mark_email_verified_by_email"
 	qAddPartnerUser           = "add_partner_user"
-	qCurrentMembershipStart   = "current_membership_start"
 	qMoveMembershipEnd        = "move_membership_end"
 	qAddPartnerRole           = "add_partner_role"
 	qGetPlan                  = "get_plan"
@@ -89,11 +88,6 @@ INSERT INTO partner_user
  (partner_id, user_id, begda, endda)
 VALUES
  (?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
-`,
-	qCurrentMembershipStart: `
-SELECT begda FROM partner_user
- WHERE partner_id = ? AND user_id = ?
-   AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
 `,
 	qMoveMembershipEnd: `
 UPDATE partner_user SET endda = ?
