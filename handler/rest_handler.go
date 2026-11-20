@@ -27,14 +27,23 @@ type RestHandler struct {
 	// write has already committed, so a hook error is logged, not surfaced.
 	PostWrite func(ctx context.Context, partnerID int64, table string, items []any) error
 
-	// columnByPascal is a lazy lookup map from PascalName → *TableColumn,
-	// built once on first request and reused across every Get / List
-	// call (v0.4.4 perf). The previous implementation walked every
-	// column on every filter key per request — O(filter × columns)
-	// for what should be O(filter) lookups. For wide tables (50+
-	// cols) under load this added up.
+	// columnByPascal maps PascalName to column, built on first request.
 	columnByPascalOnce sync.Once
 	columnByPascal     map[string]*model.TableColumn
+}
+
+// Routes returns the table's generic routes under prefix/<version>/<table>/:
+// get, list, post, delete and export. A product drops or wraps an entry
+// before mounting it.
+func (h *RestHandler) Routes(prefix string) map[string]func(w http.ResponseWriter, r *http.Request) {
+	path := prefix + "/" + h.Api.Version + "/" + h.Api.APIName + "/"
+	return map[string]func(w http.ResponseWriter, r *http.Request){
+		path + "get":    h.Get,
+		path + "list":   h.List,
+		path + "post":   h.Post,
+		path + "delete": h.Delete,
+		path + "export": h.Export,
+	}
 }
 
 func queryParamsToFilter(r *http.Request) map[string]string {

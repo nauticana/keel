@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.3.11",
+   "title": "Generic table routes, a worker pass at start",
+   "tags": [
+    "additive"
+   ],
+   "summary": "RestHandler.Routes builds a table's generic routes, and JobExecutor runs one pass at start instead of waiting one Interval.",
+   "body_markdown": "### Additive\n\n- `handler.RestHandler.Routes(prefix)` returns the table's `get`, `list`, `post`, `delete` and `export` routes under `<prefix>/<version>/<table>/`. Replace a hand-built route map with it; delete or wrap an entry to omit an operation or add a table's own rule.\n- `worker.JobExecutor` runs one pass at start, then every `Interval` seconds. A worker that relied on a short interval to act soon after a restart can lengthen it."
+  },
+  {
    "version": "v1.3.10",
    "title": "Membership check without a transaction, API key deactivation in a caller's transaction, vendor token prefixes, signed entitlements",
    "tags": [

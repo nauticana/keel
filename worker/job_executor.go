@@ -152,6 +152,9 @@ func (e *JobExecutor) Run(parent context.Context, secretProvider secret.SecretPr
 		loop = &JobLoop{QS: qsOLTP, Journal: e.Journal, GetPendingQuery: pending, ClaimQuery: claim, ReclaimQuery: reclaim, WorkerName: name, Leased: leasedClaim(qw)}
 	}
 
+	if ctx.Err() == nil {
+		e.runTick(ctx, dbOLTP, quotaService, qsOLTP, loop)
+	}
 	ticker := time.NewTicker(time.Duration(e.Interval) * time.Second)
 	defer ticker.Stop()
 	for {

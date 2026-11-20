@@ -258,19 +258,20 @@ apis["commission_rule"].SetTransactionalWriteHook(
 )
 
 // Create handlers for each API
-for name, api := range apis {
+for _, api := range apis {
     h := &handler.RestHandler{
         AbstractHandler: handler.AbstractHandler{UserService: userSvc},
         Api:             *api,
     }
-    backend.Handle(map[string]func(w, r){
-        "/api/v1/" + name:          h.Get,
-        "/api/v1/" + name + "/list": h.List,
-        "/api/v1/" + name + "/post": h.Post,
-        "/api/v1/" + name + "/export": h.Export,
-    })
+    backend.Handle(h.Routes("/api"))
 }
 ```
+
+`RestHandler.Routes(prefix)` returns the table's `get`, `list`, `post`,
+`delete` and `export` routes under `<prefix>/<version>/<table>/`, the paths
+sail's generic screens call. Delete or wrap an entry of the returned map to
+omit an operation or add a table's own rule (a quota, a feature gate) before
+mounting it.
 
 `TransactionalWriteHook` is the financial/business-invariant hook for
 auto-CRUD. `RelationAPI.Post` first writes the complete nested batch through
@@ -397,7 +398,7 @@ main: w := &PublishWorker{AbstractWorker{Caption, Interval, HCPort}}; w.Run(ctx,
   │
   ├─ JobExecutor                   ── the PROCESS: 1 per binary, runs forever ──
   │     health server, service-registry + heartbeat, build db/quota/qs ONCE, panic barrier, ticker
-  │     every Interval seconds → one tick:
+  │     at start, then every Interval seconds → one tick:
   │        │
   │        ├─ JobLoop              ── the DRAIN of ONE queue: per tick ──
   │        │     Reclaim(ctx)            demote stale 'A' claims (crashed runs) → 'P'
@@ -409,7 +410,7 @@ main: w := &PublishWorker{AbstractWorker{Caption, Interval, HCPort}}; w.Run(ctx,
 
 | Layer | Type | Scope / cadence | Responsibility |
 |---|---|---|---|
-| Process | `JobExecutor` | one per binary, runs forever | health check, service registry + heartbeat, build db/quota/QS once, ticker, panic recovery |
+| Process | `JobExecutor` | one per binary, runs forever | health check, service registry + heartbeat, build db/quota/QS once, a pass at start then the ticker, panic recovery |
 | Drain | `JobLoop` | one per queue, per tick | reclaim stale claims, poll pending, claim atomically, dispatch each claimed job |
 | One job | `HandleJob` / `ProcessQueue` | per claimed row / per tick | the worker's business logic |
 

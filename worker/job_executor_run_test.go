@@ -60,10 +60,29 @@ func TestJobExecutorRunReturnsParentError(t *testing.T) {
 	lg := &fakeLogger{}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(errors.New("deploy"))
-	if err := newRunExecutor(lg).Run(ctx, nil); !errors.Is(err, context.Canceled) {
+	w := &firstPassWorker{}
+	e := newRunExecutor(lg)
+	e.Worker = w
+	if err := e.Run(ctx, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run = %v, want context.Canceled", err)
 	}
 	if !slices.Contains(lg.infos, "stopping runtest: deploy") {
 		t.Errorf("journal = %v, want the cause logged", lg.infos)
+	}
+	if w.passes != 0 {
+		t.Errorf("passes = %d, want no pass after cancellation", w.passes)
+	}
+}
+
+func TestJobExecutorRunPassesAtStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &firstPassWorker{stop: cancel}
+	e := newRunExecutor(&fakeLogger{})
+	e.Worker = w
+	if err := e.Run(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v, want context.Canceled", err)
+	}
+	if w.passes != 1 {
+		t.Fatalf("passes = %d, want 1 before the first interval", w.passes)
 	}
 }
