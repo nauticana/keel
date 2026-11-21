@@ -7,6 +7,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
+	"github.com/nauticana/keel/geo"
 	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/oauth/connect"
 	"github.com/nauticana/keel/oauth/oidc"
@@ -28,6 +29,8 @@ type PublicHandler struct {
 	GoogleCode *oidc.GoogleCode
 	// Human, when set, checks the challengeToken of a registration request.
 	Human port.HumanVerifier
+	// Catalog, when set, mounts the country, state and currency lists.
+	Catalog *geo.Catalog
 }
 
 // GetPublicRoutes returns the unauthenticated routes served by PublicHandler.
@@ -51,6 +54,11 @@ func (h *PublicHandler) GetPublicRoutes() map[string]func(w http.ResponseWriter,
 		routes[common.PublicPrefix+"/password/change"] = h.ChangePassword
 		routes[common.PublicPrefix+"/password/reset"] = h.ConfirmPasswordChange
 		routes[common.PublicPrefix+"/plans"] = h.ListPublicPlans
+	}
+	if h.Catalog != nil {
+		routes[common.PublicPrefix+"/countries"] = h.ListCountries
+		routes[common.PublicPrefix+"/countries/{code}/states"] = h.ListStates
+		routes[common.PublicPrefix+"/currencies"] = h.ListCurrencies
 	}
 	if h.Handoff != nil {
 		routes[common.PublicPrefix+"/register/exchange"] = h.ExchangeHandoff
@@ -512,4 +520,46 @@ func (h *PublicHandler) ListPublicPlans(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	common.WriteJSON(w, http.StatusOK, plans)
+}
+
+// ListCountries returns every country code with its caption, for pickers on
+// anonymous pages such as registration.
+func (h *PublicHandler) ListCountries(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	countries, err := h.Catalog.Countries(r.Context())
+	h.writeCatalog(w, r, countries, err)
+}
+
+// ListStates returns the states of the country in the path; 404 for a country
+// the catalog does not hold.
+func (h *PublicHandler) ListStates(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	states, err := h.Catalog.States(r.Context(), r.PathValue("code"))
+	if errors.Is(err, geo.ErrUnknownCountry) {
+		h.WriteError(w, http.StatusNotFound, "Not Found", "unknown country")
+		return
+	}
+	h.writeCatalog(w, r, states, err)
+}
+
+// ListCurrencies returns every currency code with its caption and exponent.
+func (h *PublicHandler) ListCurrencies(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	currencies, err := h.Catalog.Currencies(r.Context())
+	h.writeCatalog(w, r, currencies, err)
+}
+
+func (h *PublicHandler) writeCatalog(w http.ResponseWriter, r *http.Request, entries any, err error) {
+	if err != nil {
+		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	common.WriteJSON(w, http.StatusOK, entries)
 }

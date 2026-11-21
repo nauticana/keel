@@ -397,6 +397,11 @@ srv.Handle(publicHandler.GetPublicRoutes())
 | POST | `/public/password/change` | `ChangePassword` | `{username, old_password, new_password}` — change after checking the old password |
 | POST | `/public/password/reset` | `ConfirmPasswordChange` | `{username, code, new_password}` — completes the reset; `code` is a JSON string |
 | GET | `/public/plans` | `ListPublicPlans` | Public plan catalog |
+| GET | `/public/countries` | `ListCountries` | `[{code, caption}]` ordered by caption; mounted when `Catalog` is set |
+| GET | `/public/countries/{code}/states` | `ListStates` | `[{code, caption}]` of that country, empty when none are seeded; 404 for an unknown country; mounted when `Catalog` is set |
+| GET | `/public/currencies` | `ListCurrencies` | `[{code, caption, exponent}]` ordered by code; mounted when `Catalog` is set |
+
+The catalog routes serve keel's seeded `country`, `state` and `currency` tables, which `geo.Catalog` reads once per process; responses carry `Cache-Control: public, max-age=3600`. Registration refuses a country or state outside these lists.
 
 `forgot` and `change` share one handler: an empty `old_password` selects the reset-by-email path. Public routes sit under `/public`, outside the `/api` prefix that `SSOMiddleware` gates — a client calling `/api/v1/public/...` hits the bearer check, not the route.
 

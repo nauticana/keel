@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.3.12",
+   "title": "Public country, state and currency catalog",
+   "tags": [
+    "additive"
+   ],
+   "summary": "geo.Catalog lists keel's country, state and currency tables, and PublicHandler serves them on anonymous routes when its Catalog is set.",
+   "body_markdown": "### Additive\n\n- `geo.Catalog` reads the `country`, `state` and `currency` tables once per process: `Countries`, `States(country)` (`geo.ErrUnknownCountry` for a code not in `country`) and `Currencies`.\n- `handler.PublicHandler.Catalog`, when set, mounts `GET /public/countries`, `GET /public/countries/{code}/states` (404 for an unknown country) and `GET /public/currencies`. Entries are `{code, caption}`, with `exponent` on currencies, and responses are cacheable for an hour. Set it to let an anonymous form pick a country and state by caption and send the codes registration accepts."
+  },
+  {
    "version": "v1.3.11",
    "title": "Generic table routes, a worker pass at start",
    "tags": [
