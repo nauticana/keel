@@ -7,6 +7,10 @@ columns:
     type: VARCHAR(80)
   - name: display_order
     type: INTEGER
+  - name: icon
+    type: VARCHAR(40)
+    nullable: true
+    comment: Material icon name
   - name: is_active
     type: BOOLEAN
     default: "TRUE"

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS application_menu (
     id                                   VARCHAR(30)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
     display_order                        INTEGER       NOT NULL,
+    icon                                 VARCHAR(40)  ,
     is_active                            BOOLEAN       NOT NULL DEFAULT TRUE,
     CONSTRAINT application_menu_pk PRIMARY KEY (id)
 );
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS application_menu_item (
     caption                              TEXT          NOT NULL,
     display_order                        INTEGER       NOT NULL,
     rest_uri                             VARCHAR(255)  NOT NULL,
+    icon                                 VARCHAR(40)  ,
     is_active                            BOOLEAN       NOT NULL DEFAULT TRUE,
     filter_on_list                       BOOLEAN       NOT NULL DEFAULT FALSE,
     CONSTRAINT application_menu_item_pk PRIMARY KEY (menu_id, item_id)
@@ -224,6 +226,7 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     status                               CHAR(1)       NOT NULL,
     object_name                          VARCHAR(80)  ,
     client_address                       VARCHAR(15)  ,
+    actor_id                             BIGINT       ,
     CONSTRAINT user_account_history_pk PRIMARY KEY (user_id, action_time),
     CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E'))
 );
@@ -2216,6 +2219,15 @@ BEGIN
      WHERE constraint_name = 'user_historic_actions' AND table_name = 'user_account_history'
   ) THEN
     ALTER TABLE user_account_history ADD CONSTRAINT user_historic_actions FOREIGN KEY (user_id) REFERENCES user_account(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'user_history_actors' AND table_name = 'user_account_history'
+  ) THEN
+    ALTER TABLE user_account_history ADD CONSTRAINT user_history_actors FOREIGN KEY (actor_id) REFERENCES user_account(id);
   END IF;
 END $$;
 DO $$

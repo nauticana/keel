@@ -71,12 +71,14 @@ type ApplicationMenuItem struct {
 	ItemId       string
 	Caption      string
 	RestUri      string
+	Icon         string
 	FilterOnList bool
 }
 
 type ApplicationMenu struct {
 	Id                   string
 	Caption              string
+	Icon                 string
 	ApplicationMenuItems []ApplicationMenuItem
 }
 
@@ -477,6 +479,7 @@ func (s *RestService) GetMenuData(ctx context.Context) ([]*ApplicationMenu, erro
 		menu := &ApplicationMenu{
 			Id:      common.AsString(r["Id"]),
 			Caption: common.AsString(r["Caption"]),
+			Icon:    common.AsString(r["Icon"]),
 		}
 		result[i] = menu
 	}
@@ -490,6 +493,7 @@ func (s *RestService) GetMenuData(ctx context.Context) ([]*ApplicationMenu, erro
 					ItemId:       common.AsString(r["ItemId"]),
 					Caption:      common.AsString(r["Caption"]),
 					RestUri:      common.AsString(r["RestUri"]),
+					Icon:         common.AsString(r["Icon"]),
 					FilterOnList: common.AsBool(r["FilterOnList"]),
 				}
 				menu.ApplicationMenuItems = append(menu.ApplicationMenuItems, item)

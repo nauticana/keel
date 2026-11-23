@@ -72,6 +72,10 @@ type UserService interface {
 	// EndMembership ends the user's membership of the partner, ends their role
 	// assignments and revokes their tokens.
 	EndMembership(partnerID int64, userID int, reason string) error
+	// LockAccount locks userID for actorID and revokes its tokens; UnlockAccount
+	// reverses it. Both record the actor and reason.
+	LockAccount(actorID, userID int, reason string) error
+	UnlockAccount(actorID, userID int, note string) error
 	// Members lists the partner's current members, ids and names only, for a
 	// colleague picker; search filters by name.
 	Members(partnerID int64, search string) ([]Member, error)

@@ -102,6 +102,7 @@ For services that don't use `HttpBackend` (workers exposing healthchecks, MCP se
 | `Origin` | Comma-separated origin allowlist, or `*`. Empty disables CORS. The request `Origin` is echoed back only when it matches. |
 | `AllowCredentials` | Emits `Access-Control-Allow-Credentials: true`. Invalid with `Origin: "*"` — CORS is disabled and the misconfiguration is journaled. |
 | `ExposeHeaders` | Response headers a cross-origin browser client may read, emitted as `Access-Control-Expose-Headers` whenever the origin is allowed. Without it the client sees only the CORS-safelisted headers and any custom header reads as `null`. |
+| `AllowHeaders` | Request headers a cross-origin browser client may send, appended to `Content-Type, Authorization, X-Time-Zone` in `Access-Control-Allow-Headers`. |
 
 ```go
 srv := service.HttpBackend{
@@ -575,7 +576,11 @@ Every social-create, social-re-auth, phone-create, and phone-re-auth path now wr
 - `UserActivityCreate` with object name `social:<provider>` or `phone` on first signup.
 - `UserActivityLogin` with the same object name on subsequent re-auths.
 
-`user_account_history.action_type` is a one-character code: `C` create, `L` login, `F` failed login, `O` logout, `X` lock, `U` unlock, `P` password, `D` delete, `M` profile change, `N` contact change (object name = `email` / `phone`). The `user_action_type` constant domain labels them in CRUD screens.
+`user_account_history.action_type` is a one-character code: `C` create, `L` login, `F` failed login, `O` logout, `X` lock, `U` unlock, `P` password, `D` delete, `M` profile change, `N` contact change (object name = `email` / `phone`), `E` membership end. The `user_action_type` constant domain labels them in CRUD screens. `actor_id` is the account that acted on the user, NULL when the user acted; `AddUserHistory(id, byId, …)` stores `byId` there.
+
+### Locking an account
+
+`UserService.LockAccount(actorID, userID, reason)` sets an active or self-locked account to `UserStatusAdminLock` (`S`), so sign-in and token refresh are refused, and in the same transaction revokes every refresh and access token and writes an `X` history row with the actor and reason; with `LocalUserService.OAuthTokens` set it also revokes the authorization-server tokens. API keys the account issued keep working; deactivate them separately. `UnlockAccount(actorID, userID, note)` returns an admin-locked account to active, clears its failed sign-in count and writes a `U` row. An account in any other status, or an unknown one, is `ErrAccountState` (409 `account_state`), so a lock and unlock cannot activate an expired or deleted account; acting on one's own account is `ErrSelfAction` (409 `self_action`) and a reason over 80 characters `ErrReasonTooLong` (400). The lock is not scoped to a partner: grant it only to roles that act across partners. `handler.AccountLockHandler` mounts the `user_account` table actions `lock` (parameter `reason`) and `unlock` (parameter `note`), body `{"id": …}`, gated by `USER_ACCOUNT` `LOCK` and `UNLOCK` (seeded for `APP_ADMIN` and `SECURITY_ADMIN`).
 
 Combined with the password-login history that was already written by `GetUserByLogin` / `GetUserByEmail`, every authenticated session in the system now leaves an audit-trail entry — answering "when did this user first sign in?" and "when did this social-only user last log in?" without ambiguity.
 

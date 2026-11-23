@@ -430,25 +430,58 @@ func (r *RegistrationService) resolvePlan(ctx context.Context, setup *PartnerSet
 }
 
 func (r *RegistrationService) createPartner(ctx context.Context, userID int64, setup *PartnerSetup, evidence *domain.Evidence, plan *planChoice) (*PartnerCreated, error) {
-	tx, err := r.Repo.BeginTx(ctx, r.txMap)
+	var created *PartnerCreated
+	err := data.InTx(ctx, r.Repo, r.txMap, func(tx port.TxQueryService) (err error) {
+		created, err = r.createPartnerTx(ctx, tx, userID, setup, evidence, plan)
+		return err
+	})
+	return created, err
+}
+
+// CreatePartnerFor creates a partner and its address for an operator whose
+// grant the caller checked, without a member, plan, domain or OnPartnerTx. A
+// setup naming a domain, plan or Extra is refused.
+func (r *RegistrationService) CreatePartnerFor(ctx context.Context, setup *PartnerSetup) (int64, error) {
+	if err := r.init(ctx); err != nil {
+		return 0, err
+	}
+	switch {
+	case setup == nil:
+		return 0, model.NewBadRequest("partner setup is required")
+	case setup.DomainURL != "" || setup.PlanID != "" || setup.BillingCycle != "" || setup.TermType != "" || setup.TermCount != 0 || len(setup.Extra) != 0:
+		return 0, model.NewBadRequest("an operator-created partner takes no domain, plan or extra")
+	}
+	if err := setup.validate(); err != nil {
+		return 0, err
+	}
+	if err := r.checkRegion(ctx, setup); err != nil {
+		return 0, err
+	}
+	var partnerID int64
+	err := data.InTx(ctx, r.Repo, r.txMap, func(tx port.TxQueryService) (err error) {
+		partnerID, err = r.addPartnerTx(ctx, tx, setup)
+		return err
+	})
+	return partnerID, err
+}
+
+// addPartnerTx inserts the partner and its address and returns the partner id.
+func (r *RegistrationService) addPartnerTx(ctx context.Context, tx port.TxQueryService, setup *PartnerSetup) (int64, error) {
+	ids, err := tx.Query(ctx, qAddPartner, strings.TrimSpace(setup.PartnerCaption))
 	if err != nil {
-		return nil, err
+		return 0, fmt.Errorf("add partner: %w", err)
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
-		}
-	}()
-	created, err := r.createPartnerTx(ctx, tx, userID, setup, evidence, plan)
-	if err != nil {
-		return nil, err
+	if len(ids.Rows) == 0 {
+		return 0, errors.New("add partner: no id returned")
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+	partnerID := common.AsInt64(ids.Rows[0][0])
+	country, state := setup.region()
+	latitude, longitude := setup.coordinates()
+	if _, err := tx.Query(ctx, qAddAddress, partnerID, setup.Address, nullIfBlank(setup.City), nullIfEmpty(state),
+		nullIfBlank(setup.Zipcode), nullIfEmpty(country), nullIfBlank(setup.Phone), latitude, longitude); err != nil {
+		return 0, fmt.Errorf("add address: %w", err)
 	}
-	committed = true
-	return created, nil
+	return partnerID, nil
 }
 
 func (r *RegistrationService) createPartnerTx(ctx context.Context, tx port.TxQueryService, userID int64, setup *PartnerSetup,
@@ -457,19 +490,9 @@ func (r *RegistrationService) createPartnerTx(ctx context.Context, tx port.TxQue
 	if err != nil {
 		return nil, err
 	}
-	ids, err := tx.Query(ctx, qAddPartner, strings.TrimSpace(setup.PartnerCaption))
+	partnerID, err := r.addPartnerTx(ctx, tx, setup)
 	if err != nil {
-		return nil, fmt.Errorf("add partner: %w", err)
-	}
-	if len(ids.Rows) == 0 {
-		return nil, errors.New("add partner: no id returned")
-	}
-	partnerID := common.AsInt64(ids.Rows[0][0])
-	country, state := setup.region()
-	latitude, longitude := setup.coordinates()
-	if _, err := tx.Query(ctx, qAddAddress, partnerID, setup.Address, nullIfBlank(setup.City), nullIfEmpty(state),
-		nullIfBlank(setup.Zipcode), nullIfEmpty(country), nullIfBlank(setup.Phone), latitude, longitude); err != nil {
-		return nil, fmt.Errorf("add address: %w", err)
+		return nil, err
 	}
 	if host != "" {
 		if _, err := tx.Query(ctx, qAddDomain, partnerID, host); err != nil {

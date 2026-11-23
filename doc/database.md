@@ -381,6 +381,7 @@ erDiagram
         VARCHAR id PK
         VARCHAR caption
         INTEGER display_order
+        VARCHAR icon
         BOOLEAN is_active
     }
     application_menu_item {
@@ -389,6 +390,7 @@ erDiagram
         TEXT caption
         INTEGER display_order
         VARCHAR rest_uri
+        VARCHAR icon
         BOOLEAN is_active
         BOOLEAN filter_on_list
     }
@@ -482,6 +484,7 @@ erDiagram
     consent_policy ||--o{ consent_event : "consent_event_policies"
 
     user_account ||--o{ user_account_history : "user_historic_actions"
+    user_account ||--o{ user_account_history : "user_history_actors"
     user_account ||--o{ user_external_identity : "user_external_identities"
     user_account ||--o{ user_otp : "user_otps"
     user_account ||--o{ user_refresh_token : "user_refresh_tokens"
@@ -499,6 +502,7 @@ erDiagram
         CHAR status
         VARCHAR object_name
         VARCHAR client_address
+        BIGINT actor_id FK
     }
     user_refresh_token {
         BIGINT id PK

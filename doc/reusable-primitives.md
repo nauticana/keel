@@ -95,13 +95,15 @@ Visible text of a document or fragment: `script`/`style`/`noscript`/`template`/`
 
 ### `pgsql/sqlsmoke` — PREPARE every named query
 
-Queries go through the production `pgsql.RewritePlaceholders`, so PostgreSQL validates exactly what runs. Schema order, query groups and the DSN belong to the calling test:
+Queries go through the production `pgsql.RewritePlaceholders`, so PostgreSQL validates exactly what runs. `sqlsmoke.Test` skips unless the test binary gets `-sqlsmoke`; it then connects through the libpq environment (`PGHOST`, `PGDATABASE`, ...), loads the schema files in order into a scratch schema it drops afterwards and runs one subtest per query:
 
 ```go
-conn, _ := pgx.Connect(ctx, dsn)
-if err := sqlsmoke.LoadSchema(ctx, conn, "sql/basis.sql", "sql/app.sql"); err != nil { t.Fatal(err) }
-sqlsmoke.Run(t, conn, map[string]map[string]string{"orders": orderQueries}) // one subtest per query
+func TestNamedQueriesPrepare(t *testing.T) {
+    sqlsmoke.Test(t, map[string]map[string]string{"orders": orderQueries}, "sql/basis.sql", "sql/app.sql")
+}
 ```
+
+`LoadSchema` and `Run` take a connection the test opened itself.
 
 ### Connecting a partner to a provider
 

@@ -450,6 +450,7 @@ seeds:
     columns: [constraint_name, lookup_style, display_column]
     rows:
       - [user_historic_actions, S, "*"]
+      - [user_history_actors, S, "*"]
       - [user_refresh_tokens, S, "*"]
       - [user_trusted_devices, S, "*"]
   - table: rest_api_header
@@ -495,6 +496,29 @@ seeds:
       - [BUSINESS_ADMIN, PAGE, ACCESS, user_account_policies]
       - [BUSINESS_ADMIN, TABLE, SELECT, user_account_policy]
       - [PARTNER_ADMIN, TABLE, SELECT, user_account]
+      - [APP_ADMIN, USER_ACCOUNT, LOCK, user_account]
+      - [APP_ADMIN, USER_ACCOUNT, UNLOCK, user_account]
+      - [SECURITY_ADMIN, USER_ACCOUNT, LOCK, user_account]
+      - [SECURITY_ADMIN, USER_ACCOUNT, UNLOCK, user_account]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [USER_ACCOUNT, User Account Actions]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [USER_ACCOUNT, LOCK, Lock an account]
+      - [USER_ACCOUNT, UNLOCK, Unlock an account]
+  - table: table_action
+    columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
+    rows:
+      - [user_account, lock, Lock, lock, P, true, 10]
+      - [user_account, unlock, Unlock, lock_open, P, true, 20]
+  - table: table_action_parameter
+    columns: [table_name, action_name, seq, param_name, caption, data_type, required]
+    rows:
+      - [user_account, lock, 1, reason, Reason, string, false]
+      - [user_account, unlock, 1, note, Note, string, false]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:

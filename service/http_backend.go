@@ -75,6 +75,14 @@ type HttpBackend struct {
 	// may read beyond the CORS-safelisted set. Empty emits nothing.
 	ExposeHeaders []string
 
+	// AllowHeaders lists request headers a cross-origin browser client may
+	// send beyond Content-Type, Authorization and X-Time-Zone.
+	AllowHeaders []string
+
+	// AccessLogHeaders lists request headers appended to each access-log line
+	// as name="value", the value cut to 64 characters, - when absent.
+	AccessLogHeaders []string
+
 	UserService   user.UserService
 	QuotaService  port.QuotaService
 	ApiKeyService *APIKeyService
@@ -296,6 +304,7 @@ func (h *HttpBackend) CORSMiddleware(next http.Handler) http.Handler {
 		return next
 	}
 	exposeHeaders := strings.Join(h.ExposeHeaders, ", ")
+	allowHeaders := strings.Join(append([]string{"Content-Type", "Authorization", common.TimeZoneHeader}, h.AllowHeaders...), ", ")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Vary: Origin must be set on every response so caches don't
 		// reuse a CORS-keyed entry for a different origin.
@@ -310,7 +319,7 @@ func (h *HttpBackend) CORSMiddleware(next http.Handler) http.Handler {
 		if allow != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allow)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+common.TimeZoneHeader)
+			w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
 			// Cache preflight for 10 minutes (P1-66). Browsers re-issue
 			// OPTIONS on every CORS request without a Max-Age, doubling
 			// our ingress traffic for any cross-origin app.

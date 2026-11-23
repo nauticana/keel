@@ -50,6 +50,8 @@ var (
 	ErrSignInNetwork       = errors.New("user: sign-in is not allowed from this network")
 	ErrSessionNotFound     = errors.New("user: no such active session")
 	ErrStepUpUnavailable   = errors.New("user: no way to deliver a sign-in code")
+	ErrAccountState        = errors.New("user: the account's status does not allow this")
+	ErrSelfAction          = errors.New("user: an administrator cannot act on their own account")
 )
 
 // classifyUniqueViolation maps a pgx unique-index error from user_account
@@ -196,6 +198,8 @@ const (
 	qActiveLegalHold                 = "active_legal_hold"
 	qTokensValidAfter                = "tokens_valid_after"
 	qRevokeAccessTokens              = "revoke_access_tokens"
+	qSetAdminLock                    = "set_admin_lock"
+	qClearAdminLock                  = "clear_admin_lock"
 	qUpdateTenantMember              = "update_tenant_member"
 	qSetSingleDevicePolicy           = "set_single_device_policy"
 	qRevokePriorOnSingleDevicePolicy = "revoke_prior_on_single_device_policy"
@@ -276,7 +280,9 @@ SELECT DISTINCT
        p.rest_uri,
        m.caption AS menu_caption,
        m.display_order AS menu_order,
-       p.display_order AS page_order
+       p.display_order AS page_order,
+       m.icon AS menu_icon,
+       p.icon AS page_icon
   FROM authorization_role_permission t, user_permission u, application_menu_item p, application_menu m
  WHERE t.role_id = u.role_id
    AND t.authorization_object_id = 'PAGE'
@@ -375,8 +381,19 @@ UPDATE user_account
 `,
 
 	qAddUserActivity: `
-INSERT INTO user_account_history (user_id, action_time, action_type, status, object_name, client_address)
-VALUES (?,?,?,?,?,?)
+INSERT INTO user_account_history (user_id, action_time, action_type, status, object_name, client_address, actor_id)
+VALUES (?,?,?,?,?,?,?)
+`,
+
+	qSetAdminLock: `
+UPDATE user_account SET status = '` + UserStatusAdminLock + `', lock_time = CURRENT_TIMESTAMP
+ WHERE id = ? AND status IN ('` + UserStatusActive + `', '` + UserStatusSelfLocked + `')
+RETURNING id
+`,
+	qClearAdminLock: `
+UPDATE user_account SET status = '` + UserStatusActive + `', lock_time = NULL, login_attempts = 0
+ WHERE id = ? AND status = '` + UserStatusAdminLock + `'
+RETURNING id
 `,
 
 	qSetLockStatus: `
@@ -1032,14 +1049,19 @@ func (r *LocalUserService) GetUserMenu(userid int) ([]model.UserMenu, error) {
 			Url:         common.AsString(row[4]),
 			MenuOrder:   int(common.AsInt32(row[6])),
 			PageOrder:   int(common.AsInt32(row[7])),
+			MenuIcon:    common.AsString(row[8]),
+			PageIcon:    common.AsString(row[9]),
 		})
 	}
 	return m, nil
 }
 
 func (s *LocalUserService) AddUserHistory(id int, byId int, clientaddress, actionType string, status string, objectName string) error {
-	ctx := s.ctx()
-	_, err := s.queryService.Query(ctx, qAddUserActivity, id, time.Now(), actionType, status, objectName, clientaddress)
+	var actor any
+	if byId > 0 {
+		actor = byId
+	}
+	_, err := s.queryService.Query(s.ctx(), qAddUserActivity, id, time.Now(), actionType, status, objectName, clientaddress, actor)
 	return err
 }
 
@@ -1540,45 +1562,24 @@ func (s *LocalUserService) EndMembership(partnerID int64, userID int, reason str
 	lock.Lock()
 	defer lock.Unlock()
 	ctx := s.ctx()
-	tx, err := s.database.BeginTx(ctx, LocalUserQueries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
+	err := data.InTx(ctx, s.database, LocalUserQueries, func(tx port.TxQueryService) error {
+		ended, err := tx.Query(ctx, qEndMembership, userID, partnerID)
+		if err != nil {
+			return err
 		}
-	}()
-	ended, err := tx.Query(ctx, qEndMembership, userID, partnerID)
+		if len(ended.Rows) == 0 {
+			return ErrNoMembership
+		}
+		if _, err := tx.Query(ctx, qEndPermissions, userID); err != nil {
+			return fmt.Errorf("end role assignments: %w", err)
+		}
+		return s.revokeTokensTx(ctx, tx, userID)
+	})
 	if err != nil {
 		return fmt.Errorf("end membership: %w", err)
 	}
-	if len(ended.Rows) == 0 {
-		return ErrNoMembership
-	}
-	if _, err := tx.Query(ctx, qEndPermissions, userID); err != nil {
-		return fmt.Errorf("end membership: end role assignments: %w", err)
-	}
-	if _, err := tx.Query(ctx, qRevokeAllRefreshTokensForID, userID); err != nil {
-		return fmt.Errorf("end membership: revoke refresh tokens: %w", err)
-	}
-	if _, err := tx.Query(ctx, qRevokeAccessTokens, userID); err != nil {
-		return fmt.Errorf("end membership: revoke access tokens: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("end membership: commit: %w", err)
-	}
-	committed = true
-	s.forgetTokenCutoff(userID)
-	var errs []error
-	if s.OAuthTokens != nil {
-		if err := s.OAuthTokens.RevokeForUser(ctx, int64(userID)); err != nil {
-			errs = append(errs, fmt.Errorf("end membership: revoke authorization-server tokens: %w", err))
-		}
-	}
-	errs = append(errs, s.AddUserHistory(userID, 0, "", UserActivityMembershipEnd, UserStatusActive, fmt.Sprintf("partner:%d %s", partnerID, reason)))
-	return errors.Join(errs...)
+	return errors.Join(s.revokedTokens(ctx, userID),
+		s.AddUserHistory(userID, 0, "", UserActivityMembershipEnd, UserStatusActive, fmt.Sprintf("partner:%d %s", partnerID, reason)))
 }
 
 func (s *LocalUserService) RevokeAccessTokens(userID int) error {
@@ -2548,7 +2549,7 @@ func (s *LocalUserService) CreateIdentityAccountTx(ctx context.Context, tx port.
 	if err != nil {
 		return nil, err
 	}
-	if _, err := q.Query(ctx, qAddUserActivity, userID, time.Now(), UserActivityCreate, "A", "social:"+id.Provider, ""); err != nil {
+	if _, err := q.Query(ctx, qAddUserActivity, userID, time.Now(), UserActivityCreate, "A", "social:"+id.Provider, "", nil); err != nil {
 		return nil, err
 	}
 	session := s.newSession(userID, id.FirstName, id.LastName, email, UserStatusActive, id.Provider)

@@ -207,3 +207,17 @@ func TestAccessLogMiddleware_RecordsSSORejection(t *testing.T) {
 		t.Fatal("query string logged")
 	}
 }
+
+func TestAccessLogMiddleware_LogsConfiguredHeadersQuotedAndBounded(t *testing.T) {
+	journal := &capturingLogger{}
+	h := &HttpBackend{Journal: journal, AccessLogHeaders: []string{"X-App-Platform", "X-App-Version", "X-Missing"}}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/thing", nil)
+	req.Header.Set("X-App-Platform", "ios\" forged=1")
+	req.Header.Set("X-App-Version", strings.Repeat("9", 100))
+	h.AccessLogMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), req)
+
+	want := ` X-App-Platform="ios\" forged=1" X-App-Version="` + strings.Repeat("9", maxAccessLogHeader) + `" X-Missing=-`
+	if len(journal.access) != 1 || !strings.HasSuffix(journal.access[0], want) {
+		t.Fatalf("access line %q, want suffix %q", journal.access, want)
+	}
+}

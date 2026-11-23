@@ -742,3 +742,38 @@ func TestPasswordResetRefusesRegistrationCode(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCreatePartnerForWritesOnlyThePartnerAndAddress(t *testing.T) {
+	store := newRegStore()
+	svc, _, _ := newRegistration(store)
+	ctx := context.Background()
+	setup := &PartnerSetup{PartnerCaption: "Ops Co", Address: "1 Main St", Country: "us", State: "ca", Latitude: 36.7, Longitude: -119.8}
+	id, err := svc.CreatePartnerFor(ctx, setup)
+	if err != nil || id <= 0 {
+		t.Fatalf("CreatePartnerFor = %d, %v", id, err)
+	}
+	if a := store.address; a[0] != id || a[1] != "1 Main St" || a[3] != "CA" || a[5] != "US" || a[7] != 36.7 {
+		t.Fatalf("address args = %#v", a)
+	}
+	for _, q := range []string{qAddPartnerUser, qAddPartnerRole, qAddSubscription, qAddDomain} {
+		if store.count(q) != 0 {
+			t.Errorf("%s ran for an operator-created partner", q)
+		}
+	}
+
+	for name, bad := range map[string]*PartnerSetup{
+		"nil":             nil,
+		"no caption":      {Address: "x"},
+		"domain":          {PartnerCaption: "D", DomainURL: "d.example"},
+		"plan":            {PartnerCaption: "P", PlanID: "PRO"},
+		"extra":           {PartnerCaption: "E", Extra: json.RawMessage(`{}`)},
+		"unknown country": {PartnerCaption: "C", Country: "ZZ"},
+	} {
+		if _, err := svc.CreatePartnerFor(ctx, bad); !isBadRequest(err) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	if store.count(qAddPartner) != 1 {
+		t.Fatal("a refused setup must write nothing")
+	}
+}

@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.3.13",
+   "title": "Account lock, operator-created partners, menu icons, client headers",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "UserService locks and unlocks accounts, RegistrationService.CreatePartnerFor creates a partner for an operator, menus carry icons, HttpBackend allows and logs listed client headers, and the payout onboarding query reads user_email.",
+   "body_markdown": "### Breaking\n\n- `user.UserService` adds `LockAccount(actorID, userID, reason)` and `UnlockAccount(actorID, userID, note)`; other implementations add them.\n- `pgsql/sqlsmoke` registers the `-sqlsmoke` test flag itself. A test package importing it drops its own `sqlsmoke` flag, or the test binary panics on the duplicate; `sqlsmoke.Test(t, groups, schemaFiles...)` replaces the connect, scratch-schema and load boilerplate.\n\n### Database\n\nEvery account-history insert writes `actor_id`, so apply this before deploying:\n\n```sql\nALTER TABLE application_menu ADD COLUMN icon VARCHAR(40);\nALTER TABLE application_menu_item ADD COLUMN icon VARCHAR(40);\nALTER TABLE user_account_history ADD COLUMN actor_id BIGINT;\nALTER TABLE user_account_history ADD CONSTRAINT user_history_actors FOREIGN KEY (actor_id) REFERENCES user_account(id);\n```\n\nSeeds: the `foreign_key_lookup` row `user_history_actors`; `USER_ACCOUNT` `LOCK`/`UNLOCK` with the `user_account` table actions `lock` and `unlock` and their parameters, granted to `APP_ADMIN` and `SECURITY_ADMIN`; `BUSINESS_PARTNER` `CREATE` with the `business_partner` table action `create` and its parameters, granted to `APP_ADMIN`.\n\n### Fixed\n\n- The payout onboarding query read `user_account.email` instead of `user_email`, so `POST /payout/onboard/start` failed before calling the provider.\n\n### Additive\n\n- `UserService.LockAccount` sets an active or self-locked account to `UserStatusAdminLock`, revokes every refresh, access and authorization-server token and records the actor and reason; `UnlockAccount` returns an admin-locked account to active. `handler.AccountLockHandler` mounts them as `user_account/lock` and `user_account/unlock`. New errors: `user.ErrAccountState` (409 `account_state`) and `ErrSelfAction` (409 `self_action`); `ErrReasonTooLong` now maps to 400.\n- `AddUserHistory`'s `byId` is stored in `user_account_history.actor_id` (NULL when 0).\n- `user.RegistrationService.CreatePartnerFor(ctx, setup)` creates a partner and its address for an operator, without a member, plan or domain, and returns its id. `handler.BusinessPartnerActionHandler` mounts it as `business_partner/create`.\n- `rest.ApplicationMenu.Icon`, `ApplicationMenuItem.Icon` and `model.UserMenu.MenuIcon`/`PageIcon` carry the menu icons.\n- `service.HttpBackend.AllowHeaders` extends the CORS `Access-Control-Allow-Headers`; `AccessLogHeaders` appends `name=\"value\"` for each listed request header to the access-log line.\n- `data.InTx(ctx, db, queries, fn)` runs `fn` in a transaction, committing on nil and rolling back otherwise."
+  },
+  {
    "version": "v1.3.12",
    "title": "Public country, state and currency catalog",
    "tags": [

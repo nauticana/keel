@@ -42,6 +42,7 @@ type memStore struct {
 	clock       time.Duration            // offset added to the wall clock
 	calls       []string
 	joins       [][]any                // qAddPartnerUser arguments
+	history     [][]any                // qAddUserActivity arguments
 	memberSince map[[2]int64]time.Time // {user, partner} → begda, for the membership-end queries
 	failQuery   map[string]error
 	commits     int
@@ -327,6 +328,15 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 	case qAnonymizeUserAccount:
 		m.deleted[args[2].(int)] = true
 		m.cutoffs[args[2].(int)] = time.Now()
+	case qAddUserActivity:
+		m.history = append(m.history, args)
+	case qSetAdminLock, qClearAdminLock:
+		a := m.accounts[args[0].(int)]
+		lockable := a != nil && (a.status == UserStatusActive || a.status == UserStatusSelfLocked)
+		if (name == qSetAdminLock && lockable) || (name == qClearAdminLock && a != nil && a.status == UserStatusAdminLock) {
+			a.status = map[string]string{qSetAdminLock: UserStatusAdminLock, qClearAdminLock: UserStatusActive}[name]
+			out.Rows = [][]any{{args[0]}}
+		}
 	}
 	return out, nil
 }

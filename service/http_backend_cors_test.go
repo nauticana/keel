@@ -43,3 +43,15 @@ func TestCORSExposeHeaders(t *testing.T) {
 		})
 	}
 }
+
+func TestCORSAllowHeaders(t *testing.T) {
+	const app = "https://app.example.com"
+	base := "Content-Type, Authorization, X-Time-Zone"
+	if got := corsResponse(&HttpBackend{Origin: app}, app).Get("Access-Control-Allow-Headers"); got != base {
+		t.Errorf("default Access-Control-Allow-Headers = %q, want %q", got, base)
+	}
+	h := &HttpBackend{Origin: app, AllowHeaders: []string{"X-App-Platform", "X-App-Version"}}
+	if got, want := corsResponse(h, app).Get("Access-Control-Allow-Headers"), base+", X-App-Platform, X-App-Version"; got != want {
+		t.Errorf("Access-Control-Allow-Headers = %q, want %q", got, want)
+	}
+}

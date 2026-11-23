@@ -105,7 +105,7 @@ func (s *LocalUserService) CreateTenantMemberTx(ctx context.Context, tx port.TxQ
 			return 0, fmt.Errorf("user: add membership: %w", err)
 		}
 	}
-	if _, err := local.Query(ctx, qAddUserActivity, userID, time.Now(), UserActivityCreate, "A", fmt.Sprintf("tenant:%d", partnerID), ""); err != nil {
+	if _, err := local.Query(ctx, qAddUserActivity, userID, time.Now(), UserActivityCreate, "A", fmt.Sprintf("tenant:%d", partnerID), "", nil); err != nil {
 		return 0, err
 	}
 	return userID, nil

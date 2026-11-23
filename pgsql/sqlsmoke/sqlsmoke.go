@@ -5,6 +5,7 @@ package sqlsmoke
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -25,6 +26,8 @@ type DB interface {
 var _ DB = (*pgx.Conn)(nil)
 
 var runID atomic.Uint64
+
+var enabled = flag.Bool("sqlsmoke", false, "PREPARE named queries on the PostgreSQL named by the libpq environment (PGHOST, PGDATABASE, ...)")
 
 // Failure is one query PostgreSQL refused to prepare.
 type Failure struct {
@@ -61,6 +64,38 @@ func PrepareAll(ctx context.Context, db DB, groups map[string]map[string]string)
 		}
 	})
 	return failures
+}
+
+// Test loads the schema files into a scratch schema of the libpq-named
+// PostgreSQL, dropped afterwards, and Runs groups there. It skips unless the
+// test binary is given -sqlsmoke.
+func Test(t *testing.T, groups map[string]map[string]string, schema ...string) {
+	t.Helper()
+	if !*enabled {
+		t.Skip("run with -sqlsmoke against a disposable PostgreSQL")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+	scratch := fmt.Sprintf("sqlsmoke_%d_%d", os.Getpid(), runID.Add(1))
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+scratch); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := conn.Exec(ctx, "DROP SCHEMA "+scratch+" CASCADE"); err != nil {
+			t.Errorf("drop scratch schema %s: %v", scratch, err)
+		}
+	})
+	if _, err := conn.Exec(ctx, "SET search_path TO "+scratch); err != nil {
+		t.Fatal(err)
+	}
+	if err := LoadSchema(ctx, conn, schema...); err != nil {
+		t.Fatal(err)
+	}
+	Run(t, conn, groups)
 }
 
 // Run is PrepareAll as one subtest per query, named group/query.

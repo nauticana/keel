@@ -87,7 +87,7 @@ SELECT 1 FROM user_bank_info
 	qPayoutBankInfo: `
 SELECT ubi.id, ubi.country_code, ubi.currency, ubi.account_holder_name, ubi.billing_address,
        ubi.provider, COALESCE(ubi.provider_account_id, ''),
-       COALESCE(ua.email, ''),
+       COALESCE(ua.user_email, ''),
        ubi.provider_agreement,
        ubi.provider_onboarded_at, cur.exponent
   FROM user_bank_info ubi

@@ -24,6 +24,7 @@ Keel provides a full `UserService` implementation with:
 `RegistrationService` creates an account and its partner (`business_partner`, `partner_address`, `partner_domain`, `partner_user`, roles, subscription) in one transaction:
 - `SendConfirmation(ctx, *PartnerRegistration)` then `Register(ctx, email, code)` — signup by emailed code. The account is active with the email verified (`R`), and the session signed in by one-time code. A registration with no partner field creates only the account. A global `SSO_REQUIRED` policy refuses it with `ErrSSORequired`, and a `userName` containing `@` must equal the email.
 - `CreatePartner(ctx, userID, *PartnerSetup, evidence)` — the second step of a two-step signup, for a signed-in user without a partner (`ErrAlreadyMember` otherwise).
+- `CreatePartnerFor(ctx, *PartnerSetup)` — an operator creates a partner and its address, with no member, plan, domain or `OnPartnerTx`, and gets its id; a setup naming a domain, plan or `Extra` is a 400. `handler.BusinessPartnerActionHandler` mounts it as the `business_partner` table action `create` (parameters `caption`, `address`, `city`, `state`, `zipcode`, `country`, `phone`, `latitude`, `longitude`; answers 201 `{"id": …}`), gated by `BUSINESS_PARTNER` `CREATE` (seeded for `APP_ADMIN`). The application then adds its own rows for the partner.
 - `RegisterWithIdentity(ctx, identity, consent, *PartnerSetup, evidence)` — signup with an external identity the caller verified, account and partner in one transaction through `IdentityAccountCreator` (implemented by `LocalUserService`); the session carries `ExternalSignInMethod`. An identity or email of an existing account returns `ErrAccountExists`. Consent is recorded after commit; its failure returns `ErrConsentNotRecorded` with the other results valid.
 
 Blank optional `PartnerSetup` address fields (city, state, zipcode, country, phone) and an unset `0, 0` coordinate pair are stored as NULL. `country` and `state` are trimmed and upper-cased; a code missing from `country` / `state`, or a state without a country, is a 400 before any write.
@@ -583,7 +584,10 @@ sail with no compile-time signal, so the following are HARD constraints:
   narrowest type that holds it, so only ids, money and unbounded counts
   become strings.
 - **`MainMenu` / `Permissions` / `TableDefinitions`** in
-  `RestService.GetClientCache` are sail's bootstrap payload. Adding a new
+  `RestService.GetClientCache` are sail's bootstrap payload. `MainMenu`
+  carries each menu's and item's `Icon`, the Material icon name in
+  `application_menu.icon` and `application_menu_item.icon`; `UserMenu`
+  carries them as `MenuIcon` and `PageIcon`. Adding a new
   metadata table for sail to consume = add a slot to `GetClientCache` and
   invalidate the cache (`RestService.InvalidateCache`) after admin tooling
   edits the source table.

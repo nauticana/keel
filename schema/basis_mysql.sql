@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS application_menu (
     id                                   VARCHAR(30)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
     display_order                        INT           NOT NULL,
+    icon                                 VARCHAR(40)  ,
     is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS application_menu_item (
     caption                              TEXT          NOT NULL,
     display_order                        INT           NOT NULL,
     rest_uri                             VARCHAR(255)  NOT NULL,
+    icon                                 VARCHAR(40)  ,
     is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
     filter_on_list                       TINYINT(1)    NOT NULL DEFAULT 0,
     PRIMARY KEY (menu_id, item_id),
@@ -235,8 +237,10 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     status                               CHAR(1)       NOT NULL,
     object_name                          VARCHAR(80)  ,
     client_address                       VARCHAR(15)  ,
+    actor_id                             BIGINT       ,
     PRIMARY KEY (user_id, action_time),
     CONSTRAINT user_historic_actions FOREIGN KEY (user_id) REFERENCES user_account(id),
+    CONSTRAINT user_history_actors FOREIGN KEY (actor_id) REFERENCES user_account(id),
     CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

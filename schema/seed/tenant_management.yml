@@ -87,12 +87,14 @@ seeds:
     columns: [id, caption]
     rows:
       - [PARTNER_DOMAIN, Partner Domain Actions]
+      - [BUSINESS_PARTNER, Business Partner Actions]
       - [PARTNER_USER, Partner User Actions]
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
     rows:
       - [PARTNER_DOMAIN, VERIFY, Verify a partner domain]
       - [PARTNER_DOMAIN, CANCEL, Cancel a partner domain verification]
+      - [BUSINESS_PARTNER, CREATE, Create a partner without a member]
       - [PARTNER_USER, END, End a partner membership]
       - [PARTNER_USER, DIRECTORY, Read the member directory]
   - table: authorization_role_permission
@@ -145,6 +147,7 @@ seeds:
       - [PARTNER_ADMIN, PARTNER_DOMAIN, CANCEL, partner_domain]
       - [PARTNER_ADMIN, PARTNER_USER, END, partner_user]
       - [PARTNER_ADMIN, PARTNER_USER, DIRECTORY, partner_user]
+      - [APP_ADMIN, BUSINESS_PARTNER, CREATE, business_partner]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
@@ -157,10 +160,20 @@ seeds:
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
     rows:
       - [partner_signin_network, replace, Replace networks, lock, P, false, 10]
+      - [business_partner, create, Create partner, add_business, P, false, 10]
   - table: table_action_parameter
     columns: [table_name, action_name, seq, param_name, caption, data_type, required]
     rows:
       - [partner_signin_network, replace, 1, cidrs, Networks (CSV of CIDRs; empty allows any), string, false]
+      - [business_partner, create, 1, caption, Caption, string, true]
+      - [business_partner, create, 2, address, Address, string, false]
+      - [business_partner, create, 3, city, City, string, false]
+      - [business_partner, create, 4, state, State code, string, false]
+      - [business_partner, create, 5, zipcode, Zip code, string, false]
+      - [business_partner, create, 6, country, Country code, string, false]
+      - [business_partner, create, 7, phone, Phone, string, false]
+      - [business_partner, create, 8, latitude, Latitude, number, false]
+      - [business_partner, create, 9, longitude, Longitude, number, false]
   - table: authorization_object
     columns: [id, caption]
     rows:

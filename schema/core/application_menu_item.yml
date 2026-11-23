@@ -11,6 +11,10 @@ columns:
     type: INTEGER
   - name: rest_uri
     type: VARCHAR(255)
+  - name: icon
+    type: VARCHAR(40)
+    nullable: true
+    comment: Material icon name
   - name: is_active
     type: BOOLEAN
     default: "TRUE"
