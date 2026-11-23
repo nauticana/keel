@@ -253,6 +253,7 @@ seeds:
     rows:
       - [lookup_style, Lookup Style]
       - [action_kind, Action Kind]
+      - [chart_kind, Chart Kind]
       - [measurement_unit, Measurement Unit]
       - [user_action_type, User Action Type]
       - [email_verification_method, Email Verification Method]
@@ -269,6 +270,10 @@ seeds:
       - [action_kind, P, Post]
       - [action_kind, R, Redirect]
       - [action_kind, V, Reveal]
+      - [chart_kind, N, None]
+      - [chart_kind, B, Bar]
+      - [chart_kind, L, Line]
+      - [chart_kind, P, Pie]
       - [user_action_type, C, Create]
       - [user_action_type, L, Login]
       - [user_action_type, F, Failed Login]
@@ -347,6 +352,7 @@ seeds:
     rows:
       - [lookup_style, foreign_key_lookup, lookup_style]
       - [action_kind, table_action, action_kind]
+      - [chart_kind, rest_report_header, chart_kind]
       - [user_action_type, user_account_history, action_type]
       - [email_verification_method, user_account, email_verification_method]
       - [sign_in_method, user_refresh_token, sign_in_method]
@@ -361,6 +367,7 @@ seeds:
       - [constant_lookups, D, caption]
       - [constant_values, D, caption]
       - [rest_report_params, S, "*"]
+      - [rest_report_chart_series, S, "*"]
       - [table_action_parameters, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
@@ -377,6 +384,7 @@ seeds:
       - [constant_header, 2, 0, constant_lookups]
       - [rest_api_header, 1, 0, rest_api_children]
       - [rest_report_header, 1, 0, rest_report_params]
+      - [rest_report_header, 2, 0, rest_report_chart_series]
       - [table_action, 1, 0, table_action_parameters]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]

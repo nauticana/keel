@@ -109,7 +109,11 @@ CREATE TABLE IF NOT EXISTS rest_report_header (
     query_name                           VARCHAR(60)   NOT NULL,
     description                          TEXT          NOT NULL,
     is_active                            BOOLEAN       NOT NULL DEFAULT TRUE,
-    CONSTRAINT rest_report_header_pk PRIMARY KEY (id)
+    chart_kind                           CHAR(1)       NOT NULL DEFAULT 'N',
+    category_column                      VARCHAR(60)  ,
+    CONSTRAINT rest_report_header_pk PRIMARY KEY (id),
+    CONSTRAINT chk_rest_report_header_chart_kind CHECK (chart_kind IN ('N', 'B', 'L', 'P')),
+    CONSTRAINT chk_rest_report_header_category CHECK ((chart_kind = 'N') = (category_column IS NULL))
 );
 
 -- Report parameter definitions
@@ -121,6 +125,15 @@ CREATE TABLE IF NOT EXISTS rest_report_param (
     constant_id                          VARCHAR(60)  ,
     CONSTRAINT rest_report_param_pk PRIMARY KEY (report_id, seq)
 );
+
+-- Result columns a report's chart plots, in display order
+CREATE TABLE IF NOT EXISTS rest_report_series (
+    report_id                            VARCHAR(80)   NOT NULL,
+    seq                                  INTEGER       NOT NULL,
+    column_name                          VARCHAR(60)   NOT NULL,
+    CONSTRAINT rest_report_series_pk PRIMARY KEY (report_id, seq)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS rest_report_series_column_uq ON rest_report_series(report_id, column_name);
 
 -- Per-column UI/CRUD display overrides (mode, field width, textarea rows) and
 -- the currency of a money column: currency_path is a sibling column name, or
@@ -2201,6 +2214,15 @@ BEGIN
      WHERE constraint_name = 'rest_report_param_constants' AND table_name = 'rest_report_param'
   ) THEN
     ALTER TABLE rest_report_param ADD CONSTRAINT rest_report_param_constants FOREIGN KEY (constant_id) REFERENCES constant_header(id);
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+     WHERE constraint_name = 'rest_report_chart_series' AND table_name = 'rest_report_series'
+  ) THEN
+    ALTER TABLE rest_report_series ADD CONSTRAINT rest_report_chart_series FOREIGN KEY (report_id) REFERENCES rest_report_header(id);
   END IF;
 END $$;
 DO $$

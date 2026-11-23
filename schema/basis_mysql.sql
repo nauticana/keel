@@ -117,7 +117,11 @@ CREATE TABLE IF NOT EXISTS rest_report_header (
     query_name                           VARCHAR(60)   NOT NULL,
     description                          TEXT          NOT NULL,
     is_active                            TINYINT(1)    NOT NULL DEFAULT 1,
-    PRIMARY KEY (id)
+    chart_kind                           CHAR(1)       NOT NULL DEFAULT 'N',
+    category_column                      VARCHAR(60)  ,
+    PRIMARY KEY (id),
+    CONSTRAINT chk_rest_report_header_chart_kind CHECK (chart_kind IN ('N', 'B', 'L', 'P')),
+    CONSTRAINT chk_rest_report_header_category CHECK ((chart_kind = 'N') = (category_column IS NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Report parameter definitions
@@ -131,6 +135,16 @@ CREATE TABLE IF NOT EXISTS rest_report_param (
     CONSTRAINT rest_report_params FOREIGN KEY (report_id) REFERENCES rest_report_header(id),
     CONSTRAINT rest_report_param_constants FOREIGN KEY (constant_id) REFERENCES constant_header(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Result columns a report's chart plots, in display order
+CREATE TABLE IF NOT EXISTS rest_report_series (
+    report_id                            VARCHAR(80)   NOT NULL,
+    seq                                  INT           NOT NULL,
+    column_name                          VARCHAR(60)   NOT NULL,
+    PRIMARY KEY (report_id, seq),
+    CONSTRAINT rest_report_chart_series FOREIGN KEY (report_id) REFERENCES rest_report_header(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE UNIQUE INDEX rest_report_series_column_uq ON rest_report_series(report_id, column_name);
 
 -- Per-column UI/CRUD display overrides (mode, field width, textarea rows) and
 -- the currency of a money column: currency_path is a sibling column name, or

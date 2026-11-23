@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.3.14",
+   "title": "Report charts",
+   "tags": [
+    "additive"
+   ],
+   "summary": "A report declares a chart over its result columns: rest_report_header carries chart_kind and category_column, rest_report_series lists the plotted columns, and RestReport sends them to the client.",
+   "body_markdown": "### Additive\n\n- `rest.RestReport` adds `ChartKind` (`rest.ChartNone`, `ChartBar`, `ChartLine`, `ChartPie`), `CategoryColumn` and `Series`, the result columns a chart groups by and plots. They travel in `GetClientCache`'s `Reports`; a report without a chart has `ChartKind` `N`, an empty category and no series.\n- REST boot refuses a chart with no category or no series, a pie with more than one series, a series repeating the category or another series, and series on a report whose `chart_kind` is `N`.\n\n### Database\n\nThe report queries read the new columns and table, so apply this before deploying:\n\n```sql\nALTER TABLE rest_report_header ADD COLUMN chart_kind CHAR(1) NOT NULL DEFAULT 'N';\nALTER TABLE rest_report_header ADD COLUMN category_column VARCHAR(60);\nALTER TABLE rest_report_header ADD CONSTRAINT chk_rest_report_header_chart_kind CHECK (chart_kind IN ('N', 'B', 'L', 'P'));\nALTER TABLE rest_report_header ADD CONSTRAINT chk_rest_report_header_category CHECK ((chart_kind = 'N') = (category_column IS NULL));\nCREATE TABLE rest_report_series (\n    report_id   VARCHAR(80) NOT NULL,\n    seq         INTEGER     NOT NULL,\n    column_name VARCHAR(60) NOT NULL,\n    CONSTRAINT rest_report_series_pk PRIMARY KEY (report_id, seq)\n);\nCREATE UNIQUE INDEX rest_report_series_column_uq ON rest_report_series(report_id, column_name);\nALTER TABLE rest_report_series ADD CONSTRAINT rest_report_chart_series FOREIGN KEY (report_id) REFERENCES rest_report_header(id);\n```\n\nSeeds: the `chart_kind` constant with its values and `constant_lookup` row, the `foreign_key_lookup` row `rest_report_chart_series`, and the `rest_api_child` row nesting it under `rest_report_header`."
+  },
+  {
    "version": "v1.3.13",
    "title": "Account lock, operator-created partners, menu icons, client headers",
    "tags": [

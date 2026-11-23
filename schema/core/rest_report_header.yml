@@ -13,4 +13,16 @@ columns:
   - name: is_active
     type: BOOLEAN
     default: "TRUE"
+  - name: chart_kind
+    type: CHAR(1)
+    default: N
+  # The result column a chart groups by; its plotted columns are rest_report_series rows.
+  - name: category_column
+    type: VARCHAR(60)
+    nullable: true
 primary_key: [id]
+checks:
+  - name: chk_rest_report_header_chart_kind
+    expression: "chart_kind IN ('N', 'B', 'L', 'P')"
+  - name: chk_rest_report_header_category
+    expression: "(chart_kind = 'N') = (category_column IS NULL)"

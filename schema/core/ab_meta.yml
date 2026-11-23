@@ -12,6 +12,7 @@ tables:
   - rest_api_child
   - rest_report_header
   - rest_report_param
+  - rest_report_series
   - column_display_attribute
   - table_action
   - table_action_parameter

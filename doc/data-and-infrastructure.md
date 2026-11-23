@@ -103,6 +103,27 @@ Each render is gated by `BaseAuthService.canExecute(authorityObject, authorityCh
 - Button rendering, ordering, permission gating, click → HTTP dispatch, primary-key extraction, list-refresh-on-success.
 - Reserved-subpath safety guard at boot.
 
+## Reports
+
+A `rest_report_header` row names a report: `id`, `version`, the `query_name` it runs and the `description` shown as its page header. `rest_report_param` rows list its typed parameters in `seq` order; a `constant_id` offers that constant's values as choices. `RestService.Init` returns the active reports and `GetClientCache` sends them to the client as `Reports`, keyed by id.
+
+A report can declare a chart over its result columns. `chart_kind` is a `chart_kind` constant (`N` none, `B` bar, `L` line, `P` pie; `rest.ChartNone`, `ChartBar`, `ChartLine`, `ChartPie`), `category_column` is the column the chart groups by, and `rest_report_series` rows name the plotted columns in `seq` order. They reach the client as `RestReport.ChartKind`, `CategoryColumn` and `Series`; a report without a chart has an empty category and no series.
+
+```yaml
+- table: rest_report_header
+  columns: [id, query_name, description, chart_kind, category_column]
+  rows:
+    - [monthly_revenue, monthly_revenue, Revenue by month, L, month]
+
+- table: rest_report_series
+  columns: [report_id, seq, column_name]
+  rows:
+    - [monthly_revenue, 1, revenue]
+    - [monthly_revenue, 2, refunds]
+```
+
+REST boot refuses a chart with no category or no series, a pie with more than one series, a series that repeats the category or another series, and series on a report whose `chart_kind` is `N`. The named columns are not checked against the query's result.
+
 ## Multi-Cloud Support
 
 Keel supports multiple cloud providers through its port/adapter pattern:
@@ -482,6 +503,7 @@ this summary can be checked directly against the generated schema.
 | `rest_api_child` | Nested child relations exposed by a REST API |
 | `rest_report_header` | Named report definitions |
 | `rest_report_param` | Typed parameters accepted by reports |
+| `rest_report_series` | Result columns a report's chart plots |
 | `table_sequence_usage` | Maps tables to PostgreSQL sequences |
 | `application_menu` | Navigation menu headers |
 | `application_menu_item` | Ordered navigation entries within a menu |

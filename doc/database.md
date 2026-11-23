@@ -47,11 +47,13 @@ flowchart RL
         rest_api_child["rest_api_child"]
         rest_report_header["rest_report_header"]
         rest_report_param["rest_report_param"]
+        rest_report_series["rest_report_series"]
         column_display_attribute["column_display_attribute"]
     end
     rest_api_child --> foreign_key_lookup
     rest_api_child --> rest_api_header
     rest_report_param --> rest_report_header
+    rest_report_series --> rest_report_header
     rest_report_param --> constant_header
     constant_value --> constant_header
     constant_lookup --> constant_header
@@ -405,6 +407,7 @@ erDiagram
     rest_api_header ||--o{ rest_api_child : "rest_api_children"
     foreign_key_lookup ||--o{ rest_api_child : "rest_api_lookups"
     rest_report_header ||--o{ rest_report_param : "rest_report_params"
+    rest_report_header ||--o{ rest_report_series : "rest_report_chart_series"
     constant_header o|--o{ rest_report_param : "rest_report_param_constants"
 
     constant_header {
@@ -444,6 +447,13 @@ erDiagram
         VARCHAR query_name
         TEXT description
         BOOLEAN is_active
+        CHAR chart_kind
+        VARCHAR category_column
+    }
+    rest_report_series {
+        VARCHAR report_id PK,FK
+        INTEGER seq PK
+        VARCHAR column_name
     }
     rest_report_param {
         VARCHAR report_id PK,FK

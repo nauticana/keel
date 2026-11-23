@@ -27,6 +27,7 @@ const (
 	qRestApiChild     = "rest_api_child"
 	qRestReportHeader = "rest_report_header"
 	qRestReportParam  = "rest_report_param"
+	qRestReportSeries = "rest_report_series"
 	qTableAction      = "table_action"
 	qTableActionParam = "table_action_parameter"
 	qTableGrants      = "table_grants"
@@ -44,8 +45,9 @@ SELECT DISTINCT low_limit
   FROM authorization_role_permission
  WHERE authorization_object_id = 'TABLE'
    AND is_active IS TRUE`,
-	qRestReportHeader: "SELECT id, version, query_name, description FROM rest_report_header WHERE is_active IS TRUE",
+	qRestReportHeader: "SELECT id, version, query_name, description, chart_kind, COALESCE(category_column, '') FROM rest_report_header WHERE is_active IS TRUE",
 	qRestReportParam:  "SELECT report_id, seq, param_name, data_type, constant_id FROM rest_report_param ORDER BY report_id, seq",
+	qRestReportSeries: "SELECT report_id, column_name FROM rest_report_series ORDER BY report_id, seq",
 	qTableAction: `
 SELECT table_name, action_name, caption, COALESCE(icon, ''),
        record_specific, COALESCE(method_name, ''),
@@ -102,6 +104,40 @@ type RestReport struct {
 	// must have a description.
 	Description string
 	Params      []*ReportParam
+	ChartKind   ChartKind
+	// The result columns a chart groups by and plots; empty for ChartNone.
+	CategoryColumn string
+	Series         []string
+}
+
+func (r *RestReport) validateChart() error {
+	switch r.ChartKind {
+	case ChartNone:
+		if r.CategoryColumn != "" || len(r.Series) > 0 {
+			return fmt.Errorf("rest_report_header %s has chart columns but chart_kind %s", r.Id, ChartNone)
+		}
+		return nil
+	case ChartBar, ChartLine, ChartPie:
+	default:
+		return fmt.Errorf("rest_report_header %s has unknown chart_kind %q", r.Id, r.ChartKind)
+	}
+	if r.CategoryColumn == "" {
+		return fmt.Errorf("rest_report_header %s has a chart but no category_column", r.Id)
+	}
+	if len(r.Series) == 0 {
+		return fmt.Errorf("rest_report_header %s has a chart but no rest_report_series rows", r.Id)
+	}
+	if r.ChartKind == ChartPie && len(r.Series) > 1 {
+		return fmt.Errorf("rest_report_header %s is a pie chart with %d series; a pie plots one", r.Id, len(r.Series))
+	}
+	seen := map[string]struct{}{r.CategoryColumn: {}}
+	for _, column := range r.Series {
+		if _, dup := seen[column]; dup {
+			return fmt.Errorf("rest_report_series %s.%s repeats the category or another series", r.Id, column)
+		}
+		seen[column] = struct{}{}
+	}
+	return nil
 }
 
 type RestService struct {
@@ -272,24 +308,37 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase port.DatabaseReposi
 		return nil, nil, err
 	}
 
-	s.RestReports = make(map[string]*RestReport)
-	res, err = s.qs.Query(ctx, qRestReportHeader)
-	if err != nil {
+	if err := s.loadReports(ctx); err != nil {
 		return nil, nil, err
+	}
+
+	return s.RestApis, s.RestReports, nil
+}
+
+// loadReports reads the active reports with their parameters and chart
+// columns, and refuses a chart no client could draw.
+func (s *RestService) loadReports(ctx context.Context) error {
+	s.RestReports = make(map[string]*RestReport)
+	res, err := s.qs.Query(ctx, qRestReportHeader)
+	if err != nil {
+		return err
 	}
 	for _, row := range res.Rows {
 		restReport := &RestReport{
-			Id:          common.AsString(row[0]),
-			Version:     common.AsString(row[1]),
-			QueryName:   common.AsString(row[2]),
-			Description: common.AsString(row[3]),
-			Params:      make([]*ReportParam, 0),
+			Id:             common.AsString(row[0]),
+			Version:        common.AsString(row[1]),
+			QueryName:      common.AsString(row[2]),
+			Description:    common.AsString(row[3]),
+			Params:         make([]*ReportParam, 0),
+			ChartKind:      ChartKind(common.AsString(row[4])),
+			CategoryColumn: common.AsString(row[5]),
+			Series:         make([]string, 0),
 		}
 		s.RestReports[restReport.Id] = restReport
 	}
 	res, err = s.qs.Query(ctx, qRestReportParam)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	for _, row := range res.Rows {
 		restReport, ok := s.RestReports[common.AsString(row[0])]
@@ -302,8 +351,21 @@ func (s *RestService) Init(ctx context.Context, oltpDatabase port.DatabaseReposi
 			ConstantID: common.AsString(row[4]),
 		})
 	}
-
-	return s.RestApis, s.RestReports, nil
+	res, err = s.qs.Query(ctx, qRestReportSeries)
+	if err != nil {
+		return err
+	}
+	for _, row := range res.Rows {
+		if restReport, ok := s.RestReports[common.AsString(row[0])]; ok {
+			restReport.Series = append(restReport.Series, common.AsString(row[1]))
+		}
+	}
+	for _, restReport := range s.RestReports {
+		if err := restReport.validateChart(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // auditGrants warns per TABLE grant not reachable through an active
