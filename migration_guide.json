@@ -9,6 +9,16 @@
  },
  "migrations": [
   {
+   "version": "v1.3.15",
+   "title": "Account status code list and actions, sign-in admits only active accounts",
+   "tags": [
+    "additive",
+    "breaking"
+   ],
+   "summary": "user_account.status gets the user_status code list and a CHECK and changes only through the lock, unlock, expire and activate actions; sign-in and refresh refuse every status other than active and an expired self-lock.",
+   "body_markdown": "### Breaking\n\n- Sign-in and token refresh admitted any status other than expired, admin-locked, deleted and a current self-lock, so `I` (not activated) and any code outside keel's list signed in. They now admit only `A`, and `X` once its auto-unlock window has passed; everything else is refused with `user.ErrAccountUnavailable` (403).\n- `user_account.status` is insert-only: generic update and patch skip it. Change it with the account status actions; a client that edited the column calls them instead.\n- `user.UserService` adds `ExpireAccount(actorID, userID, reason)` and `ActivateAccount(actorID, userID, note)`; other implementations add them.\n\n### Additive\n\n- `ExpireAccount` sets an active or self-locked account to `E` and revokes its tokens; `ActivateAccount` sets an expired (`E`) or not activated (`I`) account to active. Both record the actor and text, with the new `user_account_history.action_type` codes `T` (expire) and `V` (activate). `handler.AccountLockHandler` also mounts them as `user_account/expire` (parameter `reason`) and `user_account/activate` (parameter `note`), gated by `USER_ACCOUNT` `EXPIRE` and `ACTIVATE`.\n\n### Database\n\n`chk_user_account_status` fails on a status outside the list, so map any other value to one of the codes first:\n\n```sql\nSELECT status, COUNT(*) FROM user_account WHERE status NOT IN ('A', 'X', 'E', 'S', 'I', 'D') GROUP BY status;\nALTER TABLE user_account ADD CONSTRAINT chk_user_account_status CHECK (status IN ('A', 'X', 'E', 'S', 'I', 'D'));\nALTER TABLE user_account_history DROP CONSTRAINT chk_user_account_history_action_type;\nALTER TABLE user_account_history ADD CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E', 'T', 'V'));\n```\n\nSeeds: the `constant_header` `user_status`, its six `constant_value` rows and the `constant_lookup` row for `user_account.status`; the `user_action_type` values `T` and `V`; the `column_display_attribute` row `user_account.status` `I`; `USER_ACCOUNT` `EXPIRE`/`ACTIVATE` with the `user_account` table actions `expire` and `activate` and their parameters, granted to `APP_ADMIN` and `SECURITY_ADMIN`."
+  },
+  {
    "version": "v1.3.14",
    "title": "Report charts",
    "tags": [

@@ -330,12 +330,10 @@ func (m *memStore) Query(_ context.Context, name string, args ...any) (*model.Qu
 		m.cutoffs[args[2].(int)] = time.Now()
 	case qAddUserActivity:
 		m.history = append(m.history, args)
-	case qSetAdminLock, qClearAdminLock:
-		a := m.accounts[args[0].(int)]
-		lockable := a != nil && (a.status == UserStatusActive || a.status == UserStatusSelfLocked)
-		if (name == qSetAdminLock && lockable) || (name == qClearAdminLock && a != nil && a.status == UserStatusAdminLock) {
-			a.status = map[string]string{qSetAdminLock: UserStatusAdminLock, qClearAdminLock: UserStatusActive}[name]
-			out.Rows = [][]any{{args[0]}}
+	case qSetAccountStatus:
+		if a := m.accounts[args[2].(int)]; a != nil && (a.status == args[3] || a.status == args[4]) {
+			a.status = args[0].(string)
+			out.Rows = [][]any{{args[2]}}
 		}
 	}
 	return out, nil

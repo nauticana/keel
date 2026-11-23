@@ -380,3 +380,18 @@ func TestPasswordLoginFailsWhenThePartnerCannotBeLoaded(t *testing.T) {
 		t.Fatalf("login with a failed partner lookup = %+v, %v", session, err)
 	}
 }
+
+// Only an active account signs in: an unknown or unactivated status is refused.
+func TestAccountStatusGateIsAnAllowlist(t *testing.T) {
+	svc := newLocalUserService(t, memberStore())
+	for _, status := range []string{UserStatusInitial, UserStatusDeleted, UserStatusAdminLock, UserStatusExpired, "Z", "a", ""} {
+		if err := svc.checkAccountStatus(7, status, time.Time{}); !errors.Is(err, ErrAccountUnavailable) {
+			t.Errorf("status %q admitted: %v", status, err)
+		}
+	}
+	for _, status := range []string{UserStatusActive, UserStatusSelfLocked} {
+		if err := svc.checkAccountStatus(7, status, time.Time{}); err != nil {
+			t.Errorf("status %q refused: %v", status, err)
+		}
+	}
+}

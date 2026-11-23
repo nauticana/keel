@@ -255,6 +255,7 @@ seeds:
       - [action_kind, Action Kind]
       - [chart_kind, Chart Kind]
       - [measurement_unit, Measurement Unit]
+      - [user_status, Account Status]
       - [user_action_type, User Action Type]
       - [email_verification_method, Email Verification Method]
       - [sign_in_method, Sign-in Method]
@@ -274,6 +275,12 @@ seeds:
       - [chart_kind, B, Bar]
       - [chart_kind, L, Line]
       - [chart_kind, P, Pie]
+      - [user_status, A, Active]
+      - [user_status, X, Locked after failed sign-ins]
+      - [user_status, E, Expired]
+      - [user_status, S, Locked by an administrator]
+      - [user_status, I, Not activated]
+      - [user_status, D, Deleted]
       - [user_action_type, C, Create]
       - [user_action_type, L, Login]
       - [user_action_type, F, Failed Login]
@@ -285,6 +292,8 @@ seeds:
       - [user_action_type, M, Profile Change]
       - [user_action_type, N, Contact Change]
       - [user_action_type, E, Membership End]
+      - [user_action_type, T, Expire]
+      - [user_action_type, V, Activate]
       - [email_verification_method, O, Email code]
       - [email_verification_method, R, Registration]
       - [email_verification_method, C, Contact change]
@@ -353,6 +362,7 @@ seeds:
       - [lookup_style, foreign_key_lookup, lookup_style]
       - [action_kind, table_action, action_kind]
       - [chart_kind, rest_report_header, chart_kind]
+      - [user_status, user_account, status]
       - [user_action_type, user_account_history, action_type]
       - [email_verification_method, user_account, email_verification_method]
       - [sign_in_method, user_refresh_token, sign_in_method]
@@ -449,6 +459,7 @@ seeds:
       - [user_refresh_token, created_at, R]
       - [device_token, created_at, R]
       - [device_token, updated_at, U]
+      - [user_account, status, I]
       - [user_account, passtext, S]
       - [user_account, email_verified_at, R]
       - [user_account, email_verification_method, R]
@@ -508,6 +519,10 @@ seeds:
       - [APP_ADMIN, USER_ACCOUNT, UNLOCK, user_account]
       - [SECURITY_ADMIN, USER_ACCOUNT, LOCK, user_account]
       - [SECURITY_ADMIN, USER_ACCOUNT, UNLOCK, user_account]
+      - [APP_ADMIN, USER_ACCOUNT, EXPIRE, user_account]
+      - [APP_ADMIN, USER_ACCOUNT, ACTIVATE, user_account]
+      - [SECURITY_ADMIN, USER_ACCOUNT, EXPIRE, user_account]
+      - [SECURITY_ADMIN, USER_ACCOUNT, ACTIVATE, user_account]
   - table: authorization_object
     columns: [id, caption]
     rows:
@@ -517,16 +532,22 @@ seeds:
     rows:
       - [USER_ACCOUNT, LOCK, Lock an account]
       - [USER_ACCOUNT, UNLOCK, Unlock an account]
+      - [USER_ACCOUNT, EXPIRE, Expire an account]
+      - [USER_ACCOUNT, ACTIVATE, Activate an account]
   - table: table_action
     columns: [table_name, action_name, caption, icon, action_kind, record_specific, display_order]
     rows:
       - [user_account, lock, Lock, lock, P, true, 10]
       - [user_account, unlock, Unlock, lock_open, P, true, 20]
+      - [user_account, expire, Expire, timer_off, P, true, 30]
+      - [user_account, activate, Activate, check_circle, P, true, 40]
   - table: table_action_parameter
     columns: [table_name, action_name, seq, param_name, caption, data_type, required]
     rows:
       - [user_account, lock, 1, reason, Reason, string, false]
       - [user_account, unlock, 1, note, Note, string, false]
+      - [user_account, expire, 1, reason, Reason, string, false]
+      - [user_account, activate, 1, note, Note, string, false]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:

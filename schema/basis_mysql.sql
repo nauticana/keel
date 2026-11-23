@@ -238,6 +238,7 @@ CREATE TABLE IF NOT EXISTS user_account (
     single_device_session                TINYINT(1)    NOT NULL DEFAULT 0,
     tokens_valid_after                   DATETIME     ,
     PRIMARY KEY (id),
+    CONSTRAINT chk_user_account_status CHECK (status IN ('A', 'X', 'E', 'S', 'I', 'D')),
     CONSTRAINT chk_user_account_email_verification_method CHECK (email_verification_method IN ('O', 'R', 'C', 'P', 'G', 'A', 'T', 'X', 'L'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX user_account_email_uq ON user_account(user_email);
@@ -255,7 +256,7 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     PRIMARY KEY (user_id, action_time),
     CONSTRAINT user_historic_actions FOREIGN KEY (user_id) REFERENCES user_account(id),
     CONSTRAINT user_history_actors FOREIGN KEY (actor_id) REFERENCES user_account(id),
-    CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E'))
+    CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E', 'T', 'V'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A legal hold on a user's data. While any hold of the user is unreleased,

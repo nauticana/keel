@@ -114,6 +114,8 @@ const (
 	UserActivityProfile       = "M"
 	UserActivityContact       = "N"
 	UserActivityMembershipEnd = "E"
+	UserActivityExpire        = "T"
+	UserActivityActivate      = "V"
 
 	MaxHistoryReason = 80 // user_account_history.object_name width
 
@@ -198,8 +200,7 @@ const (
 	qActiveLegalHold                 = "active_legal_hold"
 	qTokensValidAfter                = "tokens_valid_after"
 	qRevokeAccessTokens              = "revoke_access_tokens"
-	qSetAdminLock                    = "set_admin_lock"
-	qClearAdminLock                  = "clear_admin_lock"
+	qSetAccountStatus                = "set_account_status"
 	qUpdateTenantMember              = "update_tenant_member"
 	qSetSingleDevicePolicy           = "set_single_device_policy"
 	qRevokePriorOnSingleDevicePolicy = "revoke_prior_on_single_device_policy"
@@ -385,14 +386,11 @@ INSERT INTO user_account_history (user_id, action_time, action_type, status, obj
 VALUES (?,?,?,?,?,?,?)
 `,
 
-	qSetAdminLock: `
-UPDATE user_account SET status = '` + UserStatusAdminLock + `', lock_time = CURRENT_TIMESTAMP
- WHERE id = ? AND status IN ('` + UserStatusActive + `', '` + UserStatusSelfLocked + `')
-RETURNING id
-`,
-	qClearAdminLock: `
-UPDATE user_account SET status = '` + UserStatusActive + `', lock_time = NULL, login_attempts = 0
- WHERE id = ? AND status = '` + UserStatusAdminLock + `'
+	qSetAccountStatus: `
+UPDATE user_account
+   SET status = ?, login_attempts = 0,
+       lock_time = CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP END
+ WHERE id = ? AND status IN (?, ?)
 RETURNING id
 `,
 
@@ -1000,26 +998,15 @@ func (r *LocalUserService) GetPasswordPolicy() model.PasswordPolicy {
 	return r.passwordPolicy
 }
 
-// checkAccountStatus returns nil when the account can proceed to a session
-// issue, or an error describing why it cannot. Centralizes the expiry/
-// lock/auto-unlock logic so GetUserById, GetUserByLogin, and GetUserByEmail
-// can never disagree.
-//
-// When status is self-locked but lastAttempt is zero (NULL in the DB), we
-// treat the account as unlocked rather than perma-locked. The lockout
-// window is anchored to the most recent failed attempt; without a recorded
-// timestamp we have no anchor, and choosing "still locked" would prevent
-// any user with a NULL last_login_attempt from ever signing in. That risk
-// is preferable to the alternative of a self-locked-then-data-migrated
-// account being indefinitely shut out.
+// checkAccountStatus admits only an active account, or a self-locked one whose
+// auto-unlock window has passed; every other status, including an unknown
+// code, is refused. A self-lock without a recorded attempt has no window to
+// anchor and is admitted. Every sign-in and refresh path goes through it.
 func (s *LocalUserService) checkAccountStatus(userID int, uStatus string, lastAttempt time.Time) error {
-	if uStatus == UserStatusExpired {
-		return fmt.Errorf("%w: user account is expired", ErrAccountUnavailable)
-	}
-	if uStatus == UserStatusAdminLock || uStatus == UserStatusDeleted {
-		return fmt.Errorf("%w: user account is locked", ErrAccountUnavailable)
-	}
-	if uStatus == UserStatusSelfLocked {
+	switch uStatus {
+	case UserStatusActive:
+		return nil
+	case UserStatusSelfLocked:
 		if lastAttempt.IsZero() {
 			return nil
 		}
@@ -1027,11 +1014,13 @@ func (s *LocalUserService) checkAccountStatus(userID int, uStatus string, lastAt
 		if err != nil {
 			return err
 		}
-		if policy.AutoUnlock > time.Now().UnixNano()-lastAttempt.UnixNano() {
-			return fmt.Errorf("%w: user account is locked", ErrAccountUnavailable)
+		if policy.AutoUnlock <= time.Now().UnixNano()-lastAttempt.UnixNano() {
+			return nil
 		}
+	case UserStatusExpired:
+		return fmt.Errorf("%w: user account is expired", ErrAccountUnavailable)
 	}
-	return nil
+	return fmt.Errorf("%w: user account is locked", ErrAccountUnavailable)
 }
 
 func (r *LocalUserService) GetUserMenu(userid int) ([]model.UserMenu, error) {

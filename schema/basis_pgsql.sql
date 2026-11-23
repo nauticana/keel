@@ -226,6 +226,7 @@ CREATE TABLE IF NOT EXISTS user_account (
     single_device_session                BOOLEAN       NOT NULL DEFAULT FALSE,
     tokens_valid_after                   TIMESTAMP    ,
     CONSTRAINT user_account_pk PRIMARY KEY (id),
+    CONSTRAINT chk_user_account_status CHECK (status IN ('A', 'X', 'E', 'S', 'I', 'D')),
     CONSTRAINT chk_user_account_email_verification_method CHECK (email_verification_method IN ('O', 'R', 'C', 'P', 'G', 'A', 'T', 'X', 'L'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS user_account_email_uq ON user_account(user_email);
@@ -241,7 +242,7 @@ CREATE TABLE IF NOT EXISTS user_account_history (
     client_address                       VARCHAR(15)  ,
     actor_id                             BIGINT       ,
     CONSTRAINT user_account_history_pk PRIMARY KEY (user_id, action_time),
-    CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E'))
+    CONSTRAINT chk_user_account_history_action_type CHECK (action_type IN ('C', 'L', 'F', 'O', 'X', 'U', 'P', 'D', 'M', 'N', 'E', 'T', 'V'))
 );
 
 -- A legal hold on a user's data. While any hold of the user is unreleased,

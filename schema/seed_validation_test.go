@@ -57,3 +57,26 @@ func TestParseSeedPathAcceptsFilesAndDirectories(t *testing.T) {
 		t.Fatal("missing seed file accepted")
 	}
 }
+
+// user_account.status changes only through the account status actions, so
+// generic update must skip it.
+func TestAccountStatusIsInsertOnly(t *testing.T) {
+	seeds, err := ParseSeedDir("seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sf := range seeds {
+		for _, st := range sf.Seeds {
+			table, column, mode := seedColumn(st, "table_name"), seedColumn(st, "column_name"), seedColumn(st, "display_mode")
+			if st.Table != "column_display_attribute" || table < 0 || column < 0 || mode < 0 {
+				continue
+			}
+			for _, r := range st.Rows {
+				if r[table] == "user_account" && r[column] == "status" && r[mode] == "I" {
+					return
+				}
+			}
+		}
+	}
+	t.Fatal("no column_display_attribute row makes user_account.status insert-only")
+}

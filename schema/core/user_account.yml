@@ -79,5 +79,7 @@ indexes:
     columns: [phone]
     unique: true
 checks:
+  - name: chk_user_account_status
+    expression: "status IN ('A', 'X', 'E', 'S', 'I', 'D')"
   - name: chk_user_account_email_verification_method
     expression: "email_verification_method IN ('O', 'R', 'C', 'P', 'G', 'A', 'T', 'X', 'L')"

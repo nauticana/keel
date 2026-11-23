@@ -576,11 +576,22 @@ Every social-create, social-re-auth, phone-create, and phone-re-auth path now wr
 - `UserActivityCreate` with object name `social:<provider>` or `phone` on first signup.
 - `UserActivityLogin` with the same object name on subsequent re-auths.
 
-`user_account_history.action_type` is a one-character code: `C` create, `L` login, `F` failed login, `O` logout, `X` lock, `U` unlock, `P` password, `D` delete, `M` profile change, `N` contact change (object name = `email` / `phone`), `E` membership end. The `user_action_type` constant domain labels them in CRUD screens. `actor_id` is the account that acted on the user, NULL when the user acted; `AddUserHistory(id, byId, …)` stores `byId` there.
+`user_account_history.action_type` is a one-character code: `C` create, `L` login, `F` failed login, `O` logout, `X` lock, `U` unlock, `P` password, `D` delete, `M` profile change, `N` contact change (object name = `email` / `phone`), `E` membership end, `T` expire, `V` activate. The `user_action_type` constant domain labels them in CRUD screens. `actor_id` is the account that acted on the user, NULL when the user acted; `AddUserHistory(id, byId, …)` stores `byId` there.
 
-### Locking an account
+### Account status
 
-`UserService.LockAccount(actorID, userID, reason)` sets an active or self-locked account to `UserStatusAdminLock` (`S`), so sign-in and token refresh are refused, and in the same transaction revokes every refresh and access token and writes an `X` history row with the actor and reason; with `LocalUserService.OAuthTokens` set it also revokes the authorization-server tokens. API keys the account issued keep working; deactivate them separately. `UnlockAccount(actorID, userID, note)` returns an admin-locked account to active, clears its failed sign-in count and writes a `U` row. An account in any other status, or an unknown one, is `ErrAccountState` (409 `account_state`), so a lock and unlock cannot activate an expired or deleted account; acting on one's own account is `ErrSelfAction` (409 `self_action`) and a reason over 80 characters `ErrReasonTooLong` (400). The lock is not scoped to a partner: grant it only to roles that act across partners. `handler.AccountLockHandler` mounts the `user_account` table actions `lock` (parameter `reason`) and `unlock` (parameter `note`), body `{"id": …}`, gated by `USER_ACCOUNT` `LOCK` and `UNLOCK` (seeded for `APP_ADMIN` and `SECURITY_ADMIN`).
+`user_account.status` is one of the `user_status` codes, enforced by `chk_user_account_status`: `A` active, `X` locked after failed sign-ins, `E` expired, `S` locked by an administrator, `I` not activated, `D` deleted. Sign-in and refresh admit only `A`, and `X` once its auto-unlock window has passed; every other status is refused with `ErrAccountUnavailable` (403).
+
+The column is insert-only (`column_display_attribute` mode `I`): generic update skips it, and an administrator changes it only through `UserService`, served by `handler.AccountLockHandler` as `user_account` table actions with body `{"id": …}`:
+
+| Action | Method | From | To | Text parameter | History |
+|---|---|---|---|---|---|
+| `lock` | `LockAccount` | `A`, `X` | `S` | `reason` | `X` |
+| `unlock` | `UnlockAccount` | `S` | `A` | `note` | `U` |
+| `expire` | `ExpireAccount` | `A`, `X` | `E` | `reason` | `T` |
+| `activate` | `ActivateAccount` | `E`, `I` | `A` | `note` | `V` |
+
+Each change and its history row, with the actor and text, commit in one transaction. A change away from active also revokes every refresh and access token and, with `LocalUserService.OAuthTokens` set, the authorization-server tokens; a change to active clears the failed sign-in count. API keys the account issued keep working; deactivate them separately. An account in no `From` status, or an unknown one, is `ErrAccountState` (409 `account_state`); acting on one's own account is `ErrSelfAction` (409 `self_action`) and a text over 80 characters `ErrReasonTooLong` (400). The actions are not scoped to a partner: grant them only to roles that act across partners. Each is gated by `USER_ACCOUNT` and its upper-cased name, seeded for `APP_ADMIN` and `SECURITY_ADMIN`.
 
 Combined with the password-login history that was already written by `GetUserByLogin` / `GetUserByEmail`, every authenticated session in the system now leaves an audit-trail entry — answering "when did this user first sign in?" and "when did this social-only user last log in?" without ambiguity.
 

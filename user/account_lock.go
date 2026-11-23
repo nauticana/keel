@@ -11,22 +11,45 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// LockAccount sets an active or self-locked account to UserStatusAdminLock, so
-// sign-in and token refresh are refused, revokes every refresh and access
-// token, and records actorID and reason. Any other account returns
-// ErrAccountState, so unlocking cannot activate an expired or deleted one.
+// accountStatusChange moves an account in one of the from statuses to to and
+// records activity.
+type accountStatusChange struct {
+	from         [2]string
+	to, activity string
+}
+
+var (
+	lockAccount     = accountStatusChange{[2]string{UserStatusActive, UserStatusSelfLocked}, UserStatusAdminLock, UserActivityLock}
+	unlockAccount   = accountStatusChange{[2]string{UserStatusAdminLock, UserStatusAdminLock}, UserStatusActive, UserActivityUnlock}
+	expireAccount   = accountStatusChange{[2]string{UserStatusActive, UserStatusSelfLocked}, UserStatusExpired, UserActivityExpire}
+	activateAccount = accountStatusChange{[2]string{UserStatusExpired, UserStatusInitial}, UserStatusActive, UserActivityActivate}
+)
+
+// LockAccount sets an active or self-locked account to UserStatusAdminLock.
 func (s *LocalUserService) LockAccount(actorID, userID int, reason string) error {
-	return s.setAdminLock(actorID, userID, reason, true)
+	return s.changeAccountStatus(actorID, userID, reason, lockAccount)
 }
 
-// UnlockAccount returns an account LockAccount locked to active, clears its
-// failed sign-in count and records actorID and note. Any other account
-// returns ErrAccountState.
+// UnlockAccount returns an account LockAccount locked to active.
 func (s *LocalUserService) UnlockAccount(actorID, userID int, note string) error {
-	return s.setAdminLock(actorID, userID, note, false)
+	return s.changeAccountStatus(actorID, userID, note, unlockAccount)
 }
 
-func (s *LocalUserService) setAdminLock(actorID, userID int, reason string, locked bool) error {
+// ExpireAccount sets an active or self-locked account to UserStatusExpired.
+func (s *LocalUserService) ExpireAccount(actorID, userID int, reason string) error {
+	return s.changeAccountStatus(actorID, userID, reason, expireAccount)
+}
+
+// ActivateAccount sets an expired or not yet activated account to active.
+func (s *LocalUserService) ActivateAccount(actorID, userID int, note string) error {
+	return s.changeAccountStatus(actorID, userID, note, activateAccount)
+}
+
+// changeAccountStatus applies change and records actorID and reason in one
+// transaction; an account in no from status returns ErrAccountState. A change
+// away from active revokes every refresh and access token; one to active
+// clears the failed sign-in count.
+func (s *LocalUserService) changeAccountStatus(actorID, userID int, reason string, change accountStatusChange) error {
 	switch {
 	case actorID <= 0 || userID <= 0:
 		return model.NewBadRequest("id is required")
@@ -35,31 +58,28 @@ func (s *LocalUserService) setAdminLock(actorID, userID int, reason string, lock
 	case utf8.RuneCountInString(reason) > MaxHistoryReason:
 		return ErrReasonTooLong
 	}
-	query, activity, status := qClearAdminLock, UserActivityUnlock, UserStatusActive
-	if locked {
-		query, activity, status = qSetAdminLock, UserActivityLock, UserStatusAdminLock
-	}
+	active := change.to == UserStatusActive
 	lock := s.tokenCutoffLock(userID)
 	lock.Lock()
 	defer lock.Unlock()
 	ctx := s.ctx()
 	err := data.InTx(ctx, s.database, LocalUserQueries, func(tx port.TxQueryService) error {
-		res, err := tx.Query(ctx, query, userID)
+		res, err := tx.Query(ctx, qSetAccountStatus, change.to, active, userID, change.from[0], change.from[1])
 		if err != nil {
 			return err
 		}
 		if len(res.Rows) == 0 {
 			return ErrAccountState
 		}
-		if _, err := tx.Query(ctx, qAddUserActivity, userID, time.Now(), activity, status, reason, "", actorID); err != nil {
+		if _, err := tx.Query(ctx, qAddUserActivity, userID, time.Now(), change.activity, change.to, reason, "", actorID); err != nil {
 			return err
 		}
-		if !locked {
+		if active {
 			return nil
 		}
 		return s.revokeTokensTx(ctx, tx, userID)
 	})
-	if err != nil || !locked {
+	if err != nil || active {
 		return err
 	}
 	return s.revokedTokens(ctx, userID)

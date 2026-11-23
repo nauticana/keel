@@ -99,3 +99,46 @@ func TestLockAccountRollsBackOnFailure(t *testing.T) {
 		t.Fatalf("commits %d rollbacks %d", store.commits, store.rollbacks)
 	}
 }
+
+func TestExpireAndActivateAccount(t *testing.T) {
+	store := memberStore()
+	store.addAccount(7, "a@acme.com", UserStatusActive)
+	svc := newLocalUserService(t, store)
+	token, _ := svc.CreateRefreshToken(&model.UserSession{Id: 7, SignInMethod: SignInPassword}, SessionDevice{})
+
+	if err := svc.ExpireAccount(3, 7, "contract ended"); err != nil || store.accounts[7].status != UserStatusExpired {
+		t.Fatalf("expire: %v, status %s", err, store.accounts[7].status)
+	}
+	if _, err := svc.ValidateRefreshToken(token, SessionDevice{}); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("refresh after expire: %v", err)
+	}
+	if h := store.history[len(store.history)-1]; h[2] != UserActivityExpire || h[3] != UserStatusExpired || h[6] != 3 {
+		t.Fatalf("history = %v", h)
+	}
+	for name, refused := range map[string]error{
+		"expire again": svc.ExpireAccount(3, 7, ""),
+		"lock":         svc.LockAccount(3, 7, ""),
+		"unlock":       svc.UnlockAccount(3, 7, ""),
+	} {
+		if !errors.Is(refused, ErrAccountState) {
+			t.Errorf("%s of an expired account: %v", name, refused)
+		}
+	}
+	if err := svc.ActivateAccount(3, 7, "renewed"); err != nil || store.accounts[7].status != UserStatusActive {
+		t.Fatalf("activate: %v, status %s", err, store.accounts[7].status)
+	}
+	if h := store.history[len(store.history)-1]; h[2] != UserActivityActivate || h[4] != "renewed" {
+		t.Fatalf("history = %v", h)
+	}
+
+	store.accounts[7].status = UserStatusInitial
+	if err := svc.ActivateAccount(3, 7, ""); err != nil || store.accounts[7].status != UserStatusActive {
+		t.Fatalf("activate a new account: %v", err)
+	}
+	for _, status := range []string{UserStatusAdminLock, UserStatusDeleted, UserStatusActive} {
+		store.accounts[7].status = status
+		if err := svc.ActivateAccount(3, 7, ""); !errors.Is(err, ErrAccountState) || store.accounts[7].status != status {
+			t.Errorf("activate from %s: %v", status, err)
+		}
+	}
+}
