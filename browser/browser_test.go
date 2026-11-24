@@ -126,7 +126,7 @@ func TestRenderAgainstRealChrome(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tmp := t.TempDir()
+	tmp := shortTempDir(t)
 	renderer := &DOMRenderer{Launcher: &Launcher{Headless: true, ExecPaths: []string{chrome}, TempDir: tmp}}
 	res, err := renderer.Render(context.Background(), RenderRequest{
 		URL:       srv.URL,
@@ -175,4 +175,16 @@ func TestRemoveProfileOutlastsLateWriter(t *testing.T) {
 	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
 		t.Errorf("profile dir survived: %v", err)
 	}
+}
+
+// shortTempDir keeps Chrome's SingletonSocket path under the 108-byte Unix
+// socket limit, which t.TempDir's test-named directory exceeds.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "kb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
 }

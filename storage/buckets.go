@@ -46,16 +46,17 @@ func (b *Buckets) Get(ctx context.Context, bucket string) (ObjectStorage, error)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	b.mu.RLock()
-	st, ok := b.stores[bucket]
-	b.mu.RUnlock()
-	if ok {
+	if st, ok := b.cached(bucket); ok {
 		return st, nil
 	}
 	// The shared build outlives an individual caller but remains bounded. Its
 	// context is never cancelled after a success: a provider client may keep it
 	// to refresh credentials.
 	result := b.group.DoChan(bucket, func() (any, error) {
+		// A build may have finished between the caller's miss and this call.
+		if st, ok := b.cached(bucket); ok {
+			return st, nil
+		}
 		buildCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		timer := time.AfterFunc(bucketBuildTimeout, cancel)
 		st, err := b.build(buildCtx, b.secrets, bucket)
@@ -84,4 +85,11 @@ func (b *Buckets) Get(ctx context.Context, bucket string) (ObjectStorage, error)
 		}
 		return r.Val.(ObjectStorage), nil
 	}
+}
+
+func (b *Buckets) cached(bucket string) (ObjectStorage, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	st, ok := b.stores[bucket]
+	return st, ok
 }

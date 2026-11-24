@@ -53,6 +53,26 @@ func TestBucketsBuildsEachBucketOnce(t *testing.T) {
 	}
 }
 
+// A caller that missed the cache just as the first build finished must reuse
+// that build's store. The window is narrow, so many rounds make it reliable.
+func TestBucketsConcurrentFirstGetBuildsOnce(t *testing.T) {
+	for round := range 500 {
+		b, builds := countingBuckets(t, nil)
+		var wg sync.WaitGroup
+		for range 16 {
+			wg.Go(func() {
+				if _, err := b.Get(context.Background(), "public"); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		wg.Wait()
+		if n := builds.Load(); n != 1 {
+			t.Fatalf("round %d: built %d stores for one bucket, want 1", round, n)
+		}
+	}
+}
+
 func TestBucketsRefusesBlankBucket(t *testing.T) {
 	b, builds := countingBuckets(t, nil)
 	for _, name := range []string{"", "  "} {

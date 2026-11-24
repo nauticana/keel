@@ -42,7 +42,7 @@ Add a pinned release to the consuming module:
 go get github.com/nauticana/keel@<version>
 ```
 
-Keel requires Go 1.27.3. Then follow [Configuration and Getting Started](doc/configuration-and-getting-started.md) for runtime configuration, application bootstrap, REST wiring, and workers.
+Keel requires Go 1.27.4. Then follow [Configuration and Getting Started](doc/configuration-and-getting-started.md) for runtime configuration, application bootstrap, REST wiring, and workers.
 
 ## API JSON
 
@@ -50,7 +50,7 @@ Keel's own HTTP API writes every 64-bit integer (`int`, `int64`, `uint`, `uint64
 
 ## Query results
 
-A named query returns a `model.QueryResult` (`Columns`, `Rows [][]any`). Positional `res.Rows[i][j]` with `common.As*` is the fastest read and stays the default where the SQL fixes the column order. For typed values with errors, `res.Row(i)` gives `At[T](j)` by position, `Get[T](name)` by name and `Into(&a, &b, …)` for the leading columns in order, and `res.Scan[T]` maps every row; all convert through `model.Coerce[T]` and fail with `ErrColumnNotFound`, `ErrRowOutOfRange`, `ErrNullValue` or `ErrCoercion`. These generic methods need Go 1.27.3, keel's minimum. See [Extending and Developing Keel](doc/extending-and-development.md).
+A named query returns a `model.QueryResult` (`Columns`, `Rows [][]any`). Positional `res.Rows[i][j]` with `common.As*` is the fastest read and stays the default where the SQL fixes the column order. For typed values with errors, `res.Row(i)` gives `At[T](j)` by position, `Get[T](name)` by name and `Into(&a, &b, …)` for the leading columns in order, and `res.Scan[T]` maps every row; all convert through `model.Coerce[T]` and fail with `ErrColumnNotFound`, `ErrRowOutOfRange`, `ErrNullValue` or `ErrCoercion`. These generic methods need Go 1.27.4, keel's minimum. See [Extending and Developing Keel](doc/extending-and-development.md).
 
 ## Standards
 

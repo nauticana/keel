@@ -20,3 +20,14 @@ func TestBuildDSNSessionIsUTC(t *testing.T) {
 		t.Fatalf("dsn lost a field: %+v", cfg)
 	}
 }
+
+// An unquoted empty value would take the next key=value pair as its own.
+func TestPgxKVQuotesEmptyValue(t *testing.T) {
+	cfg, err := pgx.ParseConfig("host=h user=u password=" + pgxKV("") + " dbname=d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Password != "" || cfg.Database != "d" {
+		t.Fatalf("password %q database %q", cfg.Password, cfg.Database)
+	}
+}

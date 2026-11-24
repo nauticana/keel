@@ -96,7 +96,7 @@ func TestRenderCapturesRequestsAgainstRealChrome(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	renderer := &DOMRenderer{Launcher: &Launcher{Headless: true, ExecPaths: []string{chrome}, TempDir: t.TempDir()}}
+	renderer := &DOMRenderer{Launcher: &Launcher{Headless: true, ExecPaths: []string{chrome}, TempDir: shortTempDir(t)}}
 	res, err := renderer.Render(context.Background(), RenderRequest{
 		URL: srv.URL, Timeout: 60 * time.Second, CaptureRequests: true, Settle: 1500 * time.Millisecond,
 	})

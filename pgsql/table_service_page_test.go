@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nauticana/keel/model"
 )
 
@@ -25,6 +26,7 @@ func (r *fakeRows) Err() error                    { return nil }
 func (r *fakeRows) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
 func (r *fakeRows) Conn() *pgx.Conn               { return nil }
 func (r *fakeRows) RawValues() [][]byte           { return nil }
+func (r *fakeRows) TypeMap() *pgtype.Map          { return nil }
 func (r *fakeRows) Values() ([]any, error)        { return r.rows[r.idx-1], nil }
 
 func (r *fakeRows) FieldDescriptions() []pgconn.FieldDescription {

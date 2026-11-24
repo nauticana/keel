@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,8 +17,10 @@ type quotaCall struct {
 }
 
 type quotaFakeQS struct {
-	rows  map[string][][]any
-	errs  map[string]error
+	rows map[string][][]any
+	errs map[string]error
+	// mu guards calls: the API-key middleware records last use from a goroutine.
+	mu    sync.Mutex
 	calls []quotaCall
 }
 
@@ -26,7 +29,9 @@ func newQuotaFakeQS() *quotaFakeQS {
 }
 
 func (f *quotaFakeQS) Query(_ context.Context, name string, args ...any) (*model.QueryResult, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, quotaCall{name, args})
+	f.mu.Unlock()
 	if err := f.errs[name]; err != nil {
 		return nil, err
 	}

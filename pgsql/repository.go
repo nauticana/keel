@@ -149,7 +149,8 @@ func buildDSN(password string) string {
 // splits keys from values on `=` while splitting key=value pairs on
 // whitespace. Values without ANY of those metacharacters pass through
 // raw (no URL-encoding); anything else gets single-quoted with `'`
-// and `\` escaped.
+// and `\` escaped. An empty value is quoted too: left bare, it would
+// take the next key=value pair as its own.
 //
 // `=` was missing from the trigger set previously (MAJOR 12). A
 // password containing `=` (no whitespace, no quote, no backslash)
@@ -158,7 +159,7 @@ func buildDSN(password string) string {
 // parses as `password=pa` followed by an unrelated `ss` key →
 // malformed DSN.
 func pgxKV(v string) string {
-	if !strings.ContainsAny(v, " \t\n'\\=") {
+	if v != "" && !strings.ContainsAny(v, " \t\n'\\=") {
 		return v
 	}
 	var b strings.Builder
