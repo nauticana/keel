@@ -235,11 +235,14 @@ keel generates each kind's SQL from its `GrantSource`, so effective dating, the 
 
 Non-human principals draw on the *same* roles and matrix below, out of their own assignment table. `IsGlobalRole(ctx, userID int)` stays user-specific: it decides row scoping beside the id used as the row filter, not who is acting.
 
+A role spans partners when its `authorization_role.is_global` is set (`SUPER`, `APP_ADMIN`, `SECURITY_ADMIN`, `SECURITY_OPER`, `BUSINESS_ADMIN`); an application marks its own roles in its seed. A `partner_scoped` role cannot be global. `SUPER` is seeded with every keel action at scope `*`, and an application seeds it for the actions it adds. Creating a partner belongs to `BUSINESS_ADMIN`, the account status actions to `SECURITY_ADMIN`.
+
 | Type | Object | SUPER | APP_ADMIN | SECURITY_ADMIN | SECURITY_OPER | BUSINESS_ADMIN | PARTNER_ADMIN |
 |------|--------|-------|-----------|----------------|---------------|----------------|---------------|
 | PAGE | * | A | | | | | |
 | TABLE | * | SIUD | | | | | |
 | REPORT | * | A | | | | | |
+| every other action | * | all | | | | | |
 | **Security** | | | | | | | |
 | PAGE | authorization_roles | | A | A | A | A | |
 | PAGE | authorization_objects | | A | A | A | A | |
@@ -253,7 +256,7 @@ Non-human principals draw on the *same* roles and matrix below, out of their own
 | TABLE | user_permission | | S | SIUD | SIUD | | S |
 | TABLE | user_account_history | | S | S | S | | |
 | TABLE | user_account_policy | | S | SIUD | S | S | |
-| TABLE | partner_user | | S | SI | S | | SI |
+| TABLE | partner_user | | | SI | S | S | SI |
 | **Framework** | | | | | | | |
 | PAGE | application_menus | | A | A | A | A | |
 | PAGE | constant_headers | | A | A | | A | |
@@ -269,26 +272,30 @@ Non-human principals draw on the *same* roles and matrix below, out of their own
 | TABLE | rest_api_child | | SIUD | S | | S | |
 | TABLE | service_registry | | S | | | | |
 | **Business Partner** | | | | | | | |
-| PAGE | partner_registrations | | A | A | A | A | |
+| PAGE | partner_registrations | | | A | A | A | |
+| PAGE | business_partners | | | | | A | |
+| PAGE | partner_addresses | | | A | A | A | A |
+| PAGE | partner_domains | | | | | A | A |
+| PAGE | partner_users | | | A | A | A | A |
 | PAGE | api_keys | | A | A | | | |
-| TABLE | business_partner | | S | S | S | SIUD | SU |
-| TABLE | partner_address | | S | | | | SIUD |
-| TABLE | partner_domain | | S | | | | SIUD |
-| TABLE | partner_domain_verification | | S | | | | S |
+| TABLE | business_partner | | | S | S | SIUD | SU |
+| TABLE | partner_address | | | | | S | SIUD |
+| TABLE | partner_domain | | | | | S | SIUD |
+| TABLE | partner_domain_verification | | | | | S | S |
 | TABLE | api_key | | S | S | | S | SD |
 | **Subscriptions** | | | | | | | |
-| PAGE | subscription_plans | | A | | | A | S |
+| PAGE | subscription_plans | | | | | A | S |
 | PAGE | subscription_resources | | A | A | | A | |
 | PAGE | subscription_addons | | | | | A | |
 | PAGE | partner_quota_usages | | | | | A | |
-| TABLE | subscription_plan | | S | | | SIUD | S |
-| TABLE | subscription_plan_price | | S | | | SIUD | S |
-| TABLE | subscription_quota | | S | | | SIUD | S |
+| TABLE | subscription_plan | | | | | SIUD | S |
+| TABLE | subscription_plan_price | | | | | SIUD | S |
+| TABLE | subscription_quota | | | | | SIUD | S |
 | TABLE | subscription_resource | | SIUD | S | | S | |
-| TABLE | subscription_addon | | S | | | SIUD | |
-| TABLE | partner_plan_subscription | | S | | | SIUD | S |
-| TABLE | partner_addon_subscription | | S | | | SIUD | S |
-| TABLE | usage_ledger | | S | | | S | S |
+| TABLE | subscription_addon | | | | | SIUD | |
+| TABLE | partner_plan_subscription | | | | | SIUD | S |
+| TABLE | partner_addon_subscription | | | | | SIUD | S |
+| TABLE | usage_ledger | | | | | S | S |
 | **Payments** | | | | | | | |
 | PAGE | payment_records | | A | | | A | A |
 | PAGE | payment_methods | | A | | | A | A |

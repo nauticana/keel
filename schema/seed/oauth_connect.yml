@@ -21,6 +21,7 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, PARTNER_CREDENTIAL, MANAGE, "*"]
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_credentials]
       - [PARTNER_ADMIN, PARTNER_CREDENTIAL, MANAGE, partner_credential]
       - [PARTNER_ADMIN, TABLE, SELECT, partner_credential]

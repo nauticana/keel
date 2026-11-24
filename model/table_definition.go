@@ -25,10 +25,7 @@ type TableDefinition struct {
 	//
 	// The CRUD path (Get / Delete) injects
 	//   id IN (SELECT user_id FROM partner_user WHERE partner_id = $sessionPartnerID)
-	// when the caller is NOT a global-trust role (see
-	// data.GlobalRoleIDs). SUPER / BUSINESS_ADMIN / SECURITY_ADMIN /
-	// SECURITY_OPER / APP_ADMIN bypass the filter to manage cross-
-	// partner data legitimately.
+	// unless the caller holds an authorization_role with is_global.
 	//
 	// Auto-set in AbstractRepository.Init on the table whose name matches
 	// AbstractRepository.UserTableName.

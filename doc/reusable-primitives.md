@@ -330,6 +330,33 @@ A vendor's `entitlement.Signer` (`NewSignerFromPEM`, RSA 2048 bits or more) sign
 
 `port.IdempotencyLedger` records a key as in flight, completed with a non-nil opaque result, or unknown. `Begin` returns the prior entry so a replay hands back the stored result, a concurrent caller sees the claim, and an unknown outcome blocks retries until reconciled. A granted claim carries a fence that every later write must present. With a `Lease`, an in-flight claim not `Renew`ed within it is taken over under a new fence and the previous holder's ledger writes fail. The fence protects the ledger, not the side effect: takeover requires an idempotent target or provider fencing. `ReclaimUnknown` fences an unknown key; the stronger `port.ReconciliationLedger` can also fence an abandoned in-flight key after the caller establishes that normal execution is no longer authoritative. `PgsqlLedger` uses the database clock. `MemoryLedger` is process-local.
 
+#### Inbound requests: `Idempotency-Key`
+
+`handler.IdempotencyHandler.Wrap` gives routes the contract; nothing else honors the header.
+
+```go
+idem := &handler.IdempotencyHandler{
+    AbstractHandler: handler.AbstractHandler{UserService: userSvc, Journal: journal},
+    Requests:        &idempotency.RequestStore{DB: db},
+}
+backend.Handle(idem.Wrap(orders.Routes(common.RestPrefix)))
+```
+
+The key belongs to the caller (session user, API key or OAuth subject, within its partner), the method and the route with its query. The first response is stored in `idempotent_request` for `idempotency_window` seconds (default 86400, 3600 to 604800), and a repeat gets it with `Idempotency-Replayed: true`.
+
+| Case | Answer |
+|---|---|
+| No header, or `GET`, `HEAD`, `OPTIONS` | Runs normally |
+| Malformed or repeated header | 400 |
+| No authenticated caller | 401 |
+| Same key, another body | 422 `idempotency_key_reused` |
+| First request still running, or its process stopped before recording an outcome | 409 `idempotency_in_flight` |
+| First request panicked, or its response exceeded 1 MiB | 409 `idempotency_outcome_unknown` |
+| First response was 401, 403 or 429 | Runs again: nothing was executed |
+| Any other first response, 5xx included | Replayed |
+
+A wrapped handler answers 401, 403 or 429 only before it changes anything. Status, body, `Content-Type`, `Content-Disposition`, `Location` and `ETag` are stored, so do not wrap a route that returns credentials or streams. Browser clients need `Idempotency-Key` in `HttpBackend.AllowHeaders`.
+
 ### `actiontoken` — a link that authorizes one action
 
 An emailed or chat decision link crosses an untrusted channel, so it must authorize exactly one action and never a session. `Service{DB, Ledger}.Mint(ctx, user, Binding{Action, ResourceKey, Digest}, ttl)` returns a 64-hex token and stores only its hash in `action_token`; the expiry is judged by the database clock.

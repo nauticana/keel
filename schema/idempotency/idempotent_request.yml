@@ -1,0 +1,29 @@
+table: idempotent_request
+comment: First response to a request carrying an Idempotency-Key, replayed until it expires; I in flight, C completed with response, U outcome unknown
+columns:
+  - name: request_key
+    type: CHAR(64)
+    comment: SHA-256 of the caller, method, route and client key
+  - name: body_digest
+    type: CHAR(64)
+  - name: state_code
+    type: CHAR(1)
+  - name: fence
+    type: CHAR(32)
+  - name: response
+    type: BYTEA
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+primary_key: [request_key]
+indexes:
+  - name: idempotent_request_expires_ix
+    columns: [expires_at]
+checks:
+  - name: idempotent_request_state_ck
+    expression: state_code IN ('I', 'C', 'U')
+  - name: idempotent_request_response_ck
+    expression: "(state_code = 'C' AND response IS NOT NULL) OR (state_code IN ('I', 'U') AND response IS NULL)"

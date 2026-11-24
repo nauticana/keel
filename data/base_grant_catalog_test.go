@@ -130,27 +130,16 @@ func TestBaseGrantCatalog_RejectsUnsafeIdentifiers(t *testing.T) {
 	}
 }
 
-func TestBaseGrantCatalog_NoGlobalRolesDeniesBypass(t *testing.T) {
-	c := NewGrantCatalog()
-	c.GlobalRoles = nil
-	if sql := c.Queries()[QCheckGlobalRole]; !strings.Contains(sql, "WHERE FALSE") {
-		t.Errorf("empty role set must match nothing, got:\n%s", sql)
+func TestBaseGrantCatalog_GlobalRoleReadsTheRoleFlag(t *testing.T) {
+	sql := NewGrantCatalog().Queries()[QCheckGlobalRole]
+	for _, want := range []string{"FROM user_permission p, authorization_role r", "r.is_global IS TRUE", "p.user_id = ?", "p.endda >= CURRENT_TIMESTAMP"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %q in:\n%s", want, sql)
+		}
+	}
+	if _, ok := (&BaseGrantCatalog{}).Queries()[QCheckGlobalRole]; ok {
+		t.Error("a catalog without a user source must not offer the bypass")
 	}
 }
 
 var _ port.GrantCatalog = NewGrantCatalog()
-
-// DefaultGrantCatalog is built at package init, so a boot-time append to
-// GlobalRoleIDs cannot reach it — the documented escape is an explicit catalog.
-func TestGlobalRoleIDs_AppendAfterInitNeedsAnOwnCatalog(t *testing.T) {
-	original := append([]string(nil), GlobalRoleIDs...)
-	t.Cleanup(func() { GlobalRoleIDs = original })
-
-	GlobalRoleIDs = append(GlobalRoleIDs, "LATE_ROLE")
-	if strings.Contains(DefaultGrantCatalog.Queries()[QCheckGlobalRole], "LATE_ROLE") {
-		t.Error("DefaultGrantCatalog unexpectedly saw a post-init append")
-	}
-	if !strings.Contains(NewGrantCatalog().Queries()[QCheckGlobalRole], "LATE_ROLE") {
-		t.Error("a catalog built after the append should carry the new role")
-	}
-}

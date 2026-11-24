@@ -10,7 +10,7 @@ import (
 	"github.com/nauticana/keel/port"
 )
 
-// QCheckGlobalRole returns 1 row when the caller holds any GlobalRoleIDs role,
+// QCheckGlobalRole returns 1 row when the caller holds an is_global role,
 // bypassing partner-scoped row filters.
 const QCheckGlobalRole = "check_global_role"
 
@@ -18,18 +18,6 @@ const (
 	qCheckPermissionPrefix   = "check_permission:"
 	qReadAuthorizationPrefix = "read_authorization:"
 )
-
-// GlobalRoleIDs names the roles with a cross-partner mandate, and seeds every
-// catalog built after it. DefaultGrantCatalog is built at package init, so a
-// downstream appending here at boot must set BaseGrantCatalog.GlobalRoles or
-// build its own catalog — the append alone comes too late.
-var GlobalRoleIDs = []string{
-	"SUPER",
-	"BUSINESS_ADMIN",
-	"SECURITY_ADMIN",
-	"SECURITY_OPER",
-	"APP_ADMIN",
-}
 
 // GrantSource locates one principal kind's role grants. keel generates the
 // authorization SQL from it, so no kind can drift from the others. Table must
@@ -46,9 +34,6 @@ var sqlIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // BaseGrantCatalog is the shipped GrantCatalog: usable as constructed, knowing
 // the human and role kinds. Safe for concurrent use.
 type BaseGrantCatalog struct {
-	// GlobalRoles gates the partner-scope bypass; empty means nobody bypasses.
-	GlobalRoles []string
-
 	mu      sync.RWMutex
 	sources map[model.PrincipalKind]GrantSource
 }
@@ -58,11 +43,9 @@ var _ port.GrantCatalog = (*BaseGrantCatalog)(nil)
 // DefaultGrantCatalog is used by any data layer given no catalog of its own.
 var DefaultGrantCatalog = NewGrantCatalog()
 
-// NewGrantCatalog returns a catalog holding the human and role kinds and
-// GlobalRoleIDs.
+// NewGrantCatalog returns a catalog holding the human and role kinds.
 func NewGrantCatalog() *BaseGrantCatalog {
 	return &BaseGrantCatalog{
-		GlobalRoles: append([]string(nil), GlobalRoleIDs...),
 		sources: map[model.PrincipalKind]GrantSource{
 			model.PrincipalUser: {Table: "user_permission", Subject: "user_id"},
 		},
@@ -122,7 +105,10 @@ func (c *BaseGrantCatalog) Queries() map[string]string {
 	}
 	out[c.CheckQuery(model.PrincipalRole)] = roleCheckPermissionSQL
 	out[c.ReadQuery(model.PrincipalRole)] = roleReadAuthorizationSQL
-	out[QCheckGlobalRole] = globalRoleSQL(c.GlobalRoles, c.sources[model.PrincipalUser])
+	// Without a user source the query is missing and IsGlobalRole denies.
+	if src, ok := c.sources[model.PrincipalUser]; ok {
+		out[QCheckGlobalRole] = src.globalRoleSQL()
+	}
 	return out
 }
 
@@ -208,23 +194,15 @@ SELECT authorization_object_id, action, low_limit, high_limit, bypass_scope
 `
 )
 
-// globalRoleSQL inlines the role allowlist: role ids are framework constants,
-// and `?` cannot expand to a variable-length IN list portably.
-func globalRoleSQL(roles []string, src GrantSource) string {
-	if len(roles) == 0 || src.Table == "" {
-		return `SELECT 1 WHERE FALSE` // no roles → nobody bypasses
-	}
-	quoted := make([]string, len(roles))
-	for i, r := range roles {
-		quoted[i] = "'" + strings.ReplaceAll(r, "'", "''") + "'"
-	}
+func (src GrantSource) globalRoleSQL() string {
 	return `
 SELECT 1
-  FROM ` + src.Table + `
- WHERE ` + src.Subject + ` = ?
-   AND role_id IN (` + strings.Join(quoted, ",") + `)
-   AND begda <= CURRENT_TIMESTAMP
-   AND (endda IS NULL OR endda >= CURRENT_TIMESTAMP)
+  FROM ` + src.Table + ` p, authorization_role r
+ WHERE p.role_id = r.id
+   AND r.is_global IS TRUE
+   AND p.` + src.Subject + ` = ?
+   AND p.begda <= CURRENT_TIMESTAMP
+   AND (p.endda IS NULL OR p.endda >= CURRENT_TIMESTAMP)
  LIMIT 1
 `
 }

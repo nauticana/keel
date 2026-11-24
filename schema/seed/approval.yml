@@ -36,6 +36,8 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, APPROVAL_POLICY, CHANGE, "*"]
+      - [SUPER, APPROVAL_POLICY, CHANGE_PLATFORM, "*"]
       - [PARTNER_ADMIN, APPROVAL_POLICY, CHANGE, approval_policy]
       - [PARTNER_ADMIN, TABLE, SELECT, approval_policy]
       - [SECURITY_ADMIN, APPROVAL_POLICY, CHANGE_PLATFORM, approval_policy]

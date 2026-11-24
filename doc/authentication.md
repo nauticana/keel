@@ -232,6 +232,7 @@ Each row records what keel implements of an IETF or OASIS specification, what it
 | RFC 8259 JSON | keel's own API bodies are one JSON value; a request with trailing content is refused. A number decoded into an untyped value keeps every digit (`json.Number`), so precision is never lost to a `float64` (§6). |
 | RFC 7493 I-JSON | §2.2 only: every 64-bit integer (`int`, `int64`, `uint`, `uint64`) is written as a string, since it may lie outside the IEEE 754 exact-integer range; input accepts a string or a number for those types. Duplicate member names are not refused, so keel does not claim I-JSON as a whole. |
 | RFC 9457 Problem Details | Errors are `application/problem+json`; `status` is a JSON number and `details` is an extension member in the API format above. |
+| `Idempotency-Key` (IETF draft-ietf-httpapi-idempotency-key-header) | On routes wrapped by `IdempotencyHandler`: a structured-field string, or the same value unquoted. Reuse with another body is 422, a concurrent request 409. A missing key is not refused. |
 
 ### Sign-in and token verification
 

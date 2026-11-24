@@ -44,13 +44,17 @@ const (
 	// handler so the route mount and the SSO partner gate cannot drift apart
 	// (service cannot import handler).
 	ConsentRoute = RestPrefix + "/user/consent"
+	// WebSocketTicketRoute mints the ticket a WebSocket handshake presents.
+	WebSocketTicketRoute = RestPrefix + "/ws/ticket"
 )
 
 // partnerOptionalRoutes are keel-owned authenticated routes that stay reachable
 // before a session has a partner: consent is recorded during signup, which
-// necessarily precedes the partner it would be scoped to.
+// necessarily precedes the partner it would be scoped to, and a socket belongs
+// to a user, not a partner.
 var partnerOptionalRoutes = map[string]struct{}{
-	ConsentRoute: {},
+	ConsentRoute:         {},
+	WebSocketTicketRoute: {},
 }
 
 // IsPartnerOptional reports whether path is exempt from SSOMiddleware's partner

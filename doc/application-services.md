@@ -250,13 +250,16 @@ hub := &realtime.Hub{
 if hub.Cache != nil {
     if err := hub.Run(ctx); err != nil { log.Fatal(err) }
 }
-srv.Handle((&handler.WebSocketHandler{
+ws := &handler.WebSocketHandler{
     AbstractHandler: handler.AbstractHandler{UserService: userSvc},
     Hub:             hub,
-}).GetPublicRoutes()) // GET /public/ws — JWT via Authorization or ?token= (browsers cannot set headers on the handshake)
+    Tickets:         &realtime.TicketService{Cache: cacheSvc},
+}
+srv.Handle(ws.GetAuthRoutes())   // POST /api/ws/ticket
+srv.Handle(ws.GetPublicRoutes()) // GET /public/ws
 ```
 
-The socket lives under `/public` so the SSO middleware does not gate the handshake; the handler validates the JWT itself. WebSocket upgrades honor the `cors_origin` allowlist (override with `Hub.CheckOrigin`); a missing `Origin` header, as native apps send, is accepted.
+The socket lives under `/public` so the SSO middleware does not gate the handshake; the handler authenticates it. A client that can set headers sends its access token in `Authorization`. A browser cannot: it calls `POST /api/ws/ticket` with its session, gets `{"ticket","expiresIn"}`, and connects to `/public/ws?ticket=…`. A ticket opens one connection within `websocket_ticket_ttl` (default 30 s, 5 to 300), and a reconnect needs a new one. Tickets live in the cache, which must be shared when several processes serve sockets. An access token in the URL is refused. WebSocket upgrades honor the `cors_origin` allowlist (override with `Hub.CheckOrigin`); a missing `Origin` header, as native apps send, is accepted.
 
 `CanSubscribe` is required for channel subscriptions; nil denies them. An empty `cors_origin` permits native clients without `Origin` and enforces same-origin browser handshakes.
 

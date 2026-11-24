@@ -87,9 +87,8 @@ func (r *AbstractRepository) userTable() string {
 	return r.UserTableName
 }
 
-// IsGlobalRole reports whether userID holds any role listed in
-// GlobalRoleIDs — the set of framework roles whose mandate is
-// cross-partner data management. Drives the bypass on partner-scoped
+// IsGlobalRole reports whether userID holds an is_global role, whose
+// mandate is cross-partner data management. Drives the bypass on partner-scoped
 // row filters such as user_account's PartnerUserScoped flag.
 //
 // Returns false on any error (query failure, missing AuthQuery, invalid
@@ -219,7 +218,7 @@ func (r *AbstractRepository) Init(ctx context.Context) error {
 	// Mark the user-account table for partner_user-mediated row scoping.
 	// pgsql.TableServicePgsql.Get / Delete consult this flag and inject
 	// `id IN (SELECT user_id FROM partner_user WHERE partner_id = $N)`
-	// when the caller is not a GlobalRoleIDs holder. Auto-detection here
+	// when the caller is not an is_global role holder. Auto-detection here
 	// (rather than a schema YAML opt-in) means a single line covers
 	// every downstream that follows keel's user_account convention.
 	if userTable := r.TableDefinitions[r.userTable()]; userTable != nil {

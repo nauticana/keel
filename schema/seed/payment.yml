@@ -81,6 +81,8 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, USER_PAYMENT_METHOD, SET_DEFAULT, "*"]
+      - [SUPER, USER_PAYMENT_METHOD, REMOVE, "*"]
       - [APP_ADMIN, PAGE, ACCESS, payment_methods]
       - [APP_ADMIN, PAGE, ACCESS, payment_webhook_logs]
       - [APP_ADMIN, TABLE, SELECT, payment_method]

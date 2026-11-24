@@ -330,7 +330,7 @@ func TestGet_PartnerAdmin_InjectsPartnerUserScope(t *testing.T) {
 }
 
 // TestGet_SuperUser_BypassesPartnerUserScope verifies that a Get by a
-// caller whose role is in GlobalRoleIDs reads every user_account row
+// caller holding an is_global role reads every user_account row
 // without the partner_user filter — SUPER and BUSINESS_ADMIN manage
 // cross-partner data legitimately.
 func TestGet_SuperUser_BypassesPartnerUserScope(t *testing.T) {
@@ -415,22 +415,6 @@ func TestDelete_PartnerAdmin_InjectsPartnerUserScope(t *testing.T) {
 	}
 	if !strings.Contains(qc.sql, "partner_user") {
 		t.Fatalf("expected partner_user subquery on Delete, got:\n%s", qc.sql)
-	}
-}
-
-// TestIsGlobalRole_QueryShape verifies that QCheckGlobalRole's SQL
-// embeds the configured role-id allowlist as inlined literals, asserting
-// the wiring rather than re-testing buildGlobalRoleQuery (which has its
-// own unit test next door).
-func TestIsGlobalRole_QueryShape(t *testing.T) {
-	sql, ok := data.DefaultGrantCatalog.Queries()[data.QCheckGlobalRole]
-	if !ok {
-		t.Fatal("QCheckGlobalRole missing from the catalog")
-	}
-	for _, role := range data.GlobalRoleIDs {
-		if !strings.Contains(sql, "'"+role+"'") {
-			t.Errorf("expected %q in QCheckGlobalRole SQL:\n%s", role, sql)
-		}
 	}
 }
 

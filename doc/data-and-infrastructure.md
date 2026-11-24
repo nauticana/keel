@@ -326,7 +326,7 @@ Every read takes `partnerID` / `ownerID` with **`0` meaning unrestricted** — t
 | Caller | `partnerID` | `ownerID` |
 |---|---|---|
 | Partner user on a `PartnerSpecific` table | `session.PartnerId` | `session.Id` if `UserSpecific` and the grant is broad (`ownScope`), else `0` |
-| `GlobalRoleIDs` holder or `bypass_scope` grant | `0` | `0` |
+| `is_global` role holder or `bypass_scope` grant | `0` | `0` |
 | Any caller on a non-`PartnerSpecific` table | `0` | as above |
 | Worker / job with no session | `0` | `0` |
 
@@ -513,7 +513,7 @@ this summary can be checked directly against the generated schema.
 | `country` | Country reference catalogue |
 | `state` | State/province reference catalogue |
 | `county` | County reference catalogue |
-| `authorization_role` | RBAC role definitions; `partner_scoped` marks roles that apply within the holder's partner |
+| `authorization_role` | RBAC role definitions; `partner_scoped` marks roles that apply within the holder's partner, `is_global` platform roles whose row access spans partners |
 | `authorization_role_permission` | Object/action/scope grants assigned to roles |
 | `user_account_policy` | Password and sign-in policies, global (`partner_id` NULL) or per partner |
 | `user_account` | User accounts with password, 2FA fields, email verification time and method |
@@ -564,6 +564,7 @@ this summary can be checked directly against the generated schema.
 | `payout_webhook_log` | Raw payout-provider account/transfer events with idempotency + audit |
 | `outbox_event` | Transactional outbox records for asynchronous delivery |
 | `idempotency_ledger` | Replay-safe record of mutating operations by key: in flight, completed with result, or unknown |
+| `idempotent_request` | First response to a request carrying an `Idempotency-Key`, until it expires |
 | `action_token` | Single-use token hashes bound to one user, action, resource and content digest; a claimed row is the claim the ledger resolves |
 | `application_config_flag` | Non-secret runtime configuration catalogue and defaults |
 | `application_config_value` | Per-node/shared overrides for configuration flags |

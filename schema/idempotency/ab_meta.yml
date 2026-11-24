@@ -1,2 +1,3 @@
 tables:
   - idempotency_ledger
+  - idempotent_request

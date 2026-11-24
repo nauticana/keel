@@ -92,6 +92,9 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, PARTNER_PLAN_SUBSCRIPTION, CANCEL, "*"]
+      - [SUPER, PARTNER_PLAN_SUBSCRIPTION, CHANGE, "*"]
+      - [SUPER, PARTNER_PLAN_SUBSCRIPTION, PORTAL, "*"]
       # Security tables
       - [PARTNER_ADMIN, PAGE, ACCESS, user_account_policies]
       - [PARTNER_ADMIN, PAGE, ACCESS, partner_users]
@@ -152,20 +155,11 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
-      - [APP_ADMIN, PAGE, ACCESS, subscription_addons]
-      - [APP_ADMIN, PAGE, ACCESS, subscription_plans]
       - [APP_ADMIN, PAGE, ACCESS, subscription_resources]
-      - [APP_ADMIN, TABLE, SELECT, partner_addon_subscription]
-      - [APP_ADMIN, TABLE, SELECT, partner_plan_subscription]
-      - [APP_ADMIN, TABLE, SELECT, subscription_addon]
-      - [APP_ADMIN, TABLE, SELECT, subscription_plan]
-      - [APP_ADMIN, TABLE, SELECT, subscription_plan_price]
-      - [APP_ADMIN, TABLE, SELECT, subscription_quota]
       - [APP_ADMIN, TABLE, SELECT, subscription_resource]
       - [APP_ADMIN, TABLE, INSERT, subscription_resource]
       - [APP_ADMIN, TABLE, UPDATE, subscription_resource]
       - [APP_ADMIN, TABLE, DELETE, subscription_resource]
-      - [APP_ADMIN, TABLE, SELECT, usage_ledger]
       - [SECURITY_ADMIN, PAGE, ACCESS, subscription_resources]
       - [SECURITY_ADMIN, TABLE, SELECT, subscription_resource]
       - [BUSINESS_ADMIN, PAGE, ACCESS, partner_quota_usages]

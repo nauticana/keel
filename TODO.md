@@ -165,7 +165,7 @@ Each row links to the artifact that made the change.
 
 | ID | Title | Where |
 |---|---|---|
-| A1 | `user_account` row-scope for non-SUPER roles | `model.TableDefinition.PartnerUserScoped` + `data.GlobalRoleIDs` + `data.QCheckGlobalRole` + `IsGlobalRole` helper; injected subquery in [pgsql/table_service.go](pgsql/table_service.go) `Get` / `Delete`; auto-set on `user_account` in `AbstractRepository.Init` |
+| A1 | `user_account` row-scope for non-global roles | `model.TableDefinition.PartnerUserScoped` + `authorization_role.is_global` + `data.QCheckGlobalRole` + `IsGlobalRole`; injected subquery in [pgsql/table_service.go](pgsql/table_service.go) `Get` / `Delete`; auto-set on `user_account` in `AbstractRepository.Init` |
 | A2 | Migration note for `EventParser.PeekEventMeta` interface gain | [README.md](README.md) — new section before the v0.5.9 migration guide |
 | A3 | Dropped unused `io.Reader` param in `StripeCheckoutClient.request` | [payment/stripe_client.go](payment/stripe_client.go) |
 | A4 | LemonSqueezy no-timestamp-window note + corrected Webhook Lifecycle | [README.md](README.md) — Payments → Webhook Lifecycle + Signature replay protection table |

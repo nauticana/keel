@@ -401,7 +401,9 @@ CREATE TABLE IF NOT EXISTS authorization_role (
     id                                   VARCHAR(30)   NOT NULL,
     caption                              VARCHAR(80)   NOT NULL,
     partner_scoped                       BOOLEAN       NOT NULL DEFAULT FALSE,
-    CONSTRAINT authorization_role_pk PRIMARY KEY (id)
+    is_global                            BOOLEAN       NOT NULL DEFAULT FALSE,
+    CONSTRAINT authorization_role_pk PRIMARY KEY (id),
+    CONSTRAINT authorization_role_global_ck CHECK (NOT (partner_scoped AND is_global))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS authorization_role_scope_uq ON authorization_role(id, partner_scoped);
 
@@ -1267,6 +1269,21 @@ CREATE TABLE IF NOT EXISTS idempotency_ledger (
     CONSTRAINT idempotency_ledger_result_ck CHECK ((state_code = 'C' AND result IS NOT NULL) OR (state_code IN ('I', 'U') AND result IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idempotency_ledger_state_ix ON idempotency_ledger(state_code, updated_at);
+
+-- First response to a request carrying an Idempotency-Key, replayed until it expires; I in flight, C completed with response, U outcome unknown
+CREATE TABLE IF NOT EXISTS idempotent_request (
+    request_key                          CHAR(64)      NOT NULL,
+    body_digest                          CHAR(64)      NOT NULL,
+    state_code                           CHAR(1)       NOT NULL,
+    fence                                CHAR(32)      NOT NULL,
+    response                             BYTEA        ,
+    created_at                           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at                           TIMESTAMP     NOT NULL,
+    CONSTRAINT idempotent_request_pk PRIMARY KEY (request_key),
+    CONSTRAINT idempotent_request_state_ck CHECK (state_code IN ('I', 'C', 'U')),
+    CONSTRAINT idempotent_request_response_ck CHECK ((state_code = 'C' AND response IS NOT NULL) OR (state_code IN ('I', 'U') AND response IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idempotent_request_expires_ix ON idempotent_request(expires_at);
 
 -- Billing invoices per partner (provider-issued or self-scheduled)
 CREATE TABLE IF NOT EXISTS invoice (

@@ -135,6 +135,11 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, AGENCY_PROFILE, APPROVE, "*"]
+      - [SUPER, AGENCY, MANAGE_CLIENTS, "*"]
+      - [SUPER, AGENCY, VIEW_EARNINGS, "*"]
+      - [SUPER, AGENCY, MANAGE_PAYOUT, "*"]
+      - [SUPER, AGENCY_DELEGATION, SET_ROLE, "*"]
       - [AGENCY, AGENCY, MANAGE_CLIENTS, agency_clients]
       - [AGENCY, AGENCY, VIEW_EARNINGS, agency_earnings]
       - [AGENCY, AGENCY, MANAGE_PAYOUT, agency_payout_profile]

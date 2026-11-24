@@ -155,6 +155,8 @@ const (
 	domain_challenge_ttl          = "domain_challenge_ttl"
 	domain_code_ttl               = "domain_code_ttl"
 	domain_challenge_attempts     = "domain_challenge_attempts"
+	idempotency_window            = "idempotency_window"
+	websocket_ticket_ttl          = "websocket_ticket_ttl"
 	signin_handoff_ttl            = "signin_handoff_ttl"
 	sso_max_document_size         = "sso_max_document_size"
 	sso_metadata_max_stale        = "sso_metadata_max_stale"
@@ -325,6 +327,8 @@ type KeelConfig struct {
 	DomainRecheckGrace          time.Duration // domain_recheck_grace          259200             How long failing domain evidence stays current before it lapses
 	DomainIdentityMaxAge        time.Duration // domain_identity_max_age       604800             How long identity evidence counts after its last passed check
 	DomainVerificationLabel     string        // domain_verification_label     domain-verification  DNS TXT value prefix and HTTP file name of domain challenges
+	IdempotencyWindow           time.Duration // idempotency_window            86400              How long a response is replayed to a request repeating its Idempotency-Key (3600-604800)
+	WebSocketTicketTTL          time.Duration // websocket_ticket_ttl          30                 Validity of a single-use WebSocket connection ticket (5-300)
 	SigninHandoffTTL            time.Duration // signin_handoff_ttl            300                Validity of a single-use sign-in handoff or test-launch code
 	SSOMaxDocumentSize          int64         // sso_max_document_size         1048576            Largest identity provider document read: callback body, SAML response or metadata (bytes)
 	SSOMetadataMaxStale         time.Duration // sso_metadata_max_stale        86400              How long cached identity provider discovery serves while the issuer is unreachable
@@ -486,6 +490,8 @@ func (c *KeelConfig) Apply(m ConfigRows) error {
 	c.DomainRecheckGrace = c.Duration(m, domain_recheck_grace)
 	c.DomainIdentityMaxAge = c.Duration(m, domain_identity_max_age)
 	c.DomainVerificationLabel = c.String(m, domain_verification_label)
+	c.IdempotencyWindow = c.boundedDuration(m, idempotency_window, 24*time.Hour, time.Hour, 7*24*time.Hour)
+	c.WebSocketTicketTTL = c.boundedDuration(m, websocket_ticket_ttl, 30*time.Second, 5*time.Second, 5*time.Minute)
 	c.SigninHandoffTTL = c.Duration(m, signin_handoff_ttl)
 	c.SSOMaxDocumentSize = c.Int64(m, sso_max_document_size)
 	c.SSOMetadataMaxStale = c.Duration(m, sso_metadata_max_stale)

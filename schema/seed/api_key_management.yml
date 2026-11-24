@@ -45,6 +45,9 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, API_KEY, GENERATE, "*"]
+      - [SUPER, API_KEY, ROLL, "*"]
+      - [SUPER, API_KEY, RESTRICT, "*"]
       - [APP_ADMIN, PAGE, ACCESS, api_keys]
       - [APP_ADMIN, TABLE, SELECT, api_key]
       - [SECURITY_ADMIN, PAGE, ACCESS, api_keys]

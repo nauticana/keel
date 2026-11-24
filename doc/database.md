@@ -251,6 +251,7 @@ flowchart BT
     subgraph idempotency["Idempotency"]
         direction TB
         idempotency_ledger["idempotency_ledger"]
+        idempotent_request["idempotent_request"]
     end
 
     subgraph billing["Billing"]
@@ -633,6 +634,7 @@ erDiagram
         VARCHAR id PK
         VARCHAR caption
         BOOLEAN partner_scoped
+        BOOLEAN is_global
     }
     authorization_role_permission {
         VARCHAR role_id PK,FK
@@ -1260,6 +1262,15 @@ erDiagram
         CHAR fence
         BYTEA result
         TIMESTAMP updated_at
+    }
+    idempotent_request {
+        CHAR request_key PK
+        CHAR body_digest
+        CHAR state_code
+        CHAR fence
+        BYTEA response
+        TIMESTAMP created_at
+        TIMESTAMP expires_at
     }
 ```
 

@@ -125,6 +125,9 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, PAYOUT_INSTRUCTION, CANCEL, "*"]
+      - [SUPER, PAYOUT_INSTRUCTION, EXECUTE, "*"]
+      - [SUPER, PAYOUT_INSTRUCTION, RESOLVE, "*"]
       - [PAYMENT_ADMIN, PAGE, ACCESS, user_bank_infos]
       - [PAYMENT_ADMIN, TABLE, SELECT, user_bank_info]
       - [PAYMENT_ADMIN, TABLE, UPDATE, user_bank_info]

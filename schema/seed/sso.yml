@@ -119,6 +119,12 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
+      - [SUPER, PARTNER_IDENTITY_PROVIDER, CONFIGURE, "*"]
+      - [SUPER, PARTNER_IDENTITY_PROVIDER, TEST, "*"]
+      - [SUPER, PARTNER_IDENTITY_PROVIDER, ACTIVATE, "*"]
+      - [SUPER, PARTNER_IDENTITY_PROVIDER, DISABLE, "*"]
+      - [SUPER, PARTNER_SCIM_TOKEN, GENERATE, "*"]
+      - [SUPER, PARTNER_SCIM_TOKEN, REVOKE, "*"]
       - [APP_ADMIN, PAGE, ACCESS, partner_identity_providers]
       - [APP_ADMIN, TABLE, SELECT, partner_identity_provider]
       - [APP_ADMIN, TABLE, SELECT, partner_idp_oidc]

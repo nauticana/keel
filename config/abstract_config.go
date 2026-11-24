@@ -77,6 +77,18 @@ func (c *AbstractConfig) Duration(rows ConfigRows, id string) time.Duration {
 	return time.Duration(c.parseInt(rows, id, "duration seconds")) * time.Second
 }
 
+// boundedDuration reads a duration whose zero value takes def and refuses one outside min to max.
+func (c *AbstractConfig) boundedDuration(rows ConfigRows, id string, def, min, max time.Duration) time.Duration {
+	d := c.Duration(rows, id)
+	if d == 0 {
+		return def
+	}
+	if d < min || d > max {
+		c.parseErrs = append(c.parseErrs, fmt.Errorf("%s: must be %d to %d seconds", id, min/time.Second, max/time.Second))
+	}
+	return d
+}
+
 func (c *AbstractConfig) text(rows ConfigRows, id string) string {
 	r, ok := rows[id]
 	if !ok {

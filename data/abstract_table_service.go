@@ -31,9 +31,7 @@ func (s *AbstractTableService) GetTable() *model.TableDefinition {
 	return s.Table
 }
 
-// IsGlobalRole reports whether userID holds any role in GlobalRoleIDs
-// (SUPER / BUSINESS_ADMIN / SECURITY_ADMIN / SECURITY_OPER / APP_ADMIN
-// by default). Used by partner-scoped CRUD paths (e.g. pgsql.Get on a
+// IsGlobalRole reports whether userID holds an is_global role. Used by partner-scoped CRUD paths (e.g. pgsql.Get on a
 // PartnerUserScoped table) to decide whether the caller can read across
 // partners.
 //

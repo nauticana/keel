@@ -1,6 +1,10 @@
 package schema
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestSeedsSatisfyForeignKeys(t *testing.T) {
 	s, err := ParseDir(".")
@@ -79,4 +83,57 @@ func TestAccountStatusIsInsertOnly(t *testing.T) {
 		}
 	}
 	t.Fatal("no column_display_attribute row makes user_account.status insert-only")
+}
+
+func seededRows(t *testing.T, table string) [][]any {
+	t.Helper()
+	seeds, err := ParseSeedDir("seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows [][]any
+	for _, sf := range seeds {
+		for _, st := range sf.Seeds {
+			if st.Table == table {
+				rows = append(rows, st.Rows...)
+			}
+		}
+	}
+	return rows
+}
+
+func TestSeededGrantsOfPlatformRoles(t *testing.T) {
+	grants := map[string]bool{}
+	for _, r := range seededRows(t, "authorization_role_permission") {
+		grants[fmt.Sprint(r...)] = true
+		if r[0] == "APP_ADMIN" && (r[1] == "USER_ACCOUNT" || r[1] == "BUSINESS_PARTNER" || strings.Contains(fmt.Sprint(r[3]), "partner_user") ||
+			r[3] == "business_partner" || r[3] == "partner_plan_subscription") {
+			t.Errorf("APP_ADMIN holds the business grant %v", r)
+		}
+	}
+	for _, a := range seededRows(t, "authorization_object_action") {
+		if !grants[fmt.Sprint("SUPER", a[0], a[1], "*")] {
+			t.Errorf("SUPER lacks %v/%v", a[0], a[1])
+		}
+	}
+	for _, want := range [][]any{{"BUSINESS_ADMIN", "BUSINESS_PARTNER", "CREATE", "business_partner"}, {"SECURITY_ADMIN", "USER_ACCOUNT", "LOCK", "user_account"}} {
+		if !grants[fmt.Sprint(want...)] {
+			t.Errorf("missing grant %v", want)
+		}
+	}
+}
+
+func TestSeededGlobalRoles(t *testing.T) {
+	var global []string
+	for _, r := range seededRows(t, "authorization_role") {
+		if r[3] == true {
+			global = append(global, fmt.Sprint(r[0]))
+			if r[2] == true {
+				t.Errorf("%v is both partner-scoped and global", r[0])
+			}
+		}
+	}
+	if got := strings.Join(global, " "); got != "SUPER APP_ADMIN SECURITY_ADMIN SECURITY_OPER BUSINESS_ADMIN" {
+		t.Fatalf("global roles = %q", got)
+	}
 }

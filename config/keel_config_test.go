@@ -45,7 +45,7 @@ var keelTestFlagIDs = []string{
 	commission_hold_days, agency_payout_min_minor,
 	domain_challenge_ttl, domain_code_ttl, domain_challenge_attempts, domain_challenge_cooldown,
 	domain_recheck_interval, domain_recheck_grace, domain_identity_max_age, domain_verification_label,
-	signin_handoff_ttl, sso_max_document_size, sso_metadata_max_stale, sso_connection_cache_size,
+	idempotency_window, websocket_ticket_ttl, signin_handoff_ttl, sso_max_document_size, sso_metadata_max_stale, sso_connection_cache_size,
 	scim_max_active_tokens, scim_token_max_days, scim_max_group_members, scim_max_patch_operations,
 }
 
@@ -311,5 +311,21 @@ func TestApplyKeel_MaxExportRows(t *testing.T) {
 		if err := (&KeelConfig{}).Apply(m); err == nil || !strings.Contains(err.Error(), max_export_rows) {
 			t.Fatalf("%s: err = %v", value, err)
 		}
+	}
+}
+
+func TestBoundedDurations(t *testing.T) {
+	for id, bad := range map[string][]string{idempotency_window: {"3599", "604801"}, websocket_ticket_ttl: {"4", "301", "-1"}} {
+		for _, v := range bad {
+			m := keelRows()
+			m[id] = ConfigRow{Default: v}
+			if err := (&KeelConfig{}).Apply(m); err == nil || !strings.Contains(err.Error(), id) {
+				t.Errorf("%s=%s: %v", id, v, err)
+			}
+		}
+	}
+	c := &KeelConfig{}
+	if err := c.Apply(keelRows()); err != nil || c.IdempotencyWindow != 24*time.Hour || c.WebSocketTicketTTL != 30*time.Second {
+		t.Fatalf("zero must take the default: %v %v %v", err, c.IdempotencyWindow, c.WebSocketTicketTTL)
 	}
 }
