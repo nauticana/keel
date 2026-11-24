@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/nauticana/keel/port"
@@ -17,24 +18,25 @@ func RollbackDetached(tx port.TxQueryService) error {
 }
 
 // InTx runs fn in a transaction of db bound to queries and commits when fn
-// returns nil; otherwise, or when fn panics, it rolls back.
-func InTx(ctx context.Context, db port.DatabaseRepository, queries map[string]string, fn func(tx port.TxQueryService) error) error {
+// returns nil; otherwise, or when fn panics, it rolls back. A failed rollback
+// joins the returned error.
+func InTx(ctx context.Context, db port.DatabaseRepository, queries map[string]string, fn func(tx port.TxQueryService) error) (err error) {
 	tx, err := db.BeginTx(ctx, queries)
 	if err != nil {
 		return err
 	}
-	committed := false
+	// A commit attempt ends the transaction either way, so only fn's failure rolls back.
+	committing := false
 	defer func() {
-		if !committed {
-			_ = RollbackDetached(tx)
+		if !committing {
+			if rollbackErr := RollbackDetached(tx); rollbackErr != nil {
+				err = errors.Join(err, rollbackErr)
+			}
 		}
 	}()
-	if err := fn(tx); err != nil {
+	if err = fn(tx); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	committed = true
-	return nil
+	committing = true
+	return tx.Commit(ctx)
 }

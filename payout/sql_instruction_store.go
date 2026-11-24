@@ -121,24 +121,9 @@ func (s *SQLInstructionStore) queryService(ctx context.Context) port.QueryServic
 }
 
 func (s *SQLInstructionStore) InTx(ctx context.Context, fn func(InstructionTx) error) error {
-	tx, err := s.DB.BeginTx(ctx, instructionQueries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = data.RollbackDetached(tx)
-		}
-	}()
-	if err := fn(&sqlInstructionTx{tx: tx}); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	committed = true
-	return nil
+	return data.InTx(ctx, s.DB, instructionQueries, func(tx port.TxQueryService) error {
+		return fn(&sqlInstructionTx{tx: tx})
+	})
 }
 
 func (s *SQLInstructionStore) InFlight(ctx context.Context, updatedBefore time.Time, limit int, partnerIDs []int64) ([]int64, error) {

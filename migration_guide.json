@@ -9,6 +9,15 @@
  },
  "migrations": [
   {
+   "version": "v1.3.17",
+   "title": "Rollback errors surfaced",
+   "tags": [
+    "additive"
+   ],
+   "summary": "data.InTx reports a failed rollback instead of discarding it.",
+   "body_markdown": "### Fixed\n\n- `data.InTx` and `payout.SQLInstructionStore.InTx` join a failed rollback to the returned error; an error whose rollback succeeds is returned unchanged. They no longer call `Rollback` after a failed `Commit`, which already ends the transaction."
+  },
+  {
    "version": "v1.3.16",
    "title": "Go 1.27.4 and dependency upgrades",
    "tags": [

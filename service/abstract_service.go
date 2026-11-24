@@ -64,26 +64,9 @@ func (s *AbstractService) Exec(ctx context.Context, name string, args ...any) er
 
 // Atomic runs fn over the service's catalog in one transaction, committed when
 // fn returns nil and rolled back otherwise, even after the context is cancelled.
-func (s *AbstractService) Atomic(ctx context.Context, fn func(tx port.TxQueryService) error) (err error) {
+func (s *AbstractService) Atomic(ctx context.Context, fn func(tx port.TxQueryService) error) error {
 	if s.DB == nil {
 		return errUninitialized
 	}
-	tx, err := s.DB.BeginTx(ctx, s.Queries)
-	if err != nil {
-		return err
-	}
-	// A commit attempt ends the transaction either way, so only fn's failure rolls back.
-	committing := false
-	defer func() {
-		if !committing {
-			if rollbackErr := data.RollbackDetached(tx); rollbackErr != nil {
-				err = errors.Join(err, rollbackErr)
-			}
-		}
-	}()
-	if err = fn(tx); err != nil {
-		return err
-	}
-	committing = true
-	return tx.Commit(ctx)
+	return data.InTx(ctx, s.DB, s.Queries, fn)
 }
